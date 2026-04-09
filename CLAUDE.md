@@ -17,6 +17,22 @@ mise exec -- pnpm dev        # 開発サーバー起動（Turbopack）
 mise exec -- pnpm build      # プロダクションビルド
 mise exec -- pnpm lint       # ESLint
 mise exec -- pnpm start      # プロダクションサーバー起動
+
+mise exec -- pnpm db:push     # スキーマを DB に反映（開発用）
+mise exec -- pnpm db:generate # マイグレーションファイル生成
+mise exec -- pnpm db:migrate  # マイグレーション適用
+mise exec -- pnpm db:studio   # Drizzle Studio（DB ブラウザ）
+```
+
+## プロジェクト構成
+
+```
+src/
+├── app/          # Next.js App Router（ページ・API Routes）
+└── db/           # Drizzle ORM（スキーマ・クライアント）
+    ├── schema.ts # テーブル定義
+    └── index.ts  # DB 接続インスタンス
+drizzle.config.ts # drizzle-kit 設定
 ```
 
 ## ドキュメント構成（読む順番）
@@ -73,7 +89,7 @@ mise exec -- pnpm start      # プロダクションサーバー起動
 ## 環境変数
 
 `.env.example` を参照。主要な設定:
-- `OPENAI_API_KEY` — LLM/エンベディング用
+- `OPENAI_API_KEY` — LLM 用（AI SDK が自動認識。他プロバイダーは `ANTHROPIC_API_KEY` 等）
 - `DATABASE_URL` — SQLite パス
 - `VECTOR_BACKEND` — `sqlite` / `pgvector` / `qdrant`
 - Feature flags: `ENABLE_VECTOR_SEARCH`, `ENABLE_CLAIM_GRAPH`, `ENABLE_MANUAL_REVIEW_QUEUE`
