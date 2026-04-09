@@ -8,9 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 主要フロー: 特許案アップロード → 請求項抽出 → 検索式生成（広/中/狭） → ユーザーが手動で J-PlatPat 検索 → 結果 CSV 再アップロード → 多層類似度分析 → リスクレポート
 
-## 現在のステータス
+## 開発コマンド
 
-**ドキュメント・仕様策定フェーズ**。アプリケーションコード（`package.json`、`app/`、`src/` 等）は未作成。`patent_poc_scaffold.zip` にスキャフォールドが同梱されているが未展開。
+ランタイム管理に mise を使用（`mise.toml` でプロジェクトローカルに設定済み）。
+
+```bash
+mise exec -- pnpm dev        # 開発サーバー起動（Turbopack）
+mise exec -- pnpm build      # プロダクションビルド
+mise exec -- pnpm lint       # ESLint
+mise exec -- pnpm start      # プロダクションサーバー起動
+```
 
 ## ドキュメント構成（読む順番）
 
