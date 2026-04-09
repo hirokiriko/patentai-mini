@@ -24,6 +24,12 @@ export function AnalyzeButton({
 
     if (res.ok) {
       router.refresh();
+      setTimeout(() => {
+        document.getElementById("step-5")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 300);
     } else {
       const data = await res.json();
       setError(data.error ?? "分析に失敗しました");
@@ -32,19 +38,24 @@ export function AnalyzeButton({
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-3">
       <button
         onClick={handleClick}
         disabled={loading}
-        className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+        className="rounded-lg bg-red-600 px-6 py-3 text-base font-medium text-white hover:bg-red-700 disabled:opacity-50"
       >
-        {loading
-          ? "分析中（数十秒かかります）..."
-          : hasResults
-            ? "再分析"
-            : "重なり分析を実行"}
+        {loading ? (
+          <span className="inline-flex items-center gap-2">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            分析中（数十秒かかります）...
+          </span>
+        ) : hasResults ? (
+          "再分析"
+        ) : (
+          "重なり分析を実行"
+        )}
       </button>
-      {error && <span className="text-sm text-red-600">{error}</span>}
+      {error && <span className="text-base text-red-600">{error}</span>}
     </div>
   );
 }

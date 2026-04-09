@@ -33,12 +33,12 @@ export function NewCaseForm() {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="新しい案件名を入力..."
-        className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-base focus:border-blue-500 focus:outline-none"
       />
       <button
         type="submit"
         disabled={submitting || !title.trim()}
-        className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        className="rounded-lg bg-blue-600 px-6 py-3 text-base font-medium text-white hover:bg-blue-700 disabled:opacity-50"
       >
         作成
       </button>
