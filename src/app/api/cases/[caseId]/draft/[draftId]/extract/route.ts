@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { draftPatents } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { draftPatentRepo } from "@/repositories";
 import { extractClaims } from "@/lib/extract-claims";
 
 export async function POST(
@@ -10,15 +8,8 @@ export async function POST(
 ) {
   const { caseId, draftId } = await params;
 
-  const [draft] = await db
-    .select()
-    .from(draftPatents)
-    .where(
-      and(
-        eq(draftPatents.draftId, Number(draftId)),
-        eq(draftPatents.caseId, Number(caseId))
-      )
-    );
+  const drafts = await draftPatentRepo.findByCaseId(Number(caseId));
+  const draft = drafts.find((d) => d.draftId === Number(draftId));
 
   if (!draft) {
     return NextResponse.json({ error: "draft not found" }, { status: 404 });
@@ -33,11 +24,10 @@ export async function POST(
 
   const claims = await extractClaims(draft.parsedText);
 
-  const [updated] = await db
-    .update(draftPatents)
-    .set({ extractedClaimsJson: JSON.stringify(claims) })
-    .where(eq(draftPatents.draftId, Number(draftId)))
-    .returning();
+  const updated = await draftPatentRepo.updateExtractedClaims(
+    Number(draftId),
+    JSON.stringify(claims)
+  );
 
   return NextResponse.json(updated);
 }

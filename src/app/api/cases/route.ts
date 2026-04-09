@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { cases } from "@/db/schema";
-import { desc } from "drizzle-orm";
+import { caseRepo } from "@/repositories";
 
 export async function GET() {
-  const rows = await db.select().from(cases).orderBy(desc(cases.createdAt));
+  const rows = await caseRepo.findAll();
   return NextResponse.json(rows);
 }
 
@@ -13,12 +11,9 @@ export async function POST(request: Request) {
   const { title } = body;
 
   if (!title || typeof title !== "string") {
-    return NextResponse.json(
-      { error: "title is required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
-  const [row] = await db.insert(cases).values({ title }).returning();
+  const row = await caseRepo.create(title);
   return NextResponse.json(row, { status: 201 });
 }

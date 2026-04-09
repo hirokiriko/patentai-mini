@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { cases, draftPatents } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { caseRepo, draftPatentRepo } from "@/repositories";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { parseFile } from "@/lib/parse-file";
@@ -13,11 +11,7 @@ export async function GET(
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   const { caseId } = await params;
-  const rows = await db
-    .select()
-    .from(draftPatents)
-    .where(eq(draftPatents.caseId, Number(caseId)));
-
+  const rows = await draftPatentRepo.findByCaseId(Number(caseId));
   return NextResponse.json(rows);
 }
 
@@ -28,11 +22,7 @@ export async function POST(
   const { caseId } = await params;
   const caseIdNum = Number(caseId);
 
-  // Case 存在確認
-  const [caseRow] = await db
-    .select()
-    .from(cases)
-    .where(eq(cases.caseId, caseIdNum));
+  const caseRow = await caseRepo.findById(caseIdNum);
   if (!caseRow) {
     return NextResponse.json({ error: "case not found" }, { status: 404 });
   }
@@ -51,14 +41,12 @@ export async function POST(
     );
   }
 
-  // ファイル保存
   const dir = join(UPLOAD_DIR, String(caseIdNum));
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, file.name);
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(filePath, buffer);
 
-  // テキスト抽出
   let parsedText: string | null = null;
   try {
     parsedText = await parseFile(filePath);
@@ -66,15 +54,11 @@ export async function POST(
     // 抽出失敗してもレコードは作成する
   }
 
-  // DB レコード作成
-  const [row] = await db
-    .insert(draftPatents)
-    .values({
-      caseId: caseIdNum,
-      sourceFilePath: filePath,
-      parsedText,
-    })
-    .returning();
+  const row = await draftPatentRepo.create({
+    caseId: caseIdNum,
+    sourceFilePath: filePath,
+    parsedText,
+  });
 
   return NextResponse.json(row, { status: 201 });
 }

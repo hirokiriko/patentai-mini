@@ -1,8 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/db";
-import { cases, draftPatents, searchQuerySets, priorArtDocuments, comparisonResults } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import {
+  caseRepo,
+  draftPatentRepo,
+  searchQuerySetRepo,
+  priorArtDocumentRepo,
+  comparisonResultRepo,
+} from "@/repositories";
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
 import { basename } from "path";
@@ -21,17 +25,10 @@ export default async function CaseDetailPage({
   const { caseId } = await params;
   const caseIdNum = Number(caseId);
 
-  const [row] = await db
-    .select()
-    .from(cases)
-    .where(eq(cases.caseId, caseIdNum));
-
+  const row = await caseRepo.findById(caseIdNum);
   if (!row) notFound();
 
-  const drafts = await db
-    .select()
-    .from(draftPatents)
-    .where(eq(draftPatents.caseId, caseIdNum));
+  const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
 
   // 最初のドラフトの抽出結果を取得
   const firstDraft = drafts[0];
@@ -40,28 +37,17 @@ export default async function CaseDetailPage({
     : null;
 
   // 検索式を取得
-  const querySets = await db
-    .select()
-    .from(searchQuerySets)
-    .where(eq(searchQuerySets.caseId, caseIdNum))
-    .orderBy(desc(searchQuerySets.querySetId));
+  const querySets = await searchQuerySetRepo.findByCaseId(caseIdNum);
   const latestQuerySet = querySets[0];
   const queryRationale = latestQuerySet?.rationaleJson
     ? JSON.parse(latestQuerySet.rationaleJson)
     : null;
 
   // 先行技術文献を取得
-  const priorArts = await db
-    .select()
-    .from(priorArtDocuments)
-    .where(eq(priorArtDocuments.caseId, caseIdNum))
-    .orderBy(desc(priorArtDocuments.docId));
+  const priorArts = await priorArtDocumentRepo.findByCaseId(caseIdNum);
 
   // 分析結果を取得
-  const analysisResults = await db
-    .select()
-    .from(comparisonResults)
-    .where(eq(comparisonResults.caseId, caseIdNum));
+  const analysisResults = await comparisonResultRepo.findByCaseId(caseIdNum);
 
   // docId → 文献番号のマップ
   const docMap = new Map(

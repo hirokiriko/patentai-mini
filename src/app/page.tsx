@@ -1,17 +1,16 @@
 import Link from "next/link";
-import { db } from "@/db";
-import { cases } from "@/db/schema";
-import { desc } from "drizzle-orm";
+import { caseRepo } from "@/repositories";
+import type { Case } from "@/repositories";
 import { NewCaseForm } from "./new-case-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  let rows: (typeof cases.$inferSelect)[] = [];
+  let rows: Case[] = [];
   let dbError = false;
 
   try {
-    rows = await db.select().from(cases).orderBy(desc(cases.createdAt));
+    rows = await caseRepo.findAll();
   } catch {
     dbError = true;
   }
@@ -23,8 +22,7 @@ export default async function HomePage() {
         <div className="rounded border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
           <p className="font-medium">データベースに接続できません</p>
           <p className="mt-1">
-            この PoC はローカル SQLite を使用しています。ローカル開発サーバー
-            （<code className="bg-yellow-100 px-1 rounded">pnpm dev</code>）で実行してください。
+            DATABASE_URL が未設定か、接続先が利用できません。
           </p>
         </div>
       </main>

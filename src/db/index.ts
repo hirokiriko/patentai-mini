@@ -9,6 +9,7 @@ function getDb(): LibSQLDatabase<typeof schema> {
     _db = drizzle({
       connection: {
         url: process.env.DATABASE_URL ?? "file:./data/app.db",
+        authToken: process.env.TURSO_AUTH_TOKEN,
       },
       schema,
     });

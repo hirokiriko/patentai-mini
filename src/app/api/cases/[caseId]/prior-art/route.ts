@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { cases, priorArtDocuments } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { caseRepo, priorArtDocumentRepo } from "@/repositories";
 import { parseJPlatPatCsv } from "@/lib/parse-jplatpat-csv";
 
 export async function GET(
@@ -9,12 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   const { caseId } = await params;
-  const rows = await db
-    .select()
-    .from(priorArtDocuments)
-    .where(eq(priorArtDocuments.caseId, Number(caseId)))
-    .orderBy(desc(priorArtDocuments.docId));
-
+  const rows = await priorArtDocumentRepo.findByCaseId(Number(caseId));
   return NextResponse.json(rows);
 }
 
@@ -25,11 +18,7 @@ export async function POST(
   const { caseId } = await params;
   const caseIdNum = Number(caseId);
 
-  // Case 存在確認
-  const [caseRow] = await db
-    .select()
-    .from(cases)
-    .where(eq(cases.caseId, caseIdNum));
+  const caseRow = await caseRepo.findById(caseIdNum);
   if (!caseRow) {
     return NextResponse.json({ error: "case not found" }, { status: 404 });
   }
@@ -50,24 +39,18 @@ export async function POST(
     );
   }
 
-  // 一括挿入
-  const inserted = await db
-    .insert(priorArtDocuments)
-    .values(
-      parsed.map((r) => ({
-        caseId: caseIdNum,
-        publicationNo: r.publicationNo,
-        title: r.title,
-        abstract: r.abstract,
-        claimsText: null,
-        sourceCsvRowJson: JSON.stringify(r.rawRow),
-        normalizedElementsJson: null,
-      }))
-    )
-    .returning();
-
-  return NextResponse.json(
-    { imported: inserted.length },
-    { status: 201 }
+  const count = await priorArtDocumentRepo.createMany(
+    parsed.map((r) => ({
+      caseId: caseIdNum,
+      docId: 0, // auto-increment
+      publicationNo: r.publicationNo,
+      title: r.title,
+      abstract: r.abstract,
+      claimsText: null,
+      sourceCsvRowJson: JSON.stringify(r.rawRow),
+      normalizedElementsJson: null,
+    }))
   );
+
+  return NextResponse.json({ imported: count }, { status: 201 });
 }
