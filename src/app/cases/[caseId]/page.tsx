@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/db";
-import { cases, draftPatents, searchQuerySets } from "@/db/schema";
+import { cases, draftPatents, searchQuerySets, priorArtDocuments } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
 import { basename } from "path";
 import { GenerateQueriesButton } from "./generate-queries-button";
+import { UploadCsvForm } from "./upload-csv-form";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 
 export const dynamic = "force-dynamic";
@@ -47,6 +48,13 @@ export default async function CaseDetailPage({
   const queryRationale = latestQuerySet?.rationaleJson
     ? JSON.parse(latestQuerySet.rationaleJson)
     : null;
+
+  // 先行技術文献を取得
+  const priorArts = await db
+    .select()
+    .from(priorArtDocuments)
+    .where(eq(priorArtDocuments.caseId, caseIdNum))
+    .orderBy(desc(priorArtDocuments.docId));
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -266,18 +274,60 @@ export default async function CaseDetailPage({
         </section>
       )}
 
+      {/* Step 4: 検索結果 CSV 取り込み */}
+      {latestQuerySet && (
+        <section className="mt-8 space-y-4">
+          <h2 className="text-lg font-semibold">4. 検索結果の取り込み</h2>
+          <UploadCsvForm caseId={caseIdNum} />
+
+          {priorArts.length > 0 && (
+            <div>
+              <p className="text-sm text-gray-600 mb-2">
+                取り込み済み: {priorArts.length} 件
+              </p>
+              <div className="max-h-80 overflow-auto rounded border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-700">
+                        文献番号
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-700">
+                        発明の名称
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {priorArts.map((pa) => (
+                      <tr key={pa.docId} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                          {pa.publicationNo}
+                        </td>
+                        <td className="px-3 py-2">{pa.title}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* 後続ステップ */}
       <section className="mt-8 space-y-4">
         <h2 className="text-lg font-semibold">処理ステップ</h2>
         <ol
           className="list-decimal list-inside space-y-2 text-gray-600"
-          start={latestQuerySet ? 4 : extracted ? 3 : 2}
+          start={priorArts.length > 0 ? 5 : latestQuerySet ? 4 : extracted ? 3 : 2}
         >
           {!extracted && <li>請求項・構成要素を抽出（上のボタンから実行）</li>}
           {extracted && !latestQuerySet && (
             <li>J-PlatPat 検索式を生成（上のボタンから実行）</li>
           )}
-          <li>検索結果 CSV をアップロード（未実装）</li>
+          {latestQuerySet && priorArts.length === 0 && (
+            <li>検索結果 CSV をアップロード（上のフォームから実行）</li>
+          )}
           <li>重なり分析・リスクレポート（未実装）</li>
         </ol>
       </section>
