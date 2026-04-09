@@ -13,6 +13,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.60",
     "@ai-sdk/openai": "^3.0.52",
     "@libsql/client": "^0.17.2",
     "ai": "^6.0.154",

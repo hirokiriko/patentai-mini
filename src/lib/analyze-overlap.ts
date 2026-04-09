@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
+import { getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
 
 // --- Step 1: スクリーニング ---
@@ -24,7 +24,7 @@ export async function screenPriorArt(
   priorArts: PriorArtSummary[]
 ): Promise<{ relevantDocIds: number[]; reasoning: string }> {
   const { object } = await generateObject({
-    model: openai("gpt-4o"),
+    model: getModel(),
     schema: screeningResultSchema,
     system: `あなたは特許調査の専門家です。
 特許案の請求項・構成要素と、先行技術文献のリストを比較し、
@@ -111,7 +111,7 @@ export async function analyzeOverlap(
   const independentClaims = extracted.claims.filter((c) => c.isIndependent);
 
   const { object } = await generateObject({
-    model: openai("gpt-4o"),
+    model: getModel(),
     schema: comparisonSchema,
     system: `あなたは特許調査の専門家です。特許案の請求項と先行技術文献の重なりを分析してください。
 

@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
+import { getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
 
 export const searchQuerySetSchema = z.object({
@@ -57,7 +57,7 @@ export async function generateQueries(
   const prompt = JSON.stringify(extracted, null, 2);
 
   const { object } = await generateObject({
-    model: openai("gpt-4o"),
+    model: getModel(),
     schema: searchQuerySetSchema,
     system: SYSTEM_PROMPT,
     prompt,

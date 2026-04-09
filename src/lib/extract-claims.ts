@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { openai } from "@ai-sdk/openai";
 import { z } from "zod";
+import { getModel } from "./ai-model";
 
 const claimElementSchema = z.object({
   type: z.enum(["component", "action", "constraint", "io", "effect"]),
@@ -46,14 +46,36 @@ const SYSTEM_PROMPT = `あなたは特許文書の構造解析エキスパート
 - 「登録可能」「拒絶されない」等の法的判断は含めない
 - 名詞句の列挙で終わらず、要素・関係・制約・作用効果に分解する`;
 
+// 特許明細書の主要セクションを抽出し、図面説明等の冗長部分を除く
+function trimPatentText(text: string, maxChars: number = 30000): string {
+  if (text.length <= maxChars) return text;
+
+  // 請求項セクションを優先保持（【特許請求の範囲】〜次の【】まで）
+  const claimsMatch = text.match(
+    /【(?:書類名】特許請求の範囲|特許請求の範囲)】[\s\S]*?(?=【書類名】|$)/
+  );
+  const claims = claimsMatch?.[0] ?? "";
+
+  // 要約・課題・効果セクションを探す
+  const summaryMatch = text.match(
+    /【(?:要約|課題|発明の効果|技術分野|背景技術)】[\s\S]*?(?=【図面の簡単な説明】|【符号の説明】|$)/
+  );
+  const summary = summaryMatch?.[0] ?? "";
+
+  const combined = claims + "\n\n" + summary;
+  return combined.substring(0, maxChars);
+}
+
 export async function extractClaims(
   parsedText: string
 ): Promise<ExtractedClaims> {
+  const trimmed = trimPatentText(parsedText);
+
   const { object } = await generateObject({
-    model: openai("gpt-4o"),
+    model: getModel(),
     schema: extractedClaimsSchema,
     system: SYSTEM_PROMPT,
-    prompt: parsedText,
+    prompt: trimmed,
   });
 
   return object;
