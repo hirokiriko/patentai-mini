@@ -1,13 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/db";
-import { cases, draftPatents, searchQuerySets, priorArtDocuments } from "@/db/schema";
+import { cases, draftPatents, searchQuerySets, priorArtDocuments, comparisonResults } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
 import { basename } from "path";
 import { GenerateQueriesButton } from "./generate-queries-button";
 import { UploadCsvForm } from "./upload-csv-form";
+import { AnalyzeButton } from "./analyze-button";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,17 @@ export default async function CaseDetailPage({
     .from(priorArtDocuments)
     .where(eq(priorArtDocuments.caseId, caseIdNum))
     .orderBy(desc(priorArtDocuments.docId));
+
+  // 分析結果を取得
+  const analysisResults = await db
+    .select()
+    .from(comparisonResults)
+    .where(eq(comparisonResults.caseId, caseIdNum));
+
+  // docId → 文献番号のマップ
+  const docMap = new Map(
+    priorArts.map((pa) => [pa.docId, pa])
+  );
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-8">
@@ -314,23 +326,139 @@ export default async function CaseDetailPage({
         </section>
       )}
 
-      {/* 後続ステップ */}
-      <section className="mt-8 space-y-4">
-        <h2 className="text-lg font-semibold">処理ステップ</h2>
-        <ol
-          className="list-decimal list-inside space-y-2 text-gray-600"
-          start={priorArts.length > 0 ? 5 : latestQuerySet ? 4 : extracted ? 3 : 2}
-        >
-          {!extracted && <li>請求項・構成要素を抽出（上のボタンから実行）</li>}
-          {extracted && !latestQuerySet && (
-            <li>J-PlatPat 検索式を生成（上のボタンから実行）</li>
+      {/* Step 5: 重なり分析・リスクレポート */}
+      {priorArts.length > 0 && extracted && (
+        <section className="mt-8 space-y-4">
+          <h2 className="text-lg font-semibold">5. 重なり分析・リスクレポート</h2>
+          <AnalyzeButton
+            caseId={caseIdNum}
+            hasResults={analysisResults.length > 0}
+          />
+
+          {analysisResults.length > 0 && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-500">
+                ※ 類似度が高い＝新規性なし ではありません。最終判断には専門家の確認が必要です。
+              </p>
+
+              {analysisResults
+                .sort((a, b) => {
+                  const order = { High: 0, Medium: 1, Low: 2, Unknown: 3 };
+                  return (
+                    (order[a.riskLabel as keyof typeof order] ?? 3) -
+                    (order[b.riskLabel as keyof typeof order] ?? 3)
+                  );
+                })
+                .map((r) => {
+                  const doc = docMap.get(r.priorDocId ?? 0);
+                  const overall =
+                    0.3 * (r.lexicalScore ?? 0) +
+                    0.35 * (JSON.parse(r.matchedElementsJson ?? "{}").elementScore ?? 0) +
+                    0.2 * (r.semanticScore ?? 0) +
+                    0.15 * (r.structuralScore ?? 0);
+                  const detail = r.matchedElementsJson
+                    ? JSON.parse(r.matchedElementsJson)
+                    : null;
+                  const riskColor = {
+                    High: "bg-red-100 text-red-800 border-red-300",
+                    Medium: "bg-yellow-100 text-yellow-800 border-yellow-300",
+                    Low: "bg-green-100 text-green-800 border-green-300",
+                    Unknown: "bg-gray-100 text-gray-600 border-gray-300",
+                  }[r.riskLabel ?? "Unknown"];
+
+                  return (
+                    <div
+                      key={r.resultId}
+                      className="rounded border border-gray-200 px-4 py-3 space-y-2"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`rounded border px-2 py-0.5 text-xs font-bold ${riskColor}`}
+                        >
+                          {r.riskLabel}
+                        </span>
+                        <span className="text-sm font-medium">
+                          請求項 {r.draftClaimId}
+                        </span>
+                        <span className="text-sm text-gray-500">vs</span>
+                        <span className="text-sm font-mono">
+                          {doc?.publicationNo ?? `Doc#${r.priorDocId}`}
+                        </span>
+                        <span className="ml-auto text-xs text-gray-500">
+                          総合: {(overall * 100).toFixed(0)}%
+                        </span>
+                      </div>
+
+                      {doc && (
+                        <p className="text-xs text-gray-500">{doc.title}</p>
+                      )}
+
+                      <div className="flex gap-3 text-xs text-gray-500">
+                        <span>L1語彙: {((r.lexicalScore ?? 0) * 100).toFixed(0)}%</span>
+                        <span>L2要素: {((detail?.elementScore ?? 0) * 100).toFixed(0)}%</span>
+                        <span>L3意味: {((r.semanticScore ?? 0) * 100).toFixed(0)}%</span>
+                        <span>L4構造: {((r.structuralScore ?? 0) * 100).toFixed(0)}%</span>
+                      </div>
+
+                      {detail?.explanation && (
+                        <p className="text-sm text-gray-700">
+                          {detail.explanation}
+                        </p>
+                      )}
+
+                      {detail?.matched?.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {detail.matched.map((m: string, i: number) => (
+                            <span
+                              key={i}
+                              className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700 border border-red-200"
+                            >
+                              一致: {m}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {detail?.unmatched?.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {detail.unmatched.map((u: string, i: number) => (
+                            <span
+                              key={i}
+                              className="rounded bg-green-50 px-2 py-0.5 text-xs text-green-700 border border-green-200"
+                            >
+                              差分: {u}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
           )}
-          {latestQuerySet && priorArts.length === 0 && (
-            <li>検索結果 CSV をアップロード（上のフォームから実行）</li>
-          )}
-          <li>重なり分析・リスクレポート（未実装）</li>
-        </ol>
-      </section>
+        </section>
+      )}
+
+      {/* 次のステップのガイド */}
+      {(!extracted || !latestQuerySet || priorArts.length === 0) && (
+        <section className="mt-8 space-y-4">
+          <h2 className="text-lg font-semibold">次のステップ</h2>
+          <ol
+            className="list-decimal list-inside space-y-2 text-gray-600"
+            start={priorArts.length > 0 ? 5 : latestQuerySet ? 4 : extracted ? 3 : 2}
+          >
+            {!extracted && (
+              <li>請求項・構成要素を抽出（上のボタンから実行）</li>
+            )}
+            {extracted && !latestQuerySet && (
+              <li>J-PlatPat 検索式を生成（上のボタンから実行）</li>
+            )}
+            {latestQuerySet && priorArts.length === 0 && (
+              <li>検索結果 CSV をアップロード（上のフォームから実行）</li>
+            )}
+          </ol>
+        </section>
+      )}
     </main>
   );
 }
