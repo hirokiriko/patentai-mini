@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/db";
-import { cases, draftPatents } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { cases, draftPatents, searchQuerySets } from "@/db/schema";
+import { eq, desc } from "drizzle-orm";
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
 import { basename } from "path";
+import { GenerateQueriesButton } from "./generate-queries-button";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,17 @@ export default async function CaseDetailPage({
   const firstDraft = drafts[0];
   const extracted: ExtractedClaims | null = firstDraft?.extractedClaimsJson
     ? JSON.parse(firstDraft.extractedClaimsJson)
+    : null;
+
+  // 検索式を取得
+  const querySets = await db
+    .select()
+    .from(searchQuerySets)
+    .where(eq(searchQuerySets.caseId, caseIdNum))
+    .orderBy(desc(searchQuerySets.querySetId));
+  const latestQuerySet = querySets[0];
+  const queryRationale = latestQuerySet?.rationaleJson
+    ? JSON.parse(latestQuerySet.rationaleJson)
     : null;
 
   return (
@@ -174,15 +186,97 @@ export default async function CaseDetailPage({
         </section>
       )}
 
+      {/* Step 3: 検索式生成 */}
+      {extracted && (
+        <section className="mt-8 space-y-4">
+          <h2 className="text-lg font-semibold">3. J-PlatPat 検索式</h2>
+          <GenerateQueriesButton
+            caseId={caseIdNum}
+            hasQueries={!!latestQuerySet}
+          />
+
+          {latestQuerySet && (
+            <div className="space-y-4">
+              {(
+                [
+                  ["広め（再現率重視）", latestQuerySet.broadQuery],
+                  ["中庸（バランス）", latestQuerySet.balancedQuery],
+                  ["狭め（適合率重視）", latestQuerySet.narrowQuery],
+                ] as const
+              ).map(([label, query]) => (
+                <div key={label} className="rounded border border-gray-200 px-4 py-3">
+                  <p className="text-sm font-medium text-gray-700">{label}</p>
+                  <pre className="mt-1 whitespace-pre-wrap rounded bg-gray-50 p-2 text-sm font-mono">
+                    {query}
+                  </pre>
+                </div>
+              ))}
+
+              {queryRationale && (
+                <details className="text-sm text-gray-600">
+                  <summary className="cursor-pointer font-medium hover:text-gray-800">
+                    キーワード・根拠の詳細
+                  </summary>
+                  <div className="mt-2 space-y-2">
+                    {queryRationale.keywordGroups && (
+                      <div className="flex flex-wrap gap-1">
+                        {queryRationale.keywordGroups.core?.map(
+                          (k: string, i: number) => (
+                            <span key={i} className="rounded bg-red-50 px-2 py-0.5 text-xs text-red-700 border border-red-200">
+                              {k}
+                            </span>
+                          )
+                        )}
+                        {queryRationale.keywordGroups.synonyms?.map(
+                          (k: string, i: number) => (
+                            <span key={i} className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700 border border-blue-200">
+                              {k}
+                            </span>
+                          )
+                        )}
+                        {queryRationale.keywordGroups.effects?.map(
+                          (k: string, i: number) => (
+                            <span key={i} className="rounded bg-green-50 px-2 py-0.5 text-xs text-green-700 border border-green-200">
+                              {k}
+                            </span>
+                          )
+                        )}
+                      </div>
+                    )}
+                    {queryRationale.excludedTerms?.length > 0 && (
+                      <p>
+                        <span className="font-medium">除外語:</span>{" "}
+                        {queryRationale.excludedTerms.join(", ")}
+                      </p>
+                    )}
+                    {queryRationale.rationale?.length > 0 && (
+                      <ul className="ml-4 list-disc">
+                        {queryRationale.rationale.map(
+                          (r: string, i: number) => (
+                            <li key={i}>{r}</li>
+                          )
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
       {/* 後続ステップ */}
       <section className="mt-8 space-y-4">
         <h2 className="text-lg font-semibold">処理ステップ</h2>
         <ol
           className="list-decimal list-inside space-y-2 text-gray-600"
-          start={extracted ? 3 : 2}
+          start={latestQuerySet ? 4 : extracted ? 3 : 2}
         >
           {!extracted && <li>請求項・構成要素を抽出（上のボタンから実行）</li>}
-          <li>J-PlatPat 検索式を生成（未実装）</li>
+          {extracted && !latestQuerySet && (
+            <li>J-PlatPat 検索式を生成（上のボタンから実行）</li>
+          )}
           <li>検索結果 CSV をアップロード（未実装）</li>
           <li>重なり分析・リスクレポート（未実装）</li>
         </ol>
