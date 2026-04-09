@@ -22,3 +22,53 @@
 - Consequence:
   - マルチユーザー用途には向かない
   - 将来 pgvector/Qdrant へ移行可能な抽象化が必要
+
+## DR-0003: LLM 統合に AI SDK (Vercel AI SDK) を採用
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - PoC フェーズでモデル・プロバイダーの切り替えを頻繁に試したい
+  - OpenAI 固定だと比較実験のたびにコード変更が必要になる
+- Decision:
+  - AI SDK を使い、プロバイダー（openai / anthropic / google 等）をコード変更なしで切り替え可能にする
+  - .env の設定でプロバイダーとモデルを指定する
+- Consequence:
+  - .env.example の LLM 関連変数を AI SDK のプロバイダー体系に合わせる
+  - 各プロバイダーの SDK パッケージを依存に追加する必要がある
+
+## DR-0004: All JS/TS 構成（Python 併用なし）
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - DR-0003 で AI SDK を採用し、LLM 呼び出しは TS で完結する
+  - PDF パースは pdf-parse、DOCX は mammoth で JS 内で対応可能
+  - PoC で 2 言語のランタイム管理は負荷が大きい
+- Decision:
+  - Next.js + TypeScript のみで構成し、Python ワーカーは使わない
+- Consequence:
+  - docs/03-architecture.md の「Parser / Analysis Worker: Python」は撤回
+  - ファイルパースを JS ライブラリで賄う必要がある
+
+## DR-0005: ORM に Drizzle を採用
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - DR-0002 で SQLite を採用しており、軽量な ORM が望ましい
+  - SQL に近い記法で学習コストが低く、PoC に適している
+- Decision:
+  - Drizzle ORM + drizzle-kit でスキーマ管理・マイグレーションを行う
+- Consequence:
+  - スキーマ定義は TypeScript ファイルで管理する
+  - drizzle-kit push / migrate でスキーマ変更を適用する
+
+## DR-0006: パッケージマネージャに pnpm を採用
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - Vercel が pnpm を公式サポートし自動検出する
+  - node_modules がハードリンクで軽量
+- Decision:
+  - pnpm を使用する
+- Consequence:
+  - pnpm-lock.yaml をリポジトリに含める
+  - mise で Node.js と pnpm のバージョンを管理する

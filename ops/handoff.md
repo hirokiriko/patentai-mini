@@ -1,17 +1,19 @@
 # Handoff
 
 ## 現在地
-PoC の土台文書はできたが、まだ**実データ前提の検証**に入っていない。
+技術スタックが確定した（DR-0003〜DR-0006）。GitHub リポジトリ作成済み（hirokiriko/patentai-mini）。**次はアプリケーションコードの初期化**。
 
 ## 次セッションの最優先
-1. 実際の特許案ファイル 1 件を解析対象として受ける
-2. 想定される請求項抽出 JSON を決める
-3. J-PlatPat 検索結果 CSV の実物を取り込み、列マッピングを作る
+1. Next.js プロジェクトの初期化（pnpm create next-app）
+2. Drizzle ORM セットアップ + docs/03-architecture.md のデータモデルをスキーマ定義
+3. .env.example を AI SDK 体系に更新
+4. Vercel デプロイ確認
 
 ## 触るファイル
-- `docs/02-requirements.md`
-- `docs/04-query-generation-spec.md`
-- `docs/05-overlap-analysis-spec.md`
+- `package.json`（新規）
+- `src/` or `app/`（新規）
+- `drizzle/`（新規）
+- `.env.example`
 - `ops/tasks.md`
 - `ops/session-log.md`
 
@@ -19,3 +21,4 @@ PoC の土台文書はできたが、まだ**実データ前提の検証**に入
 - 推測で CSV 列名を固定しない
 - 類似度だけで危険判定しない
 - 独立請求項を主軸に据える
+- ローカル git config は hirokiriko アカウント用に設定済み（HTTPS + gh auth git-credential）

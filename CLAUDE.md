@@ -44,18 +44,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | レイヤー | 技術 |
 |----------|------|
-| Frontend | Next.js or 軽量 Web UI |
-| API | Next.js API Routes or FastAPI |
-| 分析ワーカー | Python |
+| Frontend | Next.js (App Router) |
+| API | Next.js API Routes (Route Handlers) |
+| 言語 | TypeScript のみ（Python 併用なし） |
+| ORM | Drizzle ORM + drizzle-kit |
 | DB | SQLite（`file:./data/app.db`） |
 | ベクトル検索 | SQLite拡張 → pgvector/Qdrant に拡張可能 |
-| LLM | OpenAI（CHAT_MODEL, EMBEDDING_MODEL） |
+| LLM | AI SDK (Vercel AI SDK) でプロバイダー切り替え |
 | ファイル保存 | ローカル（`./data/uploads`, `./data/artifacts`） |
+| パッケージマネージャ | pnpm |
 
 ## 確定済み設計判断
 
 - **DR-0001**: J-PlatPat はユーザーが手動操作。システムは検索式生成と結果分析に集中する
 - **DR-0002**: 初期保存層は SQLite + ローカルファイル。将来の pgvector/Qdrant 移行を想定した抽象化が必要
+- **DR-0003**: LLM 統合に AI SDK を採用。プロバイダー（openai/anthropic/google 等）を .env でコード変更なしに切り替え可能にする
+- **DR-0004**: All JS/TS 構成。Python ワーカーは使わず Next.js + TypeScript のみ
+- **DR-0005**: ORM に Drizzle を採用。drizzle-kit でスキーマ管理・マイグレーション
+- **DR-0006**: パッケージマネージャに pnpm を採用
 
 ## 環境変数
 

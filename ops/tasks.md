@@ -9,6 +9,7 @@
 - [ ] Claim Element 抽出 JSON スキーマを作る
 - [ ] Query Builder のプロンプト草案を作る
 - [ ] CSV Importer のバリデーション仕様を決める
+- [ ] .env.example を AI SDK プロバイダー体系に更新する（DR-0003 consequence、Next.js 初期化時）
 
 ## In Progress
 - [ ] ここに現在セッションで着手中の作業だけを書く
@@ -18,6 +19,7 @@
 
 ## Done
 - [x] PoC の目的と対象フローを整理した
+- [x] 技術スタック設計判断を確定した（DR-0003〜DR-0006）
 
 ## 運用ルール
 - In Progress は 1〜3 件まで

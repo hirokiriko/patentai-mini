@@ -3,11 +3,14 @@
 ## 推奨方針
 PoC では **複雑な分散構成は不要** です。まずは以下で十分です。
 
-- Frontend: Next.js あるいは軽量 Web UI
-- API / Orchestrator: Next.js API Routes もしくは FastAPI
-- Parser / Analysis Worker: Python
+- Frontend: Next.js (App Router)
+- API / Orchestrator: Next.js API Routes (Route Handlers)
+- 言語: TypeScript のみ（DR-0004 により Python 併用なし）
+- ORM: Drizzle ORM + drizzle-kit（DR-0005）
 - DB: SQLite
 - Vector store: 初期は SQLite 拡張またはファイルベース、必要なら pgvector/Qdrant へ拡張
+- LLM: AI SDK (Vercel AI SDK) でプロバイダー切り替え（DR-0003）
+- パッケージマネージャ: pnpm（DR-0006）
 - File storage: ローカルディスク
 
 ## 論理コンポーネント
