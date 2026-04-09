@@ -41,3 +41,40 @@
 - Next.js プロジェクトの初期化（create-next-app）
 - Drizzle ORM セットアップとスキーマ定義
 - Vercel デプロイ
+
+## 2026-04-09 全7ステップ実装完了
+### 実施
+- Next.js プロジェクト初期化（Next.js 16, App Router, Tailwind, Turbopack）
+- mise.toml で Node.js 22 + pnpm 10 をプロジェクトローカルに設定
+- Vercel デプロイ確認（GitHub 自動連携設定済み）
+- Drizzle ORM セットアップ（5テーブル: cases, draft_patents, search_query_sets, prior_art_documents, comparison_results）
+- AI SDK + @ai-sdk/openai 導入、.env.example 更新
+- 案件 CRUD API + 一覧・作成・詳細画面
+- 特許案アップロード + テキスト自動抽出（unpdf/mammoth）
+  - pdf-parse v1/v2 は Next.js Turbopack と互換性問題があり unpdf に切り替え
+- AI 請求項・構成要素抽出（generateObject + zod スキーマ）
+- J-PlatPat 検索式生成（広/中/狭 3段階 + キーワード群 + 根拠）
+- J-PlatPat CSV 取り込み（実データ146件で検証、要約列オプショナル対応）
+- 重なり分析・リスクレポート（2段階: スクリーニング→詳細4層分析）
+
+### 決まったこと
+- PDF パースは unpdf を使用（pdf-parse は非互換）
+- J-PlatPat CSV 列定義が確定（文献番号, 出願番号, 出願日, 公知日, 発明の名称, 出願人/権利者, FI, 要約(optional), 公開番号, 公告番号, 登録番号, 審判番号, その他, ステージ, イベント詳細, 文献URL）
+- 重なり分析はコスト・時間の制約から2段階方式（スクリーニング→上位20件のみ詳細分析）
+
+### 仕様との実装差異
+- 4層スコアは独立アルゴリズムではなく AI 一括推定
+- L3 意味類似はベクトル検索未使用
+- LLM モデルは gpt-4o ハードコード（.env 切り替え未実装）
+- ファイルアップロードはローカル fs（Vercel 上で永続化不可）
+- 従属請求項の分析は未対応（独立請求項のみ）
+
+### 未解決
+- 実際の特許案ファイルでの end-to-end テスト
+- LLM プロバイダー/モデルの動的切り替え
+- Vercel 上でのファイル永続化
+
+### 次にやること
+- 実データで end-to-end 動作確認
+- UI/UX 改善
+- 仕様差異の段階的解消

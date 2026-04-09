@@ -28,12 +28,37 @@ mise exec -- pnpm db:studio   # Drizzle Studio（DB ブラウザ）
 
 ```
 src/
-├── app/          # Next.js App Router（ページ・API Routes）
-└── db/           # Drizzle ORM（スキーマ・クライアント）
-    ├── schema.ts # テーブル定義
-    └── index.ts  # DB 接続インスタンス
-drizzle.config.ts # drizzle-kit 設定
+├── app/
+│   ├── page.tsx                  # 案件一覧・作成
+│   ├── cases/[caseId]/page.tsx   # 案件詳細（全ステップ統合）
+│   └── api/cases/
+│       ├── route.ts              # GET/POST 案件 CRUD
+│       ├── [caseId]/route.ts     # GET/PATCH/DELETE 案件個別
+│       ├── [caseId]/draft/       # 特許案アップロード・テキスト抽出
+│       ├── [caseId]/draft/[draftId]/extract/  # AI 請求項抽出
+│       ├── [caseId]/queries/     # 検索式生成
+│       ├── [caseId]/prior-art/   # CSV 取り込み
+│       └── [caseId]/analyze/     # 重なり分析
+├── db/
+│   ├── schema.ts  # テーブル定義（5テーブル）
+│   └── index.ts   # DB 接続
+└── lib/
+    ├── parse-file.ts          # PDF/DOCX/TXT テキスト抽出
+    ├── extract-claims.ts      # AI 請求項・構成要素抽出
+    ├── generate-queries.ts    # AI 検索式生成
+    ├── parse-jplatpat-csv.ts  # J-PlatPat CSV パーサー
+    └── analyze-overlap.ts     # 2段階重なり分析（スクリーニング + 詳細）
+drizzle.config.ts
 ```
+
+## 仕様との実装差異・制限事項
+
+- **重なり分析の4層スコア**: 仕様では独立した4アルゴリズムだが、PoC では AI に一括推定させている。L3 意味類似はベクトル検索未使用（`ENABLE_VECTOR_SEARCH=false`）
+- **重なり分析の2段階方式**: 全文献を1件ずつ分析するとコスト・時間が非現実的なため、スクリーニング（上位20件選定）→ 詳細分析の2段階にしている
+- **ファイルアップロード**: ローカル fs 保存のため Vercel 上では永続化されない。本番運用時は Vercel Blob 等に切り替え必要
+- **LLM モデル**: `openai("gpt-4o")` がハードコードされている。プロバイダー/モデルの .env 切り替えは未実装
+- **J-PlatPat CSV**: 実データで検証済み（要約列オプショナル対応）。ただし全列パターンの網羅テストは未実施
+- **エラーハンドリング**: API の基本バリデーションのみ。LLM 呼び出し失敗時のリトライや部分保存は未実装
 
 ## ドキュメント構成（読む順番）
 
