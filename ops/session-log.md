@@ -78,3 +78,34 @@
 - 実データで end-to-end 動作確認
 - UI/UX 改善
 - 仕様差異の段階的解消
+
+## 2026-04-09 ブラッシュアップ・Turso 移行・Vercel 完全動作
+### 実施
+- LLM プロバイダー切り替え（src/lib/ai-model.ts: AI_PROVIDER / AI_MODEL 環境変数）
+- @ai-sdk/google 追加、デフォルトを Google AI (gemini) に変更
+- テキスト長制限（trimPatentText: 請求項・要約優先、30,000文字上限）
+- J-PlatPat 検索式フォーマット修正（ダブルクォート禁止、/CL等タグ必須、角括弧等）
+- 実データ end-to-end 動作確認（DOCX アップロード→請求項抽出→検索式→CSV取込→重なり分析 全ステップ成功）
+- リポジトリパターン導入（src/repositories/: types.ts + drizzle.ts + index.ts）
+- Turso (libSQL クラウド) 移行（kiriko アカウント、東京リージョン）
+- Vercel 環境変数設定（DATABASE_URL, TURSO_AUTH_TOKEN）
+- DB 遅延初期化（Proxy パターン）でビルド時の接続エラー解消
+- .vercelignore でローカル .env がデプロイに含まれない対策
+- Git author 問題の解決（原因: direnv の GIT_AUTHOR_* 環境変数、プロジェクト .envrc で上書き）
+- includeIf 復元（原因は direnv であり git config ではなかった）
+
+### 決まったこと
+- DR-0007: リポジトリパターンで DB 抽象化。Firebase 等への切り替えは index.ts の import 先変更のみ
+- DR-0008: LLM プロバイダーを環境変数で動的切り替え
+- Turso は kiriko アカウント（h.sato@kiriko.tech）で管理
+
+### 気づき・注意点
+- vercel env add で heredoc 経由だと末尾改行が入る（Invalid URL の原因に）→ printf で渡す
+- pdf-parse v1/v2 は Next.js Turbopack と互換性問題 → unpdf に切り替え済み
+- direnv の GIT_AUTHOR_* は git config より優先される（env vars > local > global > system）
+- GOOGLE_GENERATIVE_AI_API_KEY がセッション中に露出 → ローテーション推奨
+
+### 次にやること
+- UI/UX 改善
+- 従属請求項の分析対応
+- ファイルアップロードの Vercel Blob 対応

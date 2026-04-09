@@ -31,18 +31,26 @@ src/
 ├── app/
 │   ├── page.tsx                  # 案件一覧・作成
 │   ├── cases/[caseId]/page.tsx   # 案件詳細（全ステップ統合）
-│   └── api/cases/
-│       ├── route.ts              # GET/POST 案件 CRUD
-│       ├── [caseId]/route.ts     # GET/PATCH/DELETE 案件個別
-│       ├── [caseId]/draft/       # 特許案アップロード・テキスト抽出
-│       ├── [caseId]/draft/[draftId]/extract/  # AI 請求項抽出
-│       ├── [caseId]/queries/     # 検索式生成
-│       ├── [caseId]/prior-art/   # CSV 取り込み
-│       └── [caseId]/analyze/     # 重なり分析
+│   └── api/
+│       ├── cases/
+│       │   ├── route.ts              # GET/POST 案件 CRUD
+│       │   └── [caseId]/
+│       │       ├── route.ts          # GET/PATCH/DELETE 案件個別
+│       │       ├── draft/            # 特許案アップロード・テキスト抽出
+│       │       ├── draft/[draftId]/extract/  # AI 請求項抽出
+│       │       ├── queries/          # 検索式生成
+│       │       ├── prior-art/        # CSV 取り込み
+│       │       └── analyze/          # 重なり分析
+│       └── health/route.ts       # ヘルスチェック（DB 接続確認）
+├── repositories/
+│   ├── types.ts   # リポジトリインターフェース（DB 実装非依存）
+│   ├── drizzle.ts # Drizzle/Turso 実装
+│   └── index.ts   # エントリ（実装切り替えはここを変更）
 ├── db/
 │   ├── schema.ts  # テーブル定義（5テーブル）
-│   └── index.ts   # DB 接続
+│   └── index.ts   # DB 接続（遅延初期化、Turso 認証対応）
 └── lib/
+    ├── ai-model.ts            # LLM プロバイダー/モデル切り替え
     ├── parse-file.ts          # PDF/DOCX/TXT テキスト抽出
     ├── extract-claims.ts      # AI 請求項・構成要素抽出
     ├── generate-queries.ts    # AI 検索式生成
@@ -51,14 +59,24 @@ src/
 drizzle.config.ts
 ```
 
+### DB 実装の切り替え方
+
+`src/repositories/index.ts` の import 先を変更するだけで DB 実装を差し替え可能:
+```typescript
+// 現在: Drizzle/Turso
+export { caseRepo, ... } from "./drizzle";
+// Firebase に切り替える場合:
+export { caseRepo, ... } from "./firebase";
+```
+
 ## 仕様との実装差異・制限事項
 
-- **重なり分析の4層スコア**: 仕様では独立した4アルゴリズムだが、PoC では AI に一括推定させている。L3 意味類似はベクトル検索未使用（`ENABLE_VECTOR_SEARCH=false`）
+- **重なり分析の4層スコア**: 仕様では独立した4アルゴリズムだが、PoC では AI に一括推定させている。L3 意味類似はベクトル検索未使用
 - **重なり分析の2段階方式**: 全文献を1件ずつ分析するとコスト・時間が非現実的なため、スクリーニング（上位20件選定）→ 詳細分析の2段階にしている
 - **ファイルアップロード**: ローカル fs 保存のため Vercel 上では永続化されない。本番運用時は Vercel Blob 等に切り替え必要
-- **LLM モデル**: `openai("gpt-4o")` がハードコードされている。プロバイダー/モデルの .env 切り替えは未実装
 - **J-PlatPat CSV**: 実データで検証済み（要約列オプショナル対応）。ただし全列パターンの網羅テストは未実施
 - **エラーハンドリング**: API の基本バリデーションのみ。LLM 呼び出し失敗時のリトライや部分保存は未実装
+- **従属請求項**: 重なり分析は独立請求項のみ対象。従属請求項の分析は未対応
 
 ## ドキュメント構成（読む順番）
 
@@ -96,16 +114,18 @@ drizzle.config.ts
 | API | Next.js API Routes (Route Handlers) |
 | 言語 | TypeScript のみ（Python 併用なし） |
 | ORM | Drizzle ORM + drizzle-kit |
-| DB | SQLite（`file:./data/app.db`） |
-| ベクトル検索 | SQLite拡張 → pgvector/Qdrant に拡張可能 |
-| LLM | AI SDK (Vercel AI SDK) でプロバイダー切り替え |
+| DB | Turso (libSQL) — ローカルは SQLite フォールバック可 |
+| DB アクセス | リポジトリパターン（`src/repositories/`）で実装差し替え可能 |
+| ベクトル検索 | 未実装（将来 pgvector/Qdrant に拡張可能） |
+| LLM | AI SDK — `AI_PROVIDER` / `AI_MODEL` 環境変数で切り替え |
 | ファイル保存 | ローカル（`./data/uploads`, `./data/artifacts`） |
 | パッケージマネージャ | pnpm |
+| デプロイ | Vercel（GitHub 自動連携） |
 
 ## 確定済み設計判断
 
 - **DR-0001**: J-PlatPat はユーザーが手動操作。システムは検索式生成と結果分析に集中する
-- **DR-0002**: 初期保存層は SQLite + ローカルファイル。将来の pgvector/Qdrant 移行を想定した抽象化が必要
+- **DR-0002**: 初期保存層は Turso (libSQL クラウド)。リポジトリパターンで Firebase 等への差し替え可能
 - **DR-0003**: LLM 統合に AI SDK を採用。プロバイダー（openai/anthropic/google 等）を .env でコード変更なしに切り替え可能にする
 - **DR-0004**: All JS/TS 構成。Python ワーカーは使わず Next.js + TypeScript のみ
 - **DR-0005**: ORM に Drizzle を採用。drizzle-kit でスキーマ管理・マイグレーション
@@ -114,7 +134,12 @@ drizzle.config.ts
 ## 環境変数
 
 `.env.example` を参照。主要な設定:
-- `OPENAI_API_KEY` — LLM 用（AI SDK が自動認識。他プロバイダーは `ANTHROPIC_API_KEY` 等）
-- `DATABASE_URL` — SQLite パス
-- `VECTOR_BACKEND` — `sqlite` / `pgvector` / `qdrant`
-- Feature flags: `ENABLE_VECTOR_SEARCH`, `ENABLE_CLAIM_GRAPH`, `ENABLE_MANUAL_REVIEW_QUEUE`
+- `DATABASE_URL` — Turso URL（`libsql://...turso.io`）またはローカル SQLite（`file:./data/app.db`）
+- `TURSO_AUTH_TOKEN` — Turso 認証トークン（ローカル SQLite の場合は不要）
+- `AI_PROVIDER` — `google` / `openai`（デフォルト: `google`）
+- `AI_MODEL` — プロバイダーごとのモデル名（省略時はデフォルト）
+- `GOOGLE_GENERATIVE_AI_API_KEY` / `OPENAI_API_KEY` — 使用するプロバイダーの API キー
+
+### Git author 設定
+
+このリポジトリは `kiriko/` 配下にあるため、親ディレクトリの `.envrc`（direnv）で KIRIKO の git identity が適用される。プロジェクトルートの `.envrc` で `hirokiriko` に上書き済み。

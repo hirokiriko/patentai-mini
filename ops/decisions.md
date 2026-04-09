@@ -72,3 +72,29 @@
 - Consequence:
   - pnpm-lock.yaml をリポジトリに含める
   - mise で Node.js と pnpm のバージョンを管理する
+
+## DR-0007: DB をリポジトリパターンで抽象化し、Turso に移行
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - ローカル SQLite は Vercel 上で動作しない（サーバーレス環境にファイルシステムなし）
+  - 将来 Firebase / AWS DynamoDB 等への切り替えも想定される
+- Decision:
+  - src/repositories/ にインターフェース（types.ts）と実装（drizzle.ts）を分離
+  - DB を Turso (libSQL クラウド) に移行し、Vercel 上でも動作可能にする
+  - 実装切り替えは repositories/index.ts の import 先変更のみで対応
+- Consequence:
+  - API Routes と Server Components は repositories 経由でのみ DB アクセスする
+  - db/ を直接 import するのは repositories/drizzle.ts のみ
+
+## DR-0008: LLM プロバイダーを環境変数で動的切り替え
+- Date: 2026-04-09
+- Status: Accepted
+- Context:
+  - PoC フェーズでモデル比較を頻繁に行いたい
+  - openai("gpt-4o") のハードコードを排除したい
+- Decision:
+  - src/lib/ai-model.ts で AI_PROVIDER / AI_MODEL 環境変数を読み取り、getModel() を提供
+  - 現在対応: google (gemini), openai (gpt-4o)
+- Consequence:
+  - 新プロバイダー追加時は ai-model.ts に case を追加するだけ
