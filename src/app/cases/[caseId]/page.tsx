@@ -49,16 +49,33 @@ export default async function CaseDetailPage({
             {drafts.map((d) => (
               <li
                 key={d.draftId}
-                className="flex items-center gap-2 rounded border border-gray-200 px-3 py-2 text-sm"
+                className="rounded border border-gray-200 px-3 py-2 text-sm space-y-2"
               >
-                <span className="text-green-600">✓</span>
-                <span>
-                  {d.sourceFilePath ? basename(d.sourceFilePath) : "（ファイル名不明）"}
-                </span>
-                {d.extractedClaimsJson && (
-                  <span className="ml-auto text-xs text-green-600">
-                    抽出済み
+                <div className="flex items-center gap-2">
+                  <span className="text-green-600">✓</span>
+                  <span>
+                    {d.sourceFilePath ? basename(d.sourceFilePath) : "（ファイル名不明）"}
                   </span>
+                  {d.parsedText && (
+                    <span className="ml-auto text-xs text-green-600">
+                      テキスト抽出済み
+                    </span>
+                  )}
+                  {d.extractedClaimsJson && (
+                    <span className="text-xs text-blue-600">
+                      請求項抽出済み
+                    </span>
+                  )}
+                </div>
+                {d.parsedText && (
+                  <details className="text-xs text-gray-600">
+                    <summary className="cursor-pointer hover:text-gray-800">
+                      抽出テキストを表示（{d.parsedText.length.toLocaleString()} 文字）
+                    </summary>
+                    <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2">
+                      {d.parsedText}
+                    </pre>
+                  </details>
                 )}
               </li>
             ))}

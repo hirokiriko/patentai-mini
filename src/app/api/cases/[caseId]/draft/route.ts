@@ -4,6 +4,7 @@ import { cases, draftPatents } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { parseFile } from "@/lib/parse-file";
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./data/uploads";
 
@@ -57,12 +58,21 @@ export async function POST(
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(filePath, buffer);
 
+  // テキスト抽出
+  let parsedText: string | null = null;
+  try {
+    parsedText = await parseFile(filePath);
+  } catch {
+    // 抽出失敗してもレコードは作成する
+  }
+
   // DB レコード作成
   const [row] = await db
     .insert(draftPatents)
     .values({
       caseId: caseIdNum,
       sourceFilePath: filePath,
+      parsedText,
     })
     .returning();
 
