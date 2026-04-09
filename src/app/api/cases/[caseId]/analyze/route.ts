@@ -8,6 +8,8 @@ import {
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 
+export const maxDuration = 60;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
@@ -39,50 +41,56 @@ export async function POST(
 
   const extracted: ExtractedClaims = JSON.parse(draft.extractedClaimsJson);
 
-  const { relevantDocIds, reasoning } = await screenPriorArt(
-    extracted,
-    priorArts.map((pa) => ({
-      docId: pa.docId,
-      publicationNo: pa.publicationNo,
-      title: pa.title,
-      abstract: pa.abstract,
-    }))
-  );
+  try {
+    const { relevantDocIds, reasoning } = await screenPriorArt(
+      extracted,
+      priorArts.map((pa) => ({
+        docId: pa.docId,
+        publicationNo: pa.publicationNo,
+        title: pa.title,
+        abstract: pa.abstract,
+      }))
+    );
 
-  const relevantDocs = priorArts.filter((pa) =>
-    relevantDocIds.includes(pa.docId)
-  );
+    const relevantDocs = priorArts.filter((pa) =>
+      relevantDocIds.includes(pa.docId)
+    );
 
-  if (relevantDocs.length === 0) {
+    if (relevantDocs.length === 0) {
+      return NextResponse.json({
+        screening: { reasoning, candidateCount: 0 },
+        results: [],
+      });
+    }
+
+    const results = await analyzeOverlap(extracted, relevantDocs);
+
+    const count = await comparisonResultRepo.replaceByCaseId(
+      caseIdNum,
+      results.map((r) => ({
+        caseId: caseIdNum,
+        draftClaimId: String(r.draftClaimNo),
+        priorDocId: r.priorDocId,
+        lexicalScore: r.lexicalScore,
+        semanticScore: r.semanticScore,
+        structuralScore: r.structuralScore,
+        matchedElementsJson: JSON.stringify({
+          matched: r.matchedElements,
+          unmatched: r.unmatchedElements,
+          explanation: r.explanation,
+          elementScore: r.elementScore,
+        }),
+        riskLabel: r.riskLabel,
+      }))
+    );
+
     return NextResponse.json({
-      screening: { reasoning, candidateCount: 0 },
-      results: [],
+      screening: { reasoning, candidateCount: relevantDocs.length },
+      results: count,
     });
+  } catch (err) {
+    console.error("[analyze] analysis failed:", err);
+    const message = err instanceof Error ? err.message : "重なり分析中にエラーが発生しました";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  const results = await analyzeOverlap(extracted, relevantDocs);
-
-  const count = await comparisonResultRepo.replaceByCaseId(
-    caseIdNum,
-    results.map((r) => ({
-      caseId: caseIdNum,
-      draftClaimId: String(r.draftClaimNo),
-      priorDocId: r.priorDocId,
-      lexicalScore: r.lexicalScore,
-      semanticScore: r.semanticScore,
-      structuralScore: r.structuralScore,
-      matchedElementsJson: JSON.stringify({
-        matched: r.matchedElements,
-        unmatched: r.unmatchedElements,
-        explanation: r.explanation,
-        elementScore: r.elementScore,
-      }),
-      riskLabel: r.riskLabel,
-    }))
-  );
-
-  return NextResponse.json({
-    screening: { reasoning, candidateCount: relevantDocs.length },
-    results: count,
-  });
 }

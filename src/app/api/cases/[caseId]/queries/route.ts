@@ -3,6 +3,8 @@ import { caseRepo, draftPatentRepo, searchQuerySetRepo } from "@/repositories";
 import { generateQueries } from "@/lib/generate-queries";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 
+export const maxDuration = 60;
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
@@ -34,19 +36,26 @@ export async function POST(
   }
 
   const extracted: ExtractedClaims = JSON.parse(draft.extractedClaimsJson);
-  const queries = await generateQueries(extracted);
 
-  const row = await searchQuerySetRepo.create({
-    caseId: caseIdNum,
-    broadQuery: queries.broadQuery,
-    balancedQuery: queries.balancedQuery,
-    narrowQuery: queries.narrowQuery,
-    rationaleJson: JSON.stringify({
-      keywordGroups: queries.keywordGroups,
-      excludedTerms: queries.excludedTerms,
-      rationale: queries.rationale,
-    }),
-  });
+  try {
+    const queries = await generateQueries(extracted);
 
-  return NextResponse.json(row, { status: 201 });
+    const row = await searchQuerySetRepo.create({
+      caseId: caseIdNum,
+      broadQuery: queries.broadQuery,
+      balancedQuery: queries.balancedQuery,
+      narrowQuery: queries.narrowQuery,
+      rationaleJson: JSON.stringify({
+        keywordGroups: queries.keywordGroups,
+        excludedTerms: queries.excludedTerms,
+        rationale: queries.rationale,
+      }),
+    });
+
+    return NextResponse.json(row, { status: 201 });
+  } catch (err) {
+    console.error("[queries] generation failed:", err);
+    const message = err instanceof Error ? err.message : "検索式生成中にエラーが発生しました";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

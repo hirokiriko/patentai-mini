@@ -31,8 +31,12 @@ export function AnalyzeButton({
         });
       }, 300);
     } else {
-      const data = await res.json();
-      setError(data.error ?? "分析に失敗しました");
+      try {
+        const data = await res.json();
+        setError(data.error ?? "分析に失敗しました");
+      } catch {
+        setError(`分析に失敗しました（${res.status}）`);
+      }
     }
     setLoading(false);
   }

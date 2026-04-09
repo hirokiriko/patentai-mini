@@ -34,8 +34,12 @@ export function ExtractClaimsButton({
         });
       }, 300);
     } else {
-      const data = await res.json();
-      setError(data.error ?? "抽出に失敗しました");
+      try {
+        const data = await res.json();
+        setError(data.error ?? "抽出に失敗しました");
+      } catch {
+        setError(`抽出に失敗しました（${res.status}）`);
+      }
     }
     setLoading(false);
   }

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { draftPatentRepo } from "@/repositories";
 import { extractClaims } from "@/lib/extract-claims";
 
+export const maxDuration = 60;
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string; draftId: string }> }
@@ -22,12 +24,18 @@ export async function POST(
     );
   }
 
-  const claims = await extractClaims(draft.parsedText);
+  try {
+    const claims = await extractClaims(draft.parsedText);
 
-  const updated = await draftPatentRepo.updateExtractedClaims(
-    Number(draftId),
-    JSON.stringify(claims)
-  );
+    const updated = await draftPatentRepo.updateExtractedClaims(
+      Number(draftId),
+      JSON.stringify(claims)
+    );
 
-  return NextResponse.json(updated);
+    return NextResponse.json(updated);
+  } catch (err) {
+    console.error("[extract] extraction failed:", err);
+    const message = err instanceof Error ? err.message : "請求項抽出中にエラーが発生しました";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
