@@ -23,6 +23,6 @@
 ## 注意事項
 - `vercel env add` で heredoc 経由だと末尾改行が入る → `printf "value" | vercel env add` を使う
 - `.vercelignore` で `.env` を除外済み（ローカル .env が Vercel に含まれないように）
-- GOOGLE_GENERATIVE_AI_API_KEY がセッション中に露出 → ローテーション推奨
+- ~~GOOGLE_GENERATIVE_AI_API_KEY がセッション中に露出 → ローテーション推奨~~ 完了
 - 推測で CSV 列名を固定しない
 - 独立請求項を主軸に据える
