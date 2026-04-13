@@ -46,8 +46,9 @@ const SYSTEM_PROMPT = `あなたは特許文書の構造解析エキスパート
 - 「登録可能」「拒絶されない」等の法的判断は含めない
 - 名詞句の列挙で終わらず、要素・関係・制約・作用効果に分解する`;
 
-// 特許明細書の主要セクションを抽出し、図面説明等の冗長部分を除く
-function trimPatentText(text: string, maxChars: number = 30000): string {
+// 特許明細書の主要セクションを抽出し、図面説明等の冗長部分を除く。
+// Vercel Hobby の 60 秒制限内に LLM が応答できるよう 15,000 文字に制限。
+function trimPatentText(text: string, maxChars: number = 15000): string {
   if (text.length <= maxChars) return text;
 
   // 請求項セクションを優先保持（【特許請求の範囲】〜次の【】まで）
@@ -63,6 +64,12 @@ function trimPatentText(text: string, maxChars: number = 30000): string {
   const summary = summaryMatch?.[0] ?? "";
 
   const combined = claims + "\n\n" + summary;
+
+  // セクション抽出で内容が少なすぎる場合はテキスト先頭から切り出す
+  if (combined.trim().length < 500) {
+    return text.substring(0, maxChars);
+  }
+
   return combined.substring(0, maxChars);
 }
 
