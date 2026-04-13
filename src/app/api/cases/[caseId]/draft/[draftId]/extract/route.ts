@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { draftPatentRepo } from "@/repositories";
-import { extractClaimsStream } from "@/lib/extract-claims";
+import { extractClaims } from "@/lib/extract-claims";
 
 export const maxDuration = 60;
 
@@ -25,34 +25,18 @@ export async function POST(
     );
   }
 
-  // ストリーミングで応答し、HTTP 接続を維持してタイムアウトを回避する。
-  // テキストチャンクを逐次送信 → 完了後に DB 保存 → ストリーム終了。
-  const result = extractClaimsStream(draft.parsedText);
+  try {
+    const claims = await extractClaims(draft.parsedText);
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        for await (const chunk of result.textStream) {
-          controller.enqueue(encoder.encode(chunk));
-        }
+    const updated = await draftPatentRepo.updateExtractedClaims(
+      draftIdNum,
+      JSON.stringify(claims)
+    );
 
-        const claims = await result.object;
-        await draftPatentRepo.updateExtractedClaims(
-          draftIdNum,
-          JSON.stringify(claims)
-        );
-
-        controller.close();
-      } catch (err) {
-        console.error("[extract] extraction failed:", err);
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
-    status: 200,
-    headers: { "Content-Type": "text/plain; charset=utf-8" },
-  });
+    return NextResponse.json(updated);
+  } catch (err) {
+    console.error("[extract] extraction failed:", err);
+    const message = err instanceof Error ? err.message : "請求項抽出中にエラーが発生しました";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }

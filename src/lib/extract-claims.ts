@@ -1,6 +1,6 @@
-import { generateObject, streamObject } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
-import { getModel, getFastModel } from "./ai-model";
+import { getFastModel } from "./ai-model";
 
 const claimElementSchema = z.object({
   type: z.enum(["component", "action", "constraint", "io", "effect"]),
@@ -78,29 +78,13 @@ export async function extractClaims(
 ): Promise<ExtractedClaims> {
   const trimmed = trimPatentText(parsedText);
 
+  // 抽出は高速モデルを使用（思考モデルは Vercel 60 秒制限を超過するため）
   const { object } = await generateObject({
-    model: getModel(),
+    model: getFastModel(),
     schema: extractedClaimsSchema,
     system: SYSTEM_PROMPT,
     prompt: trimmed,
   });
 
   return object;
-}
-
-/**
- * ストリーミング版の請求項抽出。
- * 思考モデル（gemini-2.5-flash 等）の thinking を無効化し、
- * Vercel Hobby の 60 秒制限内で完了させる。
- * HTTP 接続維持のためストリーミングレスポンスを返す。
- */
-export function extractClaimsStream(parsedText: string) {
-  const trimmed = trimPatentText(parsedText);
-
-  return streamObject({
-    model: getFastModel(),
-    schema: extractedClaimsSchema,
-    system: SYSTEM_PROMPT,
-    prompt: trimmed,
-  });
 }
