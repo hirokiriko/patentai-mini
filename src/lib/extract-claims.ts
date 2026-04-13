@@ -1,6 +1,6 @@
 import { generateObject, streamObject } from "ai";
 import { z } from "zod";
-import { getModel } from "./ai-model";
+import { getModel, getFastModel } from "./ai-model";
 
 const claimElementSchema = z.object({
   type: z.enum(["component", "action", "constraint", "io", "effect"]),
@@ -98,14 +98,9 @@ export function extractClaimsStream(parsedText: string) {
   const trimmed = trimPatentText(parsedText);
 
   return streamObject({
-    model: getModel(),
+    model: getFastModel(),
     schema: extractedClaimsSchema,
     system: SYSTEM_PROMPT,
     prompt: trimmed,
-    providerOptions: {
-      google: {
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    },
   });
 }

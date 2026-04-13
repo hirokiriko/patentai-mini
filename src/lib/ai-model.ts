@@ -20,3 +20,21 @@ export function getModel() {
       throw new Error(`Unknown AI_PROVIDER: ${provider}`);
   }
 }
+
+/**
+ * 抽出・パース等の高速処理向けモデル。
+ * 思考（thinking）を持たない非推論モデルを返す。
+ * Vercel Hobby の 60 秒制限内で確実に完了させるため使用する。
+ */
+export function getFastModel() {
+  const provider = process.env.AI_PROVIDER ?? "google";
+
+  switch (provider) {
+    case "google":
+      return google("gemini-2.0-flash");
+    case "openai":
+      return openai("gpt-4o-mini");
+    default:
+      throw new Error(`Unknown AI_PROVIDER: ${provider}`);
+  }
+}
