@@ -12,6 +12,10 @@ export const searchQuerySetSchema = z.object({
   broadQuery: z.string().describe("広め検索式 — 再現率重視"),
   balancedQuery: z.string().describe("中庸検索式 — 再現率と適合率のバランス"),
   narrowQuery: z.string().describe("狭め検索式 — 適合率重視"),
+  keywordQueries: z.array(z.object({
+    theme: z.string().describe("検索テーマ（例: 課題起点、手段起点、効果起点、構成要素起点）"),
+    keywords: z.string().describe("J-PlatPat のキーワード検索にそのまま貼り付けできるキーワード列（スペース区切り）"),
+  })).describe("J-PlatPat キーワード検索用のコピペ可能なキーワードセット（3〜5セット）"),
   excludedTerms: z.array(z.string()).describe("ノイズ除外語"),
   rationale: z.array(z.string()).describe("検索式設計の根拠（各判断の理由）"),
 });
@@ -80,6 +84,14 @@ const SYSTEM_PROMPT = `あなたは特許調査の検索式設計エキスパー
 - 同義語展開が過剰でノイズ化する
 - ダブルクォートを使う
 - タグを付け忘れる
+
+## キーワード検索用セットの生成ルール
+論理式とは別に、J-PlatPat の「キーワード検索」にそのまま貼り付けて使えるキーワードセットを生成する。
+- 検索観点ごとにテーマを分けて 3〜5 セット生成する
+- 各セットはスペース区切りのキーワード列（論理演算子・タグ不要）
+- 日本語と英語を混在可（技術用語は両方あると有用）
+- 同義語・言い換えも含めてよいが、1セット 10 語以内に収める
+- テーマ例: 「課題起点」「手段起点」「効果起点」「構成要素起点」「応用分野起点」
 
 ## 注意
 - 法的断定をしない

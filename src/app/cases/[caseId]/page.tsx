@@ -13,6 +13,7 @@ import { ExtractClaimsButton } from "./extract-claims-button";
 import { basename } from "path";
 import { GenerateQueriesButton } from "./generate-queries-button";
 import { UploadCsvForm } from "./upload-csv-form";
+import { UploadPatentFilesForm } from "./upload-patent-files-form";
 import { AnalyzeButton } from "./analyze-button";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { StepProgressBar } from "@/components/step-progress-bar";
@@ -297,6 +298,32 @@ export default async function CaseDetailPage({
                 </div>
               ))}
 
+              {queryRationale?.keywordQueries?.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-base font-medium text-gray-700">
+                    キーワード検索用（コピペ可）
+                  </p>
+                  {queryRationale.keywordQueries.map(
+                    (kq: { theme: string; keywords: string }, i: number) => (
+                      <div
+                        key={i}
+                        className="rounded-lg border border-gray-200 px-4 py-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-gray-600">
+                            {kq.theme}
+                          </p>
+                          <CopyButton text={kq.keywords} />
+                        </div>
+                        <p className="mt-1 rounded bg-gray-50 p-3 text-base font-mono">
+                          {kq.keywords}
+                        </p>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+
               {queryRationale && (
                 <details className="text-base text-gray-700">
                   <summary className="cursor-pointer font-medium hover:text-gray-900">
@@ -360,9 +387,17 @@ export default async function CaseDetailPage({
           id="step-4"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(4)}`}
         >
-          <h2 className="text-xl font-bold">4. 検索結果の取り込み</h2>
-          <div className="mt-4">
-            <UploadCsvForm caseId={caseIdNum} />
+          <h2 className="text-xl font-bold">4. 先行技術文献の取り込み</h2>
+
+          <div className="mt-4 space-y-4">
+            <div className="rounded-lg border border-gray-200 px-4 py-3">
+              <p className="text-sm font-medium text-gray-500 mb-2">方法A: J-PlatPat 検索結果 CSV</p>
+              <UploadCsvForm caseId={caseIdNum} />
+            </div>
+            <div className="rounded-lg border border-gray-200 px-4 py-3">
+              <p className="text-sm font-medium text-gray-500 mb-2">方法B: 個別の特許文献ファイル</p>
+              <UploadPatentFilesForm caseId={caseIdNum} />
+            </div>
           </div>
 
           {priorArts.length > 0 && (
@@ -378,7 +413,10 @@ export default async function CaseDetailPage({
                         文献番号
                       </th>
                       <th className="px-4 py-2.5 text-left font-medium text-gray-700">
-                        発明の名称
+                        名称
+                      </th>
+                      <th className="px-4 py-2.5 text-left font-medium text-gray-700">
+                        種別
                       </th>
                     </tr>
                   </thead>
@@ -386,9 +424,12 @@ export default async function CaseDetailPage({
                     {priorArts.map((pa) => (
                       <tr key={pa.docId} className="hover:bg-gray-50">
                         <td className="px-4 py-2.5 font-mono text-sm whitespace-nowrap">
-                          {pa.publicationNo}
+                          {pa.publicationNo ?? "—"}
                         </td>
                         <td className="px-4 py-2.5">{pa.title}</td>
+                        <td className="px-4 py-2.5 text-sm text-gray-500 whitespace-nowrap">
+                          {pa.publicationNo ? "CSV" : "ファイル"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

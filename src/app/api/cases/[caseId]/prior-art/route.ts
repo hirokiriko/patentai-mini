@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { caseRepo, priorArtDocumentRepo } from "@/repositories";
 import { parseJPlatPatCsv } from "@/lib/parse-jplatpat-csv";
+import { parseFile } from "@/lib/parse-file";
+
+export const maxDuration = 60;
+
+const PATENT_EXTS = ["pdf", "docx", "txt"];
 
 export async function GET(
   _request: Request,
@@ -24,33 +29,75 @@ export async function POST(
   }
 
   const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  if (!file) {
+  const files = formData.getAll("file") as File[];
+  if (files.length === 0) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
 
-  const csvText = await file.text();
-  const parsed = parseJPlatPatCsv(csvText);
+  let totalImported = 0;
+  const errors: string[] = [];
 
-  if (parsed.length === 0) {
+  for (const file of files) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+    if (ext === "csv") {
+      // CSV: 既存の J-PlatPat CSV パース処理
+      const csvText = await file.text();
+      const parsed = parseJPlatPatCsv(csvText);
+      if (parsed.length === 0) {
+        errors.push(`${file.name}: 有効なレコードがありません`);
+        continue;
+      }
+      const count = await priorArtDocumentRepo.createMany(
+        parsed.map((r) => ({
+          caseId: caseIdNum,
+          publicationNo: r.publicationNo,
+          title: r.title,
+          abstract: r.abstract,
+          claimsText: null,
+          sourceCsvRowJson: JSON.stringify(r.rawRow),
+          normalizedElementsJson: null,
+        }))
+      );
+      totalImported += count;
+    } else if (PATENT_EXTS.includes(ext)) {
+      // 個別特許ファイル: テキスト抽出して1件として登録
+      try {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        const text = await parseFile(buffer, ext);
+        if (!text.trim()) {
+          errors.push(`${file.name}: テキストを抽出できませんでした`);
+          continue;
+        }
+        const count = await priorArtDocumentRepo.createMany([
+          {
+            caseId: caseIdNum,
+            publicationNo: null,
+            title: file.name.replace(/\.[^.]+$/, ""),
+            abstract: null,
+            claimsText: text,
+            sourceCsvRowJson: null,
+            normalizedElementsJson: null,
+          },
+        ]);
+        totalImported += count;
+      } catch {
+        errors.push(`${file.name}: ファイルの読み取りに失敗しました`);
+      }
+    } else {
+      errors.push(`${file.name}: 非対応の形式です（CSV, PDF, DOCX, TXT のみ）`);
+    }
+  }
+
+  if (totalImported === 0 && errors.length > 0) {
     return NextResponse.json(
-      { error: "CSV に有効なレコードがありません" },
+      { error: errors.join("\n") },
       { status: 400 }
     );
   }
 
-  const count = await priorArtDocumentRepo.createMany(
-    parsed.map((r) => ({
-      caseId: caseIdNum,
-      docId: 0, // auto-increment
-      publicationNo: r.publicationNo,
-      title: r.title,
-      abstract: r.abstract,
-      claimsText: null,
-      sourceCsvRowJson: JSON.stringify(r.rawRow),
-      normalizedElementsJson: null,
-    }))
+  return NextResponse.json(
+    { imported: totalImported, errors: errors.length > 0 ? errors : undefined },
+    { status: 201 }
   );
-
-  return NextResponse.json({ imported: count }, { status: 201 });
 }

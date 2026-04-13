@@ -1,13 +1,14 @@
-import { readFile } from "fs/promises";
-import { extname } from "path";
 import { extractText } from "unpdf";
 import mammoth from "mammoth";
 
-export async function parseFile(filePath: string): Promise<string> {
-  const ext = extname(filePath).toLowerCase();
-  const buffer = await readFile(filePath);
+/**
+ * Buffer とファイル拡張子からテキストを抽出する。
+ * ディスクI/Oを行わないため Vercel 等の読み取り専用環境でも動作する。
+ */
+export async function parseFile(buffer: Buffer, ext: string): Promise<string> {
+  const normalizedExt = ext.startsWith(".") ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
 
-  switch (ext) {
+  switch (normalizedExt) {
     case ".pdf": {
       const { text } = await extractText(buffer);
       return text.join("\n");
@@ -20,6 +21,6 @@ export async function parseFile(filePath: string): Promise<string> {
       return buffer.toString("utf-8");
     }
     default:
-      throw new Error(`Unsupported file format: ${ext}`);
+      throw new Error(`Unsupported file format: ${normalizedExt}`);
   }
 }

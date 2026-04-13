@@ -48,7 +48,7 @@ export async function POST(
         docId: pa.docId,
         publicationNo: pa.publicationNo,
         title: pa.title,
-        abstract: pa.abstract,
+        abstract: pa.abstract ?? pa.claimsText,
       }))
     );
 

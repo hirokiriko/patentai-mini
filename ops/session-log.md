@@ -109,3 +109,29 @@
 - UI/UX 改善
 - 従属請求項の分析対応
 - ファイルアップロードの Vercel Blob 対応
+
+## 2026-04-13 本番フィードバック対応（3件）
+### 実施
+- **アップロードエラー修正**: `parseFile` を Buffer ベースに変更（`fs/promises` のディスク書き込みを除去）。Vercel の読み取り専用 FS で動作するようになった
+- **キーワード検索対応**: `generate-queries.ts` に `keywordQueries` スキーマを追加。テーマ別（課題起点/手段起点等）のコピペ用キーワードセットを LLM が生成し、Step 3 UI に表示
+- **個別特許ファイルアップロード**: `prior-art/route.ts` を拡張し PDF/DOCX/TXT の複数同時アップロードに対応。テキスト抽出して `claimsText` に保存。Step 4 に CSV と並列で個別ファイルアップロード UI を追加
+- 分析ステップで `abstract` が null（個別アップロード文献）の場合 `claimsText` をフォールバックに使用
+
+### 変更ファイル
+- `src/lib/parse-file.ts` — Buffer+ext ベースに変更
+- `src/app/api/cases/[caseId]/draft/route.ts` — ディスク書き込み除去
+- `src/lib/generate-queries.ts` — keywordQueries スキーマ+プロンプト追加
+- `src/app/api/cases/[caseId]/queries/route.ts` — keywordQueries を rationaleJson に保存
+- `src/app/api/cases/[caseId]/prior-art/route.ts` — CSV+個別ファイル両対応
+- `src/app/cases/[caseId]/upload-patent-files-form.tsx` — 新規: 個別ファイルアップロード UI
+- `src/app/cases/[caseId]/page.tsx` — キーワード表示+個別アップロード UI 追加
+- `src/app/api/cases/[caseId]/analyze/route.ts` — abstract フォールバック
+
+### 決まったこと
+- ファイルはディスク保存せず、メモリ上で処理してDB保存する方式に統一
+- 個別特許アップロードでは AI による請求項分解は行わず、テキスト抽出のみ
+
+### 次にやること
+- Vercel デプロイして本番確認
+- 従属請求項の分析対応
+- UI/UX 改善

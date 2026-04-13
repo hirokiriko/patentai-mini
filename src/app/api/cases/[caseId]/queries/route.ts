@@ -47,6 +47,7 @@ export async function POST(
       narrowQuery: queries.narrowQuery,
       rationaleJson: JSON.stringify({
         keywordGroups: queries.keywordGroups,
+        keywordQueries: queries.keywordQueries,
         excludedTerms: queries.excludedTerms,
         rationale: queries.rationale,
       }),

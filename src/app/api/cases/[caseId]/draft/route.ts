@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
-import { writeFile, mkdir } from "fs/promises";
-import { join } from "path";
 import { parseFile } from "@/lib/parse-file";
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./data/uploads";
+export const maxDuration = 60;
 
 export async function GET(
   _request: Request,
@@ -36,27 +34,23 @@ export async function POST(
   const ext = file.name.split(".").pop()?.toLowerCase();
   if (!["pdf", "docx", "txt"].includes(ext ?? "")) {
     return NextResponse.json(
-      { error: "Supported formats: pdf, docx, txt" },
+      { error: "対応形式: PDF, DOCX, TXT" },
       { status: 400 }
     );
   }
 
-  const dir = join(UPLOAD_DIR, String(caseIdNum));
-  await mkdir(dir, { recursive: true });
-  const filePath = join(dir, file.name);
   const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(filePath, buffer);
 
   let parsedText: string | null = null;
   try {
-    parsedText = await parseFile(filePath);
+    parsedText = await parseFile(buffer, ext!);
   } catch {
     // 抽出失敗してもレコードは作成する
   }
 
   const row = await draftPatentRepo.create({
     caseId: caseIdNum,
-    sourceFilePath: filePath,
+    sourceFilePath: file.name,
     parsedText,
   });
 
