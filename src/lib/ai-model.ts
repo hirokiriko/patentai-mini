@@ -31,7 +31,7 @@ export function getFastModel() {
 
   switch (provider) {
     case "google":
-      return google("gemini-2.0-flash");
+      return google("gemini-3.1-flash-lite-preview");
     case "openai":
       return openai("gpt-4o-mini");
     default:
