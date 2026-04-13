@@ -26,6 +26,8 @@ export function ExtractClaimsButton({
     );
 
     if (res.ok) {
+      // ストリーミングレスポンスのボディ完了（= DB 保存完了）を待つ
+      await res.text();
       router.refresh();
       setTimeout(() => {
         document.getElementById("step-3")?.scrollIntoView({

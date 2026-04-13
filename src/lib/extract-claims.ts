@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateObject, streamObject } from "ai";
 import { z } from "zod";
 import { getModel } from "./ai-model";
 
@@ -79,4 +79,20 @@ export async function extractClaims(
   });
 
   return object;
+}
+
+/**
+ * ストリーミング版の請求項抽出。
+ * 思考モデル（gemini-2.5-flash 等）で長時間かかる場合に
+ * HTTP 接続を維持してタイムアウトを回避する。
+ */
+export function extractClaimsStream(parsedText: string) {
+  const trimmed = trimPatentText(parsedText);
+
+  return streamObject({
+    model: getModel(),
+    schema: extractedClaimsSchema,
+    system: SYSTEM_PROMPT,
+    prompt: trimmed,
+  });
 }
