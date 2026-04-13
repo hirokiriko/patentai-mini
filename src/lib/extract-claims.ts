@@ -90,8 +90,9 @@ export async function extractClaims(
 
 /**
  * ストリーミング版の請求項抽出。
- * 思考モデル（gemini-2.5-flash 等）で長時間かかる場合に
- * HTTP 接続を維持してタイムアウトを回避する。
+ * 思考モデル（gemini-2.5-flash 等）の thinking を無効化し、
+ * Vercel Hobby の 60 秒制限内で完了させる。
+ * HTTP 接続維持のためストリーミングレスポンスを返す。
  */
 export function extractClaimsStream(parsedText: string) {
   const trimmed = trimPatentText(parsedText);
@@ -101,5 +102,10 @@ export function extractClaimsStream(parsedText: string) {
     schema: extractedClaimsSchema,
     system: SYSTEM_PROMPT,
     prompt: trimmed,
+    providerOptions: {
+      google: {
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    },
   });
 }
