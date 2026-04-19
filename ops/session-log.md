@@ -110,6 +110,36 @@
 - 従属請求項の分析対応
 - ファイルアップロードの Vercel Blob 対応
 
+## 2026-04-20 方法B 単独フロー対応 + アップロード失敗の原因切り分け
+### 実施
+- **Step 4（先行技術取り込み）の表示条件を緩和**: `{latestQuerySet && (` → `{extracted && (`。請求項抽出済みなら検索式生成を経ずに Step 4 の UI（方法A/B）が表示される。`currentStep` 計算を `hasQueries && !hasPriorArts` 両方許容へ調整
+- **UI 文言を方法A/B 併用形に更新**:
+  - `next-action-banner.tsx` Step 3 メッセージに「方法 B で直接取り込み可」の副次誘導（`whitespace-pre-line` で複数行表示）、Step 4 メッセージを「CSV（方法A）または個別ファイル（方法B）」へ
+  - `step-progress-bar.tsx` の Step 4 ラベル「CSV取込」→「先行技術取込」
+  - Step 4 セクション冒頭に「方法 A と方法 B は併用可。どちらか一方だけでも分析に進めます」
+- **本番 Vercel で「複数選択アップロード失敗」の原因切り分け**: 1 ファイルは成功・複数で失敗・本番のみで発生 → **Vercel serverless function の payload 上限 4.5 MB が有力**と判断
+- **Phase A 実装**: `upload-patent-files-form.tsx` に合計サイズ事前警告（4 MB 黄色 / 4.5 MB 赤 + 送信ブロック）、ボタンラベルにサイズ表示、`fetch` / `res.json()` を try/catch で包み HTML レスポンスでも UI が止まらないよう防御。HTTP 413 用ヒント文言も追加
+
+### 変更ファイル
+- `src/app/cases/[caseId]/page.tsx` — Step 4 表示条件、currentStep 計算、Step 4 セクションの文言
+- `src/components/next-action-banner.tsx` — Step 3/4 文言、whitespace-pre-line
+- `src/components/step-progress-bar.tsx` — Step 4 ラベル
+- `src/app/cases/[caseId]/upload-patent-files-form.tsx` — 合計サイズ警告、res.json 防御、HTTP 413 ヒント
+
+### 決まったこと
+- 方法B 単独（検索式生成をスキップ）で Step 5 の分析まで進める運用が正式サポート
+- 本番 payload 上限はクライアント UI で事前警告する方針（サーバー分割/Blob への切り替えは保留）
+
+### 未解決
+- **Phase B**: クライアント側で PDF/DOCX をテキスト抽出して画像を除外し、テキストのみサーバー送信（unpdf + mammoth.browser）。別セッションで着手
+- **実施例4**: 「出願済・公開前に新規事項を付け加える特許作成方法」UI の仕様未確定。追加ヒアリング質問 8 項目を `/Users/mao/.claude/plans/1-ui-4-eager-perlis.md` に整理済み
+- 今回の変更はブラウザでの動作確認未実施（本セッション内では実機検証していない）
+
+### 次にやること
+- 本セッションの変更を Vercel にデプロイして実機検証（方法B 単独で複数ファイル、4 MB 超警告、4.5 MB 超ブロック、413 ハンドリング）
+- Phase B（クライアント抽出）の設計・実装
+- 実施例4 の仕様ヒアリング
+
 ## 2026-04-13 本番フィードバック対応（3件）
 ### 実施
 - **アップロードエラー修正**: `parseFile` を Buffer ベースに変更（`fs/promises` のディスク書き込みを除去）。Vercel の読み取り専用 FS で動作するようになった

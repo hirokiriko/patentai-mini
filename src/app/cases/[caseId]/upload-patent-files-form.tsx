@@ -4,6 +4,13 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
 
+const WARN_BYTES = 4 * 1024 * 1024;
+const BLOCK_BYTES = 4.5 * 1024 * 1024;
+
+function formatMB(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
 export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
   const router = useRouter();
   const { show } = useToast();
@@ -11,14 +18,28 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fileCount, setFileCount] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(0);
 
-  const canSubmit = fileCount > 0 && !uploading;
+  const overBlock = totalBytes > BLOCK_BYTES;
+  const overWarn = totalBytes > WARN_BYTES;
+  const canSubmit = fileCount > 0 && !uploading && !overBlock;
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    setFileCount(files.length);
+    setTotalBytes(files.reduce((sum, f) => sum + f.size, 0));
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!canSubmit) {
-      if (fileCount === 0)
+      if (fileCount === 0) {
         show("先に「ファイルを選択」してから、取り込みしてください");
+      } else if (overBlock) {
+        show(
+          `合計 ${formatMB(totalBytes)} は Vercel の上限 (4.5 MB) を超えるため送信できません。ファイルを分割するか軽いものだけ選び直してください。`
+        );
+      }
       return;
     }
     setError(null);
@@ -29,28 +50,50 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
     if (files.length === 0 || files.every((f) => f.size === 0)) return;
 
     setUploading(true);
-    const res = await fetch(`/api/cases/${caseId}/prior-art`, {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      const res = await fetch(`/api/cases/${caseId}/prior-art`, {
+        method: "POST",
+        body: formData,
+      });
 
-    const data = await res.json();
-    if (res.ok) {
-      setResult(`${data.imported} 件の文献を取り込みました`);
-      if (data.errors?.length > 0) {
-        setError(data.errors.join("\n"));
+      let data: { imported?: number; errors?: string[]; error?: string } = {};
+      try {
+        data = await res.json();
+      } catch {
+        const text = await res.text().catch(() => "");
+        const hint = res.status === 413
+          ? "（アップロードサイズが大きすぎます）"
+          : res.status >= 500
+            ? "（サーバーエラー）"
+            : "";
+        setError(
+          `取り込みに失敗しました: HTTP ${res.status} ${hint}${text ? `\n${text.slice(0, 300)}` : ""}`
+        );
+        return;
       }
-      router.refresh();
-      setTimeout(() => {
-        document.getElementById("step-5")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
-      }, 300);
-    } else {
-      setError(data.error ?? "取り込みに失敗しました");
+
+      if (res.ok) {
+        setResult(`${data.imported ?? 0} 件の文献を取り込みました`);
+        if (data.errors && data.errors.length > 0) {
+          setError(data.errors.join("\n"));
+        }
+        router.refresh();
+        setTimeout(() => {
+          document.getElementById("step-5")?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        }, 300);
+      } else {
+        setError(data.error ?? `取り込みに失敗しました（HTTP ${res.status}）`);
+      }
+    } catch (err) {
+      setError(
+        `送信中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   }
 
   return (
@@ -64,7 +107,7 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
           name="file"
           accept=".pdf,.docx,.txt"
           multiple
-          onChange={(e) => setFileCount(e.target.files?.length ?? 0)}
+          onChange={handleFileChange}
           className="flex-1 text-base file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-4 file:py-2.5 file:text-base file:font-medium hover:file:bg-gray-200"
         />
         <button
@@ -78,9 +121,19 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
         >
           {uploading
             ? "取り込み中..."
-            : `取り込み${fileCount > 0 ? `（${fileCount}件）` : ""}`}
+            : `取り込み${fileCount > 0 ? `（${fileCount}件 / ${formatMB(totalBytes)}）` : ""}`}
         </button>
       </div>
+      {overBlock && (
+        <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-base text-red-700">
+          合計 {formatMB(totalBytes)}：Vercel の送信上限 (4.5 MB) を超えています。分割してアップロードしてください。
+        </p>
+      )}
+      {!overBlock && overWarn && (
+        <p className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-base text-yellow-800">
+          合計 {formatMB(totalBytes)}：本番環境では 4.5 MB までしか送信できません。失敗する場合はファイルを減らしてください。
+        </p>
+      )}
       {result && <p className="text-base text-green-600">{result}</p>}
       {error && (
         <p className="text-base text-red-600 whitespace-pre-line">{error}</p>

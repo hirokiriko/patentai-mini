@@ -21,14 +21,15 @@ function getAction(
   }
   if (currentStep === 3) {
     return {
-      message: "「検索式を生成」ボタンを押してください",
+      message:
+        "「検索式を生成」ボタンを押してください。\nまたは、方法 B（個別の特許文献ファイル）で直接取り込み（Step 4）もできます。",
       target: "step-3",
     };
   }
   if (currentStep === 4) {
     return {
       message:
-        "J-PlatPat で検索し、結果の CSV ファイルをアップロードしてください",
+        "J-PlatPat の検索結果 CSV（方法 A）または個別の特許文献ファイル（方法 B）を取り込んでください",
       target: "step-4",
     };
   }
@@ -67,7 +68,7 @@ export function NextActionBanner({
 
   return (
     <div className="mt-3 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
-      <span className="flex-1 text-base font-medium text-blue-800">
+      <span className="flex-1 whitespace-pre-line text-base font-medium text-blue-800">
         {action.message}
       </span>
       <button

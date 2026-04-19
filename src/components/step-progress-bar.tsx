@@ -4,7 +4,7 @@ const STEPS = [
   { num: 1, label: "アップロード" },
   { num: 2, label: "請求項抽出" },
   { num: 3, label: "検索式" },
-  { num: 4, label: "CSV取込" },
+  { num: 4, label: "先行技術取込" },
   { num: 5, label: "分析" },
 ];
 

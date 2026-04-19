@@ -73,7 +73,7 @@ export default async function CaseDetailPage({
 
   let currentStep: number;
   if (!hasDraft || !hasParsedText || !hasExtracted) currentStep = 1;
-  else if (!hasQueries) currentStep = 3;
+  else if (!hasQueries && !hasPriorArts) currentStep = 3;
   else if (!hasPriorArts) currentStep = 4;
   else if (!hasAnalysis) currentStep = 5;
   else currentStep = 6;
@@ -381,21 +381,24 @@ export default async function CaseDetailPage({
         </section>
       )}
 
-      {/* ── Step 4: 検索結果 CSV 取り込み ── */}
-      {latestQuerySet && (
+      {/* ── Step 4: 先行技術文献の取り込み ── */}
+      {extracted && (
         <section
           id="step-4"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(4)}`}
         >
           <h2 className="text-xl font-bold">4. 先行技術文献の取り込み</h2>
+          <p className="mt-2 text-sm text-gray-600">
+            方法 A と方法 B は併用可。どちらか一方だけでも分析に進めます。
+          </p>
 
           <div className="mt-4 space-y-4">
             <div className="rounded-lg border border-gray-200 px-4 py-3">
-              <p className="text-sm font-medium text-gray-500 mb-2">方法A: J-PlatPat 検索結果 CSV</p>
+              <p className="text-sm font-medium text-gray-500 mb-2">方法A: J-PlatPat 検索結果 CSV（Step 3 の検索式を使用）</p>
               <UploadCsvForm caseId={caseIdNum} />
             </div>
             <div className="rounded-lg border border-gray-200 px-4 py-3">
-              <p className="text-sm font-medium text-gray-500 mb-2">方法B: 個別の特許文献ファイル</p>
+              <p className="text-sm font-medium text-gray-500 mb-2">方法B: 個別の特許文献ファイル（検索式なしで直接取り込み可）</p>
               <UploadPatentFilesForm caseId={caseIdNum} />
             </div>
           </div>
