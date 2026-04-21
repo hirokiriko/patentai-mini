@@ -17,6 +17,9 @@ importers:
       '@libsql/client':
         specifier: ^0.17.2
         version: 0.17.2
+      '@napi-rs/canvas':
+        specifier: ^0.1.99
+        version: 0.1.99
       ai:
         specifier: ^6.0.154
         version: 6.0.154(zod@4.3.6)
@@ -3587,7 +3590,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.99
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.99
       '@napi-rs/canvas-win32-x64-msvc': 0.1.99
-    optional: true
 
   '@napi-rs/wasm-runtime@0.2.12':
     dependencies:
