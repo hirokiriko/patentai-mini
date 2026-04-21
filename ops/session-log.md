@@ -140,6 +140,38 @@
 - Phase B（クライアント抽出）の設計・実装
 - 実施例4 の仕様ヒアリング
 
+## 2026-04-21 改善点カタログ化 + Quick Wins 5件
+### 実施
+- **改善点カタログ作成**: 3 並列 Explore で backend / frontend / docs&ops を調査 → 実ファイル裏取りして `/Users/mao/.claude/plans/distributed-meandering-shell.md` に 30+ 指摘を整理
+- **F1 `.env.example` 整理**: 未使用項目 (UPLOAD_DIR, ARTIFACT_DIR, VECTOR_BACKEND 系, ENABLE_* 系, ANTHROPIC_API_KEY, APP_NAME, NODE_ENV) を削除、Required/Optional セクション化
+- **B1 `queries/route.ts` の JSON.parse を try/catch 化**: 破損 JSON で 500 → 400「請求項データが不正です。再度抽出してください」
+- **C1 `new-case-form.tsx` に IME ガード追加**: composingRef + nativeEvent.isComposing + keyCode 229 の三重ガード。onKeyDown と onSubmit の両方でチェック
+- **G3 `package.json` に `type-check` script 追加** (`tsc --noEmit`)
+- **G2 `.github/workflows/ci.yml` 新規**: Node 22 + pnpm latest で `pnpm install --frozen-lockfile` → `lint` → `type-check` → `build` を push/PR 時に実行
+- ローカルで `pnpm lint` / `pnpm type-check` 通過確認（既存警告 `and` 未使用 1 件は本変更とは無関係）
+
+### 変更ファイル
+- `.env.example`
+- `src/app/api/cases/[caseId]/queries/route.ts`
+- `src/app/new-case-form.tsx`
+- `package.json`
+- `.github/workflows/ci.yml`（新規）
+
+### 決まったこと
+- CI は Node 22 + pnpm latest、lint / type-check / build の 3 段
+- NODE_ENV・APP_NAME は Next.js 自動管理で不要と判定し `.env.example` から削除
+- ANTHROPIC_API_KEY は `ai-model.ts` 未実装のため `.env.example` から削除
+
+### 未解決
+- **E4 Vercel 本番の LLM API キー設定**: ユーザー側で `printf "$KEY" | vercel env add GOOGLE_GENERATIVE_AI_API_KEY production` が必要
+- ローカル動作確認のみ。Vercel 実機検証は未実施（方法B payload 警告の実機検証と合流させて良い）
+- `.github/workflows/ci.yml` が GitHub 実機で通るかは初回 push 時の確認が必要
+
+### 次にやること
+- E4 完了（ユーザー作業）＋ 本番で請求項抽出〜分析が動くこと確認
+- 残りの Top 10 Quick Wins（A2 FK cascade / A3 transaction / A1 element_score / C5 active draft / G1 vitest 最小テスト）
+- 元の handoff 優先候補（Vercel 実機検証、Phase B クライアント抽出）も並走
+
 ## 2026-04-13 本番フィードバック対応（3件）
 ### 実施
 - **アップロードエラー修正**: `parseFile` を Buffer ベースに変更（`fs/promises` のディスク書き込みを除去）。Vercel の読み取り専用 FS で動作するようになった

@@ -1,15 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export function NewCaseForm() {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const composingRef = useRef(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
     if (!title.trim()) return;
 
     setSubmitting(true);
@@ -26,12 +26,38 @@ export function NewCaseForm() {
     setSubmitting(false);
   }
 
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const native = e.nativeEvent as Event & { isComposing?: boolean };
+    if (composingRef.current || native.isComposing) return;
+    submit();
+  }
+
   return (
     <form onSubmit={handleSubmit} className="flex gap-2">
       <input
         type="text"
         value={title}
         onChange={(e) => setTitle(e.target.value)}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={(e) => {
+          composingRef.current = false;
+          setTitle((e.target as HTMLInputElement).value);
+        }}
+        onKeyDown={(e) => {
+          const ime =
+            composingRef.current ||
+            (e.nativeEvent as KeyboardEvent & { isComposing?: boolean })
+              .isComposing ||
+            e.keyCode === 229;
+          if (ime) return;
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
         placeholder="新しい案件名を入力..."
         className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-base focus:border-blue-500 focus:outline-none"
       />

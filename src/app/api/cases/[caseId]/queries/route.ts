@@ -35,7 +35,15 @@ export async function POST(
     );
   }
 
-  const extracted: ExtractedClaims = JSON.parse(draft.extractedClaimsJson);
+  let extracted: ExtractedClaims;
+  try {
+    extracted = JSON.parse(draft.extractedClaimsJson);
+  } catch {
+    return NextResponse.json(
+      { error: "請求項データが不正です。再度抽出してください" },
+      { status: 400 }
+    );
+  }
 
   try {
     const queries = await generateQueries(extracted);

@@ -21,6 +21,8 @@
 ## Blocked
 
 ## Done
+- [x] 改善点カタログ作成（`/Users/mao/.claude/plans/distributed-meandering-shell.md`、30+ 指摘・Top 10 Quick Wins 付き）
+- [x] Quick Wins 5件: `.env.example` 整理 / queries route の JSON.parse を try/catch / 案件作成フォームに IME ガード / type-check script / GitHub Actions CI
 - [x] 方法B 単独フロー対応（Step 4 の表示を請求項抽出済みで解禁、UI 文言・進捗バー更新）
 - [x] Phase A: 先行技術取り込みフォームの合計サイズ事前警告と res.json 防御
 - [x] 本番アップロードエラー修正（fs 書き込み除去、Buffer ベースに変更）
