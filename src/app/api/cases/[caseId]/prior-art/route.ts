@@ -81,7 +81,8 @@ export async function POST(
           },
         ]);
         totalImported += count;
-      } catch {
+      } catch (err) {
+        console.error(`parseFile failed: ${file.name}`, err);
         errors.push(`${file.name}: ファイルの読み取りに失敗しました`);
       }
     } else {

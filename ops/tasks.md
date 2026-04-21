@@ -10,7 +10,9 @@
 
 ## Next
 - [ ] 方法B単独フロー+payload警告のデプロイ+実機検証（方法B複数ファイル、4MB警告、4.5MBブロック、HTTP413）
-- [ ] Phase B: クライアント側で PDF/DOCX をテキスト抽出して画像を除外（unpdf + mammoth.browser + サーバー JSON 経路追加）
+- [ ] PDF 取り込み pdfjs-dist 差し替えの Vercel 本番検証（`outputFileTracingIncludes` 経由で cmaps/standard_fonts がバンドルされるか）
+- [ ] pdfjs-dist 出力の字間スペース正規化（公報PDFで `所 定 の ...` のようになる問題、要調査）
+- [ ] Phase B: クライアント側で PDF/DOCX をテキスト抽出して画像を除外（pdfjs-dist + mammoth.browser + サーバー JSON 経路追加）
 - [ ] 実施例4 の仕様ヒアリング実施
 - [ ] UI/UX 改善（ローディング状態、エラー表示の統一）
 - [ ] 従属請求項の分析対応（現在は独立請求項のみ）
@@ -21,6 +23,7 @@
 ## Blocked
 
 ## Done
+- [x] 方法B の PDF 取り込みバグ修正（unpdf → pdfjs-dist 差し替え、cMap 設定、`serverExternalPackages`/`outputFileTracingIncludes` 設定、日本語公報PDF 3 件でローカル動作確認）
 - [x] 改善点カタログ作成（`/Users/mao/.claude/plans/distributed-meandering-shell.md`、30+ 指摘・Top 10 Quick Wins 付き）
 - [x] Quick Wins 5件: `.env.example` 整理 / queries route の JSON.parse を try/catch / 案件作成フォームに IME ガード / type-check script / GitHub Actions CI
 - [x] 方法B 単独フロー対応（Step 4 の表示を請求項抽出済みで解禁、UI 文言・進捗バー更新）

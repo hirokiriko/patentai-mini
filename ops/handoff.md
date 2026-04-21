@@ -1,11 +1,13 @@
 # Handoff
 
 ## 現在地
+2026-04-22 方法B の PDF 取り込みバグを修正（`unpdf` → `pdfjs-dist` に差し替え、CJK cmap 対応、`next.config.ts` で `serverExternalPackages` と `outputFileTracingIncludes` 設定）。ローカル dev で `data/samples/JP,7843984,B.pdf` ほか 3 件の特許公報 PDF を取り込み成功（各 295k / 94k / 31k 文字の日本語本文が DB 保存済）。`pnpm type-check` / `pnpm lint` / `pnpm build` 通過。未コミット・未デプロイ。実機確認用に残っているテストケース: caseId=6 "prior-art pdf smoke test" on Turso。
+
 2026-04-21 改善点カタログ作成＋ Top 10 Quick Wins のうち 5 件（`.env.example` 整理 / queries route JSON.parse try/catch / 案件フォーム IME ガード / `type-check` script / GitHub Actions CI）をローカル実装、`pnpm lint` / `pnpm type-check` 通過。未デプロイ・未プッシュ。改善点カタログは `/Users/mao/.claude/plans/distributed-meandering-shell.md` にあり、残り Quick Wins は A2 FK cascade / A3 transaction / A1 element_score / C5 active draft / G1 vitest 最小テスト。2026-04-20 の方法B 単独フロー＋ payload 警告（Phase A）も未デプロイのまま残っている。
 
 ## 次セッションの優先候補
 1. **Vercel 本番へ LLM API キー設定（E4）** — `printf "$KEY" | vercel env add GOOGLE_GENERATIVE_AI_API_KEY production`。未設定のままでは本番 LLM が全滅
-2. **Vercel デプロイ＋実機検証** — 今回の Quick Wins 5 件＋方法B単独フロー＋ Phase A（payload 警告）を 1 回のデプロイで一緒に確認。`.github/workflows/ci.yml` の初回 push 通過も確認
+2. **Vercel デプロイ＋実機検証** — Quick Wins 5 件＋方法B単独フロー＋ Phase A（payload 警告）＋**pdfjs-dist 差し替え**を 1 回のデプロイで一緒に確認。pdfjs-dist の cmap/standard_fonts は `outputFileTracingIncludes` で Lambda にバンドルされる想定だが、本番 Lambda の `process.cwd()` 配下に `node_modules/pdfjs-dist/cmaps/` が存在するかは未検証（動かない場合はパス解決を見直し）
 3. **残り Quick Wins** — A2 FK cascade / A3 `replaceByCaseId` トランザクション / A1 `element_score` カラム追加 / C5 複数ドラフト active 明示 / G1 主要 4 モジュール vitest テスト
 4. **Phase B 実装** — クライアントで PDF/DOCX をテキスト抽出し画像を除外（unpdf + mammoth.browser）、サーバーに JSON 経路追加して payload を数百 KB 以下へ
 5. **実施例4 の仕様ヒアリング** — `/Users/mao/.claude/plans/1-ui-4-eager-perlis.md` 末尾の 8 項目をユーザーに確認

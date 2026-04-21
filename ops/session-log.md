@@ -1,5 +1,32 @@
 # Session Log
 
+## 2026-04-22 方法B の PDF 取り込み失敗を修正（pdfjs-dist に差し替え）
+### 実施
+- 方法B で個別 PDF 取り込みが `"ファイルの読み取りに失敗しました"` で失敗していた問題を修正
+- 原因を 3 段階で特定:
+  1. `unpdf@1.4.0` は `Buffer` ではなく `Uint8Array` を要求（Buffer を渡すと即エラー）
+  2. unpdf 同梱の pdf.js serverless build には CJK 用 cmap が含まれておらず、日本語テキスト抽出は常に空
+  3. `pdfjs-dist` 5.x の Node ランタイムは `cMapUrl` に `file://` URL を渡せず、生のファイルパスを要求する（内部で `fs.promises.readFile(url)` を直接呼ぶ実装のため）
+- `src/lib/parse-file.ts` を unpdf から `pdfjs-dist` 直接使用に差し替え。cMap / standardFont のパスは `process.cwd()` ベース（Turbopack/webpack が `require.resolve` を仮想パスに変換する問題を回避）
+- `next.config.ts` で `serverExternalPackages: ["pdfjs-dist"]` と `outputFileTracingIncludes` を設定し、Vercel Lambda に cmap/standard_fonts がバンドルされるようにした
+- `src/app/api/cases/[caseId]/prior-art/route.ts` の catch で握りつぶされていたエラーを `console.error` で出力するよう修正
+- 依存整理: `unpdf` と（検証用に一度追加した）`pdf-parse` を削除、`pdfjs-dist@5.6.205` を追加
+- 実機確認: ローカル dev で `data/samples/JP,7843984,B.pdf` ほか 3 件の特許公報 PDF を取り込み成功（それぞれ 295k / 94k / 31k 文字の日本語本文が DB に保存されたことを確認）
+- `pnpm type-check` / `pnpm lint` / `pnpm build` すべて通過
+
+### 決まったこと
+- PDF テキスト抽出ライブラリは `pdfjs-dist` に変更（DR-0004 の「pdf-parse」記述は古い、unpdf もこの PoC では不採用）
+- CJK 公報 PDF は ToUnicode CMap 非埋め込みのため、`cmaps/UniJIS-UCS2-H.bcmap` 等を参照できることが必須
+
+### 未解決
+- Vercel 本番での動作検証が未実施（ローカルのみ確認）。`outputFileTracingIncludes` と `process.cwd()` ベースのパスで動く想定だが、実環境で cmaps が正しくバンドルされるか要確認
+- pdf.js の `getTextContent()` 出力は特許公報PDFで字間スペースが入る（例: `所 定 の プ ラ ッ ト フ ォ ー ム`）。分析 AI の動作には支障ないが、トークン消費が増える。後工程で正規化するかは未決
+- 動作確認で作ったテスト用ケース（caseId=6 "prior-art pdf smoke test"）が Turso に残っている
+
+### 次にやること
+- 本修正を含めて Vercel に再デプロイし、本番 Lambda での PDF 取り込みを実機確認
+- 必要なら字間スペースの正規化を `parse-file.ts` に追加
+
 ## 2026-04-09 Initial scaffold
 ### 実施
 - PoC の目的・範囲・アーキテクチャ・継続運用ファイル群を作成
