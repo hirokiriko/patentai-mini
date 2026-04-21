@@ -1,31 +1,36 @@
 # Session Log
 
-## 2026-04-22 方法B の PDF 取り込み失敗を修正（pdfjs-dist に差し替え）
+## 2026-04-22 方法B の PDF 取り込み失敗を修正（pdfjs-dist vendor/ 方式、本番まで検証）
 ### 実施
-- 方法B で個別 PDF 取り込みが `"ファイルの読み取りに失敗しました"` で失敗していた問題を修正
-- 原因を 3 段階で特定:
+- 方法B で個別 PDF 取り込みが `"ファイルの読み取りに失敗しました"` で失敗していた問題を修正、本番 Vercel Lambda まで動作確認完了
+- 原因が 5 段階で判明し、順に修正:
   1. `unpdf@1.4.0` は `Buffer` ではなく `Uint8Array` を要求（Buffer を渡すと即エラー）
   2. unpdf 同梱の pdf.js serverless build には CJK 用 cmap が含まれておらず、日本語テキスト抽出は常に空
-  3. `pdfjs-dist` 5.x の Node ランタイムは `cMapUrl` に `file://` URL を渡せず、生のファイルパスを要求する（内部で `fs.promises.readFile(url)` を直接呼ぶ実装のため）
-- `src/lib/parse-file.ts` を unpdf から `pdfjs-dist` 直接使用に差し替え。cMap / standardFont のパスは `process.cwd()` ベース（Turbopack/webpack が `require.resolve` を仮想パスに変換する問題を回避）
-- `next.config.ts` で `serverExternalPackages: ["pdfjs-dist"]` と `outputFileTracingIncludes` を設定し、Vercel Lambda に cmap/standard_fonts がバンドルされるようにした
-- `src/app/api/cases/[caseId]/prior-art/route.ts` の catch で握りつぶされていたエラーを `console.error` で出力するよう修正
-- 依存整理: `unpdf` と（検証用に一度追加した）`pdf-parse` を削除、`pdfjs-dist@5.6.205` を追加
-- 実機確認: ローカル dev で `data/samples/JP,7843984,B.pdf` ほか 3 件の特許公報 PDF を取り込み成功（それぞれ 295k / 94k / 31k 文字の日本語本文が DB に保存されたことを確認）
-- `pnpm type-check` / `pnpm lint` / `pnpm build` すべて通過
+  3. `pdfjs-dist` 5.x の Node ランタイムは `cMapUrl` に `file://` URL を渡せず生パスを要求（`fs.promises.readFile(url)` を直接呼ぶ実装）
+  4. Vercel で pnpm の `node_modules/pdfjs-dist` が symlink のため `outputFileTracingIncludes: ["./node_modules/pdfjs-dist/..."]` は "invalid deployment package" を返す
+  5. pdf.worker.mjs は fake worker が実行時に動的 import するため Next.js の output tracing で拾われず、本番で `Cannot find module pdf.worker.mjs` で落ちる
+- 最終構成:
+  - `scripts/copy-pdfjs-assets.mjs` (postinstall) で `vendor/pdfjs-dist/{cmaps, standard_fonts, legacy/build}` に実ファイルを複製
+  - `parse-file.ts` は `vendor/pdfjs-dist/legacy/build/pdf.mjs` を `pathToFileURL` で動的 import、cMap も vendor/ パスを渡す
+  - `import "@napi-rs/canvas"` を parse-file.ts に side-effect 追加して Vercel の output tracer に @napi-rs/canvas を認識させる（DOMMatrix polyfill 用）
+  - `package.json` の `pnpm.publicHoistPattern` に `@napi-rs/canvas*` を追加して root node_modules に hoist
+  - `next.config.ts`: `serverExternalPackages: ["@napi-rs/canvas"]`、`outputFileTracingIncludes` を `./vendor/pdfjs-dist/**` に
+- 依存整理: `unpdf` `pdf-parse` を削除、`pdfjs-dist@5.6.205` `@napi-rs/canvas@0.1.99` を追加
+- 本番検証: `https://patentai-mini.vercel.app/api/cases/7/prior-art` に 3 件 POST で `{"imported":3}`、Turso 上に日本語本文が保存されたことを確認（ローカル dev と同じ 295k / 94k / 31k 文字）
+- コミット: aa6a9ee → ff679da → 9750d3e → 90928f3 → dc0cbe3 → b1086fb（うち Vercel デプロイ成功は ff679da 以降の pdfjs 関連 5 コミット）
 
 ### 決まったこと
-- PDF テキスト抽出ライブラリは `pdfjs-dist` に変更（DR-0004 の「pdf-parse」記述は古い、unpdf もこの PoC では不採用）
-- CJK 公報 PDF は ToUnicode CMap 非埋め込みのため、`cmaps/UniJIS-UCS2-H.bcmap` 等を参照できることが必須
+- PDF テキスト抽出は pdfjs-dist を vendor/ 経由で動的 import する構成に固定。cmap / standard_fonts / legacy/build は全部 vendor/ にコピーする方針。DR-0004 の「pdf-parse」記述は古い
+- CJK 公報 PDF は ToUnicode CMap 非埋め込み（HeiseiKakuGo-W5 / HeiseiMin-W3 + UniJIS-UCS2-H）のため、cmaps ディレクトリへのアクセスが必須
+- Vercel 本番運用で Claude が main に push するには、ユーザー側で `! gh auth switch --user hirokiriko` と `! git push` を手動実行する必要がある（harness が拒否する、memory に記録済み）
 
 ### 未解決
-- Vercel 本番での動作検証が未実施（ローカルのみ確認）。`outputFileTracingIncludes` と `process.cwd()` ベースのパスで動く想定だが、実環境で cmaps が正しくバンドルされるか要確認
-- pdf.js の `getTextContent()` 出力は特許公報PDFで字間スペースが入る（例: `所 定 の プ ラ ッ ト フ ォ ー ム`）。分析 AI の動作には支障ないが、トークン消費が増える。後工程で正規化するかは未決
-- 動作確認で作ったテスト用ケース（caseId=6 "prior-art pdf smoke test"）が Turso に残っている
+- pdf.js の `getTextContent()` 出力は公報 PDF で字間スペースが入る（例: `所 定 の プ ラ ッ ト フ ォ ー ム`）。LLM は問題なく解釈するが、トークン消費が増える。正規化は未対応
+- 動作確認で作ったテスト用ケース caseId=6 (ローカル用) と caseId=7 (本番 "prod pdf smoke test") が Turso に残っている。不要なら画面から削除する
 
 ### 次にやること
-- 本修正を含めて Vercel に再デプロイし、本番 Lambda での PDF 取り込みを実機確認
-- 必要なら字間スペースの正規化を `parse-file.ts` に追加
+- 字間スペースの正規化を `parse-file.ts` に追加するか判断
+- 残っている Quick Wins（A2 FK cascade / A3 replaceByCaseId transaction / A1 element_score / C5 active draft / G1 vitest）
 
 ## 2026-04-09 Initial scaffold
 ### 実施

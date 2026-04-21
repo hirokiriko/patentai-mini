@@ -1,7 +1,7 @@
 # Handoff
 
 ## 現在地
-2026-04-22 方法B の PDF 取り込みバグを修正（`unpdf` → `pdfjs-dist` に差し替え、CJK cmap 対応、`next.config.ts` で `serverExternalPackages` と `outputFileTracingIncludes` 設定）。ローカル dev で `data/samples/JP,7843984,B.pdf` ほか 3 件の特許公報 PDF を取り込み成功（各 295k / 94k / 31k 文字の日本語本文が DB 保存済）。`pnpm type-check` / `pnpm lint` / `pnpm build` 通過。未コミット・未デプロイ。実機確認用に残っているテストケース: caseId=6 "prior-art pdf smoke test" on Turso。
+2026-04-22 方法B の PDF 取り込みバグを vendor/ 方式で修正し、**本番 Vercel まで動作確認完了**。最終 commit は b1086fb（main）。`https://patentai-mini.vercel.app/api/cases/7/prior-art` に 3 件 POST で `{"imported":3}`（12 秒）、Turso に日本語本文が保存されることを確認。テスト用ケース caseId=6 (ローカル)・caseId=7 (本番 "prod pdf smoke test") が Turso に残っている。詳細な構成の理由は `~/.claude/projects/-Users-mao-dev-kiriko-patentai-mini/memory/reference_pdfjs_vendor.md` 参照（安易に vendor/ 方式を戻すと本番が落ちる、5 段階の罠を全部踏んだ結果の構成）。
 
 2026-04-21 改善点カタログ作成＋ Top 10 Quick Wins のうち 5 件（`.env.example` 整理 / queries route JSON.parse try/catch / 案件フォーム IME ガード / `type-check` script / GitHub Actions CI）をローカル実装、`pnpm lint` / `pnpm type-check` 通過。未デプロイ・未プッシュ。改善点カタログは `/Users/mao/.claude/plans/distributed-meandering-shell.md` にあり、残り Quick Wins は A2 FK cascade / A3 transaction / A1 element_score / C5 active draft / G1 vitest 最小テスト。2026-04-20 の方法B 単独フロー＋ payload 警告（Phase A）も未デプロイのまま残っている。
 
