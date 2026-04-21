@@ -1,18 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // pdfjs-dist は Node 環境で cmaps/standard_fonts を直接 fs で読むため
-  // バンドルせず外部パッケージとして扱う。@napi-rs/canvas は pdfjs-dist が
-  // DOMMatrix 等の polyfill のため require するので同じ扱いにする
-  serverExternalPackages: ["pdfjs-dist", "@napi-rs/canvas"],
-  // pnpm の node_modules は symlink のため、そのまま
-  // outputFileTracingIncludes に指定すると Vercel で
-  // "invalid deployment package" エラーになる。
-  // postinstall で vendor/pdfjs-dist に実ファイルを複製している
+  // @napi-rs/canvas は native binding を含むためバンドル不可。external
+  // として扱い、parse-file.ts の side-effect import で output tracing に
+  // 拾わせる。pdfjs-dist は vendor/ から動的 import するので external 指定
+  // は不要。
+  serverExternalPackages: ["@napi-rs/canvas"],
+  // pnpm の node_modules は symlink のため、outputFileTracingIncludes に
+  // ./node_modules/... を指定すると Vercel で invalid deployment package
+  // エラーになる。postinstall で vendor/pdfjs-dist/ に必要ファイルを複製し、
+  // そこを含める。
   outputFileTracingIncludes: {
     "/api/**/*": [
       "./vendor/pdfjs-dist/cmaps/**",
       "./vendor/pdfjs-dist/standard_fonts/**",
+      "./vendor/pdfjs-dist/legacy/build/**",
     ],
   },
 };

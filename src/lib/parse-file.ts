@@ -1,5 +1,6 @@
 import mammoth from "mammoth";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 // pdfjs-dist は Node 実行時に require("@napi-rs/canvas") で DOMMatrix 等を
 // polyfill する。Vercel Lambda に自動追跡させるため、side-effect import で
@@ -8,19 +9,22 @@ import "@napi-rs/canvas";
 
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
-// pdfjs-dist の Node ビルドは `file://` URL ではなく生のパスを要求する
-// （内部で fs.promises.readFile(url) を直接呼ぶため）。
-// pnpm の node_modules/pdfjs-dist は symlink なので Vercel の
-// outputFileTracingIncludes が壊れる。postinstall で vendor/ に
-// 実ファイルを複製し、そこを参照する。
+// pnpm の node_modules は symlink で、かつ pdf.worker.mjs のような動的
+// import 対象は Next.js の output tracing で拾われない。postinstall で
+// vendor/ に全部コピーし、そこから動的 import する。
 const PDFJS_ASSETS_ROOT = path.join(process.cwd(), "vendor", "pdfjs-dist");
+const PDFJS_MODULE_PATH = path.join(PDFJS_ASSETS_ROOT, "legacy", "build", "pdf.mjs");
 const CMAP_URL = path.join(PDFJS_ASSETS_ROOT, "cmaps") + path.sep;
 const STANDARD_FONT_DATA_URL = path.join(PDFJS_ASSETS_ROOT, "standard_fonts") + path.sep;
 
 let pdfjsModulePromise: Promise<PdfJsModule> | null = null;
 function getPdfJs(): Promise<PdfJsModule> {
   if (!pdfjsModulePromise) {
-    pdfjsModulePromise = import("pdfjs-dist/legacy/build/pdf.mjs");
+    pdfjsModulePromise = import(
+      /* webpackIgnore: true */
+      /* @vite-ignore */
+      pathToFileURL(PDFJS_MODULE_PATH).href
+    ) as Promise<PdfJsModule>;
   }
   return pdfjsModulePromise;
 }
