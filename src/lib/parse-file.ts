@@ -1,6 +1,11 @@
 import mammoth from "mammoth";
 import path from "node:path";
 
+// pdfjs-dist は Node 実行時に require("@napi-rs/canvas") で DOMMatrix 等を
+// polyfill する。Vercel Lambda に自動追跡させるため、side-effect import で
+// 明示的に参照しておく。
+import "@napi-rs/canvas";
+
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
 // pdfjs-dist の Node ビルドは `file://` URL ではなく生のパスを要求する
