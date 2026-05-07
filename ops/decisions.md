@@ -98,3 +98,22 @@
   - 現在対応: google (gemini), openai (gpt-4o)
 - Consequence:
   - 新プロバイダー追加時は ai-model.ts に case を追加するだけ
+
+## DR-0009: 国内優先権主張出願モードを追加（FR-07）
+- Date: 2026-05-08
+- Status: Accepted
+- Context:
+  - 公開前の自身の出願済み特許に新規事項を加えて新しい別の特許として出願する戦略（特許法 41 条 国内優先権主張出願）を支援したい
+  - 既存フローは「単一の特許案」を前提にしており、ベース出願 + 新規事項の 2 入力を扱えない
+  - ユーザー（発明者）は制度名を意識しないので UI 上は「公開前の出願済み特許に新規事項を付け加える特許ですか？ Yes/No」で表現する
+- Decision:
+  - cases に `baseApplicationMode` (boolean) と `baseApplicationNumber` (任意メタ) を追加
+  - draftPatents に `kind` カラム ("main" | "base" | "addition") を追加。デフォルトは "main"
+  - ベース出願モード時の処理: ベース出願 (kind="base") と新規事項 (kind="addition") を別ファイルでアップロード → AI が両者を統合した新しい明細書テキストを生成 → main draft として保存 → 既存フロー (請求項抽出以降) に合流
+  - 先行技術調査・重なり分析の対象は「統合した発明全体」とする。新規事項のみの調査は将来要望
+  - 自身のベース出願は 29 条の先行技術にはならない（公開前 + 出願人同一）。29 条の 2 拡大先願は本 PoC では機械判定せず、ユーザーが手動除外する
+- Consequence:
+  - 通常モード（baseApplicationMode=false）の挙動・データは一切変えない（後方互換）
+  - 新規 API: `/api/cases/[caseId]/integrate` POST（ベース + 新規事項 → 統合 main draft 生成）
+  - 新規 lib: `src/lib/integrate-claims.ts`（統合プロンプト + AI 呼び出し）
+  - 新規 UI: 案件作成フォームに Yes/No、案件詳細画面の Step 1 を 2 系統に分岐

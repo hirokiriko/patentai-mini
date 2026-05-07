@@ -10,6 +10,7 @@ import {
 } from "@/repositories";
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
+import { IntegrateButton } from "./integrate-button";
 import { basename } from "path";
 import { GenerateQueriesButton } from "./generate-queries-button";
 import { UploadCsvForm } from "./upload-csv-form";
@@ -38,11 +39,17 @@ export default async function CaseDetailPage({
   if (!row) notFound();
 
   const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
+  const isBaseMode = row.baseApplicationMode;
 
-  // 最初のドラフトの抽出結果を取得
-  const firstDraft = drafts[0];
-  const extracted: ExtractedClaims | null = firstDraft?.extractedClaimsJson
-    ? JSON.parse(firstDraft.extractedClaimsJson)
+  // kind 別に分類。kind="main" は通常モードの特許案、または統合後の特許案。
+  const baseDraft = drafts.find((d) => d.kind === "base");
+  const additionDraft = drafts.find((d) => d.kind === "addition");
+  const mainDraft = drafts.find((d) => d.kind === "main");
+
+  // 通常モードでは main draft（または kind 未設定の旧データ）を主として使う
+  const primaryDraft = mainDraft ?? drafts[0];
+  const extracted: ExtractedClaims | null = primaryDraft?.extractedClaimsJson
+    ? JSON.parse(primaryDraft.extractedClaimsJson)
     : null;
 
   // 検索式を取得
@@ -64,8 +71,15 @@ export default async function CaseDetailPage({
   );
 
   // ── ステップ状態の算出 ──
-  const hasDraft = drafts.length > 0;
-  const hasParsedText = !!firstDraft?.parsedText;
+  const hasBase = !!baseDraft?.parsedText;
+  const hasAddition = !!additionDraft?.parsedText;
+  const hasIntegrated = !!mainDraft?.parsedText;
+
+  // 「Step 1 完了」の意味:
+  //  通常モード: ドラフトがあり parsedText が抽出済み
+  //  ベース出願モード: ベース + 新規事項の両方アップロード済みかつ統合済み (main draft あり)
+  const hasDraft = isBaseMode ? hasIntegrated : drafts.length > 0;
+  const hasParsedText = isBaseMode ? hasIntegrated : !!primaryDraft?.parsedText;
   const hasExtracted = !!extracted;
   const hasQueries = !!latestQuerySet;
   const hasPriorArts = priorArts.length > 0;
@@ -108,6 +122,10 @@ export default async function CaseDetailPage({
           currentStep={currentStep}
           hasDraft={hasDraft}
           hasExtracted={hasExtracted}
+          isBaseMode={isBaseMode}
+          hasBase={hasBase}
+          hasAddition={hasAddition}
+          hasIntegrated={hasIntegrated}
         />
       </div>
 
@@ -128,63 +146,225 @@ export default async function CaseDetailPage({
       <p className="mt-1 text-base text-gray-600">
         ステータス: {row.status} ／ 作成日: {row.createdAt}
       </p>
+      {isBaseMode && (
+        <div className="mt-3 rounded-lg border border-purple-200 bg-purple-50 px-4 py-3 text-base text-purple-900">
+          <p className="font-medium">国内優先権主張出願モード（FR-07）</p>
+          <p className="mt-1 text-sm">
+            公開前の出願済み特許 + 新規事項を統合した発明全体を分析対象にします。
+            {row.baseApplicationNumber && (
+              <>
+                {" "}ベース出願番号: <span className="font-mono">{row.baseApplicationNumber}</span>
+              </>
+            )}
+          </p>
+        </div>
+      )}
 
       {/* ── Step 1: 特許案アップロード ── */}
       <section
         id="step-1"
         className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(1)}`}
       >
-        <h2 className="text-xl font-bold">1. 特許案アップロード</h2>
-        <div className="mt-4">
-          <UploadDraftForm caseId={caseIdNum} />
-        </div>
+        <h2 className="text-xl font-bold">
+          {isBaseMode ? "1. ベース出願 + 新規事項のアップロードと統合" : "1. 特許案アップロード"}
+        </h2>
 
-        {drafts.length > 0 && (
-          <ul className="mt-4 space-y-2">
-            {drafts.map((d) => (
-              <li
-                key={d.draftId}
-                className="rounded-lg border border-gray-200 px-4 py-3 text-base space-y-3"
-              >
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-green-600 text-lg">✓</span>
-                  <span className="font-medium">
-                    {d.sourceFilePath
-                      ? basename(d.sourceFilePath)
-                      : "（ファイル名不明）"}
-                  </span>
-                  {d.parsedText && (
-                    <span className="text-sm text-green-700 font-medium">
-                      テキスト抽出済み
+        {!isBaseMode && (
+          <>
+            <div className="mt-4">
+              <UploadDraftForm caseId={caseIdNum} />
+            </div>
+
+            {drafts.length > 0 && (
+              <ul className="mt-4 space-y-2">
+                {drafts.map((d) => (
+                  <li
+                    key={d.draftId}
+                    className="rounded-lg border border-gray-200 px-4 py-3 text-base space-y-3"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-green-600 text-lg">✓</span>
+                      <span className="font-medium">
+                        {d.sourceFilePath
+                          ? basename(d.sourceFilePath)
+                          : "（ファイル名不明）"}
+                      </span>
+                      {d.parsedText && (
+                        <span className="text-sm text-green-700 font-medium">
+                          テキスト抽出済み
+                        </span>
+                      )}
+                      {d.extractedClaimsJson && (
+                        <span className="text-sm text-blue-700 font-medium">
+                          請求項抽出済み
+                        </span>
+                      )}
+                    </div>
+                    {d.parsedText && (
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <ExtractClaimsButton
+                          caseId={caseIdNum}
+                          draftId={d.draftId}
+                          hasExtracted={!!d.extractedClaimsJson}
+                        />
+                        <details className="flex-1 text-sm text-gray-700">
+                          <summary className="cursor-pointer hover:text-gray-900">
+                            抽出テキスト（
+                            {d.parsedText.length.toLocaleString()} 文字）
+                          </summary>
+                          <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-sm">
+                            {d.parsedText}
+                          </pre>
+                        </details>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+
+        {isBaseMode && (
+          <div className="mt-4 space-y-5">
+            {/* 1a: ベース出願 */}
+            <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+              <p className="text-sm font-medium text-gray-500 mb-2">
+                1-A. 公開前のベース出願（自身の出願済み特許）
+              </p>
+              <UploadDraftForm
+                caseId={caseIdNum}
+                kind="base"
+                label="ベース出願ファイル（PDF / DOCX / TXT）"
+                buttonLabel={baseDraft ? "差し替え" : "アップロード"}
+              />
+              {baseDraft && (
+                <div className="mt-3 rounded border border-gray-200 px-3 py-2 text-sm space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-green-600">✓</span>
+                    <span className="font-medium">
+                      {baseDraft.sourceFilePath
+                        ? basename(baseDraft.sourceFilePath)
+                        : "（ファイル名不明）"}
                     </span>
-                  )}
-                  {d.extractedClaimsJson && (
-                    <span className="text-sm text-blue-700 font-medium">
-                      請求項抽出済み
-                    </span>
-                  )}
-                </div>
-                {d.parsedText && (
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <ExtractClaimsButton
-                      caseId={caseIdNum}
-                      draftId={d.draftId}
-                      hasExtracted={!!d.extractedClaimsJson}
-                    />
-                    <details className="flex-1 text-sm text-gray-700">
+                    {baseDraft.parsedText && (
+                      <span className="text-xs text-green-700 font-medium">
+                        テキスト抽出済み（
+                        {baseDraft.parsedText.length.toLocaleString()} 文字）
+                      </span>
+                    )}
+                  </div>
+                  {baseDraft.parsedText && (
+                    <details className="text-sm text-gray-700">
                       <summary className="cursor-pointer hover:text-gray-900">
-                        抽出テキスト（
-                        {d.parsedText.length.toLocaleString()} 文字）
+                        抽出テキストを表示
                       </summary>
                       <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-sm">
-                        {d.parsedText}
+                        {baseDraft.parsedText}
                       </pre>
                     </details>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 1b: 新規事項 */}
+            <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+              <p className="text-sm font-medium text-gray-500 mb-2">
+                1-B. 追加したい新規事項（例: UI、新機能、追加構成要素）
+              </p>
+              <UploadDraftForm
+                caseId={caseIdNum}
+                kind="addition"
+                label="新規事項ファイル（PDF / DOCX / TXT）"
+                buttonLabel={additionDraft ? "差し替え" : "アップロード"}
+              />
+              {additionDraft && (
+                <div className="mt-3 rounded border border-gray-200 px-3 py-2 text-sm space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-green-600">✓</span>
+                    <span className="font-medium">
+                      {additionDraft.sourceFilePath
+                        ? basename(additionDraft.sourceFilePath)
+                        : "（ファイル名不明）"}
+                    </span>
+                    {additionDraft.parsedText && (
+                      <span className="text-xs text-green-700 font-medium">
+                        テキスト抽出済み（
+                        {additionDraft.parsedText.length.toLocaleString()} 文字）
+                      </span>
+                    )}
                   </div>
-                )}
-              </li>
-            ))}
-          </ul>
+                  {additionDraft.parsedText && (
+                    <details className="text-sm text-gray-700">
+                      <summary className="cursor-pointer hover:text-gray-900">
+                        抽出テキストを表示
+                      </summary>
+                      <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-sm">
+                        {additionDraft.parsedText}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* 1c: 統合 */}
+            <div className="rounded-lg border border-purple-200 bg-purple-50 px-4 py-3">
+              <p className="text-sm font-medium text-purple-700 mb-2">
+                1-C. AI で統合した発明全体を生成
+              </p>
+              <p className="text-sm text-purple-900 mb-3">
+                両ファイルから「ベース出願 + 新規事項」を組み合わせた発明全体の明細書テキストを生成します。
+                以降の請求項抽出・先行技術調査はこの統合後テキストを対象とします。
+              </p>
+              <IntegrateButton
+                caseId={caseIdNum}
+                enabled={hasBase && hasAddition}
+                hasIntegrated={hasIntegrated}
+              />
+              {!(hasBase && hasAddition) && (
+                <p className="mt-2 text-xs text-purple-700">
+                  ※ ベース出願 + 新規事項の両方をアップロード（テキスト抽出成功）すると押せるようになります
+                </p>
+              )}
+              {mainDraft && (
+                <div className="mt-3 rounded border border-purple-200 bg-white px-3 py-2 text-sm space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-green-600">✓</span>
+                    <span className="font-medium">統合済み発明全体</span>
+                    {mainDraft.parsedText && (
+                      <span className="text-xs text-green-700 font-medium">
+                        （{mainDraft.parsedText.length.toLocaleString()} 文字）
+                      </span>
+                    )}
+                    {mainDraft.extractedClaimsJson && (
+                      <span className="text-xs text-blue-700 font-medium">
+                        請求項抽出済み
+                      </span>
+                    )}
+                  </div>
+                  {mainDraft.parsedText && (
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <ExtractClaimsButton
+                        caseId={caseIdNum}
+                        draftId={mainDraft.draftId}
+                        hasExtracted={!!mainDraft.extractedClaimsJson}
+                      />
+                      <details className="flex-1 text-sm text-gray-700">
+                        <summary className="cursor-pointer hover:text-gray-900">
+                          統合後テキストを表示
+                        </summary>
+                        <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-3 text-sm">
+                          {mainDraft.parsedText}
+                        </pre>
+                      </details>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </section>
 

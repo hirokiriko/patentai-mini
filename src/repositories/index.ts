@@ -16,6 +16,7 @@ export {
 export type {
   Case,
   DraftPatent,
+  DraftKind,
   SearchQuerySet,
   PriorArtDocument,
   ComparisonResult,

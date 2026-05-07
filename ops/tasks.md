@@ -6,7 +6,6 @@
 - [ ] ベクトル検索の有効化（L3 意味類似の精度向上）
 - [ ] J-PlatPat CSV の全列パターンの網羅テスト
 - [ ] GOOGLE_GENERATIVE_AI_API_KEY のローテーション（セッション中に露出したため）
-- [ ] 実施例4（出願済・公開前に新規事項を付け加える）の仕様確定 — 追加ヒアリング質問は `/Users/mao/.claude/plans/1-ui-4-eager-perlis.md` に整理済み
 
 ## Next
 - [ ] J-PlatPat 構文修正版検索式の本番デプロイ＋父による再検証
@@ -25,6 +24,7 @@
 ## Blocked
 
 ## Done
+- [x] FR-07 国内優先権主張出願モード（DR-0009）— cases に baseApplicationMode/baseApplicationNumber、draft_patents に kind 追加。AI 統合 lib + API + UI（Step 1 を 1-A/1-B/1-C に分岐）。Turso 本番にスキーマ反映済、Vercel 未デプロイ
 - [x] J-PlatPat 検索式の構文エラー根絶（中庸でタグ後置のカッコ式を二重ネストしないようプロンプト書き直し、eslint vendor/ ignore 追加で lint も復旧）
 - [x] 方法B の PDF 取り込みバグ修正（unpdf → pdfjs-dist vendor/ 方式、@napi-rs/canvas 含む依存整備、ローカル dev + Vercel 本番の両方で日本語公報 PDF 3 件の取り込みを実機確認）
 - [x] 改善点カタログ作成（`/Users/mao/.claude/plans/distributed-meandering-shell.md`、30+ 指摘・Top 10 Quick Wins 付き）

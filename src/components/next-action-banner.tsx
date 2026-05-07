@@ -1,22 +1,67 @@
 "use client";
 
+interface ActionInput {
+  currentStep: number;
+  hasDraft: boolean;
+  hasExtracted: boolean;
+  isBaseMode: boolean;
+  hasBase: boolean;
+  hasAddition: boolean;
+  hasIntegrated: boolean;
+}
+
 function getAction(
-  currentStep: number,
-  hasDraft: boolean,
-  hasExtracted: boolean,
+  input: ActionInput
 ): { message: string; target: string } | null {
+  const {
+    currentStep,
+    hasDraft,
+    hasExtracted,
+    isBaseMode,
+    hasBase,
+    hasAddition,
+    hasIntegrated,
+  } = input;
+
   if (currentStep === 1) {
-    if (!hasDraft) {
-      return {
-        message: "まず、特許案のファイルをアップロードしてください",
-        target: "step-1",
-      };
-    }
-    if (!hasExtracted) {
-      return {
-        message: "次に「請求項を抽出」ボタンを押してください",
-        target: "step-1",
-      };
+    if (isBaseMode) {
+      if (!hasBase) {
+        return {
+          message: "まず、公開前のベース出願ファイルをアップロードしてください（1-A）",
+          target: "step-1",
+        };
+      }
+      if (!hasAddition) {
+        return {
+          message: "次に、追加したい新規事項のファイルをアップロードしてください（1-B）",
+          target: "step-1",
+        };
+      }
+      if (!hasIntegrated) {
+        return {
+          message: "「ベース出願 + 新規事項を統合する」ボタンを押してください（1-C）",
+          target: "step-1",
+        };
+      }
+      if (!hasExtracted) {
+        return {
+          message: "統合後の発明全体から「請求項を抽出」してください",
+          target: "step-1",
+        };
+      }
+    } else {
+      if (!hasDraft) {
+        return {
+          message: "まず、特許案のファイルをアップロードしてください",
+          target: "step-1",
+        };
+      }
+      if (!hasExtracted) {
+        return {
+          message: "次に「請求項を抽出」ボタンを押してください",
+          target: "step-1",
+        };
+      }
     }
   }
   if (currentStep === 3) {
@@ -46,12 +91,28 @@ export function NextActionBanner({
   currentStep,
   hasDraft,
   hasExtracted,
+  isBaseMode = false,
+  hasBase = false,
+  hasAddition = false,
+  hasIntegrated = false,
 }: {
   currentStep: number;
   hasDraft: boolean;
   hasExtracted: boolean;
+  isBaseMode?: boolean;
+  hasBase?: boolean;
+  hasAddition?: boolean;
+  hasIntegrated?: boolean;
 }) {
-  const action = getAction(currentStep, hasDraft, hasExtracted);
+  const action = getAction({
+    currentStep,
+    hasDraft,
+    hasExtracted,
+    isBaseMode,
+    hasBase,
+    hasAddition,
+    hasIntegrated,
+  });
 
   if (!action) {
     return (

@@ -1,14 +1,17 @@
 # Handoff
 
 ## 現在地
-2026-05-08 父からの追加情報を受けて J-PlatPat 検索式の構文エラー（中庸が二重ネストで `論理式のカッコの使用方法が間違っています` を返す）を根絶するプロンプト書き直しをローカル完了。`eslint.config.mjs` に `vendor/**` ignore を追加して lint も復旧。`pnpm lint` / `pnpm type-check` 通過。未コミット・未デプロイ。本番には 2026-04-22 の b1086fb までしか反映されていないので、push 後の検証で「方法B 単独フロー」「Phase A 警告」「J-PlatPat 構文修正」「Quick Wins」「pdfjs-dist 構成」がまとめて検証される。
+2026-05-08（本セッション）FR-07 国内優先権主張出願モードを実装（DR-0009）。父の「公開前の出願済み特許に新規事項を付け加える特許」要望に対応。仕様 / DB スキーマ / Repository / 統合 AI / API / UI を一通り追加し、`pnpm lint` `type-check` `build` 通過、ローカル dev でベース出願モード案件の作成と画面描画まで確認。Turso 本番にもスキーマ反映済（`scripts/migrate-fr07.mjs` を 1 回実行）。Vercel への push は未実施。
+
+2026-05-08 父からの追加情報を受けて J-PlatPat 検索式の構文エラー（中庸が二重ネストで `論理式のカッコの使用方法が間違っています` を返す）を根絶するプロンプト書き直しをローカル完了。`eslint.config.mjs` に `vendor/**` ignore を追加して lint も復旧。`pnpm lint` / `pnpm type-check` 通過。未コミット・未デプロイ。本番には 2026-04-22 の b1086fb までしか反映されていないので、push 後の検証で「方法B 単独フロー」「Phase A 警告」「J-PlatPat 構文修正」「Quick Wins」「pdfjs-dist 構成」「FR-07 ベース出願モード」がまとめて検証される。
 
 2026-04-22 方法B の PDF 取り込みバグを vendor/ 方式で修正し、**本番 Vercel まで動作確認完了**。最終 commit は b1086fb（main）。`https://patentai-mini.vercel.app/api/cases/7/prior-art` に 3 件 POST で `{"imported":3}`（12 秒）、Turso に日本語本文が保存されることを確認。テスト用ケース caseId=6 (ローカル)・caseId=7 (本番 "prod pdf smoke test") が Turso に残っている。詳細な構成の理由は `~/.claude/projects/-Users-mao-dev-kiriko-patentai-mini/memory/reference_pdfjs_vendor.md` 参照（安易に vendor/ 方式を戻すと本番が落ちる、5 段階の罠を全部踏んだ結果の構成）。
 
 2026-04-21 改善点カタログ作成＋ Top 10 Quick Wins のうち 5 件（`.env.example` 整理 / queries route JSON.parse try/catch / 案件フォーム IME ガード / `type-check` script / GitHub Actions CI）をローカル実装、`pnpm lint` / `pnpm type-check` 通過。未デプロイ・未プッシュ。改善点カタログは `/Users/mao/.claude/plans/distributed-meandering-shell.md` にあり、残り Quick Wins は A2 FK cascade / A3 transaction / A1 element_score / C5 active draft / G1 vitest 最小テスト。2026-04-20 の方法B 単独フロー＋ payload 警告（Phase A）も未デプロイのまま残っている。
 
 ## 次セッションの優先候補
-1. **Vercel デプロイ＋父による J-PlatPat 構文再検証** — 今回の修正版検索式（広/中/狭）を J-PlatPat に貼り付けて構文エラーが消えていることを確認。中庸は特に `((..)/CL+(..)/AB)*((..)/CL+(..)/AB)` の二重ネストが消え、`(..)/CL*(..)/CL` または `(A)/CL*(B)/CL+(A)/AB*(B)/AB` のフラット展開になっているはず
+1. **Vercel デプロイ + FR-07 実機検証** — main に push して Vercel デプロイ後、父にベース出願（公開前の特願 2026-40454）+ 新規事項（UI 仕様）を 2 ファイルでアップロードしてもらい、統合 → 請求項抽出 → 検索式 → 分析 までの一気通貫を確認する。統合 AI（`src/lib/integrate-claims.ts`）のプロンプトは実データなしで作っているので、出力品質の調整が必要になる可能性が高い
+2. **Vercel デプロイ＋父による J-PlatPat 構文再検証** — 今回の修正版検索式（広/中/狭）を J-PlatPat に貼り付けて構文エラーが消えていることを確認。中庸は特に `((..)/CL+(..)/AB)*((..)/CL+(..)/AB)` の二重ネストが消え、`(..)/CL*(..)/CL` または `(A)/CL*(B)/CL+(A)/AB*(B)/AB` のフラット展開になっているはず
 2. **構文エラーが再発した場合**: `src/lib/generate-queries.ts` に出力後の sanitize / 検証関数を追加（タグ後置の式が更にカッコで括られているケースを検出して再生成またはフラット展開に変換）
 3. **残り Quick Wins** — A2 FK cascade / A3 `replaceByCaseId` トランザクション / A1 `element_score` カラム追加 / C5 複数ドラフト active 明示 / G1 主要 4 モジュール vitest テスト
 4. **Phase B 実装** — クライアントで PDF/DOCX をテキスト抽出し画像を除外（pdfjs-dist + mammoth.browser）、サーバーに JSON 経路追加して payload を数百 KB 以下へ

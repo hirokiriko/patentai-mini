@@ -31,6 +31,10 @@ export async function POST(
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
 
+  const kindRaw = formData.get("kind");
+  const kind =
+    kindRaw === "base" || kindRaw === "addition" ? kindRaw : "main";
+
   const ext = file.name.split(".").pop()?.toLowerCase();
   if (!["pdf", "docx", "txt"].includes(ext ?? "")) {
     return NextResponse.json(
@@ -50,6 +54,7 @@ export async function POST(
 
   const row = await draftPatentRepo.create({
     caseId: caseIdNum,
+    kind,
     sourceFilePath: file.name,
     parsedText,
   });

@@ -1,5 +1,64 @@
 # Session Log
 
+## 2026-05-08 FR-07 国内優先権主張出願モード実装（DR-0009）
+### 実施
+- 父の追加要望「公開前の出願済み特許に新規事項を付け加える特許」を、特許法 41 条 国内優先権主張出願として明文化し実装した
+- 設計合意（AskUserQuestion 4 ターン）: 制度=国内優先権、調査スコープ=統合後全体、入力=ファイル、統合=AI 自動
+- 仕様追記:
+  - `docs/02-requirements.md` FR-07 を追加
+  - `docs/03-architecture.md` データモデル（cases.base_application_mode / base_application_number、draft_patents.kind）と「ベース出願モードの処理流れ」追加
+  - `ops/decisions.md` DR-0009 を追加
+- スキーマ拡張: `src/db/schema.ts` に上記 3 カラム追加
+  - drizzle-kit push が NOT NULL 追加カラムを「data-loss」として TTY 確認を要求するため、ALTER TABLE を直接発行する `scripts/migrate-fr07.mjs` を作成して Turso 本番に反映済（既存 9 件はデフォルト値で埋まる）
+- Repository 層: `src/repositories/types.ts` `drizzle.ts` `index.ts` に新フィールド + `DraftKind` 型 + `upsertMain` メソッド追加（main は 1 件に保つ upsert）
+- 統合 AI ロジック: `src/lib/integrate-claims.ts` 新規。ベース + 新規事項テキストを受け取り、特許明細書フォーマットの統合テキストを generateText で出力。後段の extractClaims が処理できる構造化テキストを目標とする
+- API:
+  - `POST /api/cases`: baseApplicationMode / baseApplicationNumber 受領
+  - `POST /api/cases/[caseId]/draft`: kind FormData 受領（"main"|"base"|"addition"、デフォルト "main"）
+  - `POST /api/cases/[caseId]/integrate` 新規: ベース + 新規事項 → main draft 統合
+- UI:
+  - `src/app/new-case-form.tsx`: Yes/No チェックボックスとベース出願番号入力欄（IME ガード継続）
+  - `src/app/cases/[caseId]/page.tsx`: baseApplicationMode に応じて Step 1 を 3 セクション（1-A ベース / 1-B 新規事項 / 1-C 統合）に分岐。通常モードは従来通り
+  - `src/app/cases/[caseId]/upload-draft-form.tsx`: kind / label / buttonLabel プロップ追加（hidden input で kind を FormData に乗せる）
+  - `src/app/cases/[caseId]/integrate-button.tsx` 新規
+  - `src/components/next-action-banner.tsx`: ベース出願モード用メッセージ追加（1-A → 1-B → 1-C → 抽出 → 検索式...）
+- 検証:
+  - `pnpm lint` `pnpm type-check` `pnpm build` 全て通過
+  - `pnpm dev` 起動 → POST /api/cases で baseApplicationMode=true の case 作成成功、GET /cases/10 でベース出願モードの新 UI が描画されることを HTML 文字列で確認、DELETE で案件削除して掃除
+  - ローカルから本番 Turso に直接スキーマ反映済み（migrate-fr07.mjs 1 回実行）。本番 Vercel への push は未実施
+
+### 変更ファイル
+- `docs/02-requirements.md`（FR-07 追加）
+- `docs/03-architecture.md`（データモデル + 処理流れ追加）
+- `ops/decisions.md`（DR-0009 追加）
+- `ops/tasks.md`（In Progress / Inbox 整理）
+- `src/db/schema.ts`（cases / draft_patents カラム追加）
+- `src/repositories/types.ts` `src/repositories/drizzle.ts` `src/repositories/index.ts`
+- `src/lib/integrate-claims.ts`（新規）
+- `src/app/api/cases/route.ts` `src/app/api/cases/[caseId]/draft/route.ts`
+- `src/app/api/cases/[caseId]/integrate/route.ts`（新規）
+- `src/app/new-case-form.tsx`
+- `src/app/cases/[caseId]/page.tsx` `upload-draft-form.tsx` `integrate-button.tsx`（新規）
+- `src/components/next-action-banner.tsx`
+- `scripts/migrate-fr07.mjs`（新規・運用ツール）
+
+### 決まったこと
+- 国内優先権主張出願モードの保存層は既存 5 テーブルに最小カラム追加で対応（draftPatents.kind で 3 種別を区別）
+- 統合は AI による自然言語生成にする（generateText）。構造化（generateObject）にしないのは、出力が後段の extractClaims プロンプトに食わせやすい「特許明細書フォーマット」だから
+- ベース出願は 29 条引用文献にならない（公開前 + 出願人同一）。29 条の 2 拡大先願は本 PoC では機械判定せずユーザー手動除外
+- drizzle-kit push は NOT NULL カラム追加を必ず data-loss と扱うため、本番 DB への schema 同期は小さい migrate スクリプトを書いて libsql client から直接実行する運用パターンとする
+
+### 未解決
+- 本番 Vercel に未デプロイ。ユーザー側で `! gh auth switch --user hirokiriko && git push` してから Vercel が自動デプロイ
+- 統合 AI の精度は実データで未検証。父に「特願2026-40454 + UI 仕様」を投入してもらい、統合後テキストの品質を確認する必要あり
+- 新規事項単独の調査は今回スコープ外（要望があれば将来拡張）
+- 4 月から残っている諸タスク（J-PlatPat 構文修正の本番再検証、Phase B クライアント抽出、残 Quick Wins、environment 選択 UI）は未着手のまま
+
+### 次にやること
+- 本セッションの変更を main に push し Vercel に自動デプロイさせる
+- 父に「ベース出願（特願2026-40454）のテキスト + 新規事項のテキスト」を 2 ファイルでアップロードしてもらい、統合 → 抽出 → 検索式 → 分析 まで通すリハーサル
+- 統合 AI のプロンプト調整（実機運用結果次第）
+
 ## 2026-05-08 J-PlatPat 検索式の構文エラーを根絶（中庸の二重ネスト除去）
 ### 実施
 - 父から追加情報を受領: 「長めの中庸検索式が J-PlatPat で『論理式のカッコの使用方法が間違っています』エラーで使えない」。具体的なエラー検索式 2 本を提示してもらった

@@ -13,6 +13,7 @@ import type {
   SearchQuerySetRepository,
   PriorArtDocumentRepository,
   ComparisonResultRepository,
+  DraftKind,
 } from "./types";
 
 export const caseRepo: CaseRepository = {
@@ -23,14 +24,25 @@ export const caseRepo: CaseRepository = {
     const [row] = await db.select().from(cases).where(eq(cases.caseId, caseId));
     return row ?? null;
   },
-  async create(title) {
-    const [row] = await db.insert(cases).values({ title }).returning();
+  async create(data) {
+    const [row] = await db
+      .insert(cases)
+      .values({
+        title: data.title,
+        baseApplicationMode: data.baseApplicationMode ?? false,
+        baseApplicationNumber: data.baseApplicationNumber ?? null,
+      })
+      .returning();
     return row;
   },
   async update(caseId, data) {
     const updates: Record<string, unknown> = { updatedAt: sql`datetime('now')` };
     if (data.title !== undefined) updates.title = data.title;
     if (data.status !== undefined) updates.status = data.status;
+    if (data.baseApplicationMode !== undefined)
+      updates.baseApplicationMode = data.baseApplicationMode;
+    if (data.baseApplicationNumber !== undefined)
+      updates.baseApplicationNumber = data.baseApplicationNumber;
     const [row] = await db.update(cases).set(updates).where(eq(cases.caseId, caseId)).returning();
     return row ?? null;
   },
@@ -42,18 +54,49 @@ export const caseRepo: CaseRepository = {
 
 export const draftPatentRepo: DraftPatentRepository = {
   async findByCaseId(caseId) {
-    return db.select().from(draftPatents).where(eq(draftPatents.caseId, caseId));
+    const rows = await db.select().from(draftPatents).where(eq(draftPatents.caseId, caseId));
+    return rows.map((r) => ({ ...r, kind: r.kind as DraftKind }));
   },
   async create(data) {
     const [row] = await db
       .insert(draftPatents)
       .values({
         caseId: data.caseId,
+        kind: data.kind ?? "main",
         sourceFilePath: data.sourceFilePath,
         parsedText: data.parsedText ?? null,
       })
       .returning();
-    return row;
+    return { ...row, kind: row.kind as DraftKind };
+  },
+  async upsertMain(data) {
+    // 統合済みメインドラフトを 1 件に保つ。既存があれば更新、なければ作成。
+    const existing = await db
+      .select()
+      .from(draftPatents)
+      .where(and(eq(draftPatents.caseId, data.caseId), eq(draftPatents.kind, "main")));
+    if (existing.length > 0) {
+      const [row] = await db
+        .update(draftPatents)
+        .set({
+          sourceFilePath: data.sourceFilePath,
+          parsedText: data.parsedText,
+          extractedClaimsJson: null,
+        })
+        .where(eq(draftPatents.draftId, existing[0].draftId))
+        .returning();
+      return { ...row, kind: row.kind as DraftKind };
+    }
+    const [row] = await db
+      .insert(draftPatents)
+      .values({
+        caseId: data.caseId,
+        kind: "main",
+        sourceFilePath: data.sourceFilePath,
+        parsedText: data.parsedText,
+      })
+      .returning();
+    return { ...row, kind: row.kind as DraftKind };
   },
   async updateExtractedClaims(draftId, json) {
     const [row] = await db
@@ -61,7 +104,8 @@ export const draftPatentRepo: DraftPatentRepository = {
       .set({ extractedClaimsJson: json })
       .where(eq(draftPatents.draftId, draftId))
       .returning();
-    return row ?? null;
+    if (!row) return null;
+    return { ...row, kind: row.kind as DraftKind };
   },
 };
 

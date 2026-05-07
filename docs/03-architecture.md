@@ -27,12 +27,18 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - case_id
 - title
 - status
+- base_application_mode (boolean) — 公開前ベース出願 + 新規事項モード
+- base_application_number (任意・メタ情報のみ。例: 特願 2026-40454)
 - created_at
 - updated_at
 
 ### DraftPatent
 - draft_id
 - case_id
+- kind ("main" | "base" | "addition")
+  - "main": 通常モードまたは統合済み特許案
+  - "base": 公開前のベース出願（baseApplicationMode 時のみ）
+  - "addition": 追加する新規事項（baseApplicationMode 時のみ）
 - source_file_path
 - parsed_text
 - extracted_claims_json
@@ -74,6 +80,12 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 5. 自身の請求項と既存文献要素を比較
 6. 総合スコアと説明文を生成
 7. レポート表示
+
+## ベース出願モード（FR-07）の処理流れ
+0. 案件作成時にベース出願モードを選択
+1. ベース出願ファイル（公開前）と新規事項ファイルを別々にアップロード
+2. AI がベース出願テキスト + 新規事項テキストを読み込み、両者を統合した「新しい発明全体のテキスト」を生成し main draft として保存
+3. 以降は通常フロー（請求項抽出 → 検索式生成 → 先行技術取込 → 重なり分析）と同じ
 
 ## なぜこの構成か
 - J-PlatPat の手動工程を外部依存として切り離せる

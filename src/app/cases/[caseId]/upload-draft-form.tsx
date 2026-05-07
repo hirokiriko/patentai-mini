@@ -4,7 +4,17 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
 
-export function UploadDraftForm({ caseId }: { caseId: number }) {
+export function UploadDraftForm({
+  caseId,
+  kind = "main",
+  label = "特許案ファイル（PDF / DOCX / TXT）",
+  buttonLabel = "アップロード",
+}: {
+  caseId: number;
+  kind?: "main" | "base" | "addition";
+  label?: string;
+  buttonLabel?: string;
+}) {
   const router = useRouter();
   const { show } = useToast();
   const [uploading, setUploading] = useState(false);
@@ -48,9 +58,8 @@ export function UploadDraftForm({ caseId }: { caseId: number }) {
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <label className="text-base font-medium text-gray-700">
-        特許案ファイル（PDF / DOCX / TXT）
-      </label>
+      <label className="text-base font-medium text-gray-700">{label}</label>
+      <input type="hidden" name="kind" value={kind} />
       <div className="flex gap-2">
         <input
           type="file"
@@ -68,7 +77,7 @@ export function UploadDraftForm({ caseId }: { caseId: number }) {
               : "bg-blue-600 opacity-50 cursor-not-allowed"
           }`}
         >
-          {uploading ? "アップロード中..." : "アップロード"}
+          {uploading ? "アップロード中..." : buttonLabel}
         </button>
       </div>
       {error && <p className="text-base text-red-600">{error}</p>}

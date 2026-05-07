@@ -10,13 +10,18 @@ export interface Case {
   caseId: number;
   title: string;
   status: string;
+  baseApplicationMode: boolean;
+  baseApplicationNumber: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
+export type DraftKind = "main" | "base" | "addition";
+
 export interface DraftPatent {
   draftId: number;
   caseId: number;
+  kind: DraftKind;
   sourceFilePath: string | null;
   parsedText: string | null;
   extractedClaimsJson: string | null;
@@ -59,14 +64,31 @@ export interface ComparisonResult {
 export interface CaseRepository {
   findAll(): Promise<Case[]>;
   findById(caseId: number): Promise<Case | null>;
-  create(title: string): Promise<Case>;
-  update(caseId: number, data: Partial<Pick<Case, "title" | "status">>): Promise<Case | null>;
+  create(data: {
+    title: string;
+    baseApplicationMode?: boolean;
+    baseApplicationNumber?: string | null;
+  }): Promise<Case>;
+  update(
+    caseId: number,
+    data: Partial<Pick<Case, "title" | "status" | "baseApplicationMode" | "baseApplicationNumber">>
+  ): Promise<Case | null>;
   remove(caseId: number): Promise<boolean>;
 }
 
 export interface DraftPatentRepository {
   findByCaseId(caseId: number): Promise<DraftPatent[]>;
-  create(data: { caseId: number; sourceFilePath: string | null; parsedText?: string | null }): Promise<DraftPatent>;
+  create(data: {
+    caseId: number;
+    kind?: DraftKind;
+    sourceFilePath: string | null;
+    parsedText?: string | null;
+  }): Promise<DraftPatent>;
+  upsertMain(data: {
+    caseId: number;
+    sourceFilePath: string | null;
+    parsedText: string;
+  }): Promise<DraftPatent>;
   updateExtractedClaims(draftId: number, json: string): Promise<DraftPatent | null>;
 }
 

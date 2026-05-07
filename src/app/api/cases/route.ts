@@ -8,12 +8,19 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  const { title } = body;
+  const { title, baseApplicationMode, baseApplicationNumber } = body;
 
   if (!title || typeof title !== "string") {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
-  const row = await caseRepo.create(title);
+  const row = await caseRepo.create({
+    title,
+    baseApplicationMode: !!baseApplicationMode,
+    baseApplicationNumber:
+      typeof baseApplicationNumber === "string" && baseApplicationNumber.trim()
+        ? baseApplicationNumber.trim()
+        : null,
+  });
   return NextResponse.json(row, { status: 201 });
 }

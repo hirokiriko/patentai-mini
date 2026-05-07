@@ -5,6 +5,10 @@ export const cases = sqliteTable("cases", {
   caseId: integer("case_id").primaryKey({ autoIncrement: true }),
   title: text("title").notNull(),
   status: text("status").notNull().default("draft"),
+  baseApplicationMode: integer("base_application_mode", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  baseApplicationNumber: text("base_application_number"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(datetime('now'))`),
@@ -18,6 +22,7 @@ export const draftPatents = sqliteTable("draft_patents", {
   caseId: integer("case_id")
     .notNull()
     .references(() => cases.caseId),
+  kind: text("kind").notNull().default("main"),
   sourceFilePath: text("source_file_path"),
   parsedText: text("parsed_text"),
   extractedClaimsJson: text("extracted_claims_json"),
