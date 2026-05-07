@@ -9,9 +9,12 @@
 - [ ] 実施例4（出願済・公開前に新規事項を付け加える）の仕様確定 — 追加ヒアリング質問は `/Users/mao/.claude/plans/1-ui-4-eager-perlis.md` に整理済み
 
 ## Next
+- [ ] J-PlatPat 構文修正版検索式の本番デプロイ＋父による再検証
+- [ ] 構文エラーが再発した場合の sanitize / 検証関数追加（タグ付き式のネスト検出）
 - [ ] 方法B単独フロー+payload警告のデプロイ+実機検証（方法B複数ファイル、4MB警告、4.5MBブロック、HTTP413）
 - [ ] pdfjs-dist 出力の字間スペース正規化（公報PDFで `所 定 の ...` のようになる問題、要調査）
 - [ ] Phase B: クライアント側で PDF/DOCX をテキスト抽出して画像を除外（pdfjs-dist + mammoth.browser + サーバー JSON 経路追加）
+- [ ] 環境選択 UI（要件確定待ち、追加要望B）
 - [ ] 実施例4 の仕様ヒアリング実施
 - [ ] UI/UX 改善（ローディング状態、エラー表示の統一）
 - [ ] 従属請求項の分析対応（現在は独立請求項のみ）
@@ -22,6 +25,7 @@
 ## Blocked
 
 ## Done
+- [x] J-PlatPat 検索式の構文エラー根絶（中庸でタグ後置のカッコ式を二重ネストしないようプロンプト書き直し、eslint vendor/ ignore 追加で lint も復旧）
 - [x] 方法B の PDF 取り込みバグ修正（unpdf → pdfjs-dist vendor/ 方式、@napi-rs/canvas 含む依存整備、ローカル dev + Vercel 本番の両方で日本語公報 PDF 3 件の取り込みを実機確認）
 - [x] 改善点カタログ作成（`/Users/mao/.claude/plans/distributed-meandering-shell.md`、30+ 指摘・Top 10 Quick Wins 付き）
 - [x] Quick Wins 5件: `.env.example` 整理 / queries route の JSON.parse を try/catch / 案件作成フォームに IME ガード / type-check script / GitHub Actions CI
