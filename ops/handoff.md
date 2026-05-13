@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション・4 件目）先行技術文献の選択削除 UI と CSV 重複時の publicationNo upsert を実装。チェックボックス + 一括削除のクライアントコンポーネント、DELETE API、リポジトリ層に upsert/delete メソッド追加。362 件中半分が重複している本番データは UI から削除可能になった。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+2026-05-14（本セッション・5 件目）本番で重なり分析が 504 を返したため、`analyze-overlap.ts` の thinkingLevel を 'medium' → 'low' に下げる。`pnpm lint` / `pnpm type-check` 通過。コミット後 push して実機検証が必要。
+
+2026-05-14 先行技術文献の選択削除 UI と CSV 重複時の publicationNo upsert を実装。チェックボックス + 一括削除のクライアントコンポーネント、DELETE API、リポジトリ層に upsert/delete メソッド追加。362 件中半分が重複している本番データは UI から削除可能になった。コミット `57731e2` で本番デプロイ完了。
 
 2026-05-14 AI SDK と Google 公式 thinking docs を再調査し設計見直し。`getModel()` / `getFastModel()` の default を `gemini-3.1-flash-lite`（stable、preview 未使用）に統一。analyze-overlap の 2 つの generateObject に `providerOptions.google.thinkingConfig.thinkingLevel: 'medium'` を追加。コミット `b2627b0` で本番デプロイ完了。analyze-overlap の 60s 収まり実機検証は未実施。
 

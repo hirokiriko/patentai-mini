@@ -24,7 +24,8 @@
 ## Blocked
 
 ## Done
-- [x] 先行技術文献の選択削除 + CSV 重複時の publicationNo upsert: PriorArtTable コンポーネント・DELETE API・upsertManyByPublicationNo / deleteByIds メソッド追加（未デプロイ）
+- [x] analyze-overlap の thinkingLevel を 'medium' → 'low' に下げる（504 対策、未デプロイ）
+- [x] 先行技術文献の選択削除 + CSV 重複時の publicationNo upsert: PriorArtTable コンポーネント・DELETE API・upsertManyByPublicationNo / deleteByIds メソッド追加（コミット `57731e2` デプロイ済）
 - [x] Gemini 3.1 flash-lite (stable) + thinkingLevel への切替: getModel/getFastModel を `gemini-3.1-flash-lite`(stable) に統一、analyze-overlap に `thinkingLevel: 'medium'` 指定（コミット `b2627b0` デプロイ済）
 - [x] Gemini 3.1 系 preview への移行: `getModel()` を `gemini-3.1-flash-preview` に更新（getFastModel は 3.1 preview のまま）
 - [x] 検索式生成 504 対策: `generate-queries.ts` を fast モデル + 入力圧縮に変更（`9b69088` で本番デプロイ完了、実機確認済）

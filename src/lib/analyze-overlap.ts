@@ -46,7 +46,7 @@ export async function screenPriorArt(
     providerOptions: {
       google: {
         thinkingConfig: {
-          thinkingLevel: "medium",
+          thinkingLevel: "low",
         },
       },
     },
@@ -162,7 +162,7 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
     providerOptions: {
       google: {
         thinkingConfig: {
-          thinkingLevel: "medium",
+          thinkingLevel: "low",
         },
       },
     },

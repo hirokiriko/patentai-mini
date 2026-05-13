@@ -1,5 +1,16 @@
 # Session Log
 
+## 2026-05-14 analyze-overlap の thinkingLevel を 'medium' → 'low' に下げる
+### 実施
+- 本番で重なり分析が 504 Gateway Timeout を出したため、`analyze-overlap.ts` の screenPriorArt / analyzeOverlap 両方の thinkingLevel を 'medium' → 'low' に下げる
+- 品質より「Vercel 60s に確実に収める」を優先
+
+### 変更ファイル
+- `src/lib/analyze-overlap.ts`
+
+### 決まったこと
+- flash-lite + thinkingLevel: 'low' でも 504 が出る場合は、(1) 入力圧縮（claimsText の 2000 字 trim を縮める）、(2) priorArts を分割して複数回呼ぶ、(3) thinkingLevel: 'minimal' に下げる、の順で検討
+
 ## 2026-05-14 先行技術文献の選択削除 + CSV 重複時の publicationNo upsert
 ### 実施
 - 本番で同じ CSV を 2 回登録して 362 件中半分が重複していた事象に対応するため、削除 UI と重複防止策を実装
