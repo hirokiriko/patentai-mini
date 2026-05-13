@@ -24,6 +24,7 @@
 ## Blocked
 
 ## Done
+- [x] 検索式生成 504 対策: `generate-queries.ts` を fast モデル + 入力圧縮に変更（Vercel Hobby 60 秒制限対応、未デプロイ）
 - [x] FR-07 国内優先権主張出願モード（DR-0009）— cases に baseApplicationMode/baseApplicationNumber、draft_patents に kind 追加。AI 統合 lib + API + UI（Step 1 を 1-A/1-B/1-C に分岐）。Turso 本番にスキーマ反映済、Vercel 未デプロイ
 - [x] J-PlatPat 検索式の構文エラー根絶（中庸でタグ後置のカッコ式を二重ネストしないようプロンプト書き直し、eslint vendor/ ignore 追加で lint も復旧）
 - [x] 方法B の PDF 取り込みバグ修正（unpdf → pdfjs-dist vendor/ 方式、@napi-rs/canvas 含む依存整備、ローカル dev + Vercel 本番の両方で日本語公報 PDF 3 件の取り込みを実機確認）

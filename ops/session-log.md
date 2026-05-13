@@ -1,5 +1,20 @@
 # Session Log
 
+## 2026-05-14 検索式生成の 504 タイムアウト対策
+### 実施
+- 本番 `POST /api/cases/13/queries` が 504 Gateway Timeout で落ちる報告を受けて、3028216（integrate fast 化）と同じパターンを `generateQueries` にも適用
+- `src/lib/generate-queries.ts`:
+  - `getModel()` → `getFastModel()` に切替（gemini-3.1-flash-lite、思考モデルを避ける）
+  - 入力プロンプトを `JSON.stringify(extracted, null, 2)` から「発明の名称 / 解決課題 / 作用効果 / 独立請求項 / core 構成要素」のみを抜き出した構造化テキストに圧縮（`compactExtractedForQueries`）。元の JSON は elements の type/text/importance を全件並べるため fast モデルでも応答が遅くなる
+  - SYSTEM_PROMPT は変更なし（中庸の二重ネスト禁止ルールは維持）
+- 検証: `pnpm lint` `pnpm type-check` 通過。本番デプロイは未実施
+
+### 変更ファイル
+- `src/lib/generate-queries.ts`
+
+### 決まったこと
+- LLM を使う API はデフォルトで fast モデル + 入力圧縮を採用する方針（Vercel Hobby の 60 秒制限を前提）。重い思考モデルを使う場合は背景タスク化等の別設計が必要
+
 ## 2026-05-08 FR-07 国内優先権主張出願モード実装（DR-0009）
 ### 実施
 - 父の追加要望「公開前の出願済み特許に新規事項を付け加える特許」を、特許法 41 条 国内優先権主張出願として明文化し実装した

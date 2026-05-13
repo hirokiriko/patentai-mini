@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-08（本セッション）FR-07 国内優先権主張出願モードを実装（DR-0009）。父の「公開前の出願済み特許に新規事項を付け加える特許」要望に対応。仕様 / DB スキーマ / Repository / 統合 AI / API / UI を一通り追加し、`pnpm lint` `type-check` `build` 通過、ローカル dev でベース出願モード案件の作成と画面描画まで確認。Turso 本番にもスキーマ反映済（`scripts/migrate-fr07.mjs` を 1 回実行）。Vercel への push は未実施。
+2026-05-14（本セッション）本番 `POST /api/cases/13/queries` が 504 Gateway Timeout で落ちる報告に対応。`src/lib/generate-queries.ts` を `getFastModel()` + 入力圧縮（独立請求項と core 要素のみ抜き出した構造化テキスト）に変更し、`pnpm lint` / `pnpm type-check` 通過。未コミット・未デプロイ。
+
+2026-05-08 FR-07 国内優先権主張出願モードを実装（DR-0009）。父の「公開前の出願済み特許に新規事項を付け加える特許」要望に対応。仕様 / DB スキーマ / Repository / 統合 AI / API / UI を一通り追加し、`pnpm lint` `type-check` `build` 通過、ローカル dev でベース出願モード案件の作成と画面描画まで確認。Turso 本番にもスキーマ反映済（`scripts/migrate-fr07.mjs` を 1 回実行）。Vercel への push は未実施。
 
 2026-05-08 父からの追加情報を受けて J-PlatPat 検索式の構文エラー（中庸が二重ネストで `論理式のカッコの使用方法が間違っています` を返す）を根絶するプロンプト書き直しをローカル完了。`eslint.config.mjs` に `vendor/**` ignore を追加して lint も復旧。`pnpm lint` / `pnpm type-check` 通過。未コミット・未デプロイ。本番には 2026-04-22 の b1086fb までしか反映されていないので、push 後の検証で「方法B 単独フロー」「Phase A 警告」「J-PlatPat 構文修正」「Quick Wins」「pdfjs-dist 構成」「FR-07 ベース出願モード」がまとめて検証される。
 

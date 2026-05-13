@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { getModel } from "./ai-model";
+import { getFastModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
 
 export const searchQuerySetSchema = z.object({
@@ -135,13 +135,52 @@ J-PlatPat は「タグ付きカッコ式を更にカッコでグループ化す�
 - 法的断定をしない
 - 分類コード（IPC/FI/Fターム）は人手補完を前提とし、含めなくてよい`;
 
+// Vercel Hobby の 60 秒制限内に収めるため、入力を検索式設計に必要な最小限へ圧縮する。
+// 元の JSON.stringify(extracted) は elements の冗長表現で肥大化しがちで、fast モデルでも応答が遅くなる。
+function compactExtractedForQueries(extracted: ExtractedClaims): string {
+  const independentClaims = extracted.claims.filter((c) => c.isIndependent);
+  const coreElements = independentClaims.flatMap((c) =>
+    c.elements
+      .filter((e) => e.importance === "core")
+      .map((e) => `[${e.type}] ${e.text}`)
+  );
+
+  const sections: string[] = [];
+  sections.push(`# 発明の名称\n${extracted.title}`);
+  if (extracted.solvedProblems.length > 0) {
+    sections.push(
+      `# 解決課題\n${extracted.solvedProblems.map((p) => `- ${p}`).join("\n")}`
+    );
+  }
+  if (extracted.effects.length > 0) {
+    sections.push(
+      `# 作用効果\n${extracted.effects.map((e) => `- ${e}`).join("\n")}`
+    );
+  }
+  if (independentClaims.length > 0) {
+    sections.push(
+      `# 独立請求項\n${independentClaims
+        .map((c) => `【請求項${c.claimNo}】\n${c.text}`)
+        .join("\n\n")}`
+    );
+  }
+  if (coreElements.length > 0) {
+    sections.push(
+      `# 独立請求項の必須構成要素（core）\n${coreElements
+        .map((e) => `- ${e}`)
+        .join("\n")}`
+    );
+  }
+  return sections.join("\n\n");
+}
+
 export async function generateQueries(
   extracted: ExtractedClaims
 ): Promise<SearchQuerySet> {
-  const prompt = JSON.stringify(extracted, null, 2);
+  const prompt = compactExtractedForQueries(extracted);
 
   const { object } = await generateObject({
-    model: getModel(),
+    model: getFastModel(),
     schema: searchQuerySetSchema,
     system: SYSTEM_PROMPT,
     prompt,
