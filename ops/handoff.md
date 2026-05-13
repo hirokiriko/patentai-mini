@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション・7 件目）case 12 で Step 5 まで完了後、Step 4 で削除しようとして 500 エラーになる事象に対応。原因は `comparison_results.prior_doc_id` の FK 制約。`deleteByIds` で関連 comparison_results を先に削除する形に修正。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+2026-05-14（本セッション・8 件目）本番で「Thinking level MINIMAL is not supported for this model」エラー。flash-preview が minimal 非サポートと判明。ユーザー選択で flash-lite + minimal の構成（スピード最優先、品質許容）に戻す。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+
+2026-05-14 case 12 で Step 5 まで完了後、Step 4 で削除しようとして 500 エラーになる事象に対応。原因は `comparison_results.prior_doc_id` の FK 制約。`deleteByIds` で関連 comparison_results を先に削除する形に修正（コミット `0e45909` デプロイ済）。
 
 2026-05-14 'low' でも 504 が出やすいため、analyze-overlap の構成を再調整。`getModel()` の model を `gemini-3.1-flash-preview` に切替、thinkingLevel を 'minimal' に下げる（screen / analyze 両方）。コミット `0401280` デプロイ済。
 

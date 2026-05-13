@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-05-14 analyze-overlap: flash-preview が minimal 非サポート → flash-lite に戻す
+### 実施
+- 本番で重なり分析が「Thinking level MINIMAL is not supported for this model」エラー
+- Google AI のドキュメント表記（Gemini 3.1 Flash は minimal/low/medium/high 全部サポート）と実機の挙動が一致しない事例
+- ユーザー選択: flash-lite に戻して minimal 維持（スピード最優先、品質は lite レベルで許容）
+- 変更: `getModel()` の default を `gemini-3.1-flash-preview` → `gemini-3.1-flash-lite` に戻す
+- thinkingLevel='minimal' は維持（flash-lite では minimal サポートあり、default も minimal）
+
+### 変更ファイル
+- `src/lib/ai-model.ts`
+
+### 決まったこと
+- AI SDK のドキュメントや WebFetch の「supports xxx」記載は信頼しすぎない。実機で確認しないと preview 版の制約は分からない
+- analyze-overlap は flash-lite + minimal で固定。品質懸念は別途実機検証で判断
+- flash-preview を使いたい場合は thinkingLevel='low' 以上が必要
+
 ## 2026-05-14 先行技術文献の削除で FK 制約違反 → 関連 comparison_results を先に削除
 ### 実施
 - 本番 case 12 で Step 5（重なり分析）まで完了済み、Step 4 で削除を試みたら 500 エラー
