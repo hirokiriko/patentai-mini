@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション）本番 `POST /api/cases/13/queries` が 504 Gateway Timeout で落ちる報告に対応。`src/lib/generate-queries.ts` を `getFastModel()` + 入力圧縮（独立請求項と core 要素のみ抜き出した構造化テキスト）に変更し、`pnpm lint` / `pnpm type-check` 通過。未コミット・未デプロイ。
+2026-05-14（本セッション・2 件目）`getModel()` のモデル指定を Gemini 2.5 系 preview から 3.1 系 preview (`gemini-3.1-flash-preview`) に更新。`getFastModel()` は 3.1 系 preview のまま維持。`pnpm lint` / `pnpm type-check` 通過。コミット・push 後に本番で analyze-overlap が 60s に収まるか実機検証が必要。
+
+2026-05-14 本番 `POST /api/cases/13/queries` の 504 Gateway Timeout に対応。`src/lib/generate-queries.ts` を `getFastModel()` + 入力圧縮（独立請求項と core 要素のみ抜き出した構造化テキスト）に変更し、`9b69088` でデプロイ完了、本番で実機確認済。
 
 2026-05-08 FR-07 国内優先権主張出願モードを実装（DR-0009）。父の「公開前の出願済み特許に新規事項を付け加える特許」要望に対応。仕様 / DB スキーマ / Repository / 統合 AI / API / UI を一通り追加し、`pnpm lint` `type-check` `build` 通過、ローカル dev でベース出願モード案件の作成と画面描画まで確認。Turso 本番にもスキーマ反映済（`scripts/migrate-fr07.mjs` を 1 回実行）。Vercel への push は未実施。
 

@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-05-14 Gemini 3.1 系 preview への移行
+### 実施
+- 504 対策デプロイ完了後、`getModel()` のモデル指定を Gemini 2.5 系 preview から 3.1 系 preview に更新
+- Google AI 公式モデル一覧（WebFetch）で確認: Gemini 3.0 系は 2026-03-09 にシャットダウン済、3.1 系が現役。`gemini-3.1-flash-lite` は stable 版が存在する
+- 変更: `getModel()` の default を `gemini-2.5-flash-preview-05-20` → `gemini-3.1-flash-preview`（思考あり + flash クラス）
+- `getFastModel()` は `gemini-3.1-flash-lite-preview` のまま維持（既に 3.1 preview）
+- 使用箇所マップ: `getModel()` = analyze-overlap のみ、`getFastModel()` = extract / integrate / queries
+- 検証: `pnpm lint` `pnpm type-check` 通過
+
+### 変更ファイル
+- `src/lib/ai-model.ts`
+
+### 決まったこと
+- Gemini 3.0 系は使えない（deprecated）。3.1 系へ移行する
+- `getModel()` に pro-preview を選ばないのは、analyze-overlap が generateObject を 2 回呼ぶ重い処理で Vercel 60s に収めるため。品質より速度優先
+
 ## 2026-05-14 検索式生成の 504 タイムアウト対策
 ### 実施
 - 本番 `POST /api/cases/13/queries` が 504 Gateway Timeout で落ちる報告を受けて、3028216（integrate fast 化）と同じパターンを `generateQueries` にも適用

@@ -13,7 +13,7 @@ export function getModel() {
 
   switch (provider) {
     case "google":
-      return google(model ?? "gemini-2.5-flash-preview-05-20");
+      return google(model ?? "gemini-3.1-flash-preview");
     case "openai":
       return openai(model ?? "gpt-4o");
     default:
