@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション・5 件目）本番で重なり分析が 504 を返したため、`analyze-overlap.ts` の thinkingLevel を 'medium' → 'low' に下げる。`pnpm lint` / `pnpm type-check` 通過。コミット後 push して実機検証が必要。
+2026-05-14（本セッション・6 件目）'low' でも 504 が出やすいため、analyze-overlap の構成を再調整。`getModel()` の model を `gemini-3.1-flash-preview` に切替、thinkingLevel を 'minimal' に下げる（screen / analyze 両方）。狙いは「思考時間ゼロ + モデル本体上位」で 60s に収める。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+
+2026-05-14 本番で重なり分析が 504 を返したため、`analyze-overlap.ts` の thinkingLevel を 'medium' → 'low' に下げる（コミット `adffa36` デプロイ済）。ただし 'low' でもまだ 504 出やすいことが判明、追加調整中。
 
 2026-05-14 先行技術文献の選択削除 UI と CSV 重複時の publicationNo upsert を実装。チェックボックス + 一括削除のクライアントコンポーネント、DELETE API、リポジトリ層に upsert/delete メソッド追加。362 件中半分が重複している本番データは UI から削除可能になった。コミット `57731e2` で本番デプロイ完了。
 

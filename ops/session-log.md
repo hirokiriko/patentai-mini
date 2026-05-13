@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-05-14 analyze-overlap: gemini-3.1-flash-preview + thinkingLevel='minimal'
+### 実施
+- 'low' でも 504 が出やすいため、モデル・thinking 両面で再調整
+- `getModel()` の default model: `gemini-3.1-flash-lite` → `gemini-3.1-flash-preview`（最新の flash preview、lite ではなくフル flash）
+- `analyze-overlap.ts` の thinkingLevel: 'low' → 'minimal'（screen / analyze 両方）
+- 狙い: flash-preview はモデル本体が flash-lite より上位 → 思考なし (minimal) でも品質が落ちにくく、かつ thinking 時間ゼロ近くで Vercel 60s に確実に収まる
+- 影響範囲: `getModel()` は analyze-overlap のみで使用。extract / integrate / queries は `getFastModel()`（flash-lite）のまま
+
+### 変更ファイル
+- `src/lib/ai-model.ts`
+- `src/lib/analyze-overlap.ts`
+
+### 決まったこと
+- 「思考時間ゼロ + モデル本体が上位」のほうが「思考あり + モデル本体が軽い」よりも 60s 制限下では有利になりうる。analyze-overlap はこの方針で固定
+- flash-preview の default thinkingLevel='high' は重いので、providerOptions で必ず明示する運用
+
 ## 2026-05-14 analyze-overlap の thinkingLevel を 'medium' → 'low' に下げる
 ### 実施
 - 本番で重なり分析が 504 Gateway Timeout を出したため、`analyze-overlap.ts` の screenPriorArt / analyzeOverlap 両方の thinkingLevel を 'medium' → 'low' に下げる

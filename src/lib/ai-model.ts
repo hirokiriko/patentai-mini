@@ -13,10 +13,10 @@ export function getModel() {
 
   switch (provider) {
     case "google":
-      // gemini-3.1-flash-lite は default thinkingLevel='minimal' で速い。
-      // 思考が必要な箇所は呼び出し側で providerOptions.google.thinkingConfig.thinkingLevel を上げる。
-      // flash-preview を選ばない理由: default が 'high' で重く Vercel 60s に収まりにくい。
-      return google(model ?? "gemini-3.1-flash-lite");
+      // analyze-overlap などの重い分析用。最新の flash preview。
+      // default thinkingLevel='high' なので、呼び出し側で必ず providerOptions の
+      // thinkingConfig.thinkingLevel を明示する（'minimal' 推奨、Vercel 60s 対策）。
+      return google(model ?? "gemini-3.1-flash-preview");
     case "openai":
       return openai(model ?? "gpt-4o");
     default:
