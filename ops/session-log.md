@@ -1,5 +1,33 @@
 # Session Log
 
+## 2026-05-14 先行技術文献の選択削除 + CSV 重複時の publicationNo upsert
+### 実施
+- 本番で同じ CSV を 2 回登録して 362 件中半分が重複していた事象に対応するため、削除 UI と重複防止策を実装
+- リポジトリ層 `PriorArtDocumentRepository` に 2 メソッド追加:
+  - `upsertManyByPublicationNo(caseId, docs)`: 同 caseId 内で同じ publicationNo の既存レコードは UPDATE で上書き、なければ INSERT。docId は維持されるため既存の comparison_results との紐付けが保たれる
+  - `deleteByIds(caseId, docIds)`: caseId を where に含めることで他案件の docId を渡されても削除されないガード
+- API:
+  - `POST /api/cases/[caseId]/prior-art`: CSV は upsert に変更。レスポンスに `{ imported, updated }` を返す。ファイル取り込みは publicationNo=null なので常に新規 INSERT（従来通り）
+  - `DELETE /api/cases/[caseId]/prior-art`: 新規。body `{ docIds: number[] }` で削除対象を指定
+- UI:
+  - 新規クライアントコンポーネント `PriorArtTable`: チェックボックス列・全選択・indeterminate 表示・「N 件選択中 [削除]」ボタン・confirm ダイアログ
+  - `UploadCsvForm`: 「N 件取り込み（新規 X 件 / 既存上書き Y 件）」メッセージ表示
+  - `page.tsx`: テーブル直書きを `<PriorArtTable />` に差し替え
+- 検証: `pnpm lint` `pnpm type-check` 通過
+
+### 変更ファイル
+- `src/repositories/types.ts`
+- `src/repositories/drizzle.ts`
+- `src/app/api/cases/[caseId]/prior-art/route.ts`
+- `src/app/cases/[caseId]/upload-csv-form.tsx`
+- `src/app/cases/[caseId]/prior-art-table.tsx`（新規）
+- `src/app/cases/[caseId]/page.tsx`
+
+### 決まったこと
+- 重複防止は DB の unique 制約ではなくアプリ側で実装。publicationNo は null 許容（方法B のファイル取り込み）でありSQLite の partial unique index に頼ると追加のマイグレーションが必要、UX メッセージ（新規/更新の件数表示）もアプリ側の方が表現しやすい
+- 重複時は削除→再 insert ではなく UPDATE。理由は既存の comparison_results.prior_doc_id を孤児化させないため
+- 削除は caseId をスコープに固定。他案件の docId を渡されても削除されない
+
 ## 2026-05-14 Gemini 3.1 flash-lite (stable) + thinkingLevel への切替
 ### 実施
 - 直前のセッションで `getModel()` を `gemini-3.1-flash-preview` に更新したが、AI SDK と Google 公式 thinking docs を再調査し設計を見直し

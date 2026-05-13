@@ -35,20 +35,22 @@ export async function POST(
   }
 
   let totalImported = 0;
+  let totalUpdated = 0;
   const errors: string[] = [];
 
   for (const file of files) {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
 
     if (ext === "csv") {
-      // CSV: 既存の J-PlatPat CSV パース処理
+      // CSV: J-PlatPat 検索結果。同 caseId 内で同じ publicationNo の既存レコードは UPDATE で上書き。
       const csvText = await file.text();
       const parsed = parseJPlatPatCsv(csvText);
       if (parsed.length === 0) {
         errors.push(`${file.name}: 有効なレコードがありません`);
         continue;
       }
-      const count = await priorArtDocumentRepo.createMany(
+      const { inserted, updated } = await priorArtDocumentRepo.upsertManyByPublicationNo(
+        caseIdNum,
         parsed.map((r) => ({
           caseId: caseIdNum,
           publicationNo: r.publicationNo,
@@ -59,9 +61,10 @@ export async function POST(
           normalizedElementsJson: null,
         }))
       );
-      totalImported += count;
+      totalImported += inserted;
+      totalUpdated += updated;
     } else if (PATENT_EXTS.includes(ext)) {
-      // 個別特許ファイル: テキスト抽出して1件として登録
+      // 個別特許ファイル: テキスト抽出して1件として登録（publicationNo=null なので常に新規 insert）
       try {
         const buffer = Buffer.from(await file.arrayBuffer());
         const text = await parseFile(buffer, ext);
@@ -90,7 +93,7 @@ export async function POST(
     }
   }
 
-  if (totalImported === 0 && errors.length > 0) {
+  if (totalImported === 0 && totalUpdated === 0 && errors.length > 0) {
     return NextResponse.json(
       { error: errors.join("\n") },
       { status: 400 }
@@ -98,7 +101,48 @@ export async function POST(
   }
 
   return NextResponse.json(
-    { imported: totalImported, errors: errors.length > 0 ? errors : undefined },
+    {
+      imported: totalImported,
+      updated: totalUpdated,
+      errors: errors.length > 0 ? errors : undefined,
+    },
     { status: 201 }
   );
+}
+
+export async function DELETE(
+  request: Request,
+  { params }: { params: Promise<{ caseId: string }> }
+) {
+  const { caseId } = await params;
+  const caseIdNum = Number(caseId);
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "リクエストボディが不正です" },
+      { status: 400 }
+    );
+  }
+
+  const docIds = (body as { docIds?: unknown })?.docIds;
+  if (!Array.isArray(docIds) || docIds.length === 0) {
+    return NextResponse.json(
+      { error: "削除対象の docIds が指定されていません" },
+      { status: 400 }
+    );
+  }
+
+  const validIds = docIds.filter((v) => typeof v === "number") as number[];
+  if (validIds.length === 0) {
+    return NextResponse.json(
+      { error: "docIds は数値の配列である必要があります" },
+      { status: 400 }
+    );
+  }
+
+  const deleted = await priorArtDocumentRepo.deleteByIds(caseIdNum, validIds);
+  return NextResponse.json({ deleted });
 }

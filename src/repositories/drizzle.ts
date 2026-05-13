@@ -6,7 +6,7 @@ import {
   priorArtDocuments,
   comparisonResults,
 } from "@/db/schema";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
 import type {
   CaseRepository,
   DraftPatentRepository,
@@ -132,8 +132,68 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
       .orderBy(desc(priorArtDocuments.docId));
   },
   async createMany(docs) {
+    if (docs.length === 0) return 0;
     const inserted = await db.insert(priorArtDocuments).values(docs).returning();
     return inserted.length;
+  },
+  async upsertManyByPublicationNo(caseId, docs) {
+    // 既存の publicationNo → docId マップを構築。publicationNo=null は除外。
+    const existing = await db
+      .select({
+        docId: priorArtDocuments.docId,
+        publicationNo: priorArtDocuments.publicationNo,
+      })
+      .from(priorArtDocuments)
+      .where(eq(priorArtDocuments.caseId, caseId));
+    const existingMap = new Map<string, number>();
+    for (const e of existing) {
+      if (e.publicationNo) existingMap.set(e.publicationNo, e.docId);
+    }
+
+    const toInsert: typeof docs = [];
+    let updated = 0;
+    for (const doc of docs) {
+      const existingDocId = doc.publicationNo
+        ? existingMap.get(doc.publicationNo)
+        : undefined;
+      if (existingDocId !== undefined) {
+        await db
+          .update(priorArtDocuments)
+          .set({
+            title: doc.title,
+            abstract: doc.abstract,
+            claimsText: doc.claimsText,
+            sourceCsvRowJson: doc.sourceCsvRowJson,
+            normalizedElementsJson: doc.normalizedElementsJson,
+          })
+          .where(eq(priorArtDocuments.docId, existingDocId));
+        updated++;
+      } else {
+        toInsert.push(doc);
+      }
+    }
+    let inserted = 0;
+    if (toInsert.length > 0) {
+      const result = await db
+        .insert(priorArtDocuments)
+        .values(toInsert)
+        .returning();
+      inserted = result.length;
+    }
+    return { inserted, updated };
+  },
+  async deleteByIds(caseId, docIds) {
+    if (docIds.length === 0) return 0;
+    const deleted = await db
+      .delete(priorArtDocuments)
+      .where(
+        and(
+          eq(priorArtDocuments.caseId, caseId),
+          inArray(priorArtDocuments.docId, docIds)
+        )
+      )
+      .returning();
+    return deleted.length;
   },
 };
 

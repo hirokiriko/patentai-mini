@@ -35,7 +35,14 @@ export function UploadCsvForm({ caseId }: { caseId: number }) {
 
     const data = await res.json();
     if (res.ok) {
-      setResult(`${data.imported} 件の文献を取り込みました`);
+      const imported = data.imported ?? 0;
+      const updated = data.updated ?? 0;
+      const total = imported + updated;
+      const detail =
+        updated > 0
+          ? `（新規 ${imported} 件 / 既存上書き ${updated} 件）`
+          : "";
+      setResult(`${total} 件の文献を取り込みました${detail}`);
       router.refresh();
       setTimeout(() => {
         document.getElementById("step-5")?.scrollIntoView({

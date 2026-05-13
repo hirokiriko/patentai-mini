@@ -24,6 +24,7 @@ import { StepScrollHandler } from "@/components/step-scroll-handler";
 import { CopyButton } from "@/components/copy-button";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { CaseDetailClient } from "./case-detail-client";
+import { PriorArtTable } from "./prior-art-table";
 
 export const dynamic = "force-dynamic";
 
@@ -585,39 +586,7 @@ export default async function CaseDetailPage({
 
           {priorArts.length > 0 && (
             <div className="mt-4">
-              <p className="text-base text-gray-700 mb-2">
-                取り込み済み: {priorArts.length} 件
-              </p>
-              <div className="max-h-80 overflow-auto rounded-lg border border-gray-200">
-                <table className="w-full text-base">
-                  <thead className="sticky top-0 bg-gray-100">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left font-medium text-gray-700">
-                        文献番号
-                      </th>
-                      <th className="px-4 py-2.5 text-left font-medium text-gray-700">
-                        名称
-                      </th>
-                      <th className="px-4 py-2.5 text-left font-medium text-gray-700">
-                        種別
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {priorArts.map((pa) => (
-                      <tr key={pa.docId} className="hover:bg-gray-50">
-                        <td className="px-4 py-2.5 font-mono text-sm whitespace-nowrap">
-                          {pa.publicationNo ?? "—"}
-                        </td>
-                        <td className="px-4 py-2.5">{pa.title}</td>
-                        <td className="px-4 py-2.5 text-sm text-gray-500 whitespace-nowrap">
-                          {pa.publicationNo ? "CSV" : "ファイル"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <PriorArtTable caseId={caseIdNum} priorArts={priorArts} />
             </div>
           )}
         </section>

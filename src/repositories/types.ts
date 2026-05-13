@@ -106,6 +106,14 @@ export interface SearchQuerySetRepository {
 export interface PriorArtDocumentRepository {
   findByCaseId(caseId: number): Promise<PriorArtDocument[]>;
   createMany(docs: Omit<PriorArtDocument, "docId">[]): Promise<number>;
+  // 同 caseId 内で同じ publicationNo の既存レコードがあれば UPDATE、なければ INSERT。
+  // publicationNo が null の docs は常に INSERT する。
+  upsertManyByPublicationNo(
+    caseId: number,
+    docs: Omit<PriorArtDocument, "docId">[]
+  ): Promise<{ inserted: number; updated: number }>;
+  // 指定 caseId に属する docId のみ削除する（他案件の docId を渡しても削除されない）。
+  deleteByIds(caseId: number, docIds: number[]): Promise<number>;
 }
 
 export interface ComparisonResultRepository {
