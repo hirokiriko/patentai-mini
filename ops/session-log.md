@@ -1,5 +1,29 @@
 # Session Log
 
+## 2026-05-14 Gemini 3.1 flash-lite (stable) + thinkingLevel への切替
+### 実施
+- 直前のセッションで `getModel()` を `gemini-3.1-flash-preview` に更新したが、AI SDK と Google 公式 thinking docs を再調査し設計を見直し
+- 重要な発見:
+  - Gemini 3.1 系は thinkingBudget ではなく `thinkingLevel` ('minimal'|'low'|'medium'|'high') を使う
+  - flash-preview の default thinking level は 'high' で、初出力までの latency が大きい → Vercel 60s に収まりにくい
+  - flash-lite の default は 'minimal' で最速
+  - `gemini-3.1-flash-lite` には **stable 版が存在する**（preview ではない）
+  - `@ai-sdk/google` v3.0.60 は `providerOptions.google.thinkingConfig.thinkingLevel` を受け付ける（型定義で確認）
+- 変更:
+  - `getModel()` の default: `gemini-3.1-flash-preview` → `gemini-3.1-flash-lite`（stable）
+  - `getFastModel()` の default: `gemini-3.1-flash-lite-preview` → `gemini-3.1-flash-lite`（stable）
+  - `analyze-overlap.ts` の screenPriorArt / analyzeOverlap の 2 つの generateObject に `providerOptions.google.thinkingConfig.thinkingLevel: 'medium'` を追加
+- 検証: `pnpm lint` `pnpm type-check` 通過
+
+### 変更ファイル
+- `src/lib/ai-model.ts`
+- `src/lib/analyze-overlap.ts`
+
+### 決まったこと
+- LLM モデルは原則 stable 版を使う（preview は明確な理由がある場合のみ）
+- thinkingLevel は呼び出し側（用途ごと）で指定する。ai-model.ts はモデルだけ返す責務
+- analyze-overlap の 2 段階分析は thinkingLevel: 'medium' を初期値とし、60s 超えるなら 'low' に下げる
+
 ## 2026-05-14 Gemini 3.1 系 preview への移行
 ### 実施
 - 504 対策デプロイ完了後、`getModel()` のモデル指定を Gemini 2.5 系 preview から 3.1 系 preview に更新

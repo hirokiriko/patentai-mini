@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション・2 件目）`getModel()` のモデル指定を Gemini 2.5 系 preview から 3.1 系 preview (`gemini-3.1-flash-preview`) に更新。`getFastModel()` は 3.1 系 preview のまま維持。`pnpm lint` / `pnpm type-check` 通過。コミット・push 後に本番で analyze-overlap が 60s に収まるか実機検証が必要。
+2026-05-14（本セッション・3 件目）AI SDK と Google 公式 thinking docs を再調査し設計見直し。`getModel()` / `getFastModel()` の default を `gemini-3.1-flash-lite`（stable、preview 未使用）に統一。analyze-overlap の 2 つの generateObject に `providerOptions.google.thinkingConfig.thinkingLevel: 'medium'` を追加。`pnpm lint` / `pnpm type-check` 通過。コミット作成後、push して本番で 60s に収まるか実機検証が必要。
+
+2026-05-14 `getModel()` のモデル指定を Gemini 2.5 系 preview から 3.1 系 preview (`gemini-3.1-flash-preview`) に更新（コミット `a4877b8`、未 push）。直後にユーザー指示で `gemini-3.1-flash-lite`(stable) に再変更したため、このコミットは flash-preview を一度経由する形になっている。
 
 2026-05-14 本番 `POST /api/cases/13/queries` の 504 Gateway Timeout に対応。`src/lib/generate-queries.ts` を `getFastModel()` + 入力圧縮（独立請求項と core 要素のみ抜き出した構造化テキスト）に変更し、`9b69088` でデプロイ完了、本番で実機確認済。
 

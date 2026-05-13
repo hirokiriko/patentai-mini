@@ -43,6 +43,13 @@ export async function screenPriorArt(
         abstract: pa.abstract?.substring(0, 500),
       })),
     }),
+    providerOptions: {
+      google: {
+        thinkingConfig: {
+          thinkingLevel: "medium",
+        },
+      },
+    },
   });
 
   return object;
@@ -152,6 +159,13 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
         claimsText: pa.claimsText?.substring(0, 2000),
       })),
     }),
+    providerOptions: {
+      google: {
+        thinkingConfig: {
+          thinkingLevel: "medium",
+        },
+      },
+    },
   });
 
   return object.results;
