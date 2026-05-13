@@ -184,6 +184,17 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
   },
   async deleteByIds(caseId, docIds) {
     if (docIds.length === 0) return 0;
+    // comparison_results.prior_doc_id が priorArtDocuments.docId を外部キー参照しているため、
+    // 先に該当 docId を参照する分析結果を削除しないと FK 制約違反になる。
+    // confirm ダイアログで「重なり分析の結果も影響を受ける」と警告済み。
+    await db
+      .delete(comparisonResults)
+      .where(
+        and(
+          eq(comparisonResults.caseId, caseId),
+          inArray(comparisonResults.priorDocId, docIds)
+        )
+      );
     const deleted = await db
       .delete(priorArtDocuments)
       .where(

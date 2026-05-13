@@ -1,5 +1,18 @@
 # Session Log
 
+## 2026-05-14 先行技術文献の削除で FK 制約違反 → 関連 comparison_results を先に削除
+### 実施
+- 本番 case 12 で Step 5（重なり分析）まで完了済み、Step 4 で削除を試みたら 500 エラー
+- 原因: `comparison_results.prior_doc_id` が `priorArtDocuments.docId` を外部キー参照（schema.ts:61-63）、Turso/libsql は FK 制約デフォルト ON
+- 修正: `deleteByIds` の中で対象 docId を参照する comparison_results を先に削除してから priorArtDocuments を削除
+- UI 側の confirm メッセージは既に「重なり分析の結果も影響を受ける可能性があります」と警告済みなので追加変更なし
+
+### 変更ファイル
+- `src/repositories/drizzle.ts`
+
+### 決まったこと
+- リポジトリの delete 系メソッドは FK の連鎖を明示的にコード側で処理する（schema 側に onDelete cascade を入れるとマイグレーション + Turso 本番反映が必要なため、コード側で処理する方針）
+
 ## 2026-05-14 analyze-overlap: gemini-3.1-flash-preview + thinkingLevel='minimal'
 ### 実施
 - 'low' でも 504 が出やすいため、モデル・thinking 両面で再調整

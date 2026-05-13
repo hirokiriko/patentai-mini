@@ -1,7 +1,9 @@
 # Handoff
 
 ## 現在地
-2026-05-14（本セッション・6 件目）'low' でも 504 が出やすいため、analyze-overlap の構成を再調整。`getModel()` の model を `gemini-3.1-flash-preview` に切替、thinkingLevel を 'minimal' に下げる（screen / analyze 両方）。狙いは「思考時間ゼロ + モデル本体上位」で 60s に収める。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+2026-05-14（本セッション・7 件目）case 12 で Step 5 まで完了後、Step 4 で削除しようとして 500 エラーになる事象に対応。原因は `comparison_results.prior_doc_id` の FK 制約。`deleteByIds` で関連 comparison_results を先に削除する形に修正。`pnpm lint` / `pnpm type-check` 通過、未コミット。
+
+2026-05-14 'low' でも 504 が出やすいため、analyze-overlap の構成を再調整。`getModel()` の model を `gemini-3.1-flash-preview` に切替、thinkingLevel を 'minimal' に下げる（screen / analyze 両方）。コミット `0401280` デプロイ済。
 
 2026-05-14 本番で重なり分析が 504 を返したため、`analyze-overlap.ts` の thinkingLevel を 'medium' → 'low' に下げる（コミット `adffa36` デプロイ済）。ただし 'low' でもまだ 504 出やすいことが判明、追加調整中。
 
