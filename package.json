@@ -15,6 +15,7 @@
     "postinstall": "node scripts/copy-pdfjs-assets.mjs"
   },
   "dependencies": {
+    "@ai-sdk/azure": "^3.0.65",
     "@ai-sdk/google": "^3.0.60",
     "@ai-sdk/openai": "^3.0.52",
     "@libsql/client": "^0.17.2",
@@ -41,6 +42,8 @@
     "typescript": "^5"
   },
   "pnpm": {
-    "publicHoistPattern": ["@napi-rs/canvas*"]
+    "publicHoistPattern": [
+      "@napi-rs/canvas*"
+    ]
   }
 }

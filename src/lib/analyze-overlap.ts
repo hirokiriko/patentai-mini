@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { getModel } from "./ai-model";
+import { getGoogleThinkingProviderOptions, getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
 
 // --- Step 1: スクリーニング ---
@@ -23,6 +23,8 @@ export async function screenPriorArt(
   extracted: ExtractedClaims,
   priorArts: PriorArtSummary[]
 ): Promise<{ relevantDocIds: number[]; reasoning: string }> {
+  const providerOptions = getGoogleThinkingProviderOptions();
+
   const { object } = await generateObject({
     model: getModel(),
     schema: screeningResultSchema,
@@ -43,13 +45,7 @@ export async function screenPriorArt(
         abstract: pa.abstract?.substring(0, 500),
       })),
     }),
-    providerOptions: {
-      google: {
-        thinkingConfig: {
-          thinkingLevel: "minimal",
-        },
-      },
-    },
+    ...(providerOptions ? { providerOptions } : {}),
   });
 
   return object;
@@ -116,6 +112,7 @@ export async function analyzeOverlap(
 ): Promise<ComparisonResult[]> {
   // 独立請求項のみを分析対象にする
   const independentClaims = extracted.claims.filter((c) => c.isIndependent);
+  const providerOptions = getGoogleThinkingProviderOptions();
 
   const { object } = await generateObject({
     model: getModel(),
@@ -159,13 +156,7 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
         claimsText: pa.claimsText?.substring(0, 2000),
       })),
     }),
-    providerOptions: {
-      google: {
-        thinkingConfig: {
-          thinkingLevel: "minimal",
-        },
-      },
-    },
+    ...(providerOptions ? { providerOptions } : {}),
   });
 
   return object.results;
