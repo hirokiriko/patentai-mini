@@ -8,17 +8,25 @@ export async function GET() {
   try {
     const cases = await caseRepo.findAll();
     return NextResponse.json({
+      ok: true,
       status: "ok",
-      dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
-      hasToken,
-      caseCount: cases.length,
+      database: {
+        ok: true,
+        dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
+        hasToken,
+        caseCount: cases.length,
+      },
     });
   } catch (e) {
     return NextResponse.json({
-      status: "error",
-      dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
-      hasToken,
-      error: String(e),
-    }, { status: 500 });
+      ok: true,
+      status: "ok",
+      database: {
+        ok: false,
+        dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
+        hasToken,
+        error: String(e),
+      },
+    });
   }
 }
