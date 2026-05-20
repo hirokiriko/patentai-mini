@@ -17,7 +17,7 @@ Current stack:
 - TypeScript
 - AI SDK (`ai`) with `@ai-sdk/google` and `@ai-sdk/openai`
 - Drizzle ORM
-- Turso/libSQL via `@libsql/client` and `drizzle-orm/libsql`
+- Postgres via `pg` and `drizzle-orm/node-postgres`
 - pnpm
 - PDF/DOCX/TXT parsing via `pdfjs-dist`, `@napi-rs/canvas`, and `mammoth`
 
@@ -109,23 +109,24 @@ Rules for `src/lib/ai-model.ts` and AI SDK usage:
 
 ## 6. Database Rules
 
-Current database stack:
+Current database stack after Phase 2:
 
 - Drizzle ORM
-- Turso/libSQL
-- `drizzle.config.ts` uses `dialect: "turso"`
-- `src/db/index.ts` uses `drizzle-orm/libsql`
-- `src/db/schema.ts` uses `sqliteTable`
+- Postgres
+- `drizzle.config.ts` uses `dialect: "postgresql"`
+- `src/db/index.ts` uses `drizzle-orm/node-postgres`
+- `src/db/schema.ts` uses `pgTable`
 
 Postgres migration rules:
 
-- Treat the Postgres migration as a dedicated, potentially breaking phase.
-- Move from `sqliteTable` to `pgTable` only in that phase.
-- Replace SQLite-specific SQL such as `datetime('now')` with Postgres-friendly
-  `now()` / `defaultNow()` style defaults.
-- Review `src/repositories/drizzle.ts` for SQLite-specific update expressions.
-- `TURSO_AUTH_TOKEN` removal and the changed meaning of `DATABASE_URL` must not
-  be mixed with unrelated work.
+- Treat DB changes as dedicated, potentially breaking phases.
+- Keep `DATABASE_URL` as the Postgres connection string.
+- Use Postgres-friendly `now()` / `defaultNow()` style defaults.
+- Review `src/repositories/drizzle.ts` for SQL expressions when changing
+  database behavior.
+- The Turso/libSQL stack has been removed from code during Phase 2. Do not
+  reintroduce `TURSO_AUTH_TOKEN`, `@libsql/client`, or `drizzle-orm/libsql`
+  without user approval.
 - Do not generate or apply migrations without user approval.
 - Do not change production data assumptions without documenting the migration
   path and rollback risk.
@@ -207,9 +208,14 @@ Proceed in phases. Do not combine phases without explicit user approval.
 Currently referenced directly in code:
 
 - `DATABASE_URL`
-- `TURSO_AUTH_TOKEN`
 - `AI_PROVIDER`
 - `AI_MODEL`
+- `AZURE_RESOURCE_NAME`
+- `AZURE_OPENAI_BASE_URL`
+- `AZURE_API_KEY`
+- `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `AZURE_OPENAI_FAST_DEPLOYMENT_NAME`
+- `AZURE_OPENAI_API_VERSION`
 
 Currently listed for provider SDKs in `.env.example`:
 
