@@ -1,0 +1,374 @@
+{
+  "id": "3d18550e-2e88-4391-9a0f-94ede509b9b2",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.cases": {
+      "name": "cases",
+      "schema": "",
+      "columns": {
+        "case_id": {
+          "name": "case_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "base_application_mode": {
+          "name": "base_application_mode",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "base_application_number": {
+          "name": "base_application_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.comparison_results": {
+      "name": "comparison_results",
+      "schema": "",
+      "columns": {
+        "result_id": {
+          "name": "result_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "draft_claim_id": {
+          "name": "draft_claim_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prior_doc_id": {
+          "name": "prior_doc_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lexical_score": {
+          "name": "lexical_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "structural_score": {
+          "name": "structural_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "matched_elements_json": {
+          "name": "matched_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "risk_label": {
+          "name": "risk_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "comparison_results_case_id_cases_case_id_fk": {
+          "name": "comparison_results_case_id_cases_case_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk": {
+          "name": "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "prior_art_documents",
+          "columnsFrom": [
+            "prior_doc_id"
+          ],
+          "columnsTo": [
+            "doc_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.draft_patents": {
+      "name": "draft_patents",
+      "schema": "",
+      "columns": {
+        "draft_id": {
+          "name": "draft_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'main'"
+        },
+        "source_file_path": {
+          "name": "source_file_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parsed_text": {
+          "name": "parsed_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "extracted_claims_json": {
+          "name": "extracted_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "draft_patents_case_id_cases_case_id_fk": {
+          "name": "draft_patents_case_id_cases_case_id_fk",
+          "tableFrom": "draft_patents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.prior_art_documents": {
+      "name": "prior_art_documents",
+      "schema": "",
+      "columns": {
+        "doc_id": {
+          "name": "doc_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_no": {
+          "name": "publication_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "abstract": {
+          "name": "abstract",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_text": {
+          "name": "claims_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_csv_row_json": {
+          "name": "source_csv_row_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "normalized_elements_json": {
+          "name": "normalized_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "prior_art_documents_case_id_cases_case_id_fk": {
+          "name": "prior_art_documents_case_id_cases_case_id_fk",
+          "tableFrom": "prior_art_documents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.search_query_sets": {
+      "name": "search_query_sets",
+      "schema": "",
+      "columns": {
+        "query_set_id": {
+          "name": "query_set_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "broad_query": {
+          "name": "broad_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "balanced_query": {
+          "name": "balanced_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "narrow_query": {
+          "name": "narrow_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rationale_json": {
+          "name": "rationale_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "search_query_sets_case_id_cases_case_id_fk": {
+          "name": "search_query_sets_case_id_cases_case_id_fk",
+          "tableFrom": "search_query_sets",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
