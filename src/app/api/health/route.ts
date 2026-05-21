@@ -3,7 +3,6 @@ import { caseRepo } from "@/repositories";
 
 export async function GET() {
   const dbUrl = process.env.DATABASE_URL;
-  const hasToken = !!process.env.TURSO_AUTH_TOKEN;
 
   try {
     const cases = await caseRepo.findAll();
@@ -12,8 +11,8 @@ export async function GET() {
       status: "ok",
       database: {
         ok: true,
+        type: "postgres",
         dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
-        hasToken,
         caseCount: cases.length,
       },
     });
@@ -23,8 +22,8 @@ export async function GET() {
       status: "ok",
       database: {
         ok: false,
+        type: "postgres",
         dbUrl: dbUrl ? dbUrl.replace(/\/\/.*@/, "//***@") : "NOT_SET",
-        hasToken,
         error: String(e),
       },
     });

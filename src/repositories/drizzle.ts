@@ -36,7 +36,7 @@ export const caseRepo: CaseRepository = {
     return row;
   },
   async update(caseId, data) {
-    const updates: Record<string, unknown> = { updatedAt: sql`datetime('now')` };
+    const updates: Record<string, unknown> = { updatedAt: sql`now()` };
     if (data.title !== undefined) updates.title = data.title;
     if (data.status !== undefined) updates.status = data.status;
     if (data.baseApplicationMode !== undefined)
