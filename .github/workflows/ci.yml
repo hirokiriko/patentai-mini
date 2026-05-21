@@ -28,5 +28,5 @@ jobs:
 
       - run: pnpm build
         env:
-          DATABASE_URL: file:./data/ci.db
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/patentai
           GOOGLE_GENERATIVE_AI_API_KEY: dummy-for-build
