@@ -12,15 +12,23 @@ Actions and deploy it to Azure Container Apps from Azure CLI.
 - Image: `patentaimini6ilyrw.azurecr.io/patentai-mini:latest`
 - PostgreSQL Flexible Server: `pg-patentai-mini-roznup.postgres.database.azure.com`
 - PostgreSQL database: `patentai`
-- Azure OpenAI account: `oai-patentai-mini-s5rb1e`
+- Azure OpenAI account for production chat: `oai-patentai-mini-eus2`
+- Azure OpenAI deployment: `patentai-gpt41-mini`
+- Azure OpenAI model: `gpt-4.1-mini` version `2025-04-14`
+- Azure OpenAI account in Japan East: `oai-patentai-mini-s5rb1e`
 
 ## Current State
 
 - The Postgres schema from `drizzle/0000_loud_forge.sql` has been applied to
   the Azure PostgreSQL database.
-- The Azure OpenAI account exists, but chat model deployment is blocked by
-  subscription quota/model availability. Do not run production AI traffic with
-  `AI_PROVIDER=azure` until a chat deployment has been created.
+- The Japan East Azure OpenAI account exists, but chat model deployment is
+  blocked there by subscription quota/model availability.
+- The production app uses the East US 2 Azure OpenAI account
+  `oai-patentai-mini-eus2` with deployment `patentai-gpt41-mini`.
+- `AI_PROVIDER=azure` is configured on `ca-patentai-mini`.
+- `AZURE_API_KEY` and `DATABASE_URL` are stored as Azure Container Apps secrets.
+- `/api/health` has been verified with `database.ok=true`.
+- A minimal AI SDK call to deployment `patentai-gpt41-mini` returned `OK`.
 - Local Docker is not available in the Codex workspace.
 - ACR Tasks are blocked for this subscription, so the image is built by GitHub
   Actions on a GitHub-hosted runner.
@@ -46,8 +54,8 @@ Runtime secrets must be configured on Azure Container Apps, not in the
 repository:
 
 - `DATABASE_URL`: PostgreSQL connection string for the Azure database.
-- `AI_PROVIDER`: `azure`, `google`, or `openai`. Use `azure` only after an
-  Azure OpenAI chat deployment exists.
+- `AI_PROVIDER`: `azure`, `google`, or `openai`. The current production setting
+  is `azure`.
 
 For `AI_PROVIDER=azure`, also add:
 
@@ -56,6 +64,14 @@ For `AI_PROVIDER=azure`, also add:
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT_NAME`
 - `AZURE_OPENAI_FAST_DEPLOYMENT_NAME` when a separate fast deployment exists
+
+Current production Azure OpenAI values:
+
+- `AI_PROVIDER=azure`
+- `AZURE_RESOURCE_NAME=oai-patentai-mini-eus2`
+- `AZURE_OPENAI_API_VERSION=v1`
+- `AZURE_OPENAI_DEPLOYMENT_NAME=patentai-gpt41-mini`
+- `AZURE_OPENAI_FAST_DEPLOYMENT_NAME=patentai-gpt41-mini`
 
 For `AI_PROVIDER=google`, add:
 
