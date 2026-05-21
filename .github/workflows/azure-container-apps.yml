@@ -1,23 +1,34 @@
-name: Azure Container Apps Deploy
+name: Azure Container Image Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - src/**
+      - scripts/**
+      - drizzle/**
+      - .github/workflows/azure-container-apps.yml
 
 permissions:
   contents: read
+  id-token: write
 
 env:
-  AZURE_RESOURCE_GROUP: rg-codex-lab-jpe
-  AZURE_CONTAINER_APP_NAME: ca-patentai-mini
-  AZURE_CONTAINER_APP_ENVIRONMENT: cae-patentai-mini-6ilyrw
+  AZURE_CLIENT_ID: 4f80a510-aa15-46b2-b4fb-5dd69ce891e4
+  AZURE_TENANT_ID: 43d0349b-7467-4d7f-8c04-20a93ca625e5
+  AZURE_SUBSCRIPTION_ID: ca84687e-a440-4426-908b-dbac951b7341
   AZURE_ACR_NAME: patentaimini6ilyrw
   IMAGE_NAME: patentai-mini
-  TARGET_PORT: "3000"
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment: azure
 
     steps:
       - name: Checkout
@@ -26,7 +37,9 @@ jobs:
       - name: Azure login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build and push image
         shell: bash
@@ -34,157 +47,13 @@ jobs:
           set -euo pipefail
 
           login_server="${AZURE_ACR_NAME}.azurecr.io"
-          image="${login_server}/${IMAGE_NAME}:${GITHUB_SHA}"
+          sha_image="${login_server}/${IMAGE_NAME}:${GITHUB_SHA}"
+          latest_image="${login_server}/${IMAGE_NAME}:latest"
 
           az acr login --name "${AZURE_ACR_NAME}"
-          docker build --pull -t "${image}" .
-          docker push "${image}"
+          docker build --pull -t "${sha_image}" -t "${latest_image}" .
+          docker push "${sha_image}"
+          docker push "${latest_image}"
 
-          echo "CONTAINER_IMAGE=${image}" >> "${GITHUB_ENV}"
-
-      - name: Create or update Container App
-        shell: bash
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          AI_PROVIDER: ${{ secrets.AI_PROVIDER }}
-          AI_MODEL: ${{ secrets.AI_MODEL }}
-          FAST_AI_MODEL: ${{ secrets.FAST_AI_MODEL }}
-          AZURE_RESOURCE_NAME: ${{ secrets.AZURE_RESOURCE_NAME }}
-          AZURE_OPENAI_BASE_URL: ${{ secrets.AZURE_OPENAI_BASE_URL }}
-          AZURE_API_KEY: ${{ secrets.AZURE_API_KEY }}
-          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
-          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
-          AZURE_OPENAI_FAST_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_FAST_DEPLOYMENT_NAME }}
-          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-
-          require_value() {
-            local name="$1"
-            local value="${!name:-}"
-            if [ -z "${value}" ]; then
-              echo "::error::Missing required GitHub secret: ${name}"
-              exit 1
-            fi
-          }
-
-          require_value DATABASE_URL
-
-          if [ -z "${AI_PROVIDER:-}" ]; then
-            AI_PROVIDER="azure"
-          fi
-
-          secrets_args=("database-url=${DATABASE_URL}")
-          env_args=(
-            "NODE_ENV=production"
-            "PORT=${TARGET_PORT}"
-            "HOSTNAME=0.0.0.0"
-            "DATABASE_URL=secretref:database-url"
-            "AI_PROVIDER=${AI_PROVIDER}"
-          )
-
-          if [ -n "${AI_MODEL:-}" ]; then
-            env_args+=("AI_MODEL=${AI_MODEL}")
-          fi
-
-          if [ -n "${FAST_AI_MODEL:-}" ]; then
-            env_args+=("FAST_AI_MODEL=${FAST_AI_MODEL}")
-          fi
-
-          case "${AI_PROVIDER}" in
-            azure)
-              require_value AZURE_API_KEY
-              require_value AZURE_OPENAI_API_VERSION
-              require_value AZURE_OPENAI_DEPLOYMENT_NAME
-
-              if [ -z "${AZURE_RESOURCE_NAME:-}" ] && [ -z "${AZURE_OPENAI_BASE_URL:-}" ]; then
-                echo "::error::Set AZURE_RESOURCE_NAME or AZURE_OPENAI_BASE_URL for AI_PROVIDER=azure"
-                exit 1
-              fi
-
-              secrets_args+=("azure-api-key=${AZURE_API_KEY}")
-              env_args+=(
-                "AZURE_API_KEY=secretref:azure-api-key"
-                "AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}"
-                "AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME}"
-              )
-
-              if [ -n "${AZURE_OPENAI_FAST_DEPLOYMENT_NAME:-}" ]; then
-                env_args+=("AZURE_OPENAI_FAST_DEPLOYMENT_NAME=${AZURE_OPENAI_FAST_DEPLOYMENT_NAME}")
-              fi
-
-              if [ -n "${AZURE_OPENAI_BASE_URL:-}" ]; then
-                env_args+=("AZURE_OPENAI_BASE_URL=${AZURE_OPENAI_BASE_URL}")
-              else
-                env_args+=("AZURE_RESOURCE_NAME=${AZURE_RESOURCE_NAME}")
-              fi
-              ;;
-            google)
-              require_value GOOGLE_GENERATIVE_AI_API_KEY
-              secrets_args+=("google-api-key=${GOOGLE_GENERATIVE_AI_API_KEY}")
-              env_args+=("GOOGLE_GENERATIVE_AI_API_KEY=secretref:google-api-key")
-              ;;
-            openai)
-              require_value OPENAI_API_KEY
-              secrets_args+=("openai-api-key=${OPENAI_API_KEY}")
-              env_args+=("OPENAI_API_KEY=secretref:openai-api-key")
-              ;;
-            *)
-              echo "::error::Unsupported AI_PROVIDER: ${AI_PROVIDER}"
-              exit 1
-              ;;
-          esac
-
-          login_server="${AZURE_ACR_NAME}.azurecr.io"
-          acr_username="$(az acr credential show --name "${AZURE_ACR_NAME}" --query username -o tsv)"
-          acr_password="$(az acr credential show --name "${AZURE_ACR_NAME}" --query 'passwords[0].value' -o tsv)"
-
-          if az containerapp show \
-            --name "${AZURE_CONTAINER_APP_NAME}" \
-            --resource-group "${AZURE_RESOURCE_GROUP}" \
-            >/dev/null 2>&1; then
-            az containerapp registry set \
-              --name "${AZURE_CONTAINER_APP_NAME}" \
-              --resource-group "${AZURE_RESOURCE_GROUP}" \
-              --server "${login_server}" \
-              --username "${acr_username}" \
-              --password "${acr_password}"
-
-            az containerapp secret set \
-              --name "${AZURE_CONTAINER_APP_NAME}" \
-              --resource-group "${AZURE_RESOURCE_GROUP}" \
-              --secrets "${secrets_args[@]}"
-
-            az containerapp update \
-              --name "${AZURE_CONTAINER_APP_NAME}" \
-              --resource-group "${AZURE_RESOURCE_GROUP}" \
-              --image "${CONTAINER_IMAGE}" \
-              --set-env-vars "${env_args[@]}"
-          else
-            az containerapp create \
-              --name "${AZURE_CONTAINER_APP_NAME}" \
-              --resource-group "${AZURE_RESOURCE_GROUP}" \
-              --environment "${AZURE_CONTAINER_APP_ENVIRONMENT}" \
-              --image "${CONTAINER_IMAGE}" \
-              --target-port "${TARGET_PORT}" \
-              --ingress external \
-              --registry-server "${login_server}" \
-              --registry-username "${acr_username}" \
-              --registry-password "${acr_password}" \
-              --secrets "${secrets_args[@]}" \
-              --env-vars "${env_args[@]}"
-          fi
-
-      - name: Show app URL
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          fqdn="$(az containerapp show \
-            --name "${AZURE_CONTAINER_APP_NAME}" \
-            --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --query properties.configuration.ingress.fqdn \
-            -o tsv)"
-
-          echo "https://${fqdn}"
+          echo "Pushed ${sha_image}"
+          echo "Pushed ${latest_image}"
