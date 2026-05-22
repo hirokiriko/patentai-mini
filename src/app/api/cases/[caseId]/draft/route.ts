@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
+import { storeOriginalFile } from "@/lib/blob-storage";
 import { parseFile } from "@/lib/parse-file";
 
 export const maxDuration = 60;
@@ -44,6 +45,14 @@ export async function POST(
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  const storedFile = await storeOriginalFile({
+    caseId: caseIdNum,
+    category: "drafts",
+    kind,
+    fileName: file.name,
+    buffer,
+    contentType: file.type,
+  });
 
   let parsedText: string | null = null;
   try {
@@ -55,7 +64,7 @@ export async function POST(
   const row = await draftPatentRepo.create({
     caseId: caseIdNum,
     kind,
-    sourceFilePath: file.name,
+    sourceFilePath: storedFile?.blobName ?? file.name,
     parsedText,
   });
 

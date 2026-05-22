@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { caseRepo, priorArtDocumentRepo } from "@/repositories";
+import { storeOriginalFile } from "@/lib/blob-storage";
 import { parseJPlatPatCsv } from "@/lib/parse-jplatpat-csv";
 import { parseFile } from "@/lib/parse-file";
 
@@ -72,6 +73,13 @@ export async function POST(
           errors.push(`${file.name}: テキストを抽出できませんでした`);
           continue;
         }
+        const storedFile = await storeOriginalFile({
+          caseId: caseIdNum,
+          category: "prior-art",
+          fileName: file.name,
+          buffer,
+          contentType: file.type,
+        });
         const count = await priorArtDocumentRepo.createMany([
           {
             caseId: caseIdNum,
@@ -79,7 +87,15 @@ export async function POST(
             title: file.name.replace(/\.[^.]+$/, ""),
             abstract: null,
             claimsText: text,
-            sourceCsvRowJson: null,
+            sourceCsvRowJson: storedFile
+              ? JSON.stringify({
+                  source: "uploaded-file",
+                  originalFileName: storedFile.originalFileName,
+                  blobName: storedFile.blobName,
+                  contentType: storedFile.contentType,
+                  size: storedFile.size,
+                })
+              : null,
             normalizedElementsJson: null,
           },
         ]);
