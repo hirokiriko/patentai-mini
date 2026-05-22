@@ -135,6 +135,8 @@ For `AI_PROVIDER=openai`, add:
 - Blob Storage is optional in local development. If both Blob env vars are
   omitted, uploads keep the previous DB-only behavior. If one is present and the
   other is missing, uploads fail with a configuration error.
+- Blob-backed draft and uploaded prior-art rows show an `Azure Blob saved` badge
+  in the case detail UI.
 - Case deletion performs best-effort cleanup for original-file blobs referenced
   by the case's draft and uploaded prior-art metadata. The database delete still
   takes precedence; any Blob cleanup failure is logged and returned in the API

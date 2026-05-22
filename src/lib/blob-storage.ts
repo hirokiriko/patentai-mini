@@ -1,5 +1,8 @@
 import { randomUUID } from "crypto";
 import { BlobServiceClient } from "@azure/storage-blob";
+import { isOriginalFileBlobName } from "./original-file-metadata";
+
+export { isOriginalFileBlobName } from "./original-file-metadata";
 
 type BlobCategory = "drafts" | "prior-art";
 
@@ -53,11 +56,6 @@ function sanitizeFileName(fileName: string): string {
     .replace(/^-|-$/g, "");
 
   return normalized.slice(0, 120) || "upload.bin";
-}
-
-export function isOriginalFileBlobName(value: string, caseId?: number): boolean {
-  const prefix = caseId === undefined ? "cases/" : `cases/${caseId}/`;
-  return value.startsWith(prefix);
 }
 
 export async function storeOriginalFile(params: {
