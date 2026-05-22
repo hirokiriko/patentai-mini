@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/toast";
+import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
 import type { PriorArtDocument } from "@/repositories/types";
 
 interface Props {
@@ -118,30 +119,43 @@ export function PriorArtTable({ caseId, priorArts }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {priorArts.map((pa) => (
-              <tr
-                key={pa.docId}
-                className={`hover:bg-gray-50 ${
-                  selectedIds.has(pa.docId) ? "bg-blue-50" : ""
-                }`}
-              >
-                <td className="w-10 px-3 py-2.5 text-center">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(pa.docId)}
-                    onChange={() => toggleOne(pa.docId)}
-                    aria-label={`${pa.publicationNo ?? pa.title ?? "文献"} を選択`}
-                  />
-                </td>
-                <td className="px-4 py-2.5 font-mono text-sm whitespace-nowrap">
-                  {pa.publicationNo ?? "—"}
-                </td>
-                <td className="px-4 py-2.5">{pa.title}</td>
-                <td className="px-4 py-2.5 text-sm text-gray-500 whitespace-nowrap">
-                  {pa.publicationNo ? "CSV" : "ファイル"}
-                </td>
-              </tr>
-            ))}
+            {priorArts.map((pa) => {
+              const originalFile = parseUploadedOriginalFileMetadata(pa.sourceCsvRowJson);
+
+              return (
+                <tr
+                  key={pa.docId}
+                  className={`hover:bg-gray-50 ${
+                    selectedIds.has(pa.docId) ? "bg-blue-50" : ""
+                  }`}
+                >
+                  <td className="w-10 px-3 py-2.5 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(pa.docId)}
+                      onChange={() => toggleOne(pa.docId)}
+                      aria-label={`${pa.publicationNo ?? pa.title ?? "文献"} を選択`}
+                    />
+                  </td>
+                  <td className="px-4 py-2.5 font-mono text-sm whitespace-nowrap">
+                    {pa.publicationNo ?? "—"}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {originalFile?.originalFileName ?? pa.title}
+                  </td>
+                  <td className="px-4 py-2.5 text-sm text-gray-500 whitespace-nowrap">
+                    <div className="flex flex-col gap-1">
+                      <span>{pa.publicationNo ? "CSV" : "ファイル"}</span>
+                      {originalFile && (
+                        <span className="w-fit rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                          Azure Blob saved
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

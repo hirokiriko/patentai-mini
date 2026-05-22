@@ -11,7 +11,6 @@ import {
 import { UploadDraftForm } from "./upload-draft-form";
 import { ExtractClaimsButton } from "./extract-claims-button";
 import { IntegrateButton } from "./integrate-button";
-import { basename } from "path";
 import { GenerateQueriesButton } from "./generate-queries-button";
 import { UploadCsvForm } from "./upload-csv-form";
 import { UploadPatentFilesForm } from "./upload-patent-files-form";
@@ -25,6 +24,10 @@ import { CopyButton } from "@/components/copy-button";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { CaseDetailClient } from "./case-detail-client";
 import { PriorArtTable } from "./prior-art-table";
+import {
+  getOriginalFileDisplayName,
+  isOriginalFileBlobName,
+} from "@/lib/original-file-metadata";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +113,18 @@ export default async function CaseDetailPage({
     return "border-gray-200 bg-gray-50";
   }
 
+  function renderBlobBadge(sourceFilePath: string | null) {
+    if (!sourceFilePath || !isOriginalFileBlobName(sourceFilePath, caseIdNum)) {
+      return null;
+    }
+
+    return (
+      <span className="rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+        Azure Blob saved
+      </span>
+    );
+  }
+
   return (
     <CaseDetailClient>
     <main className="mx-auto max-w-3xl px-4 pb-12">
@@ -187,9 +202,10 @@ export default async function CaseDetailPage({
                       <span className="text-green-600 text-lg">✓</span>
                       <span className="font-medium">
                         {d.sourceFilePath
-                          ? basename(d.sourceFilePath)
+                          ? getOriginalFileDisplayName(d.sourceFilePath)
                           : "（ファイル名不明）"}
                       </span>
+                      {renderBlobBadge(d.sourceFilePath)}
                       {d.parsedText && (
                         <span className="text-sm text-green-700 font-medium">
                           テキスト抽出済み
@@ -245,9 +261,10 @@ export default async function CaseDetailPage({
                     <span className="text-green-600">✓</span>
                     <span className="font-medium">
                       {baseDraft.sourceFilePath
-                        ? basename(baseDraft.sourceFilePath)
+                        ? getOriginalFileDisplayName(baseDraft.sourceFilePath)
                         : "（ファイル名不明）"}
                     </span>
+                    {renderBlobBadge(baseDraft.sourceFilePath)}
                     {baseDraft.parsedText && (
                       <span className="text-xs text-green-700 font-medium">
                         テキスト抽出済み（
@@ -286,9 +303,10 @@ export default async function CaseDetailPage({
                     <span className="text-green-600">✓</span>
                     <span className="font-medium">
                       {additionDraft.sourceFilePath
-                        ? basename(additionDraft.sourceFilePath)
+                        ? getOriginalFileDisplayName(additionDraft.sourceFilePath)
                         : "（ファイル名不明）"}
                     </span>
+                    {renderBlobBadge(additionDraft.sourceFilePath)}
                     {additionDraft.parsedText && (
                       <span className="text-xs text-green-700 font-medium">
                         テキスト抽出済み（

@@ -1,26 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteOriginalFiles, isOriginalFileBlobName } from "@/lib/blob-storage";
+import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
 import { caseRepo, draftPatentRepo, priorArtDocumentRepo } from "@/repositories";
-
-function getUploadedPriorArtBlobName(sourceCsvRowJson: string | null): string | null {
-  if (!sourceCsvRowJson) {
-    return null;
-  }
-
-  try {
-    const metadata = JSON.parse(sourceCsvRowJson) as {
-      source?: unknown;
-      blobName?: unknown;
-    };
-    if (metadata.source === "uploaded-file" && typeof metadata.blobName === "string") {
-      return metadata.blobName;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-}
 
 export async function GET(
   _request: Request,
@@ -58,7 +39,7 @@ export async function DELETE(
       .map((draft) => draft.sourceFilePath)
       .filter((value): value is string => !!value && isOriginalFileBlobName(value, caseIdNum)),
     ...priorArts
-      .map((doc) => getUploadedPriorArtBlobName(doc.sourceCsvRowJson))
+      .map((doc) => parseUploadedOriginalFileMetadata(doc.sourceCsvRowJson)?.blobName ?? null)
       .filter((value): value is string => !!value && isOriginalFileBlobName(value, caseIdNum)),
   ];
 
