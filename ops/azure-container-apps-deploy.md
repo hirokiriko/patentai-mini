@@ -1,7 +1,7 @@
 # Azure Container Apps Deploy Notes
 
-This repository is prepared to build the Next.js container image through GitHub
-Actions and deploy it to Azure Container Apps from Azure CLI.
+This repository is prepared to build the Next.js container image and deploy it
+to Azure Container Apps through GitHub Actions.
 
 ## Azure Resources
 
@@ -46,14 +46,22 @@ Actions and deploy it to Azure Container Apps from Azure CLI.
 - The OIDC trust is limited to
   `repo:hirokiriko/patentai-mini:ref:refs/heads/main`.
 - The service principal has `AcrPush` on `patentaimini6ilyrw`.
+- The service principal also needs permission to update `ca-patentai-mini`,
+  such as `Azure Container Apps Contributor` on the app/resource group or an
+  equivalent least-privilege custom role. Without this, image build/push can
+  succeed while the deploy step fails at `az containerapp update`.
 
 ## GitHub Actions
 
-No GitHub secrets are required for image build/push. The workflow uses:
+No GitHub secrets are required for image build/push/deploy. The workflow uses:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
+- `AZURE_ACR_NAME`
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_CONTAINER_APP_NAME`
+- `IMAGE_NAME`
 
 These values are not secrets and are stored in
 `.github/workflows/azure-container-apps.yml`.
@@ -100,7 +108,9 @@ For `AI_PROVIDER=openai`, add:
 3. The workflow builds the repository Dockerfile on a GitHub-hosted runner.
 4. The workflow pushes both `${GITHUB_SHA}` and `latest` tags to
    `patentaimini6ilyrw.azurecr.io`.
-5. Use Azure CLI to create or update `ca-patentai-mini` from the pushed image.
+5. The workflow updates `ca-patentai-mini` to the immutable `${GITHUB_SHA}`
+   image tag with `az containerapp update`.
+6. Verify `/api/health` after deployment.
 
 ## Notes
 
@@ -110,3 +120,8 @@ For `AI_PROVIDER=openai`, add:
   existing `postinstall` script during `pnpm install --frozen-lockfile`.
 - Do not store Azure keys, database credentials, or connection strings in the
   repository.
+- Prefer deploying the commit SHA image tag instead of `latest` so the running
+  revision maps directly back to a Git commit.
+- If GitHub Actions deploy fails after pushing the image, check the federated
+  credential subject and the service principal role assignment before changing
+  application code.

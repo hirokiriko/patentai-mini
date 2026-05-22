@@ -1,4 +1,4 @@
-name: Azure Container Image Build
+name: Azure Container Apps Deploy
 
 on:
   workflow_dispatch:
@@ -24,10 +24,12 @@ env:
   AZURE_TENANT_ID: 43d0349b-7467-4d7f-8c04-20a93ca625e5
   AZURE_SUBSCRIPTION_ID: ca84687e-a440-4426-908b-dbac951b7341
   AZURE_ACR_NAME: patentaimini6ilyrw
+  AZURE_RESOURCE_GROUP: rg-codex-lab-jpe
+  AZURE_CONTAINER_APP_NAME: ca-patentai-mini
   IMAGE_NAME: patentai-mini
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -57,3 +59,18 @@ jobs:
 
           echo "Pushed ${sha_image}"
           echo "Pushed ${latest_image}"
+          echo "SHA_IMAGE=${sha_image}" >> "${GITHUB_ENV}"
+
+      - name: Deploy to Azure Container Apps
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az extension add --name containerapp --upgrade --only-show-errors
+          az containerapp update \
+            --name "${AZURE_CONTAINER_APP_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${SHA_IMAGE}" \
+            --only-show-errors
+
+          echo "Deployed ${SHA_IMAGE} to ${AZURE_CONTAINER_APP_NAME}"
