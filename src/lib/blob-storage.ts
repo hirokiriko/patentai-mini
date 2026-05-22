@@ -15,6 +15,13 @@ export type StoredOriginalFile = {
   size: number;
 };
 
+export type BlobCleanupResult = {
+  attempted: number;
+  deleted: number;
+  failed: string[];
+  skipped: boolean;
+};
+
 function getBlobConfig(): BlobConfig | null {
   const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
   const containerName = process.env.AZURE_BLOB_CONTAINER_NAME;
@@ -46,6 +53,11 @@ function sanitizeFileName(fileName: string): string {
     .replace(/^-|-$/g, "");
 
   return normalized.slice(0, 120) || "upload.bin";
+}
+
+export function isOriginalFileBlobName(value: string, caseId?: number): boolean {
+  const prefix = caseId === undefined ? "cases/" : `cases/${caseId}/`;
+  return value.startsWith(prefix);
 }
 
 export async function storeOriginalFile(params: {
@@ -87,5 +99,45 @@ export async function storeOriginalFile(params: {
     originalFileName: params.fileName,
     contentType,
     size: params.buffer.length,
+  };
+}
+
+export async function deleteOriginalFiles(blobNames: string[]): Promise<BlobCleanupResult> {
+  const uniqueBlobNames = [...new Set(blobNames)].filter((name) => isOriginalFileBlobName(name));
+
+  const config = getBlobConfig();
+  if (!config || uniqueBlobNames.length === 0) {
+    return {
+      attempted: uniqueBlobNames.length,
+      deleted: 0,
+      failed: [],
+      skipped: !config,
+    };
+  }
+
+  const blobServiceClient = BlobServiceClient.fromConnectionString(config.connectionString);
+  const containerClient = blobServiceClient.getContainerClient(config.containerName);
+  const failed: string[] = [];
+  let deleted = 0;
+
+  for (const blobName of uniqueBlobNames) {
+    try {
+      const response = await containerClient.getBlobClient(blobName).deleteIfExists({
+        deleteSnapshots: "include",
+      });
+      if (response.succeeded) {
+        deleted++;
+      }
+    } catch (error) {
+      console.error(`[blob-storage] Failed to delete blob ${blobName}:`, error);
+      failed.push(blobName);
+    }
+  }
+
+  return {
+    attempted: uniqueBlobNames.length,
+    deleted,
+    failed,
+    skipped: false,
   };
 }
