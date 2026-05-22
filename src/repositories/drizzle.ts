@@ -47,8 +47,15 @@ export const caseRepo: CaseRepository = {
     return row ?? null;
   },
   async remove(caseId) {
-    const [row] = await db.delete(cases).where(eq(cases.caseId, caseId)).returning();
-    return !!row;
+    return db.transaction(async (tx) => {
+      await tx.delete(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+      await tx.delete(searchQuerySets).where(eq(searchQuerySets.caseId, caseId));
+      await tx.delete(draftPatents).where(eq(draftPatents.caseId, caseId));
+      await tx.delete(priorArtDocuments).where(eq(priorArtDocuments.caseId, caseId));
+
+      const [row] = await tx.delete(cases).where(eq(cases.caseId, caseId)).returning();
+      return !!row;
+    });
   },
 };
 
