@@ -7,6 +7,8 @@ to Azure Container Apps through GitHub Actions.
 
 - Resource group: `rg-codex-lab-jpe`
 - Azure Container Registry: `patentaimini6ilyrw`
+- Azure Storage account: `stpatentaimini6ilyrw`
+- Blob container for original uploads: `patentai-original-files`
 - Container Apps environment: `cae-patentai-mini-6ilyrw`
 - Planned Container App: `ca-patentai-mini`
 - Image: `patentaimini6ilyrw.azurecr.io/patentai-mini:latest`
@@ -34,6 +36,8 @@ to Azure Container Apps through GitHub Actions.
   yet.
 - `AI_PROVIDER=azure` is configured on `ca-patentai-mini`.
 - `AZURE_API_KEY` and `DATABASE_URL` are stored as Azure Container Apps secrets.
+- `AZURE_STORAGE_CONNECTION_STRING` is stored as an Azure Container Apps secret.
+- `AZURE_BLOB_CONTAINER_NAME=patentai-original-files` is configured on the app.
 - `/api/health` has been verified with `database.ok=true`.
 - Minimal AI SDK calls to deployments `patentai-gpt54` and
   `patentai-gpt54-mini` returned `OK`.
@@ -72,6 +76,9 @@ repository:
 - `DATABASE_URL`: PostgreSQL connection string for the Azure database.
 - `AI_PROVIDER`: `azure`, `google`, or `openai`. The current production setting
   is `azure`.
+- `AZURE_STORAGE_CONNECTION_STRING`: Azure Storage connection string for
+  original uploaded files.
+- `AZURE_BLOB_CONTAINER_NAME`: Blob container name for original uploaded files.
 
 For `AI_PROVIDER=azure`, also add:
 
@@ -125,3 +132,6 @@ For `AI_PROVIDER=openai`, add:
 - If GitHub Actions deploy fails after pushing the image, check the federated
   credential subject and the service principal role assignment before changing
   application code.
+- Blob Storage is optional in local development. If both Blob env vars are
+  omitted, uploads keep the previous DB-only behavior. If one is present and the
+  other is missing, uploads fail with a configuration error.
