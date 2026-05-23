@@ -4,8 +4,9 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
 
-const WARN_BYTES = 4 * 1024 * 1024;
-const BLOCK_BYTES = 4.5 * 1024 * 1024;
+const MB = 1024 * 1024;
+const WARN_BYTES = 16 * MB;
+const BLOCK_BYTES = 20 * MB;
 
 function formatMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
@@ -37,7 +38,7 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
         show("先に「ファイルを選択」してから、取り込みしてください");
       } else if (overBlock) {
         show(
-          `合計 ${formatMB(totalBytes)} は Vercel の上限 (4.5 MB) を超えるため送信できません。ファイルを分割するか軽いものだけ選び直してください。`
+          `合計 ${formatMB(totalBytes)} はこのアプリの処理上限 (${formatMB(BLOCK_BYTES)}) を超えるため送信できません。ファイルを分割するか軽いものだけ選び直してください。`
         );
       }
       return;
@@ -126,12 +127,12 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
       </div>
       {overBlock && (
         <p className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-base text-red-700">
-          合計 {formatMB(totalBytes)}：Vercel の送信上限 (4.5 MB) を超えています。分割してアップロードしてください。
+          合計 {formatMB(totalBytes)}：このアプリの処理上限 ({formatMB(BLOCK_BYTES)}) を超えています。分割してアップロードしてください。
         </p>
       )}
       {!overBlock && overWarn && (
         <p className="rounded-lg border border-yellow-300 bg-yellow-50 px-3 py-2 text-base text-yellow-800">
-          合計 {formatMB(totalBytes)}：本番環境では 4.5 MB までしか送信できません。失敗する場合はファイルを減らしてください。
+          合計 {formatMB(totalBytes)}：大きなファイルは解析に時間がかかります。失敗する場合はファイルを減らしてください。
         </p>
       )}
       {result && <p className="text-base text-green-600">{result}</p>}

@@ -93,7 +93,7 @@ export function getModel() {
 /**
  * 抽出・パース等の高速処理向けモデル。
  * 思考（thinking）を持たない非推論モデルを返す。
- * Vercel Hobby の 60 秒制限内で確実に完了させるため使用する。
+ * 短い同期リクエストで安定して完了させたい処理に使用する。
  */
 export function getFastModel() {
   const provider = getProvider();

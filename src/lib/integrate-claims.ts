@@ -64,7 +64,7 @@ function trim(text: string, maxChars: number): string {
 export async function integrateClaims(
   input: IntegrateClaimsInput
 ): Promise<IntegrateClaimsOutput> {
-  // Vercel Hobby の 60 秒制限内に収めるため、入力を圧縮し fast モデルを使う。
+  // 同期リクエスト内で安定して返すため、入力を圧縮し fast モデルを使う。
   const baseTrimmed = trim(input.baseText, 8000);
   const additionTrimmed = trim(input.additionText, 3000);
 

@@ -47,7 +47,7 @@ const SYSTEM_PROMPT = `あなたは特許文書の構造解析エキスパート
 - 名詞句の列挙で終わらず、要素・関係・制約・作用効果に分解する`;
 
 // 特許明細書の主要セクションを抽出し、図面説明等の冗長部分を除く。
-// Vercel Hobby の 60 秒制限内に LLM が応答できるよう 15,000 文字に制限。
+// 同期リクエスト内で安定して応答できるよう 15,000 文字に制限。
 function trimPatentText(text: string, maxChars: number = 15000): string {
   if (text.length <= maxChars) return text;
 
@@ -78,7 +78,7 @@ export async function extractClaims(
 ): Promise<ExtractedClaims> {
   const trimmed = trimPatentText(parsedText);
 
-  // 抽出は高速モデルを使用（思考モデルは Vercel 60 秒制限を超過するため）
+  // 抽出は高速モデルを使用（重い推論モデルは同期リクエストで遅くなりやすいため）
   const { object } = await generateObject({
     model: getFastModel(),
     schema: extractedClaimsSchema,
