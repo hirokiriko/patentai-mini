@@ -135,7 +135,7 @@ J-PlatPat は「タグ付きカッコ式を更にカッコでグループ化す�
 - 法的断定をしない
 - 分類コード（IPC/FI/Fターム）は人手補完を前提とし、含めなくてよい`;
 
-// Vercel Hobby の 60 秒制限内に収めるため、入力を検索式設計に必要な最小限へ圧縮する。
+// 同期リクエスト内で安定して返すため、入力を検索式設計に必要な最小限へ圧縮する。
 // 元の JSON.stringify(extracted) は elements の冗長表現で肥大化しがちで、fast モデルでも応答が遅くなる。
 function compactExtractedForQueries(extracted: ExtractedClaims): string {
   const independentClaims = extracted.claims.filter((c) => c.isIndependent);

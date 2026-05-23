@@ -137,6 +137,9 @@ For `AI_PROVIDER=openai`, add:
   other is missing, uploads fail with a configuration error.
 - Blob-backed draft and uploaded prior-art rows show an `Azure Blob saved` badge
   in the case detail UI.
+- The prior-art multi-file upload UI no longer uses the old Vercel 4.5 MB
+  payload guard. It warns above 16 MB and blocks above 20 MB as an application
+  processing guard for the current synchronous parsing flow.
 - Case deletion performs best-effort cleanup for original-file blobs referenced
   by the case's draft and uploaded prior-art metadata. The database delete still
   takes precedence; any Blob cleanup failure is logged and returned in the API
