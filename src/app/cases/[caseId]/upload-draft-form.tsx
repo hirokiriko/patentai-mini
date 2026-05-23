@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
 
 export function UploadDraftForm({
   caseId,
@@ -36,12 +37,18 @@ export function UploadDraftForm({
     if (!file || file.size === 0) return;
 
     setUploading(true);
-    const res = await fetch(`/api/cases/${caseId}/draft`, {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      const res = await fetch(`/api/cases/${caseId}/draft`, {
+        method: "POST",
+        body: formData,
+      });
+      const result = await readApiResponse<unknown>(res, "アップロードに失敗しました");
 
-    if (res.ok) {
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
       router.refresh();
       setTimeout(() => {
         document.getElementById("step-1")?.scrollIntoView({
@@ -49,11 +56,11 @@ export function UploadDraftForm({
           block: "start",
         });
       }, 300);
-    } else {
-      const data = await res.json();
-      setError(data.error ?? "アップロードに失敗しました");
+    } catch (err) {
+      setError(getNetworkErrorMessage(err, "アップロードに失敗しました"));
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   }
 
   return (

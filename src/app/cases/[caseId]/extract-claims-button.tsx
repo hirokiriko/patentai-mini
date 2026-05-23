@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
 
 export function ExtractClaimsButton({
   caseId,
@@ -20,12 +21,18 @@ export function ExtractClaimsButton({
     setLoading(true);
     setError(null);
 
-    const res = await fetch(
-      `/api/cases/${caseId}/draft/${draftId}/extract`,
-      { method: "POST" }
-    );
+    try {
+      const res = await fetch(
+        `/api/cases/${caseId}/draft/${draftId}/extract`,
+        { method: "POST" }
+      );
+      const result = await readApiResponse<unknown>(res, "抽出に失敗しました");
 
-    if (res.ok) {
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
       router.refresh();
       setTimeout(() => {
         document.getElementById("step-3")?.scrollIntoView({
@@ -33,15 +40,11 @@ export function ExtractClaimsButton({
           block: "start",
         });
       }, 300);
-    } else {
-      try {
-        const data = await res.json();
-        setError(data.error ?? "抽出に失敗しました");
-      } catch {
-        setError(`抽出に失敗しました（${res.status}）`);
-      }
+    } catch (err) {
+      setError(getNetworkErrorMessage(err, "抽出に失敗しました"));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (

@@ -7,6 +7,7 @@ import {
 } from "@/repositories";
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import type { ExtractedClaims } from "@/lib/extract-claims";
+import { parseJsonOrNull } from "@/lib/safe-json";
 
 export const maxDuration = 60;
 
@@ -39,7 +40,16 @@ export async function POST(
     );
   }
 
-  const extracted: ExtractedClaims = JSON.parse(draft.extractedClaimsJson);
+  const extracted = parseJsonOrNull<ExtractedClaims>(
+    draft.extractedClaimsJson,
+    `case.${caseIdNum}.extractedClaimsJson`
+  );
+  if (!extracted) {
+    return NextResponse.json(
+      { error: "請求項データの読み込みに失敗しました。もう一度、請求項抽出を実行してください。" },
+      { status: 400 }
+    );
+  }
 
   try {
     const { relevantDocIds, reasoning } = await screenPriorArt(

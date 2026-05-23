@@ -3,8 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/toast";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
 import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
 import type { PriorArtDocument } from "@/repositories/types";
+
+type DeletePriorArtResponse = {
+  deleted?: number;
+};
 
 interface Props {
   caseId: number;
@@ -48,17 +53,21 @@ export function PriorArtTable({ caseId, priorArts }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ docIds: Array.from(selectedIds) }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        show(data.error ?? "削除に失敗しました");
+      const result = await readApiResponse<DeletePriorArtResponse>(
+        res,
+        "削除に失敗しました"
+      );
+
+      if (!result.ok) {
+        show(result.error);
         return;
       }
-      show(`${data.deleted} 件を削除しました`);
+      show(`${result.data.deleted ?? 0} 件を削除しました`);
       setSelectedIds(new Set());
       router.refresh();
     } catch (err) {
       console.error("delete prior-art failed:", err);
-      show("削除中にエラーが発生しました");
+      show(getNetworkErrorMessage(err, "削除に失敗しました"));
     } finally {
       setDeleting(false);
     }

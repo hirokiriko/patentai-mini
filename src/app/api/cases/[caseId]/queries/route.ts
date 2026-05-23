@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo, searchQuerySetRepo } from "@/repositories";
 import { generateQueries } from "@/lib/generate-queries";
 import type { ExtractedClaims } from "@/lib/extract-claims";
+import { parseJsonOrNull } from "@/lib/safe-json";
 
 export const maxDuration = 60;
 
@@ -35,12 +36,13 @@ export async function POST(
     );
   }
 
-  let extracted: ExtractedClaims;
-  try {
-    extracted = JSON.parse(draft.extractedClaimsJson);
-  } catch {
+  const extracted = parseJsonOrNull<ExtractedClaims>(
+    draft.extractedClaimsJson,
+    `case.${caseIdNum}.extractedClaimsJson`
+  );
+  if (!extracted) {
     return NextResponse.json(
-      { error: "請求項データが不正です。再度抽出してください" },
+      { error: "請求項データの読み込みに失敗しました。もう一度、請求項抽出を実行してください。" },
       { status: 400 }
     );
   }
