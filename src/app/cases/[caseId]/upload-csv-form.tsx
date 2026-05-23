@@ -3,6 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
+
+type PriorArtUploadResponse = {
+  imported?: number;
+  updated?: number;
+};
 
 export function UploadCsvForm({ caseId }: { caseId: number }) {
   const router = useRouter();
@@ -28,13 +34,22 @@ export function UploadCsvForm({ caseId }: { caseId: number }) {
     if (!file || file.size === 0) return;
 
     setUploading(true);
-    const res = await fetch(`/api/cases/${caseId}/prior-art`, {
-      method: "POST",
-      body: formData,
-    });
+    try {
+      const res = await fetch(`/api/cases/${caseId}/prior-art`, {
+        method: "POST",
+        body: formData,
+      });
+      const result = await readApiResponse<PriorArtUploadResponse>(
+        res,
+        "取り込みに失敗しました"
+      );
 
-    const data = await res.json();
-    if (res.ok) {
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
+      const data = result.data;
       const imported = data.imported ?? 0;
       const updated = data.updated ?? 0;
       const total = imported + updated;
@@ -50,10 +65,11 @@ export function UploadCsvForm({ caseId }: { caseId: number }) {
           block: "start",
         });
       }, 300);
-    } else {
-      setError(data.error ?? "取り込みに失敗しました");
+    } catch (err) {
+      setError(getNetworkErrorMessage(err, "取り込みに失敗しました"));
+    } finally {
+      setUploading(false);
     }
-    setUploading(false);
   }
 
   return (

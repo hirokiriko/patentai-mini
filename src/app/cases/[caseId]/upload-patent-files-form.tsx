@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useToast } from "@/components/toast";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
 
 const MB = 1024 * 1024;
 const WARN_BYTES = 16 * MB;
@@ -11,6 +12,11 @@ const BLOCK_BYTES = 20 * MB;
 function formatMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
+
+type PriorArtUploadResponse = {
+  imported?: number;
+  errors?: string[];
+};
 
 export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
   const router = useRouter();
@@ -56,42 +62,30 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
         method: "POST",
         body: formData,
       });
+      const result = await readApiResponse<PriorArtUploadResponse>(
+        res,
+        "取り込みに失敗しました"
+      );
 
-      let data: { imported?: number; errors?: string[]; error?: string } = {};
-      try {
-        data = await res.json();
-      } catch {
-        const text = await res.text().catch(() => "");
-        const hint = res.status === 413
-          ? "（アップロードサイズが大きすぎます）"
-          : res.status >= 500
-            ? "（サーバーエラー）"
-            : "";
-        setError(
-          `取り込みに失敗しました: HTTP ${res.status} ${hint}${text ? `\n${text.slice(0, 300)}` : ""}`
-        );
+      if (!result.ok) {
+        setError(result.error);
         return;
       }
 
-      if (res.ok) {
-        setResult(`${data.imported ?? 0} 件の文献を取り込みました`);
-        if (data.errors && data.errors.length > 0) {
-          setError(data.errors.join("\n"));
-        }
-        router.refresh();
-        setTimeout(() => {
-          document.getElementById("step-5")?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-        }, 300);
-      } else {
-        setError(data.error ?? `取り込みに失敗しました（HTTP ${res.status}）`);
+      const data = result.data;
+      setResult(`${data.imported ?? 0} 件の文献を取り込みました`);
+      if (data.errors && data.errors.length > 0) {
+        setError(data.errors.join("\n"));
       }
+      router.refresh();
+      setTimeout(() => {
+        document.getElementById("step-5")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }, 300);
     } catch (err) {
-      setError(
-        `送信中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`
-      );
+      setError(getNetworkErrorMessage(err, "取り込みに失敗しました"));
     } finally {
       setUploading(false);
     }

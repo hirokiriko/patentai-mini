@@ -28,8 +28,27 @@ import {
   getOriginalFileDisplayName,
   isOriginalFileBlobName,
 } from "@/lib/original-file-metadata";
+import { parseJsonOrNull } from "@/lib/safe-json";
 
 export const dynamic = "force-dynamic";
+
+type QueryRationale = {
+  keywordGroups?: {
+    core?: string[];
+    synonyms?: string[];
+    effects?: string[];
+  };
+  keywordQueries?: { theme: string; keywords: string }[];
+  excludedTerms?: string[];
+  rationale?: string[];
+};
+
+type MatchedElementDetail = {
+  elementScore?: number;
+  explanation?: string;
+  matched?: string[];
+  unmatched?: string[];
+};
 
 export default async function CaseDetailPage({
   params,
@@ -53,15 +72,24 @@ export default async function CaseDetailPage({
   // 通常モードでは main draft（または kind 未設定の旧データ）を主として使う
   const primaryDraft = mainDraft ?? drafts[0];
   const extracted: ExtractedClaims | null = primaryDraft?.extractedClaimsJson
-    ? JSON.parse(primaryDraft.extractedClaimsJson)
+    ? parseJsonOrNull<ExtractedClaims>(
+        primaryDraft.extractedClaimsJson,
+        "draft.extractedClaimsJson"
+      )
     : null;
 
   // 検索式を取得
   const querySets = await searchQuerySetRepo.findByCaseId(caseIdNum);
   const latestQuerySet = querySets[0];
   const queryRationale = latestQuerySet?.rationaleJson
-    ? JSON.parse(latestQuerySet.rationaleJson)
+    ? parseJsonOrNull<QueryRationale>(
+        latestQuerySet.rationaleJson,
+        "searchQuerySet.rationaleJson"
+      )
     : null;
+  const keywordQueries = queryRationale?.keywordQueries ?? [];
+  const excludedTerms = queryRationale?.excludedTerms ?? [];
+  const rationaleItems = queryRationale?.rationale ?? [];
 
   // 先行技術文献を取得
   const priorArts = await priorArtDocumentRepo.findByCaseId(caseIdNum);
@@ -497,12 +525,12 @@ export default async function CaseDetailPage({
                 </div>
               ))}
 
-              {queryRationale?.keywordQueries?.length > 0 && (
+              {keywordQueries.length > 0 && (
                 <div className="space-y-2">
                   <p className="text-base font-medium text-gray-700">
                     キーワード検索用（コピペ可）
                   </p>
-                  {queryRationale.keywordQueries.map(
+                  {keywordQueries.map(
                     (kq: { theme: string; keywords: string }, i: number) => (
                       <div
                         key={i}
@@ -554,15 +582,15 @@ export default async function CaseDetailPage({
                         )}
                       </div>
                     )}
-                    {queryRationale.excludedTerms?.length > 0 && (
+                    {excludedTerms.length > 0 && (
                       <p>
                         <span className="font-medium">除外語:</span>{" "}
-                        {queryRationale.excludedTerms.join(", ")}
+                        {excludedTerms.join(", ")}
                       </p>
                     )}
-                    {queryRationale.rationale?.length > 0 && (
+                    {rationaleItems.length > 0 && (
                       <ul className="ml-4 list-disc">
-                        {queryRationale.rationale.map(
+                        {rationaleItems.map(
                           (r: string, i: number) => (
                             <li key={i}>{r}</li>
                           )
@@ -640,14 +668,17 @@ export default async function CaseDetailPage({
                 })
                 .map((r) => {
                   const doc = docMap.get(r.priorDocId ?? 0);
+                  const detail = parseJsonOrNull<MatchedElementDetail>(
+                    r.matchedElementsJson,
+                    `comparisonResult.${r.resultId}.matchedElementsJson`
+                  );
+                  const matchedElements = detail?.matched ?? [];
+                  const unmatchedElements = detail?.unmatched ?? [];
                   const overall =
                     0.3 * (r.lexicalScore ?? 0) +
-                    0.35 * (JSON.parse(r.matchedElementsJson ?? "{}").elementScore ?? 0) +
+                    0.35 * (detail?.elementScore ?? 0) +
                     0.2 * (r.semanticScore ?? 0) +
                     0.15 * (r.structuralScore ?? 0);
-                  const detail = r.matchedElementsJson
-                    ? JSON.parse(r.matchedElementsJson)
-                    : null;
                   const riskColor = {
                     High: "bg-red-100 text-red-800 border-red-300",
                     Medium: "bg-yellow-100 text-yellow-800 border-yellow-300",
@@ -695,9 +726,9 @@ export default async function CaseDetailPage({
                         </p>
                       )}
 
-                      {detail?.matched?.length > 0 && (
+                      {matchedElements.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
-                          {detail.matched.map((m: string, i: number) => (
+                          {matchedElements.map((m: string, i: number) => (
                             <span
                               key={i}
                               className="rounded bg-red-50 px-2.5 py-1 text-sm text-red-700 border border-red-200"
@@ -708,9 +739,9 @@ export default async function CaseDetailPage({
                         </div>
                       )}
 
-                      {detail?.unmatched?.length > 0 && (
+                      {unmatchedElements.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
-                          {detail.unmatched.map((u: string, i: number) => (
+                          {unmatchedElements.map((u: string, i: number) => (
                             <span
                               key={i}
                               className="rounded bg-green-50 px-2.5 py-1 text-sm text-green-700 border border-green-200"

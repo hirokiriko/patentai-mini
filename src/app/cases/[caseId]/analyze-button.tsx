@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { getNetworkErrorMessage, readApiResponse } from "@/lib/api-response";
 
 export function AnalyzeButton({
   caseId,
@@ -18,11 +19,17 @@ export function AnalyzeButton({
     setLoading(true);
     setError(null);
 
-    const res = await fetch(`/api/cases/${caseId}/analyze`, {
-      method: "POST",
-    });
+    try {
+      const res = await fetch(`/api/cases/${caseId}/analyze`, {
+        method: "POST",
+      });
+      const result = await readApiResponse<unknown>(res, "分析に失敗しました");
 
-    if (res.ok) {
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+
       router.refresh();
       setTimeout(() => {
         document.getElementById("step-5")?.scrollIntoView({
@@ -30,15 +37,11 @@ export function AnalyzeButton({
           block: "start",
         });
       }, 300);
-    } else {
-      try {
-        const data = await res.json();
-        setError(data.error ?? "分析に失敗しました");
-      } catch {
-        setError(`分析に失敗しました（${res.status}）`);
-      }
+    } catch (err) {
+      setError(getNetworkErrorMessage(err, "分析に失敗しました"));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   return (
