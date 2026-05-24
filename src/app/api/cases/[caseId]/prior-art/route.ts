@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { caseRepo, priorArtDocumentRepo } from "@/repositories";
 import { storeOriginalFile } from "@/lib/blob-storage";
 import { parseJPlatPatCsv } from "@/lib/parse-jplatpat-csv";
-import { parseFile } from "@/lib/parse-file";
+import { isFileParseError, parseFile } from "@/lib/parse-file";
 
 export const maxDuration = 60;
 
@@ -102,6 +102,10 @@ export async function POST(
         totalImported += count;
       } catch (err) {
         console.error(`parseFile failed: ${file.name}`, err);
+        if (isFileParseError(err)) {
+          errors.push(`${file.name}: ${err.message}`);
+          continue;
+        }
         errors.push(`${file.name}: ファイルの読み取りに失敗しました`);
       }
     } else {

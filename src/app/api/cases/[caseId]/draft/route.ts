@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
 import { storeOriginalFile } from "@/lib/blob-storage";
-import { parseFile } from "@/lib/parse-file";
+import { isFileParseError, parseFile } from "@/lib/parse-file";
 
 export const maxDuration = 60;
 
@@ -45,6 +45,16 @@ export async function POST(
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  let parsedText: string | null = null;
+  try {
+    parsedText = await parseFile(buffer, ext!);
+  } catch (err) {
+    if (isFileParseError(err)) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    // 抽出失敗してもレコードは作成する
+  }
+
   const storedFile = await storeOriginalFile({
     caseId: caseIdNum,
     category: "drafts",
@@ -53,13 +63,6 @@ export async function POST(
     buffer,
     contentType: file.type,
   });
-
-  let parsedText: string | null = null;
-  try {
-    parsedText = await parseFile(buffer, ext!);
-  } catch {
-    // 抽出失敗してもレコードは作成する
-  }
 
   const row = await draftPatentRepo.create({
     caseId: caseIdNum,

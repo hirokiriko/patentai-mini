@@ -20,6 +20,7 @@ Current stack:
 - Postgres via `pg` and `drizzle-orm/node-postgres`
 - pnpm
 - PDF/DOCX/TXT parsing via `pdfjs-dist`, `@napi-rs/canvas`, and `mammoth`
+- OCR/layout fallback via Azure AI Document Intelligence when configured
 
 Azure Hackathon migration target:
 
@@ -216,6 +217,8 @@ Currently referenced directly in code:
 - `AZURE_OPENAI_DEPLOYMENT_NAME`
 - `AZURE_OPENAI_FAST_DEPLOYMENT_NAME`
 - `AZURE_OPENAI_API_VERSION`
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`
+- `AZURE_DOCUMENT_INTELLIGENCE_KEY`
 
 Currently listed for provider SDKs in `.env.example`:
 
@@ -233,6 +236,8 @@ Azure migration candidates:
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_STORAGE_CONNECTION_STRING`
 - `AZURE_BLOB_CONTAINER_NAME`
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`
+- `AZURE_DOCUMENT_INTELLIGENCE_KEY`
 - `PORT`
 
 Rules:
