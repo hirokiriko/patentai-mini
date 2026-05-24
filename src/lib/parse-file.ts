@@ -58,7 +58,7 @@ function getPdfJs(): Promise<PdfJsModule> {
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
   const pdfjs = await getPdfJs();
-  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const uint8 = new Uint8Array(buffer);
   const pdf = await pdfjs.getDocument({
     data: uint8,
     cMapUrl: CMAP_URL,
