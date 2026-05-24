@@ -20,6 +20,7 @@ to Azure Container Apps through GitHub Actions.
 - Azure OpenAI normal model: `gpt-5.4` version `2026-03-05`
 - Azure OpenAI fast model: `gpt-5.4-mini` version `2026-03-17`
 - Azure OpenAI account in Japan East: `oai-patentai-mini-s5rb1e`
+- Azure AI Document Intelligence account: `di-patentai-mini-jpe`
 
 ## Current State
 
@@ -38,6 +39,9 @@ to Azure Container Apps through GitHub Actions.
 - `AZURE_API_KEY` and `DATABASE_URL` are stored as Azure Container Apps secrets.
 - `AZURE_STORAGE_CONNECTION_STRING` is stored as an Azure Container Apps secret.
 - `AZURE_BLOB_CONTAINER_NAME=patentai-original-files` is configured on the app.
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and
+  `AZURE_DOCUMENT_INTELLIGENCE_KEY` are required for scanned PDF and OCR/layout
+  fallback.
 - `/api/health` has been verified with `database.ok=true`.
 - Minimal AI SDK calls to deployments `patentai-gpt54` and
   `patentai-gpt54-mini` returned `OK`.
@@ -87,6 +91,11 @@ For `AI_PROVIDER=azure`, also add:
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT_NAME`
 - `AZURE_OPENAI_FAST_DEPLOYMENT_NAME` when a separate fast deployment exists
+
+For scanned PDF, garbled PDF, and layout-heavy DOCX fallback, also add:
+
+- `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`
+- `AZURE_DOCUMENT_INTELLIGENCE_KEY`
 
 Current production Azure OpenAI values:
 
