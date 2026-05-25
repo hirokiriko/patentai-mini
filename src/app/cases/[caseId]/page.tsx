@@ -51,6 +51,7 @@ type QueryRationale = {
       relatedNames?: string[];
       reason?: string;
       confidence?: "high" | "medium" | "low";
+      source?: "ai" | "dictionary";
     }[];
     additionalKeywordQueries?: {
       theme?: string;
@@ -646,6 +647,17 @@ export default async function CaseDetailPage({
                                 confidence: {item.confidence}
                               </span>
                             )}
+                            <span
+                              className={`rounded px-2 py-0.5 text-xs ${
+                                item.source === "dictionary"
+                                  ? "bg-emerald-100 text-emerald-800"
+                                  : "bg-amber-100 text-amber-900"
+                              }`}
+                            >
+                              {item.source === "dictionary"
+                                ? "辞書候補"
+                                : "AI推定"}
+                            </span>
                           </div>
                           {item.relatedNames && item.relatedNames.length > 0 && (
                             <div className="mt-1 flex flex-wrap gap-1.5">

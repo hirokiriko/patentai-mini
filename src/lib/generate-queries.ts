@@ -1,6 +1,11 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { getFastModel } from "./ai-model";
+import {
+  findCompanyNameHints,
+  mergeCompanyNameHints,
+  type CompanyNameHint,
+} from "./company-name-aliases";
 import type { ExtractedClaims } from "./extract-claims";
 
 export const searchQuerySetSchema = z.object({
@@ -28,6 +33,7 @@ export const searchQuerySetSchema = z.object({
       relatedNames: z.array(z.string()).max(6).describe("旧社名、現社名、略称、英語名などの候補"),
       reason: z.string().describe("社名変遷や表記差として確認すべき理由"),
       confidence: z.enum(["high", "medium", "low"]).describe("候補の確からしさ。断定できない場合は low"),
+      source: z.enum(["ai", "dictionary"]).optional().describe("候補の由来"),
     })).max(3).describe("社名変遷・出願人名ゆれの確認候補。根拠が薄い場合は空配列"),
     additionalKeywordQueries: z.array(z.object({
       theme: z.string().describe("追加検索の観点"),
@@ -217,5 +223,45 @@ export async function generateQueries(
     prompt,
   });
 
-  return object;
+  const dictionaryCompanyHints = findCompanyNameHints(prompt);
+  if (dictionaryCompanyHints.length === 0) {
+    return object;
+  }
+
+  const aiCompanyNameHints: CompanyNameHint[] =
+    object.searchExpansionHints.companyNameHints.map((hint) => ({
+      ...hint,
+      source: hint.source ?? "ai",
+    }));
+  const companyNameHints = mergeCompanyNameHints(
+    aiCompanyNameHints,
+    dictionaryCompanyHints
+  );
+  const dictionaryKeywordQueries = dictionaryCompanyHints.map((hint) => ({
+    theme: `出願人名ゆれ: ${hint.observedName}`,
+    keywords: [hint.observedName, ...hint.relatedNames].join(" "),
+    note: "J-PlatPat の出願人/権利者欄でも旧社名・現社名・英語名を確認してください。",
+  }));
+  const dictionaryRisks = dictionaryCompanyHints.map(
+    (hint) =>
+      `${hint.observedName} だけで出願人名検索すると、${hint.relatedNames.join(
+        " / "
+      )} 表記の文献を取りこぼす可能性があります。`
+  );
+
+  return {
+    ...object,
+    searchExpansionHints: {
+      ...object.searchExpansionHints,
+      companyNameHints,
+      additionalKeywordQueries: [
+        ...dictionaryKeywordQueries,
+        ...object.searchExpansionHints.additionalKeywordQueries,
+      ].slice(0, 3),
+      leakageRisks: [
+        ...dictionaryRisks,
+        ...object.searchExpansionHints.leakageRisks,
+      ].slice(0, 5),
+    },
+  };
 }
