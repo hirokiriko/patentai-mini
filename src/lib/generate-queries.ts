@@ -16,6 +16,26 @@ export const searchQuerySetSchema = z.object({
     theme: z.string().describe("検索テーマ（例: 課題起点、手段起点、効果起点、構成要素起点）"),
     keywords: z.string().describe("J-PlatPat のキーワード検索にそのまま貼り付けできるキーワード列（スペース区切り）"),
   })).describe("J-PlatPat キーワード検索用のコピペ可能なキーワードセット（3〜5セット）"),
+  searchExpansionHints: z.object({
+    spellingVariants: z.array(z.object({
+      baseTerm: z.string().describe("表記ゆれを検討すべき中心語"),
+      variants: z.array(z.string()).max(6).describe("漢字/かな/カナ、長音、英語略語などの候補"),
+      reason: z.string().describe("検索漏れにつながる理由"),
+      suggestedUse: z.string().describe("追加検索での使い方。例: 広め検索に追加、別検索で確認"),
+    })).max(5).describe("表記ゆれ・同義語・表記差の候補"),
+    companyNameHints: z.array(z.object({
+      observedName: z.string().describe("入力文面や技術分野から確認対象になりうる会社名・組織名"),
+      relatedNames: z.array(z.string()).max(6).describe("旧社名、現社名、略称、英語名などの候補"),
+      reason: z.string().describe("社名変遷や表記差として確認すべき理由"),
+      confidence: z.enum(["high", "medium", "low"]).describe("候補の確からしさ。断定できない場合は low"),
+    })).max(3).describe("社名変遷・出願人名ゆれの確認候補。根拠が薄い場合は空配列"),
+    additionalKeywordQueries: z.array(z.object({
+      theme: z.string().describe("追加検索の観点"),
+      keywords: z.string().describe("J-PlatPat キーワード検索に貼り付ける追加候補"),
+      note: z.string().describe("この追加検索で拾いたい漏れ筋"),
+    })).max(3).describe("検索漏れ対策として別途試すキーワード検索候補（0〜3件）"),
+    leakageRisks: z.array(z.string()).max(5).describe("表記ゆれ・社名変遷によって漏れやすい観点"),
+  }).describe("検索漏れを減らすための表記ゆれ・社名変遷・追加検索ヒント"),
   excludedTerms: z.array(z.string()).describe("ノイズ除外語"),
   rationale: z.array(z.string()).describe("検索式設計の根拠（各判断の理由）"),
 });
@@ -130,6 +150,14 @@ J-PlatPat は「タグ付きカッコ式を更にカッコでグループ化す�
 - 日本語と英語を混在可（技術用語は両方あると有用）
 - 同義語・言い換えも含めてよいが、1セット 10 語以内に収める
 - テーマ例: 「課題起点」「手段起点」「効果起点」「構成要素起点」「応用分野起点」
+
+## 表記ゆれ・社名変遷による検索漏れ対策
+論理式とは別に、searchExpansionHints に検索漏れ対策を出す。
+- spellingVariants には、漢字/ひらがな/カタカナ、長音記号「ー」の有無、半角/全角、英語略語、旧字体/新字体、一般語/専門語の候補を入れる
+- companyNameHints には、入力文面や技術分野から確認対象になりうる会社名・組織名がある場合だけ、旧社名/現社名/略称/英語名の候補を入れる
+- 社名変遷は断定せず、必ず「確認候補」として扱う。根拠が薄い場合は confidence を low にするか空配列にする
+- main の broad/balanced/narrowQuery に候補を詰め込みすぎない。検索式本体は実行しやすさを優先し、追加確認は additionalKeywordQueries に分ける
+- leakageRisks には「この表記だけで検索すると漏れそうな理由」を短く書く
 
 ## 注意
 - 法的断定をしない

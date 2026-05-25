@@ -58,6 +58,7 @@ export async function POST(
       rationaleJson: JSON.stringify({
         keywordGroups: queries.keywordGroups,
         keywordQueries: queries.keywordQueries,
+        searchExpansionHints: queries.searchExpansionHints,
         excludedTerms: queries.excludedTerms,
         rationale: queries.rationale,
       }),
