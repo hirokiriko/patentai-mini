@@ -39,6 +39,26 @@ type QueryRationale = {
     effects?: string[];
   };
   keywordQueries?: { theme: string; keywords: string }[];
+  searchExpansionHints?: {
+    spellingVariants?: {
+      baseTerm?: string;
+      variants?: string[];
+      reason?: string;
+      suggestedUse?: string;
+    }[];
+    companyNameHints?: {
+      observedName?: string;
+      relatedNames?: string[];
+      reason?: string;
+      confidence?: "high" | "medium" | "low";
+    }[];
+    additionalKeywordQueries?: {
+      theme?: string;
+      keywords?: string;
+      note?: string;
+    }[];
+    leakageRisks?: string[];
+  };
   excludedTerms?: string[];
   rationale?: string[];
 };
@@ -88,6 +108,17 @@ export default async function CaseDetailPage({
       )
     : null;
   const keywordQueries = queryRationale?.keywordQueries ?? [];
+  const searchExpansionHints = queryRationale?.searchExpansionHints;
+  const spellingVariants = searchExpansionHints?.spellingVariants ?? [];
+  const companyNameHints = searchExpansionHints?.companyNameHints ?? [];
+  const additionalKeywordQueries =
+    searchExpansionHints?.additionalKeywordQueries ?? [];
+  const leakageRisks = searchExpansionHints?.leakageRisks ?? [];
+  const hasSearchExpansionHints =
+    spellingVariants.length > 0 ||
+    companyNameHints.length > 0 ||
+    additionalKeywordQueries.length > 0 ||
+    leakageRisks.length > 0;
   const excludedTerms = queryRationale?.excludedTerms ?? [];
   const rationaleItems = queryRationale?.rationale ?? [];
 
@@ -547,6 +578,134 @@ export default async function CaseDetailPage({
                         </p>
                       </div>
                     )
+                  )}
+                </div>
+              )}
+
+              {hasSearchExpansionHints && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-base text-amber-950">
+                  <div>
+                    <p className="font-medium">
+                      検索漏れ対策（表記ゆれ・社名変遷）
+                    </p>
+                    <p className="mt-1 text-sm text-amber-900">
+                      メイン検索式に詰め込みすぎず、追加確認用の候補として使います。社名変遷は断定ではなく確認候補です。
+                    </p>
+                  </div>
+
+                  {spellingVariants.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-sm font-medium text-amber-900">
+                        表記ゆれ候補
+                      </p>
+                      {spellingVariants.map((item, i) => (
+                        <div key={i} className="rounded border border-amber-200 bg-white px-3 py-2">
+                          <p className="font-medium">
+                            {item.baseTerm ?? "確認語"}
+                          </p>
+                          {item.variants && item.variants.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {item.variants.map((variant, variantIndex) => (
+                                <span
+                                  key={variantIndex}
+                                  className="rounded bg-amber-100 px-2 py-0.5 text-sm text-amber-900"
+                                >
+                                  {variant}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {item.reason && (
+                            <p className="mt-1 text-sm text-gray-700">
+                              {item.reason}
+                            </p>
+                          )}
+                          {item.suggestedUse && (
+                            <p className="mt-1 text-sm text-gray-600">
+                              使い方: {item.suggestedUse}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {companyNameHints.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-sm font-medium text-amber-900">
+                        社名変遷・出願人名ゆれ候補
+                      </p>
+                      {companyNameHints.map((item, i) => (
+                        <div key={i} className="rounded border border-amber-200 bg-white px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-medium">
+                              {item.observedName ?? "確認対象"}
+                            </p>
+                            {item.confidence && (
+                              <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                                confidence: {item.confidence}
+                              </span>
+                            )}
+                          </div>
+                          {item.relatedNames && item.relatedNames.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1.5">
+                              {item.relatedNames.map((name, nameIndex) => (
+                                <span
+                                  key={nameIndex}
+                                  className="rounded bg-sky-50 px-2 py-0.5 text-sm text-sky-800"
+                                >
+                                  {name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {item.reason && (
+                            <p className="mt-1 text-sm text-gray-700">
+                              {item.reason}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {additionalKeywordQueries.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-sm font-medium text-amber-900">
+                        追加で試す検索
+                      </p>
+                      {additionalKeywordQueries.map((query, i) => (
+                        <div key={i} className="rounded border border-amber-200 bg-white px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium text-gray-700">
+                              {query.theme ?? "追加検索"}
+                            </p>
+                            <CopyButton text={query.keywords ?? ""} />
+                          </div>
+                          <p className="mt-1 rounded bg-gray-50 p-2 font-mono text-sm">
+                            {query.keywords}
+                          </p>
+                          {query.note && (
+                            <p className="mt-1 text-sm text-gray-600">
+                              {query.note}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {leakageRisks.length > 0 && (
+                    <div className="mt-3">
+                      <p className="text-sm font-medium text-amber-900">
+                        検索漏れリスク
+                      </p>
+                      <ul className="ml-4 mt-1 list-disc text-sm text-gray-700">
+                        {leakageRisks.map((risk, i) => (
+                          <li key={i}>{risk}</li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}
