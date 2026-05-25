@@ -33,7 +33,6 @@ export const searchQuerySetSchema = z.object({
       relatedNames: z.array(z.string()).max(6).describe("旧社名、現社名、略称、英語名などの候補"),
       reason: z.string().describe("社名変遷や表記差として確認すべき理由"),
       confidence: z.enum(["high", "medium", "low"]).describe("候補の確からしさ。断定できない場合は low"),
-      source: z.enum(["ai", "dictionary"]).optional().describe("候補の由来"),
     })).max(3).describe("社名変遷・出願人名ゆれの確認候補。根拠が薄い場合は空配列"),
     additionalKeywordQueries: z.array(z.object({
       theme: z.string().describe("追加検索の観点"),
@@ -231,7 +230,7 @@ export async function generateQueries(
   const aiCompanyNameHints: CompanyNameHint[] =
     object.searchExpansionHints.companyNameHints.map((hint) => ({
       ...hint,
-      source: hint.source ?? "ai",
+      source: "ai",
     }));
   const companyNameHints = mergeCompanyNameHints(
     aiCompanyNameHints,
