@@ -22,7 +22,7 @@ export const searchQuerySetSchema = z.object({
       variants: z.array(z.string()).max(6).describe("漢字/かな/カナ、長音、英語略語などの候補"),
       reason: z.string().describe("検索漏れにつながる理由"),
       suggestedUse: z.string().describe("追加検索での使い方。例: 広め検索に追加、別検索で確認"),
-    })).max(5).describe("表記ゆれ・同義語・表記差の候補"),
+    })).min(1).max(5).describe("表記ゆれ・同義語・表記差の候補"),
     companyNameHints: z.array(z.object({
       observedName: z.string().describe("入力文面や技術分野から確認対象になりうる会社名・組織名"),
       relatedNames: z.array(z.string()).max(6).describe("旧社名、現社名、略称、英語名などの候補"),
@@ -33,8 +33,8 @@ export const searchQuerySetSchema = z.object({
       theme: z.string().describe("追加検索の観点"),
       keywords: z.string().describe("J-PlatPat キーワード検索に貼り付ける追加候補"),
       note: z.string().describe("この追加検索で拾いたい漏れ筋"),
-    })).max(3).describe("検索漏れ対策として別途試すキーワード検索候補（0〜3件）"),
-    leakageRisks: z.array(z.string()).max(5).describe("表記ゆれ・社名変遷によって漏れやすい観点"),
+    })).min(1).max(3).describe("検索漏れ対策として別途試すキーワード検索候補（1〜3件）"),
+    leakageRisks: z.array(z.string()).min(1).max(5).describe("表記ゆれ・社名変遷によって漏れやすい観点"),
   }).describe("検索漏れを減らすための表記ゆれ・社名変遷・追加検索ヒント"),
   excludedTerms: z.array(z.string()).describe("ノイズ除外語"),
   rationale: z.array(z.string()).describe("検索式設計の根拠（各判断の理由）"),
@@ -154,10 +154,13 @@ J-PlatPat は「タグ付きカッコ式を更にカッコでグループ化す�
 ## 表記ゆれ・社名変遷による検索漏れ対策
 論理式とは別に、searchExpansionHints に検索漏れ対策を出す。
 - spellingVariants には、漢字/ひらがな/カタカナ、長音記号「ー」の有無、半角/全角、英語略語、旧字体/新字体、一般語/専門語の候補を入れる
+- spellingVariants は必ず 1 件以上出す。入力に明示的な表記ゆれがなくても、主要技術語のカタカナ長音、英語略語、一般語/専門語の揺れを検討する
 - companyNameHints には、入力文面や技術分野から確認対象になりうる会社名・組織名がある場合だけ、旧社名/現社名/略称/英語名の候補を入れる
 - 社名変遷は断定せず、必ず「確認候補」として扱う。根拠が薄い場合は confidence を low にするか空配列にする
 - main の broad/balanced/narrowQuery に候補を詰め込みすぎない。検索式本体は実行しやすさを優先し、追加確認は additionalKeywordQueries に分ける
+- additionalKeywordQueries は必ず 1 件以上出す。表記ゆれ確認用、英語/略語確認用、または効果語確認用のいずれかにする
 - leakageRisks には「この表記だけで検索すると漏れそうな理由」を短く書く
+- leakageRisks は必ず 1 件以上出す
 
 ## 注意
 - 法的断定をしない
