@@ -29,6 +29,7 @@ import {
   isOriginalFileBlobName,
 } from "@/lib/original-file-metadata";
 import { parseJsonOrNull } from "@/lib/safe-json";
+import { buildPatentKeywordAssist } from "@/lib/patent-keyword-assist";
 
 export const dynamic = "force-dynamic";
 
@@ -122,6 +123,26 @@ export default async function CaseDetailPage({
     leakageRisks.length > 0;
   const excludedTerms = queryRationale?.excludedTerms ?? [];
   const rationaleItems = queryRationale?.rationale ?? [];
+  const patentKeywordAssistItems = buildPatentKeywordAssist([
+    extracted?.title,
+    extracted?.abstract,
+    ...(extracted?.solvedProblems ?? []),
+    ...(extracted?.effects ?? []),
+    ...(extracted?.claims ?? []).map((claim) => claim.text),
+    ...(extracted?.claims ?? []).flatMap((claim) =>
+      claim.elements.map((element) => element.text)
+    ),
+    latestQuerySet?.broadQuery,
+    latestQuerySet?.balancedQuery,
+    latestQuerySet?.narrowQuery,
+    ...(queryRationale?.keywordGroups?.core ?? []),
+    ...(queryRationale?.keywordGroups?.synonyms ?? []),
+    ...(queryRationale?.keywordGroups?.effects ?? []),
+    ...keywordQueries.map((query) => `${query.theme} ${query.keywords}`),
+    ...additionalKeywordQueries.map(
+      (query) => `${query.theme ?? ""} ${query.keywords ?? ""}`
+    ),
+  ]);
 
   // 先行技術文献を取得
   const priorArts = await priorArtDocumentRepo.findByCaseId(caseIdNum);
@@ -580,6 +601,137 @@ export default async function CaseDetailPage({
                       </div>
                     )
                   )}
+                </div>
+              )}
+
+              {patentKeywordAssistItems.length > 0 && (
+                <div className="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-base text-cyan-950">
+                  <div>
+                    <p className="font-medium">
+                      {"\u691c\u7d22\u30ad\u30fc\u30ef\u30fc\u30c9\u88dc\u52a9"}
+                    </p>
+                    <p className="mt-1 text-sm text-cyan-900">
+                      {"\u3053\u306e\u5019\u88dc\u306f\u691c\u7d22\u6f0f\u308c\u3092\u6e1b\u3089\u3059\u305f\u3081\u306e\u88dc\u52a9\u3067\u3059\u3002\u7279\u8a31\u6027\u30fb\u65b0\u898f\u6027\u30fb\u9032\u6b69\u6027\u3092\u5224\u65ad\u3059\u308b\u3082\u306e\u3067\u306f\u3042\u308a\u307e\u305b\u3093\u3002\u6700\u7d42\u5224\u65ad\u306f\u77e5\u8ca1\u62c5\u5f53\u8005\u30fb\u5f01\u7406\u58eb\u7b49\u304c\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002"}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 space-y-3">
+                    {patentKeywordAssistItems.map((item) => {
+                      const copyText = [
+                        item.centerTerm,
+                        ...item.synonyms,
+                        ...item.broaderTerms,
+                        ...item.narrowerTerms,
+                        ...item.patentTerms,
+                        ...item.englishKeywords,
+                      ].join(" ");
+                      const categories = [
+                        {
+                          label: "\u540c\u7fa9\u8a9e\u30fb\u8fd1\u7fa9\u8a9e",
+                          values: item.synonyms,
+                          className: "bg-blue-50 text-blue-800",
+                        },
+                        {
+                          label: "\u4e0a\u4f4d\u6982\u5ff5",
+                          values: item.broaderTerms,
+                          className: "bg-purple-50 text-purple-800",
+                        },
+                        {
+                          label: "\u4e0b\u4f4d\u6982\u5ff5",
+                          values: item.narrowerTerms,
+                          className: "bg-indigo-50 text-indigo-800",
+                        },
+                        {
+                          label: "\u696d\u754c\u8a9e\u30fb\u7279\u8a31\u8868\u73fe",
+                          values: item.patentTerms,
+                          className: "bg-emerald-50 text-emerald-800",
+                        },
+                        {
+                          label: "\u82f1\u8a9e\u30ad\u30fc\u30ef\u30fc\u30c9",
+                          values: item.englishKeywords,
+                          className: "bg-sky-50 text-sky-800",
+                        },
+                      ].filter((category) => category.values.length > 0);
+
+                      return (
+                        <div
+                          key={item.centerTerm}
+                          className="rounded border border-cyan-200 bg-white px-3 py-2"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-cyan-900">
+                                {"\u4e2d\u5fc3\u8a9e"}
+                              </span>
+                              <span className="rounded bg-cyan-100 px-2 py-0.5 text-sm font-medium text-cyan-900">
+                                {item.centerTerm}
+                              </span>
+                            </div>
+                            <CopyButton text={copyText} />
+                          </div>
+
+                          <div className="mt-2 space-y-2">
+                            {categories.map((category) => (
+                              <div key={category.label}>
+                                <p className="text-xs font-medium text-gray-600">
+                                  {category.label}
+                                </p>
+                                <div className="mt-1 flex flex-wrap gap-1.5">
+                                  {category.values.map((value) => (
+                                    <span
+                                      key={value}
+                                      className={`rounded px-2 py-0.5 text-sm ${category.className}`}
+                                    >
+                                      {value}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {item.leakageWarnings.length > 0 && (
+                            <div className="mt-2">
+                              <p className="text-xs font-medium text-amber-900">
+                                {"\u691c\u7d22\u6f0f\u308c\u6ce8\u610f"}
+                              </p>
+                              <ul className="ml-4 mt-1 list-disc text-sm text-gray-700">
+                                {item.leakageWarnings.map((warning) => (
+                                  <li key={warning}>{warning}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {item.broadWarnings.length > 0 && (
+                            <div className="mt-2">
+                              <p className="text-xs font-medium text-orange-900">
+                                {"\u5e83\u3059\u304e\u6ce8\u610f"}
+                              </p>
+                              <ul className="ml-4 mt-1 list-disc text-sm text-gray-700">
+                                {item.broadWarnings.map((warning) => (
+                                  <li key={warning}>{warning}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {item.humanReviewPoints.length > 0 && (
+                            <div className="mt-2">
+                              <p className="text-xs font-medium text-gray-700">
+                                {"\u4eba\u624b\u78ba\u8a8d\u30dd\u30a4\u30f3\u30c8"}
+                              </p>
+                              <ul className="ml-4 mt-1 list-disc text-sm text-gray-700">
+                                {item.humanReviewPoints.map((point) => (
+                                  <li key={point}>{point}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
