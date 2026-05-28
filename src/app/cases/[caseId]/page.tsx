@@ -30,6 +30,11 @@ import {
 } from "@/lib/original-file-metadata";
 import { parseJsonOrNull } from "@/lib/safe-json";
 import { buildPatentKeywordAssist } from "@/lib/patent-keyword-assist";
+import {
+  buildClaimDraftCheck,
+  type ClaimCheckCategory,
+  type ClaimCheckSeverity,
+} from "@/lib/claim-draft-check";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +76,45 @@ type MatchedElementDetail = {
   matched?: string[];
   unmatched?: string[];
 };
+
+function claimCheckSeverityLabel(severity: ClaimCheckSeverity): string {
+  switch (severity) {
+    case "needsReview":
+      return "人手確認";
+    case "warning":
+      return "注意候補";
+    default:
+      return "確認候補";
+  }
+}
+
+function claimCheckSeverityClass(severity: ClaimCheckSeverity): string {
+  switch (severity) {
+    case "needsReview":
+      return "border-rose-200 bg-rose-50 text-rose-800";
+    case "warning":
+      return "border-amber-200 bg-amber-50 text-amber-800";
+    default:
+      return "border-sky-200 bg-sky-50 text-sky-800";
+  }
+}
+
+function claimCheckCategoryLabel(category: ClaimCheckCategory): string {
+  switch (category) {
+    case "ambiguousExpression":
+      return "曖昧表現";
+    case "supportCandidate":
+      return "本文照合";
+    case "termConsistency":
+      return "用語揺れ";
+    case "antecedentReference":
+      return "参照語";
+    case "claimDependency":
+      return "引用関係";
+    default:
+      return "一般";
+  }
+}
 
 export default async function CaseDetailPage({
   params,
@@ -145,6 +189,19 @@ export default async function CaseDetailPage({
   ]);
 
   // 先行技術文献を取得
+  const claimDraftCheckResult = extracted
+    ? buildClaimDraftCheck({
+        claims: extracted.claims.map((claim) => claim.text),
+        specificationText: primaryDraft?.parsedText,
+        abstract: extracted.abstract,
+        problem: extracted.solvedProblems.join("\n"),
+        effect: extracted.effects.join("\n"),
+        elements: extracted.claims.flatMap((claim) =>
+          claim.elements.map((element) => element.text)
+        ),
+      })
+    : null;
+
   const priorArts = await priorArtDocumentRepo.findByCaseId(caseIdNum);
 
   // 分析結果を取得
@@ -541,6 +598,91 @@ export default async function CaseDetailPage({
               </div>
             ))}
           </div>
+
+          {claimDraftCheckResult && (
+            <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 text-base text-violet-950">
+              <div>
+                <p className="font-medium">請求項記載チェック</p>
+                <p className="mt-1 text-sm text-violet-900">
+                  {claimDraftCheckResult.summary}
+                </p>
+                <p className="mt-1 text-sm text-violet-900">
+                  {claimDraftCheckResult.disclaimer}
+                </p>
+              </div>
+
+              {claimDraftCheckResult.items.length > 0 ? (
+                <div className="mt-3 space-y-3">
+                  {claimDraftCheckResult.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded border border-violet-200 bg-white px-3 py-2"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded border px-2 py-0.5 text-xs font-medium ${claimCheckSeverityClass(
+                            item.severity
+                          )}`}
+                        >
+                          {claimCheckSeverityLabel(item.severity)}
+                        </span>
+                        <span className="rounded bg-violet-100 px-2 py-0.5 text-xs text-violet-900">
+                          {claimCheckCategoryLabel(item.category)}
+                        </span>
+                        <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                          {item.source === "dictionary" ? "辞書" : "ルール"}
+                        </span>
+                        {item.claimNumber && (
+                          <span className="text-xs text-gray-600">
+                            請求項 {item.claimNumber}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-2 font-medium text-gray-900">
+                        {item.title}
+                      </p>
+                      {item.target && (
+                        <p className="mt-1 text-sm text-gray-600">
+                          対象: {item.target}
+                        </p>
+                      )}
+                      <p className="mt-1 text-sm text-gray-800">
+                        {item.message}
+                      </p>
+                      <p className="mt-1 text-sm text-gray-600">
+                        {item.reason}
+                      </p>
+                      {item.suggestions.length > 0 && (
+                        <ul className="ml-4 mt-2 list-disc text-sm text-gray-700">
+                          {item.suggestions.map((suggestion) => (
+                            <li key={suggestion}>{suggestion}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 rounded border border-violet-200 bg-white px-3 py-2 text-sm text-gray-700">
+                  自動チェックで強い確認候補は出ていません。最終確認では、下の人手確認ポイントを見てください。
+                </p>
+              )}
+
+              {claimDraftCheckResult.humanCheckpoints.length > 0 && (
+                <div className="mt-3 rounded border border-violet-200 bg-white px-3 py-2">
+                  <p className="text-sm font-medium text-gray-700">
+                    人手確認ポイント
+                  </p>
+                  <ul className="ml-4 mt-1 list-disc text-sm text-gray-700">
+                    {claimDraftCheckResult.humanCheckpoints.map((checkpoint) => (
+                      <li key={checkpoint}>{checkpoint}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 
