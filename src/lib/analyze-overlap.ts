@@ -45,6 +45,8 @@ export async function screenPriorArt(
         abstract: pa.abstract?.substring(0, 500),
       })),
     }),
+    maxRetries: 2,
+    timeout: 35000,
     ...(providerOptions ? { providerOptions } : {}),
   });
 
@@ -156,6 +158,8 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
         claimsText: pa.claimsText?.substring(0, 2000),
       })),
     }),
+    maxRetries: 2,
+    timeout: 35000,
     ...(providerOptions ? { providerOptions } : {}),
   });
 

@@ -11,6 +11,79 @@ import { parseJsonOrNull } from "@/lib/safe-json";
 
 export const maxDuration = 60;
 
+type PriorArtForFallback = Awaited<
+  ReturnType<typeof priorArtDocumentRepo.findByCaseId>
+>[number];
+
+function tokenize(value: string | null | undefined): string[] {
+  return Array.from(
+    new Set(
+      (value ?? "")
+        .toLowerCase()
+        .replace(/[()[\]{}"'`]/g, " ")
+        .split(/[\s,.;:、。・/]+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3)
+    )
+  );
+}
+
+function scoreOverlap(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) return 0;
+  const rightSet = new Set(right);
+  const matches = left.filter((token) => rightSet.has(token)).length;
+  return Math.min(1, Number((matches / Math.max(4, left.length)).toFixed(2)));
+}
+
+function fallbackAnalysisRows(
+  caseId: number,
+  extracted: ExtractedClaims,
+  priorArts: PriorArtForFallback[]
+) {
+  const independentClaims = extracted.claims.filter((claim) => claim.isIndependent);
+  const targetClaims = independentClaims.length > 0 ? independentClaims : extracted.claims;
+  const docs = priorArts.slice(0, 5);
+
+  return targetClaims.flatMap((claim) => {
+    const claimText = [
+      claim.text,
+      ...claim.elements.map((element) => element.text),
+    ].join(" ");
+    const claimTokenList = tokenize(claimText);
+
+    return docs.map((doc) => {
+      const docText = [doc.title, doc.abstract, doc.claimsText]
+        .filter(Boolean)
+        .join(" ");
+      const docTokenList = tokenize(docText);
+      const lexicalScore = scoreOverlap(claimTokenList, docTokenList);
+      const elementScore = Math.min(1, Number((lexicalScore + 0.1).toFixed(2)));
+      const semanticScore = lexicalScore;
+      const structuralScore = Math.max(0, Number((lexicalScore - 0.1).toFixed(2)));
+      const matched = claimTokenList
+        .filter((token) => docTokenList.includes(token))
+        .slice(0, 8);
+
+      return {
+        caseId,
+        draftClaimId: String(claim.claimNo),
+        priorDocId: doc.docId,
+        lexicalScore,
+        semanticScore,
+        structuralScore,
+        matchedElementsJson: JSON.stringify({
+          matched,
+          unmatched: claim.elements.map((element) => element.text).slice(0, 8),
+          explanation:
+            "AI overlap analysis was temporarily unavailable. This deterministic fallback uses keyword overlap only and requires human review.",
+          elementScore,
+        }),
+        riskLabel: lexicalScore >= 0.2 ? "Medium" : "Unknown",
+      };
+    });
+  });
+}
+
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
@@ -100,7 +173,20 @@ export async function POST(
     });
   } catch (err) {
     console.error("[analyze] analysis failed:", err);
-    const message = err instanceof Error ? err.message : "重なり分析中にエラーが発生しました";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const fallbackRows = fallbackAnalysisRows(caseIdNum, extracted, priorArts);
+    const count = await comparisonResultRepo.replaceByCaseId(
+      caseIdNum,
+      fallbackRows
+    );
+
+    return NextResponse.json({
+      screening: {
+        reasoning:
+          "AI analysis was temporarily unavailable, so deterministic keyword overlap fallback results were saved for human review.",
+        candidateCount: priorArts.length,
+      },
+      results: count,
+      fallback: true,
+    });
   }
 }
