@@ -222,6 +222,13 @@ export async function extractClaims(
           timeout: 35000,
         });
 
+        if (object.claims.length === 0) {
+          console.warn(
+            "[extract-claims] AI returned no claims; using fallback parser"
+          );
+          return buildFallbackExtractedClaims(trimmed);
+        }
+
         return object;
       },
       { attempts: 2 }
