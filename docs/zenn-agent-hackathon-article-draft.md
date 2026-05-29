@@ -30,7 +30,7 @@ J-PlatPat を開く。検索ボックスの前で、手が止まる。
 
 - 公開 URL: https://ca-patentai-mini.ambitiousocean-c848492c.japaneast.azurecontainerapps.io/
 - 完成済みデモケース: https://ca-patentai-mini.ambitiousocean-c848492c.japaneast.azurecontainerapps.io/cases/14
-- 新規操作用サンプル: `docs/judge-samples/patent-prior-art-check-judge-samples.zip`
+- 新規操作用サンプル: https://github.com/hirokiriko/patentai-mini/raw/main/docs/judge-samples/patent-prior-art-check-judge-samples.zip
 
 なお、本ハッカソンで実装したのは **Azure クラウド側で動く PoC** です。タイトルの「閉域で使える」は、機密データ処理を Azure Arc / Azure Local 経由でオンプレ・エッジ側に切り出す **次フェーズの設計思想** を含めたものです。今回のアプリは、そのクラウド側コンポーネントとして、Azure Container Apps 上で実際に動作する形まで実装しました。
 
@@ -40,7 +40,7 @@ J-PlatPat を開く。検索ボックスの前で、手が止まる。
 
 3 分で、PDF アップロードから 4 層の重なり分析までを通しで見せます。
 
-審査員の方が **新規ケース作成から通し操作を試す** 場合に備えて、軽量な TXT サンプルも用意しています。`docs/judge-samples/patent-prior-art-check-judge-samples.zip` を展開し、`README.md` の手順に沿って、特許案サンプルと先行技術サンプルを順番にアップロードしてください。完成済みデモケースを見るだけでなく、請求項抽出、検索式生成、請求項記載チェック、先行技術取り込み、4 層分析までを実際に確認できます。
+審査員の方が **新規ケース作成から通し操作を試す** 場合に備えて、軽量な TXT サンプルも用意しています。新規操作用サンプル ZIP（https://github.com/hirokiriko/patentai-mini/raw/main/docs/judge-samples/patent-prior-art-check-judge-samples.zip）を展開し、`README.md` の手順に沿って、特許案サンプルと先行技術サンプルを順番にアップロードしてください。完成済みデモケースを見るだけでなく、請求項抽出、検索式生成、請求項記載チェック、先行技術取り込み、4 層分析までを実際に確認できます。
 
 ## 作ったもの
 
@@ -600,4 +600,4 @@ Patent Prior-Art Check は、特許調査そのものを置き換えるアプリ
 
 - アプリ本体: https://ca-patentai-mini.ambitiousocean-c848492c.japaneast.azurecontainerapps.io/
 - 完成済みデモケース: https://ca-patentai-mini.ambitiousocean-c848492c.japaneast.azurecontainerapps.io/cases/14
-- 新規操作用サンプル: `docs/judge-samples/patent-prior-art-check-judge-samples.zip`
+- 新規操作用サンプル: https://github.com/hirokiriko/patentai-mini/raw/main/docs/judge-samples/patent-prior-art-check-judge-samples.zip
