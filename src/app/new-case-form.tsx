@@ -95,17 +95,29 @@ export function NewCaseForm() {
           />
           <span className="flex-1">
             <span className="font-medium">
-              公開前の出願済み特許に新規事項を付け加える特許ですか？
+              公開前のベース出願に新規事項を追加して調査する
             </span>
             <span className="ml-2 text-sm text-gray-600">
-              （国内優先権主張出願 / 特許法 41 条）
+              （特殊ケース・通常の新規出願前調査ではオフで OK）
             </span>
             <span className="block mt-1 text-sm text-gray-600">
-              Yes の場合、作成後の案件詳細画面で「1-A ベース出願（公開前）」「1-B 新規事項」の
+              オンにすると、作成後の案件詳細画面で「1-A ベース出願（公開前）」「1-B 新規事項」の
               2 ファイルをアップロードし、AI が両者を統合した発明全体に対して先行技術調査を行います。
             </span>
           </span>
         </label>
+
+        <details className="mt-3 ml-8 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+          <summary className="cursor-pointer font-medium text-gray-800">
+            Q. どんな場合に使うオプションですか？
+          </summary>
+          <p className="mt-2">
+            国内優先権主張出願や、出願済みの発明に追加構成を加えて別出願を検討する場合など、
+            通常の新規出願前調査とは前提が異なるときの補助です。
+            本アプリはベース出願と新規事項を統合した調査用テキストを作りますが、
+            国内優先権の可否や補正可否などの法的判断は行いません。
+          </p>
+        </details>
 
         {baseApplicationMode && (
           <div className="mt-3 ml-8">
