@@ -1,0 +1,93 @@
+name: 開発タスク
+description: publicリポジトリで扱える開発タスクを登録します
+title: "[Task] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このリポジトリはpublicです。未公開発明、顧客情報、実案件資料、秘密情報、認証付きURL、個人パスは記載しないでください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 背景・目的
+      description: 公開可能な情報だけで、なぜこの変更が必要かを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 対象範囲
+      description: 今回変更する範囲を具体的に記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受入条件
+      description: 完了と判断できる条件を箇条書きで記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 対象外
+      description: 今回変更しない範囲を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: required_tests
+    attributes:
+      label: 必須テスト
+      description: 実行すべきlint、type-check、build、unit、integration、E2E等を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: production_impact
+    attributes:
+      label: Production／deploy影響
+      description: 本番環境やdeployへの影響を記載してください。影響なしの場合も明記してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: rollback方針
+      description: 問題発生時の戻し方を記載してください。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data_classification
+    attributes:
+      label: データ区分
+      options:
+        - 公開情報のみ
+        - 機密・実データあり
+    validations:
+      required: true
+
+  - type: dropdown
+    id: execution_route
+    attributes:
+      label: 実行経路
+      options:
+        - Cloud
+        - Local
+    validations:
+      required: true
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 関連Issue／PR
+      description: 関連するIssue／PR番号を記載してください。ない場合は「なし」と記載してください。
+    validations:
+      required: true
