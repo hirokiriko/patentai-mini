@@ -31,6 +31,14 @@ patentability, validity, infringement, or rejection outcomes.
 - Confirm current state from the default branch, CI, and—when authorized—the
   relevant runtime environment rather than relying on historical notes.
 
+A Local Codex start message may include a short Local-only execution hint that
+must not be written to public GitHub, such as how to identify or copy an
+already-saved local file. Such a hint is not a specification: it must not alter
+or fill gaps in the purpose, scope, acceptance criteria, design decisions,
+priority, or required tests. If the Issue is incomplete, update the Issue or
+stop with the appropriate label instead. Never copy Local-only details into
+GitHub, and Cloud Codex must work from GitHub alone.
+
 Never copy secrets, credentials, customer or case material, unpublished patent
 content, production data, authenticated URLs, personal paths, device details,
 or individual account information into Issues, pull requests, commits, logs, or
@@ -146,3 +154,19 @@ resources unless the active Issue explicitly authorizes it.
 Report work in Japanese. Include the change summary, changed files, commands,
 successful and failed checks, unresolved items, recommended next action, and a
 Git diff summary. Keep all reporting public-safe.
+
+Every progress or completion report must also include these two independent
+headings:
+
+- `## 🚨 Codexへの指示`: show the exact next instruction in a code block. For a
+  self-contained GitHub handoff, prefer only `Issue #Nを進めて` or
+  `PR #Nを進めて`. If no instruction is needed, state
+  `現在、Codexへの指示はありません`. Do not restate long prompts except for a
+  short Local-only execution hint that cannot be stored on public GitHub.
+- `## 作業の区切り`: choose exactly one of `地続きで続行`,
+  `ここで一時休憩OK`, `ここでセッション切替OK`, or `作業完了`.
+
+When Local priority work has reached a clean stopping point, or the user has
+explicitly deferred it, at most one other Open Issue may be suggested as
+`別タスク（任意）`. Keep that separate from mandatory continuation work and do
+not imply it is required to finish the current Issue.

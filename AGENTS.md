@@ -261,6 +261,20 @@ Every work report to the user must be in Japanese and include:
 - 次にやるべきこと
 - Git diff 要約
 
+Every progress or completion report must also include two independent headings:
+
+- `## 🚨 Codexへの指示`: if another instruction is needed, show the exact text
+  in a code block. Prefer only `Issue #Nを進めて` or `PR #Nを進めて` when the
+  GitHub handoff is self-contained. If nothing is needed, state
+  `現在、Codexへの指示はありません`. Do not restate a long prompt unless a
+  short Local-only execution hint cannot be stored on public GitHub.
+- `## 作業の区切り`: choose exactly one of `地続きで続行`,
+  `ここで一時休憩OK`, `ここでセッション切替OK`, or `作業完了`.
+
+If Local priority work has reached a clean stopping point, or the user has
+explicitly deferred it, at most one other Open Issue may be suggested as
+`別タスク（任意）`. Keep it separate from mandatory continuation work.
+
 If no commands were run, state that explicitly. If checks were skipped, explain
 why.
 
@@ -292,6 +306,15 @@ transitions, and dependencies. Chat messages and past conversations are not
 required specifications. The normal start instruction should be only
 `Issue #Nを進めて`; never ask the user to relay a long prompt between ChatGPT,
 Cloud Codex, Local Codex, or a verifier.
+
+A Local Codex start message may include a short Local-only execution hint that
+must not be written to public GitHub. It may describe how to identify or copy an
+already-saved local file, but it is not part of the formal specification and
+must not alter or fill gaps in purpose, scope, acceptance criteria, priority,
+design decisions, or required tests. Never transfer personal paths, customer or
+case details, secrets, or real-case content from that hint into GitHub. Cloud
+Codex must ignore Local-only execution hints and use GitHub alone as its source
+of truth.
 
 Before adding an execution-route label or creating a branch, confirm that the
 Issue is self-contained and internally consistent. ChatGPT must not add an
