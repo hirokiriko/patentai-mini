@@ -1,145 +1,148 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides repository-specific guidance for Claude Code and other local
+assistants. `AGENTS.md` is the primary agent policy; do not add rules here that
+conflict with it.
 
-## プロジェクト概要
+## Project overview
 
-特許先行技術調査の個人向け PoC。ユーザーの特許案から J-PlatPat 用検索式を生成し、検索結果 CSV を取り込んで請求項・構成要素レベルの重なり検出と拒絶リスクの早期把握を行う。
+`patentai-mini` is a patent prior-art check PoC. It supports draft parsing,
+claim extraction, J-PlatPat query generation, prior-art import, and overlap or
+risk-signal review.
 
-主要フロー: 特許案アップロード → 請求項抽出 → 検索式生成（広/中/狭） → ユーザーが手動で J-PlatPat 検索 → 結果 CSV 再アップロード → 多層類似度分析 → リスクレポート
+It is not a legal judgment system. Describe results as investigation support,
+comparison support, issue extraction, overlap candidates, match candidates, or
+risk signals that require human review. Do not state legal conclusions about
+patentability, validity, infringement, or rejection outcomes.
 
-## 開発コマンド
+## Canonical workflow
 
-ランタイム管理に mise を使用（`mise.toml` でプロジェクトローカルに設定済み）。
+- Read the latest `AGENTS.md` before making changes.
+- GitHub Issues are the source of truth for tasks, scope, acceptance criteria,
+  progress, validation, and handoff.
+- Each Issue should be self-contained so an agent can complete it without
+  relying on chat history or an unpublished prompt.
+- Record agent handoffs, correction requests, and public-safe validation on the
+  relevant Issue or pull request.
+- `ops/tasks.md`, `ops/session-log.md`, and `ops/handoff.md` are historical
+  records from before the Issue Driven workflow. Do not update them as current
+  task trackers.
+- `ops/decisions.md` remains the canonical record for durable design decisions.
+- Confirm current state from the default branch, CI, and—when authorized—the
+  relevant runtime environment rather than relying on historical notes.
+
+Never copy secrets, credentials, customer or case material, unpublished patent
+content, production data, authenticated URLs, personal paths, device details,
+or individual account information into Issues, pull requests, commits, logs, or
+agent documents. Use classifications and PASS/FAIL results without reproducing
+the detected value.
+
+## Current stack
+
+- Next.js 16 / React 19 with App Router
+- TypeScript
+- AI SDK with Google, OpenAI, and Azure OpenAI provider support
+- Drizzle ORM with Postgres (`pg` and `drizzle-orm/node-postgres`)
+- pnpm
+- PDF/DOCX/TXT parsing with `pdfjs-dist`, `@napi-rs/canvas`, and `mammoth`
+- Optional Azure AI Document Intelligence fallback when configured
+- Azure Container Apps deployment
+
+## Commands
+
+Use pnpm. Do not switch package managers or install dependencies unless the
+approved Issue requires it.
 
 ```bash
-mise exec -- pnpm dev        # 開発サーバー起動（Turbopack）
-mise exec -- pnpm build      # プロダクションビルド
-mise exec -- pnpm lint       # ESLint
-mise exec -- pnpm start      # プロダクションサーバー起動
-
-mise exec -- pnpm db:push     # スキーマを DB に反映（開発用）
-mise exec -- pnpm db:generate # マイグレーションファイル生成
-mise exec -- pnpm db:migrate  # マイグレーション適用
-mise exec -- pnpm db:studio   # Drizzle Studio（DB ブラウザ）
+pnpm dev
+pnpm build
+pnpm start
+pnpm lint
+pnpm type-check
+pnpm db:generate
+pnpm db:migrate
+pnpm db:push
+pnpm db:studio
 ```
 
-## プロジェクト構成
+`postinstall` runs `node scripts/copy-pdfjs-assets.mjs` to prepare PDF.js assets
+under `vendor/pdfjs-dist`.
 
-```
-src/
-├── app/
-│   ├── page.tsx                  # 案件一覧・作成
-│   ├── cases/[caseId]/page.tsx   # 案件詳細（全ステップ統合）
-│   └── api/
-│       ├── cases/
-│       │   ├── route.ts              # GET/POST 案件 CRUD
-│       │   └── [caseId]/
-│       │       ├── route.ts          # GET/PATCH/DELETE 案件個別
-│       │       ├── draft/            # 特許案アップロード・テキスト抽出
-│       │       ├── draft/[draftId]/extract/  # AI 請求項抽出
-│       │       ├── queries/          # 検索式生成
-│       │       ├── prior-art/        # CSV 取り込み
-│       │       └── analyze/          # 重なり分析
-│       └── health/route.ts       # ヘルスチェック（DB 接続確認）
-├── repositories/
-│   ├── types.ts   # リポジトリインターフェース（DB 実装非依存）
-│   ├── drizzle.ts # Drizzle/Turso 実装
-│   └── index.ts   # エントリ（実装切り替えはここを変更）
-├── db/
-│   ├── schema.ts  # テーブル定義（5テーブル）
-│   └── index.ts   # DB 接続（遅延初期化、Turso 認証対応）
-└── lib/
-    ├── ai-model.ts            # LLM プロバイダー/モデル切り替え
-    ├── parse-file.ts          # PDF/DOCX/TXT テキスト抽出
-    ├── extract-claims.ts      # AI 請求項・構成要素抽出
-    ├── generate-queries.ts    # AI 検索式生成
-    ├── parse-jplatpat-csv.ts  # J-PlatPat CSV パーサー
-    └── analyze-overlap.ts     # 2段階重なり分析（スクリーニング + 詳細）
-drizzle.config.ts
-```
+Do not generate or apply migrations without explicit approval. Run the checks
+required by the active Issue and report any skipped check with its reason.
 
-### DB 実装の切り替え方
+## Repository structure
 
-`src/repositories/index.ts` の import 先を変更するだけで DB 実装を差し替え可能:
-```typescript
-// 現在: Drizzle/Turso
-export { caseRepo, ... } from "./drizzle";
-// Firebase に切り替える場合:
-export { caseRepo, ... } from "./firebase";
-```
+- `src/app`: App Router pages, layouts, and client components
+- `src/app/api`: case, draft, prior-art, query, analysis, integration, and
+  health-check Route Handlers
+- `src/components`: shared UI components
+- `src/lib`: AI provider selection, parsing, extraction, query generation,
+  overlap analysis, and claim integration
+- `src/db`: Drizzle Postgres connection and schema
+- `src/repositories`: repository interfaces and Drizzle implementation
+- `scripts`: utility and migration scripts
+- `.github/workflows`: CI and deployment workflows
+- `docs` and `ops`: product, architecture, operational, and decision records
 
-## 仕様との実装差異・制限事項
+## Database rules
 
-- **重なり分析の4層スコア**: 仕様では独立した4アルゴリズムだが、PoC では AI に一括推定させている。L3 意味類似はベクトル検索未使用
-- **重なり分析の2段階方式**: 全文献を1件ずつ分析するとコスト・時間が非現実的なため、スクリーニング（上位20件選定）→ 詳細分析の2段階にしている
-- **ファイルアップロード**: メモリ上で処理しDB保存（ディスク書き込みなし）。元ファイルは永続化されない
-- **J-PlatPat CSV**: 実データで検証済み（要約列オプショナル対応）。ただし全列パターンの網羅テストは未実施
-- **エラーハンドリング**: API の基本バリデーションのみ。LLM 呼び出し失敗時のリトライや部分保存は未実装
-- **従属請求項**: 重なり分析は独立請求項のみ対象。従属請求項の分析は未対応
+- The current database is Postgres through Drizzle ORM.
+- `drizzle.config.ts` uses the `postgresql` dialect.
+- `src/db/index.ts` uses `drizzle-orm/node-postgres`.
+- `src/db/schema.ts` uses Postgres table definitions.
+- `DATABASE_URL` is the Postgres connection string.
+- The former Turso/libSQL implementation is superseded. Do not reintroduce it
+  without explicit approval.
+- Treat schema, migration, and production-data work as dedicated high-risk
+  changes with a documented migration path and rollback.
 
-## ドキュメント構成（読む順番）
+## AI provider rules
 
-1. `docs/01-product-brief.md` — 価値提案・成功条件・非目標
-2. `docs/02-requirements.md` — 機能要件 FR-01〜FR-06、非機能要件
-3. `docs/03-architecture.md` — 技術構成・データモデル・処理フロー
-4. `docs/04-query-generation-spec.md` — 検索式生成の入出力・戦略
-5. `docs/05-overlap-analysis-spec.md` — 4層類似度分析（L1文字列〜L4構造）・スコア重み・リスクラベル
-6. `ops/runbook-manual-search.md` — J-PlatPat 手動検索手順
-7. `AGENTS.md` — AI エージェント作業規約
+- `AI_PROVIDER` supports `google`, `openai`, and `azure`.
+- Keep `getModel()` and `getFastModel()` responsibilities separate.
+- Azure OpenAI uses deployment names rather than generic model names.
+- Apply Google-specific provider options only when the Google provider is in
+  use.
+- Preserve structured-output compatibility at `generateObject` call sites.
+- Do not break an existing provider while changing another provider.
 
-## セッション運用（必須）
+Configuration names may be documented, but values must never be committed or
+printed. Refer to `.env.example` for the supported names.
 
-**作業開始時**: `ops/handoff.md` → `ops/tasks.md`（In Progress）→ `ops/decisions.md` → `ops/session-log.md` を読む。
+## Azure Container Apps deployment
 
-**作業終了時**: 以下を必ず更新する。更新しないと複数セッション運用が破綻する。
-- `ops/tasks.md` — タスク状態の反映
-- `ops/session-log.md` — 実施内容と未解決事項
-- `ops/handoff.md` — 次セッションが即着手できる状態に
-- `ops/decisions.md` — 設計判断があれば記録
+The current deployment path is `.github/workflows/azure-container-apps.yml`.
+It can run manually or for the configured changes on `main`, authenticates to
+Azure with OIDC, builds and pushes commit-SHA and `latest` image tags to Azure
+Container Registry, and updates the existing Container App image.
 
-## ドメインルール
+The workflow does not create Azure resources, apply database migrations, or set
+runtime environment variables. Resource provisioning, secrets, and runtime
+configuration remain separately controlled. Do not deploy or change Azure
+resources unless the active Issue explicitly authorizes it.
 
-- **法的断定禁止**: 「登録可能」「拒絶されない」と断言しない。「重複候補」「一致候補」等の表現を使う
-- **請求項ベース**: 独立請求項を主軸に据え、従属請求項と分けて扱う
-- **構成要素の分解**: 名詞句の列挙で終わらせず、要素・関係・制約・作用効果に分解する
-- **検索式は3系統**: 広め / 中庸 / 狭め を基本とする
-- **推測で固定しない**: J-PlatPat の CSV 列定義や PDF 仕様を未確認のまま断定しない
+## PDF and file parsing
 
-## 想定技術スタック
+- Treat `src/lib/parse-file.ts` and `scripts/copy-pdfjs-assets.mjs` as
+  high-risk files.
+- Preserve the checked-in build strategy that generates `vendor/pdfjs-dist`
+  during installation or container build.
+- Keep `@napi-rs/canvas` and the related Next.js tracing/external-package
+  configuration unless a dedicated Issue authorizes and verifies a change.
+- Verify PDF parsing in the built container before changing packaging behavior.
 
-| レイヤー | 技術 |
-|----------|------|
-| Frontend | Next.js (App Router) |
-| API | Next.js API Routes (Route Handlers) |
-| 言語 | TypeScript のみ（Python 併用なし） |
-| ORM | Drizzle ORM + drizzle-kit |
-| DB | Turso (libSQL) — ローカルは SQLite フォールバック可 |
-| DB アクセス | リポジトリパターン（`src/repositories/`）で実装差し替え可能 |
-| ベクトル検索 | 未実装（将来 pgvector/Qdrant に拡張可能） |
-| LLM | AI SDK — `AI_PROVIDER` / `AI_MODEL` 環境変数で切り替え |
-| ファイル保存 | ローカル（`./data/uploads`, `./data/artifacts`） |
-| パッケージマネージャ | pnpm |
-| デプロイ | Vercel（GitHub 自動連携） |
+## Domain rules
 
-## 確定済み設計判断
+- Keep independent and dependent claims distinct.
+- Decompose claims into elements, relationships, constraints, and effects.
+- Generate broad, balanced, and narrow query variants.
+- Do not infer undocumented J-PlatPat CSV or PDF behavior as fact.
+- Preserve existing API and type contracts unless the active Issue calls for a
+  change.
 
-- **DR-0001**: J-PlatPat はユーザーが手動操作。システムは検索式生成と結果分析に集中する
-- **DR-0002**: 初期保存層は Turso (libSQL クラウド)。リポジトリパターンで Firebase 等への差し替え可能
-- **DR-0003**: LLM 統合に AI SDK を採用。プロバイダー（openai/anthropic/google 等）を .env でコード変更なしに切り替え可能にする
-- **DR-0004**: All JS/TS 構成。Python ワーカーは使わず Next.js + TypeScript のみ
-- **DR-0005**: ORM に Drizzle を採用。drizzle-kit でスキーマ管理・マイグレーション
-- **DR-0006**: パッケージマネージャに pnpm を採用
+## Reporting
 
-## 環境変数
-
-`.env.example` を参照。主要な設定:
-- `DATABASE_URL` — Turso URL（`libsql://...turso.io`）またはローカル SQLite（`file:./data/app.db`）
-- `TURSO_AUTH_TOKEN` — Turso 認証トークン（ローカル SQLite の場合は不要）
-- `AI_PROVIDER` — `google` / `openai`（デフォルト: `google`）
-- `AI_MODEL` — プロバイダーごとのモデル名（省略時はデフォルト）
-- `GOOGLE_GENERATIVE_AI_API_KEY` / `OPENAI_API_KEY` — 使用するプロバイダーの API キー
-
-### Git author 設定
-
-このリポジトリは `kiriko/` 配下にあるため、親ディレクトリの `.envrc`（direnv）で KIRIKO の git identity が適用される。プロジェクトルートの `.envrc` で `hirokiriko` に上書き済み。
+Report work in Japanese. Include the change summary, changed files, commands,
+successful and failed checks, unresolved items, recommended next action, and a
+Git diff summary. Keep all reporting public-safe.
