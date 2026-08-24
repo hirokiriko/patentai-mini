@@ -1,5 +1,8 @@
 # Decisions
 
+> このファイルは恒久的な設計判断の正本です。現在状態は最新のAccepted判断とdefault branchを照合してください。
+> 過去判断と現行実装が矛盾する場合は削除せず、後続判断で明示的にsupersedeします。
+
 ## DR-0001: PoC は手動検索を前提にする
 - Date: 2026-04-09
 - Status: Accepted
@@ -111,9 +114,44 @@
   - draftPatents に `kind` カラム ("main" | "base" | "addition") を追加。デフォルトは "main"
   - ベース出願モード時の処理: ベース出願 (kind="base") と新規事項 (kind="addition") を別ファイルでアップロード → AI が両者を統合した新しい明細書テキストを生成 → main draft として保存 → 既存フロー (請求項抽出以降) に合流
   - 先行技術調査・重なり分析の対象は「統合した発明全体」とする。新規事項のみの調査は将来要望
-  - 自身のベース出願は 29 条の先行技術にはならない（公開前 + 出願人同一）。29 条の 2 拡大先願は本 PoC では機械判定せず、ユーザーが手動除外する
+  - 適用法令を機械的に断定せず、先行技術からの除外を含む法的評価は人間のレビューに委ねる
 - Consequence:
   - 通常モード（baseApplicationMode=false）の挙動・データは一切変えない（後方互換）
   - 新規 API: `/api/cases/[caseId]/integrate` POST（ベース + 新規事項 → 統合 main draft 生成）
   - 新規 lib: `src/lib/integrate-claims.ts`（統合プロンプト + AI 呼び出し）
   - 新規 UI: 案件作成フォームに Yes/No、案件詳細画面の Step 1 を 2 系統に分岐
+
+## DR-0010: 現行platformをPostgres／複数AI provider／Azure Container Appsとする
+- Date: 2026-08-24
+- Status: Accepted
+- Supersedes: DR-0002の保存層、DR-0007のTurso部分、DR-0008のprovider一覧、およびVercelを現行deploy先とする記述
+- Context:
+  - 現行コードとdeploy workflowは旧platform判断から移行済みである
+  - 過去の設計判断は履歴として保持しつつ、現在の正しい前提を明示する必要がある
+- Decision:
+  - DBはDrizzle ORM経由のPostgresを使用する
+  - AI providerはGoogle、OpenAI、Azure OpenAIに対応する
+  - deployはGitHub ActionsからOIDCでAzureへ認証し、ACR imageを既存Azure Container Appへ反映する
+  - Azure resource作成、runtime環境変数設定、DB migrationはdeploy workflowの責務に含めない
+- Consequence:
+  - 旧SQLite／Turso／Vercel記述は歴史的判断として残るが、現行構成の根拠には使わない
+  - 現在状態はdefault branchのコード、workflow、CI、および許可された実環境で確認する
+
+## DR-0011: Issue Driven運用とGitHub内完結のagent handoffを採用する
+- Date: 2026-08-24
+- Status: Accepted
+- Supersedes: 旧session文書を新規タスク、進捗、引継ぎの正本として毎回更新する運用
+- Context:
+  - 複数agentが同じ受入条件と公開可能な検証記録を参照できる運用が必要である
+  - chat履歴や個人環境へ依存する引継ぎは再現性と情報管理を損なう
+- Decision:
+  - GitHub Issueをタスク、scope、受入条件、進捗、引継ぎの正本とする
+  - Issue本文だけで作業を完遂できる自己完結指示を原則とする
+  - agent間の引継ぎ、修正要求、検証記録は関連IssueまたはPRで行う
+  - `ops/tasks.md`、`ops/session-log.md`、`ops/handoff.md`はIssue Driven移行前の履歴資料として保持し、現行運用では更新しない
+  - `ops/decisions.md`は恒久的設計判断の正本として継続する
+  - 公開記録にはsecret、個人パス、個別アカウント、顧客・実案件情報、未公開資料、Production dataを記載しない
+- Consequence:
+  - 現行状態はGitHub Issue／PR、default branch、CI、および必要な実環境から確認する
+  - 旧履歴文書の本文を新しいIssue／PRへ無差別に転記しない
+  - 検出結果は分類、件数、PASS／FAILで扱い、値を再掲しない
