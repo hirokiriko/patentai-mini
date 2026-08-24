@@ -42,5 +42,6 @@ Codexがユーザーへ進捗・完了を報告する際は、`## 🚨 Codexへ�
 
 - AI agent向け技術・安全ルール: `AGENTS.md`
 - Cloud Codex運用手順: `ops/codex-automation.md`
+- [公報XMLパーサー仕様](docs/06-koho-xml-parser-spec.md)
 
 Issueにない機能や将来拡張は同時に追加せず、現在の受入条件を満たす最小変更に限定します。
