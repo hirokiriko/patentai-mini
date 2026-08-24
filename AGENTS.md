@@ -270,3 +270,97 @@ why.
 - Keep code identifiers, command names, env var names, and technical API names
   in their existing style.
 - Match existing code-comment style when editing source files.
+
+## 13. GitHub Issue Driven / Codex Operations
+
+Each implementation Issue body is the sole source of truth for its task,
+required behavior, and acceptance criteria. GitHub Issues and pull requests
+are the source of truth for progress, verification, re-verification, and
+handoff. The Issue body must be a self-contained instruction that lets the
+assigned Codex proceed from start through PR creation using that body alone.
+Every mandatory instruction must appear there; links to public GitHub
+information may provide context or evidence but must not replace required
+instructions. Confirm current state from the Issue, related PRs, CI, and the
+default branch.
+
+### Self-contained Issues and GitHub Handoff
+
+Each implementation Issue must state the purpose, editable scope, prohibited
+scope, required work, acceptance criteria, out-of-scope items, required tests,
+Production/deploy impact, rollback, execution route, start and completion state
+transitions, and dependencies. Chat messages and past conversations are not
+required specifications. The normal start instruction should be only
+`Issue #Nを進めて`; never ask the user to relay a long prompt between ChatGPT,
+Cloud Codex, Local Codex, or a verifier.
+
+Before adding an execution-route label or creating a branch, confirm that the
+Issue is self-contained and internally consistent. ChatGPT must not add an
+execution-route label to an incomplete Issue. If information is missing,
+contradictory, or awaiting a decision, record the missing items on the Issue,
+add the appropriate stop label such as `codex:blocked`, and stop before branch
+creation. Do not expand scope by consulting chat history or restricted files.
+
+Record start information, correction requests, test evidence for the exact
+head SHA, re-verification, unresolved items, and handoff in the Issue or PR.
+Cloud and Local workers and verifiers must complete their handoffs on GitHub;
+the user is not a message relay between Codex environments.
+
+The repository is public. Cloud work may use only public code, public
+information, published documents, fictional data, or irreversibly anonymized
+data. Do not retrieve, inspect, quote, summarize, generate, or write the
+following into Issues, pull requests, comments, commits, or Actions logs:
+
+- unpublished inventions, claims, specifications, or drawings;
+- customer names, case names, contracts, or personal information;
+- real-case J-PlatPat search results or investigation materials;
+- customer-provided PDF, DOCX, CSV, or image files;
+- Production DB contents or secret logs;
+- API keys, tokens, passwords, connection strings, or authenticated URLs;
+- personal local filesystem paths or account-specific information.
+
+If a task requires any of the above or requires a Local-only environment, stop
+Cloud work, remove `codex:in-progress`, add `codex:blocked`, and record only a
+generalized reason. Do not expand scope to inspect restricted material.
+
+### Labels
+
+- `codex:cloud-ready`: Cloud Codex implementation and conditional automatic
+  merge are approved. Workers must not add this label themselves.
+- `codex:local-only`: Local Codex only.
+- `data:confidential`: contains confidential or real data; do not put its
+  contents on public GitHub.
+- `codex:in-progress`: Codex work is active.
+- `codex:needs-review`: waiting for PR verification.
+- `codex:fix-required`: changes are required before verification can pass.
+- `codex:local-verified`: required Local verification is complete.
+- `codex:blocked`: blocked by an external decision, information, or environment.
+- `codex:automation-pause`: if present on any Open Issue, all automation stops.
+- `codex:no-auto-merge`: verify the PR but do not merge automatically.
+- `priority:P0`: highest priority.
+- `priority:P1`: high priority.
+- `priority:P2`: normal priority.
+- `priority:P3`: low priority.
+
+### State Flow
+
+Use this flow unless an Issue explicitly requires a stricter one:
+
+1. Select one eligible, self-contained Open Issue. If it is incomplete, record
+   the missing information and stop before creating a branch.
+2. Add `codex:in-progress` and create a dedicated branch from the latest default
+   branch. Prefer `codex/issue-<number>-<slug>`.
+3. Implement only the Issue scope and run the required checks.
+4. Open a PR to the default branch, add `codex:needs-review`, and remove
+   `codex:in-progress` from the Issue.
+5. The verifier checks the Issue, exact PR head, diff, CI, acceptance criteria,
+   information safety, conflicts, and unresolved reviews.
+6. If all merge conditions are satisfied, use Squash Merge and close the linked
+   Issue via `Closes #...`.
+
+Do not work on the same Issue in Cloud and Local at the same time. Direct pushes
+to `main` are prohibited by default. Do not add features, future expansion, or
+preemptive optimization that the Issue does not require.
+
+When reporting verification, explicitly state any test that was not run, any UI
+that was not visually confirmed, and any Production behavior that was not
+confirmed. Never report an unexecuted check as successful.

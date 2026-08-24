@@ -1,0 +1,127 @@
+name: 開発タスク
+description: publicリポジトリで扱える自己完結した開発タスクを登録します
+title: "[Task] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        このリポジトリはpublicです。未公開発明、顧客情報、実案件資料、秘密情報、認証付きURL、個人パスは記載しないでください。
+
+        このIssue本文だけで担当Codexが開始からPR作成まで完遂できる情報を記載してください。チャットや過去会話を必須仕様の保存先にせず、ユーザーに長文promptの中継を要求しません。不足・矛盾・判断待ちはIssue／PRへ記録し、停止ラベルを付けてください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 背景・目的
+      description: 公開可能な情報だけで、なぜこの変更が必要かを記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: source_of_truth
+    attributes:
+      label: 正本と開始時確認
+      description: このIssue本文を唯一の正式指示とし、開始時に確認するrepository、default branch、baseline、関連する公開GitHub情報を記載してください。リンクは補足・証拠に限り、必須指示をリンク先、チャット、過去会話への参照だけで済ませないでください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: editable_scope
+    attributes:
+      label: 編集可能範囲
+      description: 変更を許可するファイル、ディレクトリ、設定、外部状態を具体的に記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: restricted_scope
+    attributes:
+      label: 閲覧禁止範囲
+      description: 閲覧、検索、引用、編集を禁止するファイル、データ、URL、外部状態を記載してください。ない場合も「なし」と明記してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 実施内容
+      description: 担当Codexが追加判断なしで実装できる粒度で、必要な変更と実行手順を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受入条件
+      description: 完了と判断できる条件を箇条書きで記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: 対象外
+      description: 今回変更しない範囲を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: required_tests
+    attributes:
+      label: 必須テスト
+      description: 実行すべきlint、type-check、build、unit、integration、E2E、構文確認、実画面確認等を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: production_impact
+    attributes:
+      label: Production／deploy影響
+      description: 本番環境やdeployへの影響と、実操作を許可するかを記載してください。影響なしの場合も明記してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: rollback方針
+      description: 問題発生時の戻し方と、復旧に必要な判断を記載してください。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: data_classification
+    attributes:
+      label: データ区分
+      options:
+        - 公開情報のみ
+        - 機密・実データあり
+    validations:
+      required: true
+
+  - type: dropdown
+    id: execution_route
+    attributes:
+      label: Cloud／Local実行経路
+      options:
+        - Cloud
+        - Local
+    validations:
+      required: true
+
+  - type: textarea
+    id: state_transition
+    attributes:
+      label: 開始・完了時の状態遷移
+      description: 開始時、PR作成時、検証NG／停止時、完了時に付与・解除するラベルと、Issue／PRへ残す記録を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: related_dependencies
+    attributes:
+      label: 関連Issue／PR・依存関係
+      description: 親子・関連Issue／PR、先行条件、外部判断や環境依存を記載してください。ない場合は「なし」と記載してください。
+    validations:
+      required: true
