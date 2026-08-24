@@ -273,9 +273,37 @@ why.
 
 ## 13. GitHub Issue Driven / Codex Operations
 
-GitHub Issue is the source of truth for tasks, acceptance criteria, progress,
-and handoff. `ops/decisions.md` is the source of truth for durable design
-decisions, and Runbooks are the source of truth for operational procedures.
+Each implementation Issue body is the sole source of truth for its task,
+required behavior, and acceptance criteria. GitHub Issues and pull requests
+are the source of truth for progress, verification, re-verification, and
+handoff. The Issue body must be a self-contained instruction that lets the
+assigned Codex proceed from start through PR creation using that body alone.
+Every mandatory instruction must appear there; links to public GitHub
+information may provide context or evidence but must not replace required
+instructions. Confirm current state from the Issue, related PRs, CI, and the
+default branch.
+
+### Self-contained Issues and GitHub Handoff
+
+Each implementation Issue must state the purpose, editable scope, prohibited
+scope, required work, acceptance criteria, out-of-scope items, required tests,
+Production/deploy impact, rollback, execution route, start and completion state
+transitions, and dependencies. Chat messages and past conversations are not
+required specifications. The normal start instruction should be only
+`Issue #Nを進めて`; never ask the user to relay a long prompt between ChatGPT,
+Cloud Codex, Local Codex, or a verifier.
+
+Before adding an execution-route label or creating a branch, confirm that the
+Issue is self-contained and internally consistent. ChatGPT must not add an
+execution-route label to an incomplete Issue. If information is missing,
+contradictory, or awaiting a decision, record the missing items on the Issue,
+add the appropriate stop label such as `codex:blocked`, and stop before branch
+creation. Do not expand scope by consulting chat history or restricted files.
+
+Record start information, correction requests, test evidence for the exact
+head SHA, re-verification, unresolved items, and handoff in the Issue or PR.
+Cloud and Local workers and verifiers must complete their handoffs on GitHub;
+the user is not a message relay between Codex environments.
 
 The repository is public. Cloud work may use only public code, public
 information, published documents, fictional data, or irreversibly anonymized
@@ -317,7 +345,8 @@ generalized reason. Do not expand scope to inspect restricted material.
 
 Use this flow unless an Issue explicitly requires a stricter one:
 
-1. Select one eligible Open Issue.
+1. Select one eligible, self-contained Open Issue. If it is incomplete, record
+   the missing information and stop before creating a branch.
 2. Add `codex:in-progress` and create a dedicated branch from the latest default
    branch. Prefer `codex/issue-<number>-<slug>`.
 3. Implement only the Issue scope and run the required checks.

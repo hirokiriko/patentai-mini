@@ -1,6 +1,15 @@
 # Codex Automation Runbook
 
-この文書は、`hirokiriko/patentai-mini`におけるCloud Issue WorkerとCloud PR Verifierの運用手順の正本です。GitHub Issueをタスク、受入条件、進捗、引継ぎの正本とし、`ops/decisions.md`は恒久的な設計判断の正本として扱います。
+この文書は、`hirokiriko/patentai-mini`におけるCloud Issue WorkerとCloud PR Verifierの運用手順の正本です。各実装Issue本文をタスク、必須仕様、受入条件の唯一の正本とし、Issue／PRを進捗、検証、再検証、引継ぎの正本とします。
+
+## 共通原則
+
+- 各実装Issue本文を、それだけで担当Codexが開始からPR作成まで完遂できる自己完結した唯一の正式指示にします。公開GitHubへのリンクは補足・証拠に限り、必須指示の代わりにしません。
+- チャットや過去会話を必須仕様の保存先にしません。開始指示は原則「Issue #Nを進めて」だけとし、ユーザーに長文promptの中継を要求しません。
+- 不足、矛盾、判断待ちはIssue／PRへ記録して停止ラベルを付けます。禁止範囲を開いたり、チャット履歴で補完したりしません。
+- Cloud Worker、Local Codex、Verifier間の開始記録、修正要求、検証、再検証、未解決事項、引継ぎはGitHub上で完結させます。
+- ChatGPTは不完全なIssueへ`codex:cloud-ready`または`codex:local-only`を付けません。Workerも実行経路ラベルを自己完結性の証明として扱いません。
+- 同一head SHAでchecks、reviews、labels、関連Issueの状態に変化がなければ、同じ検証と同じコメントを反復しません。
 
 ## 情報管理
 
@@ -74,6 +83,22 @@ Open Issueに`codex:automation-pause`が1件でもある場合は全処理を停
 
 優先順位はP0、P1、P2、P3、優先度なしの順です。同順位では作成日時が古いIssueを優先し、1回に1件だけ処理します。
 
+### 自己完結性確認
+
+`codex:in-progress`の付与とbranch作成より前に、Issue本文だけで次を確認します。
+
+- 背景・目的
+- 正本と開始時確認
+- 編集可能範囲と閲覧禁止範囲
+- 実施内容、受入条件、対象外
+- 必須テスト
+- Production／deploy影響とrollback
+- データ区分とCloud／Local実行経路
+- 開始・完了・停止時の状態遷移
+- 関連Issue／PRと依存関係
+
+不足、矛盾、判断待ちがある場合は`codex:in-progress`を付けず、branchも作成しません。公開可能な不足項目だけをIssueへ1回コメントし、`codex:blocked`を付けて停止します。同じIssue本文とlabelsのまま同じ不足コメントを反復しません。作業開始後に停止条件が判明した場合は`codex:in-progress`を外し、`codex:blocked`を付け、一般化した理由と再開条件をIssueへ記録します。
+
 ### 重複着手防止
 
 着手前に次を確認します。
@@ -113,33 +138,67 @@ Issueと`AGENTS.md`指定のテストを実行し、実行不能な確認は成�
 - DB schema／migration影響
 - Azure resource／secret／環境変数変更の有無
 - rollback方法
+- 現在head SHAに対する検証記録
+- 未解決事項、次の担当、再開条件のGitHub上の引継ぎ
 - 残存リスク
 
-PR作成後に`codex:needs-review`を付け、Issueの`codex:in-progress`を外します。Worker自身はマージしません。
+PR作成後に`codex:needs-review`を付け、Issueの`codex:in-progress`を外します。修正担当は修正後のexact head SHAとテスト結果をPRへ記録し、`codex:fix-required`を外して`codex:needs-review`へ戻します。Workerおよび修正担当自身はマージしません。
 
 ## Cloud PR Verifier
 
-### 対象選定
+### 内容取得前のmode gate
 
-Open Issueに`codex:automation-pause`が1件でもあれば全処理を停止します。対象は`codex:needs-review`、`codex:fix-required`、`codex:local-verified`のいずれかが付いたOpen PRから1件だけ選びます。
+Open Issueに`codex:automation-pause`が1件でもあれば全処理を停止します。初期候補は`codex:needs-review`、`codex:fix-required`、`codex:local-verified`のいずれかが付いたOpen PRです。
 
-### 検証
+候補ごとに、PR本文、Issue本文、コメント、review本文、diff、patch、変更ファイル内容、Actions log／artifactを取得する前に、次のmetadataだけを取得します。
 
-次を確認します。
+- PRのnumber、state、base、head SHA、labels
+- GitHubのnative linkで関連付けられたIssueのnumber、state、labels
 
-- 関連Issueと受入条件
-- 最新head SHAと差分
+PRまたはいずれかの関連Issueに`codex:blocked`があれば候補から除外します。関連Issueをmetadataで一意に確認できない場合は`METADATA_LINK_REQUIRED`とし、内容を取得せず、`codex:needs-review`と`codex:fix-required`を外して`codex:blocked`を付けます。遷移後のmetadataでVerifier記録を保存し、GitHub上の明示的な関連付けを求める一般化コメントを1回だけ残して停止します。PRまたはいずれかの関連Issueに`codex:local-only`または`data:confidential`があれば`STANDARD_FULL_REVIEW`へ進みません。
+
+Local-only／機密PRは、PRに`codex:local-verified`があり、現在head SHAに直接紐づく公開可能なLocal検証記録が`success`の場合だけ`LOCAL_METADATA_ONLY`とします。有効なLocal検証記録は、repositoryで認可されたLocal verifierが作成し、metadata APIだけでrecord id、issuer、head SHA、resultを確認できる専用GitHub Checkまたはcommit status（例: `codex/local-verification`）です。このcontextの`success`は、exact headに対する受入条件、差分、必須テスト、情報管理、merge conflict、未解決review threadなしをLocalで確認済みであることを意味します。通常のPR／Issueコメントを走査して検証記録を探しません。任意のコメント本文を取得しないと特定できない記録は無効です。
+
+labelまたは有効なLocal検証記録がない、検証が失敗している、あるいは記録のSHAが現在headと一致しない場合は`LOCAL_REVERIFY_REQUIRED`とします。本文、コメント、review本文、diff、patch、変更ファイル内容、Actions log／artifactを開かず、`codex:needs-review`、`codex:fix-required`、古い`codex:local-verified`を外し、`codex:blocked`を付けます。遷移後のmetadataでVerifier記録を保存し、一般化したLocal再検証要求を1回だけ記録して停止します。Local側は現在headの`success`記録を作成した後だけ`codex:blocked`と`codex:fix-required`を外して`codex:local-verified`と`codex:needs-review`を付け、再検証へ戻します。
+
+`LOCAL_METADATA_ONLY`では、停止labels、base、head SHA、mergeability、checks／statusesの状態、Local検証記録のhead一致だけを確認し、内容を取得しません。受入条件、差分、情報管理、review threadの内容確認はLocal検証記録へ委譲します。Local-only／機密labelがなく、関連Issueをmetadataで確認できるPRだけを`STANDARD_FULL_REVIEW`へ進めます。
+
+### state fingerprintと重複防止
+
+1件を選ぶ前に、候補ごとに次を安定した順序で正規化し、state fingerprintを作成します。
+
+- head SHA
+- checks／statusesのname、status、conclusion。ただしVerifier自身の`codex/verifier`と、別項目で扱う`codex/local-verification`は除く
+- `STANDARD_FULL_REVIEW`ではreviewのid、state、submittedAt、updatedAtと、review threadのid、isResolved、comment count、last comment id、last comment updatedAt
+- PR labels
+- 関連Issueのnumber、state、labels、updatedAt
+- Local検証記録がある場合はrecord id、head SHA、result
+
+`LOCAL_METADATA_ONLY`ではreview／reviewThreadsをqueryせず、Local検証記録のresultを使用します。直近のVerifier記録とhead SHAおよびstate fingerprintが同じPRは候補から除外し、コメントもlabel操作も行わず次の候補へ進みます。`codex:fix-required`付きPRも、head SHA、checks、reviews、labels、または関連Issueのいずれかが変化した場合だけ再検証します。除外後に残った候補から、優先順位に従って1回に1件だけ処理します。
+
+Verifier記録は、内容を含まない専用`codex/verifier` GitHub Check／commit status等のmetadataとしてexact head SHA、mode、state fingerprint、resultを保持します。`codex/verifier`はfingerprintの入力から常に除外します。label遷移を行った場合は遷移後の最終metadataからfingerprintを再計算して保存し、Verifier自身のrecord更新やlabel変更を次回の新しい状態と誤認しないようにします。
+
+### STANDARD_FULL_REVIEW
+
+通常PRでは次を確認します。
+
+- 関連Issue本文の自己完結性と受入条件
+- 最新head SHA、差分、許可範囲
 - CIとchecks。pendingは成功扱いしない
 - 秘密情報、機密データ、個人パスの混入
 - merge conflict
-- 未解決review thread
+- reviewと未解決review thread
 - Production／deploy、DB、migration、環境変数、secret、Azure resourceへの影響
 
-NGの場合は具体的なPRコメントを残します。安全に修正できる範囲は同branchへ最小修正できますが、Verifierが修正commitを追加した実行ではマージしません。
+checksがpendingの場合は`WAITING_CHECKS`として`codex:needs-review`を維持し、同じfingerprintで同じ待機コメントを反復しません。NGの場合は具体的なPRコメントと必要なreview threadを1回だけ残し、`codex:needs-review`を外して`codex:fix-required`を付け、遷移後のfingerprintを`FIX_REQUIRED`として記録します。
+
+修正担当は修正、必要なthread返信、exact head SHAの検証記録をGitHubへ残し、`codex:fix-required`を外して`codex:needs-review`へ戻します。Verifierが安全に修正できる範囲へ最小commitを追加した場合も、新headを`codex:needs-review`へ戻し、その実行ではマージしません。対応を確認したreview threadは返信後にresolveし、未解決事項はIssue／PR上で次の担当と再開条件を引き継ぎます。
 
 ### Merge条件
 
-OKの場合はmerge直前に`codex:no-auto-merge`、`codex:automation-pause`、`codex:blocked`がないことを再確認します。条件成立時のみexpected head SHAを指定してSquash Mergeし、関連IssueをCloseします。`codex:no-auto-merge`付きPRは検証結果だけを残してマージしません。
+OKの場合はmerge直前にmetadataを再取得し、同じ正規化規則でstate fingerprintを再計算して、検証済みfingerprintと完全一致することを確認します。さらにexpected head SHA、全必須checksのsuccess、merge conflictなし、有効な関連Issue、任意のOpen Issueに`codex:automation-pause`なし、PRと関連Issueに`codex:no-auto-merge`／`codex:blocked`／`codex:fix-required`なしを確認します。
+
+`STANDARD_FULL_REVIEW`では`codex:needs-review`があり、未解決review threadがないことをCloudで確認します。`LOCAL_METADATA_ONLY`ではreview／reviewThreadsをqueryせず、`codex:needs-review`と`codex:local-verified`があり、認可された現在headのLocal検証記録が内容検証と未解決review threadなしを証明することだけをmetadataで確認します。条件成立時のみexpected head SHAを指定してSquash Mergeし、関連IssueをCloseします。`codex:no-auto-merge`付きPRは検証結果だけを残してマージしません。
 
 ## 報告
 

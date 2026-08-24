@@ -1,5 +1,5 @@
 name: 開発タスク
-description: publicリポジトリで扱える開発タスクを登録します
+description: publicリポジトリで扱える自己完結した開発タスクを登録します
 title: "[Task] "
 labels: []
 body:
@@ -7,6 +7,8 @@ body:
     attributes:
       value: |
         このリポジトリはpublicです。未公開発明、顧客情報、実案件資料、秘密情報、認証付きURL、個人パスは記載しないでください。
+
+        このIssue本文だけで担当Codexが開始からPR作成まで完遂できる情報を記載してください。チャットや過去会話を必須仕様の保存先にせず、ユーザーに長文promptの中継を要求しません。不足・矛盾・判断待ちはIssue／PRへ記録し、停止ラベルを付けてください。
 
   - type: textarea
     id: purpose
@@ -17,10 +19,34 @@ body:
       required: true
 
   - type: textarea
-    id: scope
+    id: source_of_truth
     attributes:
-      label: 対象範囲
-      description: 今回変更する範囲を具体的に記載してください。
+      label: 正本と開始時確認
+      description: このIssue本文を唯一の正式指示とし、開始時に確認するrepository、default branch、baseline、関連する公開GitHub情報を記載してください。リンクは補足・証拠に限り、必須指示をリンク先、チャット、過去会話への参照だけで済ませないでください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: editable_scope
+    attributes:
+      label: 編集可能範囲
+      description: 変更を許可するファイル、ディレクトリ、設定、外部状態を具体的に記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: restricted_scope
+    attributes:
+      label: 閲覧禁止範囲
+      description: 閲覧、検索、引用、編集を禁止するファイル、データ、URL、外部状態を記載してください。ない場合も「なし」と明記してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 実施内容
+      description: 担当Codexが追加判断なしで実装できる粒度で、必要な変更と実行手順を記載してください。
     validations:
       required: true
 
@@ -44,7 +70,7 @@ body:
     id: required_tests
     attributes:
       label: 必須テスト
-      description: 実行すべきlint、type-check、build、unit、integration、E2E等を記載してください。
+      description: 実行すべきlint、type-check、build、unit、integration、E2E、構文確認、実画面確認等を記載してください。
     validations:
       required: true
 
@@ -52,7 +78,7 @@ body:
     id: production_impact
     attributes:
       label: Production／deploy影響
-      description: 本番環境やdeployへの影響を記載してください。影響なしの場合も明記してください。
+      description: 本番環境やdeployへの影響と、実操作を許可するかを記載してください。影響なしの場合も明記してください。
     validations:
       required: true
 
@@ -60,7 +86,7 @@ body:
     id: rollback
     attributes:
       label: rollback方針
-      description: 問題発生時の戻し方を記載してください。
+      description: 問題発生時の戻し方と、復旧に必要な判断を記載してください。
     validations:
       required: true
 
@@ -77,7 +103,7 @@ body:
   - type: dropdown
     id: execution_route
     attributes:
-      label: 実行経路
+      label: Cloud／Local実行経路
       options:
         - Cloud
         - Local
@@ -85,9 +111,17 @@ body:
       required: true
 
   - type: textarea
-    id: related
+    id: state_transition
     attributes:
-      label: 関連Issue／PR
-      description: 関連するIssue／PR番号を記載してください。ない場合は「なし」と記載してください。
+      label: 開始・完了時の状態遷移
+      description: 開始時、PR作成時、検証NG／停止時、完了時に付与・解除するラベルと、Issue／PRへ残す記録を記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: related_dependencies
+    attributes:
+      label: 関連Issue／PR・依存関係
+      description: 親子・関連Issue／PR、先行条件、外部判断や環境依存を記載してください。ない場合は「なし」と記載してください。
     validations:
       required: true

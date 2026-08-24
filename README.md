@@ -32,11 +32,11 @@
 
 ## 開発運用
 
-開発タスク、受入条件、進捗、引継ぎは GitHub Issue を正本とします。実装は最新の default branch と関連 PR、CI を確認して進めてください。
+開発タスクは GitHub Issue を入口とし、各実装Issue本文をタスク、必須仕様、受入条件の唯一の正本とします。Issue／PRは進捗、検証、再検証、引継ぎの正本です。Issue本文は、それだけで担当Codexが開始からPR作成まで完遂できる自己完結した正式指示にします。公開GitHubへのリンクは補足・証拠に限り、必須指示の代わりにしません。開始指示は原則「Issue #Nを進めて」だけでよく、チャットや過去会話を必須仕様にしたり、ユーザーに長文promptの中継を求めたりしません。
+
+不足・矛盾・判断待ちはIssue／PRへ記録して停止ラベルを付け、Cloud／Local／Verifier間の修正要求、検証、再検証、引継ぎもGitHub上で完結させます。現行状態は関連Issue／PR、CI、最新のdefault branchで確認してください。
 
 - AI agent向け技術・安全ルール: `AGENTS.md`
 - Cloud Codex運用手順: `ops/codex-automation.md`
-- 恒久的な設計判断: `ops/decisions.md`
-- 運用手順: Runbook
 
 Issueにない機能や将来拡張は同時に追加せず、現在の受入条件を満たす最小変更に限定します。
