@@ -52,6 +52,16 @@
 4. ZIP全体をfilesystemへ展開しない。
 5. entryごとに原path、正規化path、非圧縮size、処理結果を記録する。
 
+処理開始前に、実行環境ごとに0より大きいpackage全体のresource上限を設定する。
+少なくともZIP sourceの総byte数、中央directoryのbyte数、entry数、累積圧縮
+payload byte数、累積非圧縮byte数、およびentry単位の圧縮／非圧縮byte数を個別に
+制限する。中央directoryとentry headerの申告値は事前拒否に使うだけで信用せず、
+中央directoryのparse中、ZIP sourceの受信中、および各entryのstream読取中に実際の
+entry数とbyte数をoverflow-safeなcounterで加算する。申告値または実測値のどちらかが
+上限を超えた時点で、それ以上の割当て、読取、展開を停止し、packageを`取込失敗`と
+する。選択対象entryの合計が上限内でも、ZIP全体のentry数または中央directoryが上限を
+超えるpackageは受け入れない。
+
 次のentry名は拒否し、`取込失敗`とする。
 
 - 絶対path、drive letter、UNC path
@@ -721,6 +731,7 @@ roll-upは決定的に次のとおりとする。
 | case | 状態 | 必須動作 |
 |---|---|---|
 | ZIP破損、中央directory不正 | `取込失敗` | package処理を停止し、展開しない |
+| ZIP全体またはentry単位のresource上限超過 | `取込失敗` | 申告値と実測値を別々に検査し、超過時点でpackage処理を停止 |
 | path traversal、絶対path、重複正規化path | `取込失敗` | entryを拒否しsecurity errorを記録してpackage処理を停止 |
 | XML not well-formed、不正UTF-8 | `取込失敗` | 当該documentを確定せず、安全に次entryへ継続 |
 | 外部実体・外部network参照 | `取込失敗` | 解決・fetchしない |
@@ -762,6 +773,8 @@ roll-upは決定的に次のとおりとする。
 fixture、test codeは作成しない。
 
 - ZIPを全展開せずentry単位で処理する。
+- ZIP source、中央directory、entry数、累積圧縮／非圧縮byte数、entry単位の
+  圧縮／非圧縮byte数に上限を設け、申告値とstream実測値の両方で強制する。
 - path traversal、重複path、外部実体、外部network解決を拒否する。
 - A1/A5/P1/P5/B1/B2をroot、namespace、path、kind、番号、schemaの複合条件で
   識別する。
@@ -785,7 +798,8 @@ fixture、test codeは作成しない。
 - 未知caseを`確認候補`、`未対応種別`、`取込失敗`へ安全に分類する。
 - fixtureは架空dataまたは公開可能dataのみを使い、A1/A5/P1/P5/B1/B2、
   nested ST.26、path traversal、外部entity、欠損、kind矛盾、mixed content、
-  CSV可変長/固定長を種別別にtestする。標準entityでescapeされたST.25型
+  ZIPのentry数／中央directory／累積byte上限、CSV可変長/固定長を種別別にtestする。
+  標準entityでescapeされたST.25型
   数値tag列を一度だけdecodeし、plain textとして保持するcaseも含める。
 - 2026-155号の観察件数を用いる回帰検証はLocal環境でのみ実施し、固定の
   Production期待値にしない。
