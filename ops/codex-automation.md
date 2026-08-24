@@ -6,6 +6,7 @@
 
 - 各実装Issue本文を、それだけで担当Codexが開始からPR作成まで完遂できる自己完結した唯一の正式指示にします。公開GitHubへのリンクは補足・証拠に限り、必須指示の代わりにしません。
 - チャットや過去会話を必須仕様の保存先にしません。開始指示は原則「Issue #Nを進めて」だけとし、ユーザーに長文promptの中継を要求しません。
+- Local Codexの開始メッセージには、public GitHubへ保存すべきでない短いLocal専用実行補足を付加して構いません。これは非正本の実行時ヒントであり、目的、仕様、対象範囲、受入条件、優先順位、設計判断、必須テストを変更・補完しません。個人パス、顧客情報、秘密情報、実案件内容をGitHubへ転記せず、Cloud CodexはLocal専用実行補足へ依存しません。
 - 不足、矛盾、判断待ちはIssue／PRへ記録して停止ラベルを付けます。禁止範囲を開いたり、チャット履歴で補完したりしません。
 - Cloud Worker、Local Codex、Verifier間の開始記録、修正要求、検証、再検証、未解決事項、引継ぎはGitHub上で完結させます。
 - ChatGPTは不完全なIssueへ`codex:cloud-ready`または`codex:local-only`を付けません。Workerも実行経路ラベルを自己完結性の証明として扱いません。
@@ -207,5 +208,25 @@ OKの場合はmerge直前にmetadataを再取得し、同じ正規化規則でst
 `STANDARD_FULL_REVIEW`では`codex:needs-review`があり、未解決review threadがないことをCloudで確認します。`LOCAL_METADATA_ONLY`ではreview／reviewThreadsをqueryせず、`codex:needs-review`と`codex:local-verified`があり、現在headの公開可能なLocal検証記録が内容検証と未解決review threadなしを証明することだけを確認します。条件成立時のみexpected head SHAを指定してSquash Mergeし、関連IssueをCloseします。`codex:no-auto-merge`付きPRは検証結果だけを残してマージしません。
 
 ## 報告
+
+進捗・完了報告では、GitHubへ記録済みの詳細を長文で繰り返さず、ユーザーが次に何をすべきかと作業の区切りを明示します。
+
+### 🚨 Codexへの指示
+
+- 次に必要な指示がある場合は、そのまま送れる文章をコードブロックで示します。
+- Issue／PRが自己完結している場合は、原則`Issue #Nを進めて`または`PR #Nを進めて`だけを提示します。
+- 指示がない場合も`現在、Codexへの指示はありません`と明示します。
+- 長文promptは、public GitHubへ保存できない短いLocal専用実行補足が必要な場合を除いて再掲しません。
+
+### 作業の区切り
+
+次のいずれか1つを独立見出しで明示します。
+
+- `地続きで続行`: 同じIssue／PR／branchで続けるべき作業がある
+- `ここで一時休憩OK`: 自動処理待ち等で人の継続操作が不要
+- `ここでセッション切替OK`: 引継ぎがGitHubへ記録され、別セッションから再開可能
+- `作業完了`: 対象Issue／親Issueの完了条件を満たした
+
+Localでの優先作業に区切りがついた場合、またはユーザーが現在タスクを後回しにすると明示した場合に限り、Open Issueから最大1件を`別タスク（任意）`として提案して構いません。地続きの必須対応と混同しません。
 
 テスト未実施、実画面未確認、Production未確認は明示します。成功していない確認を成功扱いしません。
