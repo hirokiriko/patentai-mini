@@ -5,6 +5,7 @@ const PUBLIC_MESSAGES: Record<KohoZipErrorCode, string> = {
   source_invalid: "ZIP source is invalid or unavailable",
   source_too_large: "ZIP source exceeds the configured limit",
   invalid_zip: "ZIP metadata or entry data is invalid",
+  ambiguous_eocd: "ZIP contains multiple valid end records",
   zip64_value_unsafe: "ZIP64 metadata contains an unsafe integer value",
   multi_disk_unsupported: "Multi-disk ZIP archives are not supported",
   central_directory_too_large:
@@ -41,11 +42,23 @@ export class KohoZipError extends Error {
 }
 
 export function asKohoZipError(error: unknown): KohoZipError {
-  if (error instanceof KohoZipError) {
-    return error;
+  try {
+    if (error instanceof KohoZipError) {
+      const code: unknown = error.code;
+      return isKohoZipErrorCode(code)
+        ? new KohoZipError(code)
+        : new KohoZipError("invalid_zip");
+    }
+  } catch {
+    return new KohoZipError("invalid_zip");
   }
 
-  const message = error instanceof Error ? error.message : "";
+  let message = "";
+  try {
+    message = error instanceof Error ? error.message : "";
+  } catch {
+    return new KohoZipError("invalid_zip");
+  }
   if (
     message.startsWith("absolute path:") ||
     message.startsWith("invalid relative path:") ||
@@ -71,4 +84,11 @@ export function asKohoZipError(error: unknown): KohoZipError {
   }
 
   return new KohoZipError("invalid_zip");
+}
+
+function isKohoZipErrorCode(value: unknown): value is KohoZipErrorCode {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(PUBLIC_MESSAGES, value)
+  );
 }

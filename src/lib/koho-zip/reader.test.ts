@@ -2,7 +2,8 @@ import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { ZipFile } from "yauzl";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildZip,
@@ -34,6 +35,7 @@ afterEach(async () => {
   const directories = [...temporaryDirectories];
   openReaders.clear();
   temporaryDirectories.clear();
+  vi.restoreAllMocks();
   await Promise.allSettled(readers.map((reader) => reader.close()));
   await Promise.all(
     directories.map((directory) =>
@@ -79,6 +81,111 @@ function expectBytes(actual: Uint8Array, expected: string): void {
 }
 
 describe("openKohoZip normal reading", () => {
+  it("open中はbounded raw tailだけを許可し選択entry streamはread時に開く", async () => {
+    const fixture = buildZip({
+      entries: [
+        {
+          fileName: "FICTIONAL/SELECTED-PAYLOAD.bin",
+          data: Buffer.alloc(8_192, 0x53),
+        },
+        {
+          fileName: "FICTIONAL/UNSELECTED-PAYLOAD.bin",
+          data: Buffer.alloc(8_192, 0x55),
+        },
+      ],
+    });
+    const openReadStream = vi.spyOn(
+      ZipFile.prototype,
+      "openReadStreamPromise",
+    );
+    const reader = await openBuffer(fixture.bytes);
+
+    expect(reader.summary.eocdTailBytesRead).toBe(fixture.bytes.byteLength);
+    expect(reader.summary.metadataBytesRead).toBe(fixture.bytes.byteLength);
+    expect(reader.summary.targetedMetadataBytesRead).toBe(
+      fixture.centralDirectorySize,
+    );
+    expect(openReadStream).not.toHaveBeenCalled();
+
+    expect(await reader.readEntryBytes(0)).toEqual(
+      Buffer.alloc(8_192, 0x53),
+    );
+    expect(openReadStream).toHaveBeenCalledTimes(1);
+    expect(openReadStream.mock.calls[0][0].fileName).toBe(
+      "FICTIONAL/SELECTED-PAYLOAD.bin",
+    );
+    expect(reader.summary.metadataBytesRead).toBe(fixture.bytes.byteLength);
+    expect(reader.summary.targetedMetadataBytesRead).toBe(
+      fixture.centralDirectorySize,
+    );
+  });
+
+  it("EOCD raw tail scanを65,557 bytesに制限しyauzlではsourceを再走査しない", async () => {
+    const fixture = buildZip({
+      entries: [
+        {
+          fileName: "FICTIONAL/MAX-COMMENT.bin",
+          data: Buffer.alloc(256, 0x46),
+        },
+      ],
+      comment: Buffer.alloc(0xffff, 0x43),
+    });
+    const expectedMetadataBytes =
+      65_557 + fixture.centralDirectorySize;
+
+    await expectZipError(
+      openBuffer(
+        fixture.bytes,
+        limits({
+          maxCentralDirectoryBytes: expectedMetadataBytes - 1,
+        }),
+      ),
+      "central_directory_too_large",
+    );
+
+    const reader = await openBuffer(
+      fixture.bytes,
+      limits({
+        maxCentralDirectoryBytes: expectedMetadataBytes,
+      }),
+    );
+
+    expect(reader.summary.eocdTailBytesRead).toBe(65_557);
+    expect(reader.summary.metadataBytesRead).toBe(expectedMetadataBytes);
+    expect(reader.summary.targetedMetadataBytesRead).toBe(
+      fixture.centralDirectorySize,
+    );
+  });
+
+  it("ZIP64の最大commentでもlocatorをtargeted readしentryを展開しない", async () => {
+    const fixture = buildZip({
+      archiveZip64: true,
+      entries: [
+        {
+          fileName: "FICTIONAL/ZIP64-MAX-COMMENT.bin",
+          data: Buffer.alloc(256, 0x5a),
+        },
+      ],
+      comment: Buffer.alloc(0xffff, 0x43),
+    });
+    const expectedTargetedMetadataBytes =
+      fixture.centralDirectorySize + 56 + 20;
+    const expectedMetadataBytes =
+      65_557 + expectedTargetedMetadataBytes;
+
+    const reader = await openBuffer(
+      fixture.bytes,
+      limits({ maxCentralDirectoryBytes: expectedMetadataBytes }),
+    );
+
+    expect(reader.summary).toMatchObject({
+      zip64: true,
+      eocdTailBytesRead: 65_557,
+      metadataBytesRead: expectedMetadataBytes,
+      targetedMetadataBytesRead: expectedTargetedMetadataBytes,
+    });
+  });
+
   it("storedとdeflate entryを列挙し、選択したbyte列を返す", async () => {
     const storedName = Buffer.from("FICTIONAL/STORED.txt", "utf8");
     const fixture = buildZip({
@@ -111,6 +218,7 @@ describe("openKohoZip normal reading", () => {
       sourceName: "fictional-fixture.zip",
       sourceSize: fixture.bytes.byteLength,
       commentLength: Buffer.byteLength("fictional-package"),
+      eocdTailBytesRead: fixture.bytes.byteLength,
       declaredEntryCount: 2,
       observedEntryCount: 2,
       totalDeclaredCompressedBytes:

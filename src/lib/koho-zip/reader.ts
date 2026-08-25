@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import {
   Entry,
   RandomAccessReader,
+  type LocalFileHeader,
   type ZipFile,
   fromRandomAccessReaderPromise,
 } from "yauzl";
@@ -13,6 +14,7 @@ import { assertSafeRawEntryPath, inspectEntryPath } from "./path";
 import {
   preflightKohoZip,
   type StrongEncryptionEntryObservation,
+  type YauzlOpeningRecord,
 } from "./preflight";
 import { UniqueByteRangeCounter } from "./ranges";
 import { openInternalSource, type InternalZipSource } from "./source";
@@ -29,10 +31,13 @@ import type {
 
 class TrackingRandomAccessReader extends RandomAccessReader {
   private metadataPhase = true;
+  private openingTailServed = false;
 
   constructor(
     private readonly source: InternalZipSource,
     private readonly metadataRanges: UniqueByteRangeCounter,
+    private readonly targetedMetadataRanges: UniqueByteRangeCounter,
+    private readonly openingRecord: YauzlOpeningRecord,
     private readonly strongEncryptionEntries: readonly StrongEncryptionEntryObservation[],
   ) {
     super();
@@ -53,8 +58,22 @@ class TrackingRandomAccessReader extends RandomAccessReader {
       ) {
         throw new KohoZipError("invalid_zip");
       }
+      if (this.metadataPhase && !this.openingTailServed) {
+        const expectedStart =
+          this.source.size - Math.min(this.source.size, 20 + 22 + 0xffff);
+        if (start !== expectedStart || end !== this.source.size) {
+          throw new KohoZipError("invalid_zip");
+        }
+        this.openingTailServed = true;
+        return createSyntheticYauzlOpeningTail(
+          start,
+          end,
+          this.openingRecord,
+        );
+      }
       if (this.metadataPhase) {
         this.metadataRanges.add(start, end);
+        this.targetedMetadataRanges.add(start, end);
       }
       const sourceStream = this.source.createReadStream(start, end);
       if (!this.metadataPhase || this.strongEncryptionEntries.length === 0) {
@@ -122,14 +141,20 @@ export async function openKohoZip(
     const metadataRanges = new UniqueByteRangeCounter(
       limits.maxCentralDirectoryBytes,
     );
+    const targetedMetadataRanges = new UniqueByteRangeCounter(
+      limits.maxCentralDirectoryBytes,
+    );
     const preflight = await preflightKohoZip(
       source,
       limits,
       metadataRanges,
+      targetedMetadataRanges,
     );
     const randomAccessReader = new TrackingRandomAccessReader(
       source,
       metadataRanges,
+      targetedMetadataRanges,
+      preflight.yauzlOpeningRecord,
       preflight.strongEncryptionEntries,
     );
     zipFile = await fromRandomAccessReaderPromise(
@@ -179,9 +204,11 @@ export async function openKohoZip(
       sourceSize: source.size,
       zip64: preflight.zip64,
       commentLength: preflight.commentLength,
+      eocdTailBytesRead: preflight.eocdTailBytesRead,
       centralDirectoryOffset: preflight.centralDirectoryOffset,
       declaredCentralDirectorySize: preflight.centralDirectorySize,
       metadataBytesRead: metadataRanges.total,
+      targetedMetadataBytesRead: targetedMetadataRanges.total,
       declaredEntryCount: preflight.declaredEntryCount,
       observedEntryCount: enumerated.observedEntryCount,
       totalDeclaredCompressedBytes: enumerated.totalCompressedBytes,
@@ -207,6 +234,48 @@ export async function openKohoZip(
     if (source !== null) await source.close().catch(() => undefined);
     throw asKohoZipError(error);
   }
+}
+
+function createSyntheticYauzlOpeningTail(
+  start: number,
+  end: number,
+  openingRecord: YauzlOpeningRecord,
+): Readable {
+  const output = Buffer.alloc(end - start);
+  copyOpeningRecordBytes(
+    output,
+    start,
+    end,
+    openingRecord.eocdOffset,
+    openingRecord.eocdBytes,
+  );
+  if (
+    openingRecord.locatorOffset !== null &&
+    openingRecord.locatorBytes !== null
+  ) {
+    copyOpeningRecordBytes(
+      output,
+      start,
+      end,
+      openingRecord.locatorOffset,
+      openingRecord.locatorBytes,
+    );
+  }
+  return Readable.from([output]);
+}
+
+function copyOpeningRecordBytes(
+  output: Buffer,
+  rangeStart: number,
+  rangeEnd: number,
+  recordOffset: number,
+  recordBytes: Buffer,
+): void {
+  const recordEnd = recordOffset + recordBytes.byteLength;
+  if (recordOffset < rangeStart || recordEnd > rangeEnd) {
+    throw new KohoZipError("invalid_zip");
+  }
+  recordBytes.copy(output, recordOffset - rangeStart);
 }
 
 async function enumerateEntries(
@@ -483,6 +552,18 @@ class KohoZipReaderImpl implements KohoZipReader {
     ) {
       throw new KohoZipError("invalid_zip");
     }
+    if ((entry.generalPurposeBitFlag & 0x08) === 0) {
+      if (header.crc32 !== entry.crc32) {
+        throw new KohoZipError("invalid_zip");
+      }
+      const localSizes = readLocalHeaderSizes(header);
+      if (
+        localSizes.compressedSize !== entry.compressedSize ||
+        localSizes.uncompressedSize !== entry.uncompressedSize
+      ) {
+        throw new KohoZipError("entry_size_mismatch");
+      }
+    }
 
     let nextBoundary = this.centralDirectoryOffset;
     for (const candidate of this.yauzlEntries.values()) {
@@ -499,6 +580,76 @@ class KohoZipReaderImpl implements KohoZipReader {
       throw new KohoZipError("invalid_zip");
     }
   }
+}
+
+function readLocalHeaderSizes(header: LocalFileHeader): {
+  readonly compressedSize: number;
+  readonly uncompressedSize: number;
+} {
+  const uint32Max = 0xffffffff;
+  if (
+    header.compressedSize !== uint32Max &&
+    header.uncompressedSize !== uint32Max
+  ) {
+    return {
+      compressedSize: header.compressedSize,
+      uncompressedSize: header.uncompressedSize,
+    };
+  }
+
+  const zip64Extra = findLocalZip64Extra(header.extraField);
+  if (zip64Extra === null) {
+    return {
+      compressedSize: header.compressedSize,
+      uncompressedSize: header.uncompressedSize,
+    };
+  }
+
+  let cursor = 0;
+  const takeUInt64 = (): number => {
+    if (cursor + 8 > zip64Extra.byteLength) {
+      throw new KohoZipError("invalid_zip");
+    }
+    const value = zip64Extra.readBigUInt64LE(cursor);
+    cursor += 8;
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new KohoZipError("zip64_value_unsafe");
+    }
+    return Number(value);
+  };
+
+  const uncompressedSize =
+    header.uncompressedSize === uint32Max
+      ? takeUInt64()
+      : header.uncompressedSize;
+  const compressedSize =
+    header.compressedSize === uint32Max
+      ? takeUInt64()
+      : header.compressedSize;
+  return { compressedSize, uncompressedSize };
+}
+
+function findLocalZip64Extra(extraFields: Buffer): Buffer | null {
+  let cursor = 0;
+  let zip64Extra: Buffer | null = null;
+  while (cursor < extraFields.byteLength) {
+    if (cursor + 4 > extraFields.byteLength) {
+      throw new KohoZipError("invalid_zip");
+    }
+    const fieldId = extraFields.readUInt16LE(cursor);
+    const fieldSize = extraFields.readUInt16LE(cursor + 2);
+    const dataStart = cursor + 4;
+    const dataEnd = dataStart + fieldSize;
+    if (dataEnd > extraFields.byteLength) {
+      throw new KohoZipError("invalid_zip");
+    }
+    if (fieldId === 0x0001) {
+      if (zip64Extra !== null) throw new KohoZipError("invalid_zip");
+      zip64Extra = extraFields.subarray(dataStart, dataEnd);
+    }
+    cursor = dataEnd;
+  }
+  return zip64Extra;
 }
 
 function validateEntryNumbers(entry: Entry, centralDirectoryOffset: number): void {
@@ -547,7 +698,6 @@ function mapReadError(
   readStartTotal: number,
   limits: KohoZipLimits,
 ): KohoZipError {
-  if (error instanceof KohoZipError) return error;
   const observedMinimum = extractTooManyObservedBytes(error);
   if (observedMinimum !== null) {
     if (
@@ -562,7 +712,12 @@ function mapReadError(
 }
 
 function extractTooManyObservedBytes(error: unknown): number | null {
-  const message = error instanceof Error ? error.message : "";
+  let message = "";
+  try {
+    message = error instanceof Error ? error.message : "";
+  } catch {
+    return null;
+  }
   const match = /too many bytes in the stream\. expected \d+\. got at least (\d+)/.exec(
     message,
   );

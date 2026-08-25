@@ -23,6 +23,7 @@ export type KohoZipErrorCode =
   | "source_invalid"
   | "source_too_large"
   | "invalid_zip"
+  | "ambiguous_eocd"
   | "zip64_value_unsafe"
   | "multi_disk_unsupported"
   | "central_directory_too_large"
@@ -83,9 +84,20 @@ export interface KohoZipSummary {
   readonly sourceSize: number;
   readonly zip64: boolean;
   readonly commentLength: number;
+  /** Raw source bytes read by the bounded EOCD tail discovery scan. */
+  readonly eocdTailBytesRead: number;
   readonly centralDirectoryOffset: number;
   readonly declaredCentralDirectorySize: number;
+  /**
+   * Unique source bytes read during open-time metadata discovery, including
+   * the EOCD tail scan. Entry reads are excluded.
+   */
   readonly metadataBytesRead: number;
+  /**
+   * Unique source bytes read specifically for ZIP64/central-directory access.
+   * This can overlap eocdTailBytesRead and excludes entry reads.
+   */
+  readonly targetedMetadataBytesRead: number;
   readonly declaredEntryCount: number;
   readonly observedEntryCount: number;
   readonly totalDeclaredCompressedBytes: number;

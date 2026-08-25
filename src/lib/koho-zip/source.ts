@@ -5,6 +5,20 @@ import { Readable } from "node:stream";
 import { KohoZipError } from "./errors";
 import type { KohoZipSource } from "./types";
 
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "buffer",
+)!.get!;
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+)!.get!;
+const TYPED_ARRAY_BYTE_OFFSET_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteOffset",
+)!.get!;
+
 export interface InternalZipSource {
   readonly type: KohoZipSource["type"];
   readonly sourceName: string | null;
@@ -90,14 +104,13 @@ class FileZipSource implements InternalZipSource {
 
 class BufferZipSource implements InternalZipSource {
   readonly type = "buffer" as const;
-  readonly size: number;
 
   constructor(
-    private readonly bytes: Uint8Array,
+    private readonly buffer: ArrayBufferLike,
+    private readonly byteOffset: number,
+    readonly size: number,
     readonly sourceName: string | null,
-  ) {
-    this.size = bytes.byteLength;
-  }
+  ) {}
 
   async read(
     target: Uint8Array,
@@ -105,13 +118,35 @@ class BufferZipSource implements InternalZipSource {
     length: number,
     position: number,
   ): Promise<number> {
-    const view = this.bytes.subarray(position, position + length);
-    target.set(view, offset);
-    return view.byteLength;
+    try {
+      const view = new Uint8Array(
+        this.buffer,
+        this.byteOffset + position,
+        length,
+      );
+      target.set(view, offset);
+      return length;
+    } catch {
+      throw new KohoZipError("source_invalid");
+    }
   }
 
   createReadStream(start: number, end: number): Readable {
-    return Readable.from([this.bytes.subarray(start, end)]);
+    try {
+      return Readable.from([
+        new Uint8Array(
+          this.buffer,
+          this.byteOffset + start,
+          end - start,
+        ),
+      ]);
+    } catch {
+      return new Readable({
+        read() {
+          this.destroy(new KohoZipError("source_invalid"));
+        },
+      });
+    }
   }
 
   async close(): Promise<void> {}
@@ -127,13 +162,19 @@ export async function openInternalSource(
 
   if (source.type === "buffer") {
     if (
-      !(source.bytes instanceof Uint8Array) ||
-      (source.sourceName !== undefined && typeof source.sourceName !== "string")
+      source.sourceName !== undefined &&
+      typeof source.sourceName !== "string"
     ) {
       throw new KohoZipError("source_invalid");
     }
-    validateSourceSize(source.bytes.byteLength, maxSourceBytes);
-    return new BufferZipSource(source.bytes, source.sourceName ?? null);
+    const snapshot = snapshotBufferView(source.bytes);
+    validateSourceSize(snapshot.byteLength, maxSourceBytes);
+    return new BufferZipSource(
+      snapshot.buffer,
+      snapshot.byteOffset,
+      snapshot.byteLength,
+      source.sourceName ?? null,
+    );
   }
 
   if (source.type !== "file" || typeof source.path !== "string") {
@@ -158,6 +199,22 @@ export async function openInternalSource(
   } catch (error) {
     await handle.close().catch(() => undefined);
     if (error instanceof KohoZipError) throw error;
+    throw new KohoZipError("source_invalid");
+  }
+}
+
+function snapshotBufferView(bytes: Uint8Array): {
+  readonly buffer: ArrayBufferLike;
+  readonly byteOffset: number;
+  readonly byteLength: number;
+} {
+  try {
+    return {
+      buffer: Reflect.apply(TYPED_ARRAY_BUFFER_GETTER, bytes, []),
+      byteOffset: Reflect.apply(TYPED_ARRAY_BYTE_OFFSET_GETTER, bytes, []),
+      byteLength: Reflect.apply(TYPED_ARRAY_BYTE_LENGTH_GETTER, bytes, []),
+    };
+  } catch {
     throw new KohoZipError("source_invalid");
   }
 }

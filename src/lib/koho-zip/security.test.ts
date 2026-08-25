@@ -115,6 +115,25 @@ describe("openKohoZip metadata and resource limits", () => {
       maxSourceBytes: fixture.bytes.byteLength,
     });
     expect(reader.summary.sourceSize).toBe(fixture.bytes.byteLength);
+
+    class StatefulByteLength extends Uint8Array {
+      reads = 0;
+
+      override get byteLength(): number {
+        this.reads += 1;
+        return this.reads === 1 ? 1 : fixture.bytes.byteLength;
+      }
+    }
+    const hostileBytes = new StatefulByteLength(fixture.bytes.byteLength);
+    hostileBytes.set(fixture.bytes);
+    await expectCode(
+      openKohoZip({
+        source: { type: "buffer", bytes: hostileBytes },
+        limits: limits({ maxSourceBytes: 1 }),
+      }),
+      "source_too_large",
+    );
+    expect(hostileBytes.reads).toBe(0);
   });
 
   it("snapshots mutable limit and source descriptors before asynchronous work", async () => {
@@ -147,6 +166,12 @@ describe("openKohoZip metadata and resource limits", () => {
   });
 
   it("enforces declared and actually-read central-directory limits", async () => {
+    const emptyFixture = buildZip({ entries: [] });
+    await expectCode(
+      openFixture(emptyFixture, { maxCentralDirectoryBytes: 21 }),
+      "central_directory_too_large",
+    );
+
     const longNameFixture = buildZip({
       entries: [{ fileName: "A".repeat(0xffff), data: "" }],
     });
@@ -160,6 +185,7 @@ describe("openKohoZip metadata and resource limits", () => {
     );
 
     const tailFixture = buildZip({
+      archiveZip64: true,
       entries: [
         {
           fileName: "FICTIONAL.bin",
@@ -167,14 +193,21 @@ describe("openKohoZip metadata and resource limits", () => {
         },
       ],
     });
+    const actualMetadataBytes = 65_557;
     await expectCode(
-      openFixture(tailFixture, { maxCentralDirectoryBytes: 65_576 }),
+      openFixture(tailFixture, {
+        maxCentralDirectoryBytes: actualMetadataBytes - 1,
+      }),
       "central_directory_too_large",
     );
     const reader = await openFixture(tailFixture, {
-      maxCentralDirectoryBytes: 65_577,
+      maxCentralDirectoryBytes: actualMetadataBytes,
     });
-    expect(reader.summary.metadataBytesRead).toBe(65_577);
+    expect(reader.summary.metadataBytesRead).toBe(actualMetadataBytes);
+    expect(reader.summary.eocdTailBytesRead).toBe(65_557);
+    expect(reader.summary.targetedMetadataBytesRead).toBe(
+      tailFixture.centralDirectorySize + 56,
+    );
   });
 
   it("counts overlapping metadata reads only once", async () => {
@@ -189,6 +222,10 @@ describe("openKohoZip metadata and resource limits", () => {
     });
 
     expect(reader.summary.metadataBytesRead).toBe(fixture.bytes.byteLength);
+    expect(reader.summary.targetedMetadataBytesRead).toBe(
+      fixture.centralDirectorySize,
+    );
+    expect(reader.summary.eocdTailBytesRead).toBe(fixture.bytes.byteLength);
     expect(reader.summary.declaredCentralDirectorySize).toBe(
       fixture.centralDirectorySize,
     );
@@ -227,7 +264,7 @@ describe("openKohoZip metadata and resource limits", () => {
     );
     await expectCode(
       openBytes(malformedSecondHeader, { maxEntries: 1 }),
-      "entry_count_limit",
+      "invalid_zip",
     );
     await expectCode(
       openBytes(underDeclared, { maxEntries: 2 }),
@@ -293,6 +330,7 @@ describe("openKohoZip metadata and resource limits", () => {
           fileName: "FICTIONAL.txt",
           data: payload,
           compressionMethod: 8,
+          localUncompressedSize: 1,
           centralUncompressedSize: 1,
         },
       ],
@@ -313,6 +351,7 @@ describe("openKohoZip metadata and resource limits", () => {
           fileName: "FICTIONAL.txt",
           data: "X",
           compressionMethod: 8,
+          localUncompressedSize: 0,
           centralUncompressedSize: 0,
         },
       ],
@@ -335,6 +374,9 @@ describe("openKohoZip malformed and ZIP64 metadata", () => {
     });
     const reader = await openFixture(fixture);
     expect(reader.summary.zip64).toBe(true);
+    expect(reader.summary.eocdTailBytesRead).toBe(
+      fixture.bytes.byteLength,
+    );
 
     const unsafe = cloneFixtureBytes(fixture);
     expect(fixture.zip64EocdOffset).not.toBeNull();
@@ -344,6 +386,24 @@ describe("openKohoZip malformed and ZIP64 metadata", () => {
         ZIP_FIXTURE_FIELD_OFFSETS.zip64Eocd.entryCount,
     );
     await expectCode(openBytes(unsafe), "zip64_value_unsafe");
+  });
+
+  it("does not decode a ZIP64 entry until readEntryBytes is called", async () => {
+    const fixture = buildZip({
+      archiveZip64: true,
+      entries: [
+        {
+          fileName: "FICTIONAL/ZIP64-DECODE.xml",
+          data: "fictional-zip64-body",
+          compressionMethod: 8,
+          compressedBytes: Buffer.from([0xff]),
+        },
+      ],
+    });
+
+    const reader = await openFixture(fixture);
+    expect(reader.summary.zip64).toBe(true);
+    await expectCode(reader.readEntryBytes(0), "invalid_zip");
   });
 
   it("does not mistake an exact classic maximum entry size for missing ZIP64 metadata", async () => {
@@ -369,7 +429,7 @@ describe("openKohoZip malformed and ZIP64 metadata", () => {
     });
   });
 
-  it("rejects truncated, ambiguous, and inconsistent metadata", async () => {
+  it("rejects truncated metadata and ignores structurally invalid EOCD lookalikes", async () => {
     const fixture = buildZip({
       entries: [{ fileName: "FICTIONAL.txt", data: "metadata" }],
     });
@@ -384,8 +444,136 @@ describe("openKohoZip malformed and ZIP64 metadata", () => {
 
     const falseEocd = Buffer.alloc(22);
     falseEocd.writeUInt32LE(0x06054b50, 0);
-    const ambiguous = buildZip({ entries: [], comment: falseEocd });
-    await expectCode(openFixture(ambiguous), "invalid_zip");
+    falseEocd.writeUInt16LE(DEFAULT_LIMITS.maxEntries + 1, 8);
+    falseEocd.writeUInt16LE(DEFAULT_LIMITS.maxEntries + 1, 10);
+    const withInvalidCandidate = buildZip({
+      entries: [],
+      comment: falseEocd,
+    });
+    const reader = await openFixture(withInvalidCandidate);
+    expect(reader.summary.commentLength).toBe(falseEocd.byteLength);
+  });
+
+  it("excludes a decoy whose central record crosses its EOCD boundary", async () => {
+    const comment = Buffer.alloc(100);
+    const centralOffset = 22;
+    const decoyOffset = 72;
+    comment.writeUInt32LE(0x02014b50, 0);
+    comment.writeUInt16LE(14, ZIP_FIXTURE_FIELD_OFFSETS.central.fileNameLength);
+    comment.writeUInt16LE(1, ZIP_FIXTURE_FIELD_OFFSETS.central.diskStart);
+    const decoyInComment = decoyOffset - centralOffset;
+    comment.writeUInt32LE(0x06054b50, decoyInComment);
+    comment.writeUInt16LE(
+      1,
+      decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.entriesOnDisk,
+    );
+    comment.writeUInt16LE(
+      1,
+      decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.entryCount,
+    );
+    comment.writeUInt32LE(
+      decoyOffset - centralOffset,
+      decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.centralDirectorySize,
+    );
+    comment.writeUInt32LE(
+      centralOffset,
+      decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.centralDirectoryOffset,
+    );
+    comment.writeUInt16LE(
+      comment.byteLength - decoyInComment - 22,
+      decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.commentLength,
+    );
+    const fixture = buildZip({ entries: [], comment });
+
+    const reader = await openFixture(fixture);
+    expect(reader.entries).toHaveLength(0);
+    expect(reader.summary.commentLength).toBe(comment.byteLength);
+  });
+
+  it("bounds aggregate validation work across many invalid EOCD decoys", async () => {
+    const decoyCount = 24;
+    const fileNameLength = decoyCount * 22 + 10;
+    const comment = Buffer.alloc(46 + fileNameLength);
+    comment.writeUInt32LE(0x02014b50, 0);
+    comment.writeUInt16LE(
+      fileNameLength,
+      ZIP_FIXTURE_FIELD_OFFSETS.central.fileNameLength,
+    );
+    const sourceSize = 22 + comment.byteLength;
+    for (let index = 0; index < decoyCount; index += 1) {
+      const decoyInComment = 46 + index * 22;
+      const decoyOffset = 22 + decoyInComment;
+      comment.writeUInt32LE(0x06054b50, decoyInComment);
+      comment.writeUInt16LE(
+        1,
+        decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.entriesOnDisk,
+      );
+      comment.writeUInt16LE(
+        1,
+        decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.entryCount,
+      );
+      comment.writeUInt32LE(
+        decoyOffset - 22,
+        decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.centralDirectorySize,
+      );
+      comment.writeUInt32LE(
+        22,
+        decoyInComment +
+          ZIP_FIXTURE_FIELD_OFFSETS.eocd.centralDirectoryOffset,
+      );
+      comment.writeUInt16LE(
+        sourceSize - decoyOffset - 22,
+        decoyInComment + ZIP_FIXTURE_FIELD_OFFSETS.eocd.commentLength,
+      );
+    }
+    const fixture = buildZip({ entries: [], comment });
+
+    await expectCode(
+      openFixture(fixture, {
+        maxCentralDirectoryBytes: fixture.bytes.byteLength,
+      }),
+      "ambiguous_eocd",
+    );
+  });
+
+  it("rejects multiple structurally valid EOCD interpretations", async () => {
+    const secondEocd = Buffer.alloc(22);
+    secondEocd.writeUInt32LE(0x06054b50, 0);
+    secondEocd.writeUInt32LE(22, 16);
+    const ambiguous = buildZip({ entries: [], comment: secondEocd });
+
+    await expectCode(openFixture(ambiguous), "ambiguous_eocd");
+  });
+
+  it("fails closed when another structurally plausible EOCD hits a policy limit", async () => {
+    const inner = buildZip({
+      entries: [
+        { fileName: "FICTIONAL/INNER-A.txt", data: "A" },
+        { fileName: "FICTIONAL/INNER-B.txt", data: "B" },
+      ],
+    });
+    const shiftedInner = Buffer.from(inner.bytes);
+    const outerEocdSize = 22;
+    for (const entry of inner.entries) {
+      const relativeOffsetField =
+        entry.centralHeaderOffset +
+        ZIP_FIXTURE_FIELD_OFFSETS.central.relativeLocalHeaderOffset;
+      shiftedInner.writeUInt32LE(
+        shiftedInner.readUInt32LE(relativeOffsetField) + outerEocdSize,
+        relativeOffsetField,
+      );
+    }
+    shiftedInner.writeUInt32LE(
+      inner.centralDirectoryOffset + outerEocdSize,
+      inner.eocdOffset +
+        ZIP_FIXTURE_FIELD_OFFSETS.eocd.centralDirectoryOffset,
+    );
+    const fixture = buildZip({ entries: [], comment: shiftedInner });
+
+    await expectCode(
+      openFixture(fixture, { maxEntries: 1 }),
+      "ambiguous_eocd",
+    );
   });
 
   it("rejects multi-disk metadata with a stable code", async () => {
@@ -494,12 +682,78 @@ describe("openKohoZip package safety", () => {
           fileName: "FICTIONAL.txt",
           data: "short",
           compressionMethod: 8,
+          localUncompressedSize: 6,
           centralUncompressedSize: 6,
         },
       ],
     });
     const reader = await openFixture(fixture);
     await expectCode(reader.readEntryBytes(0), "entry_size_mismatch");
+  });
+
+  it("rejects local-header size declarations that disagree with the central entry", async () => {
+    const fixture = buildZip({
+      entries: [
+        {
+          fileName: "FICTIONAL-LOCAL-SIZE.txt",
+          data: "abc",
+          localCompressedSize: 1,
+          localUncompressedSize: 2,
+        },
+      ],
+    });
+    const reader = await openFixture(fixture);
+
+    await expectCode(reader.readEntryBytes(0), "entry_size_mismatch");
+  });
+
+  it("accepts data-descriptor entries without trusting local size fields", async () => {
+    const fixture = buildZip({
+      entries: [
+        {
+          fileName: "FICTIONAL-DESCRIPTOR.txt",
+          data: "descriptor",
+          flags: 0x0808,
+          localCompressedSize: 0,
+          localUncompressedSize: 0,
+        },
+      ],
+    });
+    const bytes = cloneFixtureBytes(fixture);
+    bytes.writeUInt32LE(
+      0,
+      fixture.entries[0].localHeaderOffset +
+        ZIP_FIXTURE_FIELD_OFFSETS.local.crc32,
+    );
+    const reader = await openBytes(bytes);
+
+    expect(Buffer.from(await reader.readEntryBytes(0)).toString("utf8")).toBe(
+      "descriptor",
+    );
+  });
+
+  it("accepts selected local ZIP64 size fields that match central metadata", async () => {
+    const zip64Sizes = Buffer.alloc(20);
+    zip64Sizes.writeUInt16LE(0x0001, 0);
+    zip64Sizes.writeUInt16LE(16, 2);
+    zip64Sizes.writeBigUInt64LE(BigInt(3), 4);
+    zip64Sizes.writeBigUInt64LE(BigInt(3), 12);
+    const fixture = buildZip({
+      entries: [
+        {
+          fileName: "FICTIONAL-LOCAL-ZIP64.txt",
+          data: "zip",
+          localExtraFields: zip64Sizes,
+          localCompressedSize: 0xffffffff,
+          localUncompressedSize: 0xffffffff,
+        },
+      ],
+    });
+    const reader = await openFixture(fixture);
+
+    expect(Buffer.from(await reader.readEntryBytes(0)).toString("utf8")).toBe(
+      "zip",
+    );
   });
 
   it("rejects duplicate local-header aliases before a selected read", async () => {
@@ -558,6 +812,45 @@ describe("openKohoZip package safety", () => {
     });
     openReaders.add(reader);
     const error = await expectCode(reader.readEntryBytes(0), "invalid_zip");
+    expect(error.message).not.toContain(marker);
+  });
+
+  it("normalizes a source-thrown typed error before exposing it", async () => {
+    const marker = "FICTIONAL_MUTATED_ERROR_MESSAGE";
+    class ThrowingByteLength extends Uint8Array {
+      override get byteLength(): number {
+        const error = new KohoZipError("source_invalid");
+        error.message = marker;
+        throw error;
+      }
+    }
+
+    const error = await expectCode(
+      openKohoZip({
+        source: { type: "buffer", bytes: new ThrowingByteLength(0) },
+        limits: DEFAULT_LIMITS,
+      }),
+      "source_invalid",
+    );
+    expect(error.message).toBe("ZIP source is invalid or unavailable");
+    expect(error.message).not.toContain(marker);
+  });
+
+  it("maps hostile buffer type checks to source_invalid", async () => {
+    const marker = "FICTIONAL_PROXY_MARKER";
+    const bytes = new Proxy(new Uint8Array(1), {
+      getPrototypeOf() {
+        throw new Error(`encrypted ${marker}`);
+      },
+    });
+
+    const error = await expectCode(
+      openKohoZip({
+        source: { type: "buffer", bytes },
+        limits: DEFAULT_LIMITS,
+      }),
+      "source_invalid",
+    );
     expect(error.message).not.toContain(marker);
   });
 });
