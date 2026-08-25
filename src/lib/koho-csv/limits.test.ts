@@ -4,6 +4,7 @@ import {
   addToCodePointTotal,
   checkCsvByteLimit,
   countUnicodeCodePoints,
+  KOHO_CSV_LIMIT_FIELDS,
   validateLimits,
   wouldExceedSafeLimit,
 } from "./limits";
@@ -18,21 +19,50 @@ const VALID_LIMITS: KohoCsvLimits = {
   maxRepeatedItemsPerRecord: 5,
 };
 
+const EXPECTED_LIMIT_FIELDS = [
+  "maxCsvBytes",
+  "maxRecords",
+  "maxColumnsPerRecord",
+  "maxCellCharacters",
+  "maxTotalCharacters",
+  "maxRepeatedItemsPerRecord",
+] as const satisfies readonly (keyof KohoCsvLimits)[];
+
+const INVALID_LIMIT_VALUES = [
+  ["undefined", undefined],
+  ["zero", 0],
+  ["negative", -1],
+  ["fraction", 1.5],
+  ["infinity", Number.POSITIVE_INFINITY],
+  ["nan", Number.NaN],
+  ["unsafe-integer", Number.MAX_SAFE_INTEGER + 1],
+] as const;
+
+const INVALID_LIMIT_CASES = EXPECTED_LIMIT_FIELDS.flatMap((field) =>
+  INVALID_LIMIT_VALUES.map(
+    ([label, value]) => [field, label, value] as const,
+  ),
+);
+
 describe("validateLimits", () => {
   it("positive finite safe integerだけを受け入れる", () => {
     expect(validateLimits(VALID_LIMITS)).toEqual([]);
+    expect(KOHO_CSV_LIMIT_FIELDS).toEqual(EXPECTED_LIMIT_FIELDS);
   });
 
-  it.each([0, -1, 1.5, Number.POSITIVE_INFINITY, Number.NaN, 2 ** 53])(
-    "契約外limit %sを拒否する",
-    (invalidValue) => {
-      const limits = { ...VALID_LIMITS, maxRecords: invalidValue };
+  it.each(INVALID_LIMIT_CASES)(
+    "%sの%sを拒否する",
+    (field, _label, invalidValue) => {
+      const limits = {
+        ...VALID_LIMITS,
+        [field]: invalidValue,
+      } as KohoCsvLimits;
 
       expect(validateLimits(limits)).toEqual([
         expect.objectContaining({
           code: "invalid_limits",
           status: "failed",
-          field: "maxRecords",
+          field,
         }),
       ]);
     },

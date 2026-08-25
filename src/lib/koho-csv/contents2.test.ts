@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
+import { parseKohoCsv } from "./index";
 import { parseContents2Records } from "./parse-contents2";
+import { fictionalCsvBytes } from "./__fixtures__/fictional-csv";
 import type {
+  KohoCsvContents2Projection,
   KohoCsvLimits,
   KohoCsvPackageType,
   ParsedCsvRecord,
@@ -120,6 +123,23 @@ function parse(
   });
 }
 
+function parsePublic(
+  packageType: KohoCsvPackageType,
+  entryPath: string,
+  record: ParsedCsvRecord,
+) {
+  const result = parseKohoCsv({
+    packageType,
+    entryPath,
+    bytes: fictionalCsvBytes(`${record.rawRecord}\r\n`),
+    limits: DEFAULT_LIMITS,
+  });
+  if (result.logicalFile !== "CONTENTS2") {
+    throw new Error("expected a CONTENTS2 result");
+  }
+  return result;
+}
+
 function issueCodes(result: ReturnType<typeof parseContents2Records>) {
   return result.records.flatMap((record) =>
     record.issues.map((issue) => issue.code),
@@ -129,34 +149,135 @@ function issueCodes(result: ReturnType<typeof parseContents2Records>) {
 describe("parseContents2Records", () => {
   it("JPA 17列を正式property名とlossy metadataへ投影する", () => {
     const record = parsedRecord(jpaCells());
-    const result = parse("JPA", [record]);
+    const result = parsePublic(
+      "JPA",
+      "DOCUMENT/P_A1/CONTENTS2.csv",
+      record,
+    );
 
     expect(result.status).toBe("success");
+    expect(result.recordCount).toBe(1);
+    expect(result.encoding.bom).toBe("none");
+    expect(result.lineEndings?.style).toBe("crlf");
+    expect(result.records[0].rawRecord).toBe(record.rawRecord);
     expect(result.records[0].sourceCells).toEqual(record.sourceCells);
-    expect(result.records[0].projection).toMatchObject({
+    expect(result.records[0].projection).toEqual({
+      recordLength: {
+        sourceValue: record.sourceCells[0],
+        value: Number(record.sourceCells[0]),
+      },
+      computedRecordLength: codePointLength(record.rawRecord) + 1,
+      matchesCandidate: true,
+      divisionSectionCode: "P_A1",
       publicationNumber: "FICTIONAL-PUB-0001",
       applicationNumber: "FICTIONAL-APP-0001",
       registrationDate: null,
       displayFlagCount: { sourceValue: "1", value: 1 },
+      displaySlot1: "請",
+      displaySlot2: " ",
+      displaySlot3: " ",
+      displaySlot4: " ",
+      displaySlot5: " ",
+      displaySlot6: " ",
+      displaySlot7: " ",
       displayFlags: ["請"],
+      firstClassification: {
+        sourceValue: "FICTIONAL-CLASS-1",
+        value: "FICTIONAL-CLASS-1",
+      },
+      title: "架空発明",
       firstApplicantLocation: { sourceValue: "", value: null },
       firstPartyIdentifier: { sourceValue: "00001", value: "00001" },
       firstApplicantName: { sourceValue: "", value: null },
       projectionCompleteness: "lossy_first_values_only",
-      matchesCandidate: true,
     });
+    expect(result.records[0].projection).not.toHaveProperty(
+      "formattedPublicationNumber",
+    );
+    expect(result.records[0].projection).not.toHaveProperty(
+      "formattedApplicationNumber",
+    );
+    expectTypeOf<
+      Extract<
+        keyof KohoCsvContents2Projection,
+        "formattedPublicationNumber" | "formattedApplicationNumber"
+      >
+    >().toEqualTypeOf<never>();
   });
 
   it("JPB 18列はrecordLength一致でも常にunverified reviewにする", () => {
-    const result = parse("JPB", [parsedRecord(jpbCells())]);
+    const record = parsedRecord(jpbCells());
+    const result = parsePublic(
+      "JPB",
+      "DOCUMENT/P_B1/CONTENTS2.csv",
+      record,
+    );
 
     expect(result.status).toBe("review_required");
+    expect(result.recordCount).toBe(1);
+    expect(result.records[0].sourceCells).toEqual(record.sourceCells);
     expect(issueCodes(result)).toContain("jpb_record_length_unverified");
-    expect(result.records[0].projection).toMatchObject({
-      registrationDate: "20990228",
-      displayFlags: ["早", "際"],
+    expect(result.records[0].projection).toEqual({
+      recordLength: {
+        sourceValue: record.sourceCells[0],
+        value: Number(record.sourceCells[0]),
+      },
+      computedRecordLength: codePointLength(record.rawRecord) + 1,
       matchesCandidate: true,
+      divisionSectionCode: "P_B1",
+      publicationNumber: "FICTIONAL-PUB-B-0001",
+      registrationDate: "20990228",
+      applicationNumber: "FICTIONAL-APP-B-0001",
+      displayFlagCount: { sourceValue: "2", value: 2 },
+      displaySlot1: "早",
+      displaySlot2: "際",
+      displaySlot3: " ",
+      displaySlot4: " ",
+      displaySlot5: " ",
+      displaySlot6: " ",
+      displaySlot7: " ",
+      displayFlags: ["早", "際"],
+      firstClassification: {
+        sourceValue: "FICTIONAL-CLASS-B-1",
+        value: "FICTIONAL-CLASS-B-1",
+      },
+      title: "架空登録発明",
+      firstApplicantLocation: {
+        sourceValue: "架空所在地",
+        value: "架空所在地",
+      },
+      firstPartyIdentifier: { sourceValue: "00002", value: "00002" },
+      firstApplicantName: {
+        sourceValue: "架空権利者",
+        value: "架空権利者",
+      },
+      projectionCompleteness: "lossy_first_values_only",
     });
+    expect(result.records[0].projection).not.toHaveProperty(
+      "formattedPublicationNumber",
+    );
+    expect(result.records[0].projection).not.toHaveProperty(
+      "formattedApplicationNumber",
+    );
+  });
+
+  it("JPA P_P1 pathを公開APIからCONTENTS2へdispatchする", () => {
+    const record = parsedRecord(jpaCells("FICTIONAL-PUB-P1-0001"));
+    const result = parsePublic(
+      "JPA",
+      "DOCUMENT/P_P1/CONTENTS2.csv",
+      record,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "success",
+        logicalFile: "CONTENTS2",
+        normalizedEntryPath: "DOCUMENT/P_P1/CONTENTS2.csv",
+        recordCount: 1,
+      }),
+    );
+    expect(result.records[0].sourceCells).toEqual(record.sourceCells);
   });
 
   it("JPB recordLength不一致もfailedへ昇格せず候補比較を保持する", () => {
@@ -225,6 +346,20 @@ describe("parseContents2Records", () => {
     expect(issueCodes(result)).toContain("display_slot_mismatch");
   });
 
+  it.each(["-1", "1.5", "9007199254740992"])(
+    "displayFlagCountの不正decimal %sをfailedにする",
+    (sourceValue) => {
+      const cells = jpaCells();
+      cells[4] = sourceValue;
+
+      const result = parse("JPA", [parsedRecord(cells)]);
+
+      expect(result.status).toBe("failed");
+      expect(issueCodes(result)).toContain("invalid_decimal");
+      expect(result.records[0].projection).toBeNull();
+    },
+  );
+
   it.each([0, 7])("displayFlagCount=%iのslot契約を受理する", (count) => {
     const cells = jpaCells();
     cells[4] = String(count);
@@ -235,7 +370,21 @@ describe("parseContents2Records", () => {
     const result = parse("JPA", [parsedRecord(cells)]);
 
     expect(result.status).toBe("success");
-    expect(result.records[0].projection?.displayFlags).toHaveLength(count);
+    const projection = result.records[0].projection;
+    expect(projection?.displayFlags).toEqual(
+      Array.from({ length: count }, () => "請"),
+    );
+    expect([
+      projection?.displaySlot1,
+      projection?.displaySlot2,
+      projection?.displaySlot3,
+      projection?.displaySlot4,
+      projection?.displaySlot5,
+      projection?.displaySlot6,
+      projection?.displaySlot7,
+    ]).toEqual(
+      Array.from({ length: 7 }, (_, index) => (index < count ? "請" : " ")),
+    );
   });
 
   it("JPB invalid recordLengthをfailedにしつつunverified reviewも保持する", () => {
@@ -272,12 +421,23 @@ describe("parseContents2Records", () => {
     );
   });
 
-  it("required fieldとJPB dateを検証し、空titleだけはreviewにする", () => {
-    const requiredCells = jpaCells();
-    requiredCells[2] = "";
-    const requiredResult = parse("JPA", [parsedRecord(requiredCells)]);
-    expect(requiredResult.status).toBe("failed");
-    expect(issueCodes(requiredResult)).toContain("required_field_empty");
+  it.each([
+    ["divisionSectionCode", 1],
+    ["publicationNumber", 2],
+    ["applicationNumber", 3],
+  ] as const)("空%sをrequired failureにする", (field, index) => {
+    const cells = jpaCells();
+    cells[index] = "";
+
+    const result = parse("JPA", [parsedRecord(cells)]);
+
+    expect(result.status).toBe("failed");
+    expect(result.records[0].issues).toContainEqual(
+      expect.objectContaining({ code: "required_field_empty", field }),
+    );
+  });
+
+  it("JPB dateを検証し、空titleだけはreviewにする", () => {
 
     const dateCells = jpbCells();
     dateCells[3] = "20990230";

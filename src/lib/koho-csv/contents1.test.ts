@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { parseKohoCsv } from "./index";
 import { parseContents1Records } from "./parse-contents1";
+import { fictionalCsvBytes } from "./__fixtures__/fictional-csv";
 import type {
   KohoCsvLimits,
   KohoCsvPackageType,
@@ -127,6 +129,23 @@ function parse(
   return parseContents1Records({ packageType, records, limits });
 }
 
+function parsePublic(
+  packageType: KohoCsvPackageType,
+  entryPath: string,
+  record: ParsedCsvRecord,
+) {
+  const result = parseKohoCsv({
+    packageType,
+    entryPath,
+    bytes: fictionalCsvBytes(`${record.rawRecord}\r\n`),
+    limits: DEFAULT_LIMITS,
+  });
+  if (result.logicalFile !== "CONTENTS1") {
+    throw new Error("expected a CONTENTS1 result");
+  }
+  return result;
+}
+
 function issueCodes(result: ReturnType<typeof parseContents1Records>) {
   return result.records.flatMap((record) =>
     record.issues.map((issue) => issue.code),
@@ -135,7 +154,7 @@ function issueCodes(result: ReturnType<typeof parseContents1Records>) {
 
 describe("parseContents1Records", () => {
   it("JPAの反復fieldとUnicode code point長をsource表現付きでparseする", () => {
-    const title = "架空,発明😀\n第二行";
+    const title = "架空,発明😀\r\n第二行";
     const location = "架空,所在地";
     const applicantName = '架空"出願人';
     const record = parsedRecord(
@@ -149,10 +168,24 @@ describe("parseContents1Records", () => {
       }),
     );
 
-    const result = parse("JPA", [record]);
+    const result = parsePublic(
+      "JPA",
+      "DOCUMENT/P_A1/CONTENTS1.csv",
+      record,
+    );
 
     expect(result.status).toBe("success");
     expect(result.issues).toEqual([]);
+    expect(result.recordCount).toBe(1);
+    expect(result.encoding.bom).toBe("none");
+    expect(result.lineEndings).toEqual({
+      style: "crlf",
+      crlfCount: 2,
+      lfCount: 0,
+      crCount: 0,
+      hasTerminalCrlf: true,
+    });
+    expect(result.records[0].rawRecord).toBe(record.rawRecord);
     expect(result.records[0].sourceCells).toEqual(record.sourceCells);
     expect(result.records[0].projection).toMatchObject({
       registrationDate: null,
@@ -179,9 +212,16 @@ describe("parseContents1Records", () => {
   });
 
   it("JPBのregistrationDate、複数flag、count=0をparseする", () => {
-    const result = parse("JPB", [parsedRecord(jpbCells())]);
+    const record = parsedRecord(jpbCells());
+    const result = parsePublic(
+      "JPB",
+      "DOCUMENT/P_B1/CONTENTS1.csv",
+      record,
+    );
 
     expect(result.status).toBe("success");
+    expect(result.recordCount).toBe(1);
+    expect(result.records[0].rawRecord).toBe(record.rawRecord);
     expect(result.records[0].projection).toMatchObject({
       registrationDate: "20990228",
       displayFlagCount: { sourceValue: "2", value: 2 },
@@ -191,6 +231,27 @@ describe("parseContents1Records", () => {
       applicantCount: { sourceValue: "0", value: 0 },
       applicants: [],
     });
+  });
+
+  it("JPA P_P1 pathを公開APIからCONTENTS1へdispatchする", () => {
+    const record = parsedRecord(
+      jpaCells({ publicationNumber: "FICTIONAL-PUB-P1-0001" }),
+    );
+    const result = parsePublic(
+      "JPA",
+      "DOCUMENT/P_P1/CONTENTS1.csv",
+      record,
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "success",
+        logicalFile: "CONTENTS1",
+        normalizedEntryPath: "DOCUMENT/P_P1/CONTENTS1.csv",
+        recordCount: 1,
+      }),
+    );
+    expect(result.records[0].sourceCells).toEqual(record.sourceCells);
   });
 
   it("unknown flagと空title・applicant nameをsource保持してreviewにする", () => {
@@ -224,6 +285,51 @@ describe("parseContents1Records", () => {
     expect(result.status).toBe("failed");
     expect(issueCodes(result)).toContain("invalid_date");
     expect(result.records[0].projection).toBeNull();
+  });
+
+  it.each([
+    ["divisionSectionCode", 1],
+    ["formattedPublicationNumber", 2],
+    ["formattedApplicationNumber", 3],
+  ] as const)("空%sをrequired failureにする", (field, index) => {
+    const cells = jpaCells();
+    cells[index] = "";
+
+    const result = parse("JPA", [parsedRecord(cells)]);
+
+    expect(result.status).toBe("failed");
+    expect(result.records[0].issues).toContainEqual(
+      expect.objectContaining({ code: "required_field_empty", field }),
+    );
+  });
+
+  it.each([
+    ["displayFlags[0]", 5],
+    ["displayClassifications[0]", 7],
+  ] as const)("空%sをrequired failureにする", (field, index) => {
+    const cells = jpaCells();
+    cells[index] = "";
+
+    const result = parse("JPA", [parsedRecord(cells)]);
+
+    expect(result.status).toBe("failed");
+    expect(result.records[0].issues).toContainEqual(
+      expect.objectContaining({ code: "required_field_empty", field }),
+    );
+  });
+
+  it("空locationとpartyIdentifierをsource表現付きで許可する", () => {
+    const result = parse("JPA", [
+      parsedRecord(jpaCells({ location: "", partyIdentifier: "" })),
+    ]);
+
+    expect(result.status).toBe("success");
+    expect(result.records[0].projection?.applicants[0]).toEqual(
+      expect.objectContaining({
+        location: "",
+        partyIdentifier: { sourceValue: "", value: null },
+      }),
+    );
   });
 
   it.each([

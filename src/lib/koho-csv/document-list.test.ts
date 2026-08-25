@@ -55,20 +55,29 @@ describe("parseKohoCsv DOCUMENT_LIST", () => {
     expect(result.status).toBe("success");
   });
 
-  it("opposite known kind、unknown kind、unknown countryを区別する", () => {
-    const opposite = parseDocumentList(
-      "JPA",
-      "JP,FICTIONAL-PUBLICATION,B1,20990228\r\n",
+  it.each([
+    ["JPA", "B1"],
+    ["JPA", "B2"],
+    ["JPB", "A"],
+    ["JPB", "A5"],
+  ] as const)("%sでopposite known kind %sをfailedにする", (packageType, kind) => {
+    const result = parseDocumentList(
+      packageType,
+      `JP,FICTIONAL-PUBLICATION,${kind},20990228\r\n`,
     );
+
+    expect(result.status).toBe("failed");
+    expect(result.records[0].issues.map((issue) => issue.code)).toContain(
+      "package_kind_mismatch",
+    );
+  });
+
+  it("unknown kindとunknown countryを区別する", () => {
     const unknown = parseDocumentList(
       "JPA",
       "ZZ,FICTIONAL-PUBLICATION,FICTIONAL-KIND,20990228\r\n",
     );
 
-    expect(opposite.status).toBe("failed");
-    expect(opposite.records[0].issues.map((issue) => issue.code)).toContain(
-      "package_kind_mismatch",
-    );
     expect(unknown.status).toBe("review_required");
     expect(unknown.records[0].issues.map((issue) => issue.code)).toEqual(
       expect.arrayContaining(["unknown_country_code", "unknown_kind"]),
@@ -147,11 +156,18 @@ describe("parseKohoCsv DOCUMENT_LIST", () => {
     }
   });
 
-  it("duplicateとconflictを全該当recordへ付け、mergeしない", () => {
+  it.each([
+    ["kind", "A5", "20990228"],
+    ["date", "A", "20990301"],
+  ] as const)("duplicateの%sだけが異なる場合も全recordをconflictにする", (
+    _difference,
+    secondKind,
+    secondDate,
+  ) => {
     const result = parseDocumentList(
       "JPA",
       "JP,FICTIONAL-DUPLICATE,A,20990228\r\n" +
-        "JP,FICTIONAL-DUPLICATE,A5,20990301\r\n",
+        `JP,FICTIONAL-DUPLICATE,${secondKind},${secondDate}\r\n`,
     );
 
     expect(result.status).toBe("review_required");

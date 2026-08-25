@@ -51,13 +51,65 @@ describe("parseKohoCsv ABSTRACT", () => {
         expect.objectContaining({
           recordType: "summary",
           publicationNumberRange: "FICTIONAL-RANGE-0001",
-          documentCount: expect.objectContaining({
+          documentCount: {
             sourceValue: packageType === "JPA" ? "00001" : "00002",
-          }),
+            value: packageType === "JPA" ? 1 : 2,
+          },
         }),
       );
+      if (packageType === "JPB") {
+        expect(result.records[1].projection).toEqual(
+          expect.objectContaining({
+            missingNumbersInRange: {
+              sourceValue: "FICTIONAL-MISSING-0001",
+              values: ["FICTIONAL-MISSING-0001"],
+            },
+            includedNumbersOutsideRange: {
+              sourceValue: "FICTIONAL-OUTSIDE-0001",
+              values: ["FICTIONAL-OUTSIDE-0001"],
+            },
+          }),
+        );
+      }
     },
   );
+
+  it("issueControlValueをopaqueに保持しmetadata分岐へ使用しない", () => {
+    const result = parseAbstract(
+      "JPA",
+      "JPA,20990228,FICTIONAL-ISSUE-0001,FICTIONAL-CONTROL\r\n" +
+        "公開特許公報（特開）,FICTIONAL-RANGE-0001,00001\r\n",
+    );
+
+    expect(result.status).toBe("success");
+    expect(result.records[0].projection).toEqual(
+      expect.objectContaining({
+        issueControlValue: "FICTIONAL-CONTROL",
+      }),
+    );
+    expect(result.records[1].projection).toEqual(
+      expect.objectContaining({
+        section: "P_A1",
+        documentCount: { sourceValue: "00001", value: 1 },
+      }),
+    );
+  });
+
+  it("空issueControlValueをrequired failureにする", () => {
+    const result = parseAbstract(
+      "JPA",
+      "JPA,20990228,FICTIONAL-ISSUE-0001,\r\n" +
+        "公開特許公報（特開）,FICTIONAL-RANGE-0001,00001\r\n",
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.records[0].issues).toContainEqual(
+      expect.objectContaining({
+        code: "required_field_empty",
+        field: "issueControlValue",
+      }),
+    );
+  });
 
   it.each([
     ["公開特許公報（特開）", "P_A1"],
@@ -112,12 +164,17 @@ describe("parseKohoCsv ABSTRACT", () => {
     const valid = parseAbstract(
       "JPB",
       "JPB,20990228,FICTIONAL-ISSUE-0001,01122\r\n" +
-        "特許公報,FICTIONAL-RANGE-0001,00003,FICTIONAL-A;FICTIONAL-A; FICTIONAL-B,\r\n",
+        "特許公報,FICTIONAL-RANGE-0001,00003,FICTIONAL-A;FICTIONAL-A; FICTIONAL-B,FICTIONAL-OUT;FICTIONAL-OUT\r\n",
     );
     const invalid = parseAbstract(
       "JPB",
       "JPB,20990228,FICTIONAL-ISSUE-0001,01122\r\n" +
         "特許公報,FICTIONAL-RANGE-0001,00003,FICTIONAL-A;;FICTIONAL-B,\r\n",
+    );
+    const invalidIncluded = parseAbstract(
+      "JPB",
+      "JPB,20990228,FICTIONAL-ISSUE-0001,01122\r\n" +
+        "特許公報,FICTIONAL-RANGE-0001,00003,,FICTIONAL-OUT;;FICTIONAL-OUT\r\n",
     );
 
     expect(valid.status).toBe("success");
@@ -127,11 +184,22 @@ describe("parseKohoCsv ABSTRACT", () => {
           sourceValue: "FICTIONAL-A;FICTIONAL-A; FICTIONAL-B",
           values: ["FICTIONAL-A", "FICTIONAL-A", " FICTIONAL-B"],
         },
+        includedNumbersOutsideRange: {
+          sourceValue: "FICTIONAL-OUT;FICTIONAL-OUT",
+          values: ["FICTIONAL-OUT", "FICTIONAL-OUT"],
+        },
       }),
     );
     expect(invalid.status).toBe("failed");
     expect(invalid.records[1].issues.map((issue) => issue.code)).toContain(
       "invalid_semicolon_list",
+    );
+    expect(invalidIncluded.status).toBe("failed");
+    expect(invalidIncluded.records[1].issues).toContainEqual(
+      expect.objectContaining({
+        code: "invalid_semicolon_list",
+        field: "includedNumbersOutsideRange",
+      }),
     );
   });
 

@@ -79,6 +79,7 @@ describe("inspectKohoCsvPath", () => {
     ["OTHER.csv", "unsupported_logical_file"],
     ["abstract.csv", "unsupported_logical_file"],
     ["folder/ABSTRACT.csv", "unsupported_entry_placement"],
+    ["folder/DOCUMENT_LIST.csv", "unsupported_entry_placement"],
     ["DOCUMENT_LIST.csv/extra", "unsupported_logical_file"],
     ["CONTENTS1.csv", "unsupported_entry_placement"],
     ["DOCUMENT/P_A5/CONTENTS1.csv", "unsupported_entry_placement"],
@@ -100,6 +101,8 @@ describe("inspectKohoCsvPath", () => {
     ["JPA", "DOCUMENT/P_B1/CONTENTS1.csv", "CONTENTS1"],
     ["JPA", "DOCUMENT/P_B1/CONTENTS2.csv", "CONTENTS2"],
     ["JPB", "DOCUMENT/P_A1/CONTENTS1.csv", "CONTENTS1"],
+    ["JPB", "DOCUMENT/P_A1/CONTENTS2.csv", "CONTENTS2"],
+    ["JPB", "DOCUMENT/P_P1/CONTENTS1.csv", "CONTENTS1"],
     ["JPB", "DOCUMENT/P_P1/CONTENTS2.csv", "CONTENTS2"],
   ])("%sと%sのsection矛盾をfailedへする", (packageType, path, logicalFile) => {
     expect(inspectKohoCsvPath(packageType, path)).toMatchObject({
