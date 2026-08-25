@@ -227,7 +227,7 @@ describe("Issue #40 public contract", () => {
       packageType: "JPA",
       logicalFile: "abstract",
       entryPath: "ABSTRACT.csv",
-      csv: fictionalAbstractCsv("JPB"),
+      csv: fictionalAbstractCsv("JPA").replace(/^JPA,/, "JPB,"),
     });
     expect(abstract.status).toBe("review_required");
     expect(issueCodes(abstract)).toContain("unknown_package_code");
