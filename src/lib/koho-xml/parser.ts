@@ -590,6 +590,17 @@ export function parseKohoXml(input: KohoXmlParseInput): KohoXmlParseResult {
   source = sourceWithRoot(source, parsed.root, parsed.xmlByteLength);
   const root = parsed.root;
 
+  if (
+    parsed.doctype === "st26_v1_3" &&
+    !(
+      root.localName === "ST26SequenceListing" &&
+      root.namespaceUri === "" &&
+      path.isDeeperXml
+    )
+  ) {
+    return failedResult(source, [parserFailureIssue("doctype_forbidden")]);
+  }
+
   if (root.localName === "ST26SequenceListing") {
     if (root.namespaceUri !== "") {
       return unsupportedResult(source, [

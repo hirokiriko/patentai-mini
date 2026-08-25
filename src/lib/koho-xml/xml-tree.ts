@@ -67,6 +67,7 @@ export type XmlTreeParseResult =
       ok: true;
       root: XmlTreeElement;
       xmlByteLength: number;
+      doctype: "st26_v1_3" | null;
     }
   | {
       ok: false;
@@ -100,6 +101,17 @@ class XmlAbort extends Error {
     super(code);
     this.name = "XmlAbort";
   }
+}
+
+const ST26_V1_3_DOCTYPE_PATTERN =
+  /^[\x20\x09\x0d\x0a]*ST26SequenceListing[\x20\x09\x0d\x0a]+PUBLIC[\x20\x09\x0d\x0a]+(["'])-\/\/WIPO\/\/DTD Sequence Listing 1\.3\/\/EN\1[\x20\x09\x0d\x0a]+(["'])ST26SequenceListing_V1_3\.dtd\2[\x20\x09\x0d\x0a]*$/;
+
+function classifyAllowedDoctype(
+  declaration: string,
+): "st26_v1_3" | null {
+  return ST26_V1_3_DOCTYPE_PATTERN.test(declaration)
+    ? "st26_v1_3"
+    : null;
 }
 
 export function hasValidLimits(
@@ -205,6 +217,7 @@ export function parseXmlTree(
   let root: XmlTreeElement | null = null;
   let elementCount = 0;
   let textByteCount = 0;
+  let doctype: "st26_v1_3" | null = null;
 
   try {
     const parser = new SaxesParser({ xmlns: true, fragment: false } as const);
@@ -218,8 +231,13 @@ export function parseXmlTree(
       }
     });
 
-    parser.on("doctype", () => {
-      throw new XmlAbort("doctype_forbidden");
+    parser.on("doctype", (declaration) => {
+      // saxes reports but never loads DTD resources. The exact known marker is
+      // carried forward only for the post-parse nested ST.26 identity check.
+      doctype = classifyAllowedDoctype(declaration);
+      if (!doctype) {
+        throw new XmlAbort("doctype_forbidden");
+      }
     });
 
     parser.on("error", (error) => {
@@ -315,7 +333,7 @@ export function parseXmlTree(
     if (!root || stack.length !== 0) {
       return { ok: false, code: "malformed_xml", xmlByteLength };
     }
-    return { ok: true, root, xmlByteLength };
+    return { ok: true, root, xmlByteLength, doctype };
   } catch (error) {
     if (error instanceof XmlAbort) {
       return { ok: false, code: error.code, xmlByteLength };

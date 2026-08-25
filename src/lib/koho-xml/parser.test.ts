@@ -13,6 +13,7 @@ import {
   createFictionalKohoInput,
   FICTIONAL_NESTED_ST26_ENTRY_PATH,
   FICTIONAL_NESTED_ST26_XML,
+  FICTIONAL_ST26_V1_3_DOCTYPE,
   fictionalPrimaryEntryPath,
   type FictionalFullPublicationXmlOptions,
 } from "./__fixtures__/fictional-koho";
@@ -129,7 +130,7 @@ describe("parseKohoXml success cases", () => {
     );
   });
 
-  it("DOCTYPEなしのdeeper ST.26 XMLをprimaryとは別に識別する", () => {
+  it("既知DOCTYPE付きのdeeper ST.26 XMLを解決せずprimaryとは別に識別する", () => {
     const input = createFictionalKohoInput("A1", {
       xml: FICTIONAL_NESTED_ST26_XML,
       entryPath: FICTIONAL_NESTED_ST26_ENTRY_PATH,
@@ -139,7 +140,9 @@ describe("parseKohoXml success cases", () => {
     expectSuccess(result);
     expect(result.entryType).toBe("nested_st26");
     expect(result.kind).toBeNull();
-    expect(FICTIONAL_NESTED_ST26_XML).not.toContain("<!DOCTYPE");
+    expect(FICTIONAL_NESTED_ST26_XML).toContain(
+      FICTIONAL_ST26_V1_3_DOCTYPE,
+    );
     if (!("nestedSt26" in result)) {
       throw new Error("expected nested ST.26 metadata");
     }

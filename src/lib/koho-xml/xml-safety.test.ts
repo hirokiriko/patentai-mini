@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   FICTIONAL_KOHO_LIMITS,
+  FICTIONAL_NESTED_ST26_ENTRY_PATH,
+  FICTIONAL_NESTED_ST26_XML,
+  FICTIONAL_ST26_V1_3_DOCTYPE,
   createFictionalKohoInput,
 } from "./__fixtures__/fictional-koho";
 import { parseKohoXml } from "./index";
@@ -128,9 +131,94 @@ describe("parseKohoXml XML safety", () => {
   it.each([
     '<!DOCTYPE FictionalRoot [<!ENTITY fictional "value">]><FictionalRoot/>',
     '<!DOCTYPE FictionalRoot SYSTEM "https://invalid.example/fictional.dtd"><FictionalRoot/>',
-  ])("rejects every DOCTYPE without resolving it", (xml) => {
+  ])("rejects general DOCTYPE declarations without resolving them", (xml) => {
     const result = parseKohoXml(
       createFictionalKohoInput("A1", { xml }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects the ST.26 DOCTYPE allowlist outside a nested ST.26 entry", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${FICTIONAL_ST26_V1_3_DOCTYPE}\n<FictionalRoot/>`;
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", { xml }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects the known ST.26 DOCTYPE at a primary-shaped path", () => {
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", {
+        xml: FICTIONAL_NESTED_ST26_XML,
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects the known ST.26 DOCTYPE for a namespaced lookalike root", () => {
+    const xml = FICTIONAL_NESTED_ST26_XML.replace(
+      '<ST26SequenceListing dtdVersion="V1_3">',
+      '<ST26SequenceListing xmlns="urn:fictional:st26" dtdVersion="V1_3">',
+    );
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", {
+        xml,
+        entryPath: FICTIONAL_NESTED_ST26_ENTRY_PATH,
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects an internal subset appended to the known ST.26 DOCTYPE", () => {
+    const xml = FICTIONAL_NESTED_ST26_XML.replace(
+      FICTIONAL_ST26_V1_3_DOCTYPE,
+      `${FICTIONAL_ST26_V1_3_DOCTYPE.slice(0, -1)} [<!ENTITY fictional "value">]>`,
+    );
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", {
+        xml,
+        entryPath: FICTIONAL_NESTED_ST26_ENTRY_PATH,
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects non-XML whitespace in a lookalike ST.26 DOCTYPE", () => {
+    const xml = FICTIONAL_NESTED_ST26_XML.replace(
+      "ST26SequenceListing PUBLIC",
+      "ST26SequenceListing\u00a0PUBLIC",
+    );
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", {
+        xml,
+        entryPath: FICTIONAL_NESTED_ST26_ENTRY_PATH,
+      }),
+    );
+
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["doctype_forbidden"]);
+  });
+
+  it("rejects an external ST.26 DTD instead of fetching it", () => {
+    const xml = FICTIONAL_NESTED_ST26_XML.replace(
+      "ST26SequenceListing_V1_3.dtd",
+      "https://invalid.example/ST26SequenceListing_V1_3.dtd",
+    );
+    const result = parseKohoXml(
+      createFictionalKohoInput("A1", {
+        xml,
+        entryPath: FICTIONAL_NESTED_ST26_ENTRY_PATH,
+      }),
     );
 
     expect(result.status).toBe("failed");

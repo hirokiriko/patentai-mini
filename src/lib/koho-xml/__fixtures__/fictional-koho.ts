@@ -972,7 +972,11 @@ export function createFictionalKohoInput(
 export const FICTIONAL_NESTED_ST26_ENTRY_PATH =
   "DOCUMENT/P_A1/999900/999990/2099000001/FICTIONAL-ST26-ATTACHMENT/FICTIONAL-ST26.xml";
 
+export const FICTIONAL_ST26_V1_3_DOCTYPE =
+  '<!DOCTYPE ST26SequenceListing PUBLIC "-//WIPO//DTD Sequence Listing 1.3//EN" "ST26SequenceListing_V1_3.dtd">';
+
 export const FICTIONAL_NESTED_ST26_XML = `<?xml version="1.0" encoding="UTF-8"?>
+${FICTIONAL_ST26_V1_3_DOCTYPE}
 <ST26SequenceListing dtdVersion="V1_3">
   <ApplicationIdentification>
     <IPOfficeCode>ZZ</IPOfficeCode>
