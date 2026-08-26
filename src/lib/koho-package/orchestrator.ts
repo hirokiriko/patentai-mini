@@ -45,12 +45,15 @@ const JPA_SECTIONS = new Set<KohoPackageSection>([
   "P_P5",
 ]);
 const JPB_SECTIONS = new Set<KohoPackageSection>(["P_B1"]);
-const KNOWN_CSV = new Map([
+const KNOWN_CSV: ReadonlyMap<
+  string,
+  KohoCsvContractParseInput["logicalFile"]
+> = new Map([
   ["ABSTRACT.csv", "abstract"],
   ["DOCUMENT_LIST.csv", "document_list"],
   ["CONTENTS1.csv", "contents1"],
   ["CONTENTS2.csv", "contents2"],
-] as const);
+]);
 const ROOT_CSV_PATHS = ["ABSTRACT.csv", "DOCUMENT_LIST.csv"] as const;
 const ROLE_NAMES: readonly KohoZipEntryRole[] = [
   "directory",
@@ -1088,7 +1091,7 @@ function knownCsvLogicalFile(
   normalizedPath: string,
 ): KohoCsvContractParseInput["logicalFile"] | null {
   const basename = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
-  return KNOWN_CSV.get(basename as keyof typeof KNOWN_CSV) ?? null;
+  return KNOWN_CSV.get(basename) ?? null;
 }
 
 function isCanonicalCsvPath(packageType: KohoPackageType, path: string): boolean {
