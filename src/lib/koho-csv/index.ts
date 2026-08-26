@@ -1,4 +1,6 @@
-export { parseKohoCsv } from "./parser";
+export { parseKohoCsv } from "./contract-parser";
+
+// PR #39 public contract. Keep these names and shapes unchanged.
 export type {
   KohoCsvAbstractMetadataProjection,
   KohoCsvAbstractProjection,
@@ -34,3 +36,32 @@ export type {
   KohoCsvUnclassifiedFailedResult,
   KohoCsvUnsupportedResult,
 } from "./types";
+
+// Issue #40 additive contract. Prefixes prevent collisions with PR #39.
+export type {
+  KohoCsvContractAbstractRecord,
+  KohoCsvContractAbstractResult,
+  KohoCsvContractAbstractSemantic,
+  KohoCsvContractContents1Record,
+  KohoCsvContractContents1Result,
+  KohoCsvContractContents1Semantic,
+  KohoCsvContractContents2Record,
+  KohoCsvContractContents2Result,
+  KohoCsvContractContents2Semantic,
+  KohoCsvContractDocumentListRecord,
+  KohoCsvContractDocumentListResult,
+  KohoCsvContractDocumentListSemantic,
+  KohoCsvContractEncodingMetadata,
+  KohoCsvContractIssue,
+  KohoCsvContractIssueCode,
+  KohoCsvContractLimits,
+  KohoCsvContractLineEndingMetadata,
+  KohoCsvContractLogicalFile,
+  KohoCsvContractPackageType,
+  KohoCsvContractParseInput,
+  KohoCsvContractParseResult,
+  KohoCsvContractRecord,
+  KohoCsvContractResultBase,
+  KohoCsvContractSourceMetadata,
+  KohoCsvContractStatus,
+} from "./contract-types";

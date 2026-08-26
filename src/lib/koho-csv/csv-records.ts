@@ -88,7 +88,21 @@ export function parseCsvRecords(
   text: string,
   limits: KohoCsvLimits,
 ): ParsedCsvRecordsResult {
-  const bytes = new TextEncoder().encode(text);
+  return parseCsvRecordsFromUtf8Bytes(
+    new TextEncoder().encode(text),
+    limits,
+  );
+}
+
+/**
+ * Parse text using its already-available, BOM-free UTF-8 representation.
+ * The Issue #40 string adapter uses this entry point so its one bounded
+ * post-preflight encoding is reused for source-record reconstruction.
+ */
+export function parseCsvRecordsFromUtf8Bytes(
+  bytes: Uint8Array,
+  limits: KohoCsvLimits,
+): ParsedCsvRecordsResult {
   // The file-level decoder has already removed only the leading transport BOM.
   // Preserve any later U+FEFF that happens to begin a logical record.
   const decoder = new TextDecoder("utf-8", {
