@@ -120,8 +120,12 @@ interface DocumentListView {
   record: KohoCsvContractDocumentListRecord;
   publicationNumber: string;
   kindCode: string;
-  knownKind: string | null;
   issuePublicationDate: string;
+}
+
+interface EntryParseOutcome<T> {
+  attached: T | null;
+  stopReader: boolean;
 }
 
 export async function parseKohoPackage(
@@ -151,6 +155,8 @@ export async function parseKohoPackageWithDependencies(
   }
 
   let reader: KohoZipReader | null = null;
+  let readerReady = false;
+  let entries: readonly KohoZipEntry[] = [];
   let zipSummary: KohoPackageParseResult["zipSummary"] = null;
   const manifestById = new Map<number, KohoPackageManifestEntry>();
   const csvResults: KohoPackageCsvResult[] = [];
@@ -164,6 +170,8 @@ export async function parseKohoPackageWithDependencies(
         limits: input.limits.zip,
       });
       zipSummary = reader.summary;
+      entries = reader.entries;
+      readerReady = true;
     } catch (error) {
       queueIssue(
         queuedIssues,
@@ -176,112 +184,139 @@ export async function parseKohoPackageWithDependencies(
         undefined,
         zipCause(error),
       );
-      return finalizeResult({
-        packageType: input.packageType,
-        zipSummary: null,
-        manifest: [],
-        csvResults: [],
-        primaryXmlResults: [],
-        counts,
-        queuedIssues,
-      });
     }
 
-    initializeManifestAndMetadataIssues(
-      reader.entries,
-      input.packageType,
-      manifestById,
-      queuedIssues,
-    );
-
-    let rootFatal = false;
-    const rootEntries = new Map<string, KohoZipEntry>();
-    for (const path of ROOT_CSV_PATHS) {
-      const entry = reader.entries.find((candidate) => candidate.normalizedPath === path);
-      if (!entry) {
-        rootFatal = true;
-        queueIssue(queuedIssues, 2, "required_csv_missing", "failed", undefined, path);
-      } else {
-        rootEntries.set(path, entry);
-      }
-    }
-
-    if (!rootFatal) {
-      for (const path of ROOT_CSV_PATHS) {
-        const entry = rootEntries.get(path)!;
-        const result = await parseCsvEntry(
-          reader,
-          entry,
-          input,
-          dependencies,
-          manifestById,
-          queuedIssues,
-          true,
-          true,
-        );
-        if (result) csvResults.push(result);
-        if (!result || result.result.status === "failed") rootFatal = true;
-      }
-    }
-
-    if (!rootFatal) {
-      const remainingCsv = reader.entries
-        .filter(
-          (entry) =>
-            entry.role === "csv" &&
-            knownCsvLogicalFile(entry.normalizedPath) !== null &&
-            !ROOT_CSV_PATHS.includes(
-              entry.normalizedPath as (typeof ROOT_CSV_PATHS)[number],
-            ),
-        )
-        .sort(compareEntries);
-
-      for (const entry of remainingCsv) {
-        const canonical = isCanonicalCsvPath(input.packageType, entry.normalizedPath);
-        const result = await parseCsvEntry(
-          reader,
-          entry,
-          input,
-          dependencies,
-          manifestById,
-          queuedIssues,
-          canonical,
-          false,
-        );
-        if (result) csvResults.push(result);
-      }
-
-      const documentList = getDocumentListViews(csvResults);
-      const primaryEntries = reader.entries
-        .filter(
-          (entry) => entry.role === "xml" && entry.pathCandidate === "primary_xml",
-        )
-        .sort(compareEntries);
-
-      for (const entry of primaryEntries) {
-        const result = await parsePrimaryXmlEntry(
-          reader,
-          entry,
-          input,
-          documentList,
-          dependencies,
-          manifestById,
-          queuedIssues,
-        );
-        if (result) primaryXmlResults.push(result);
-      }
-
-      counts = buildCounts(reader.entries, csvResults, primaryXmlResults);
-      runCrossChecks(
+    if (readerReady && reader) {
+      initializeManifestAndMetadataIssues(
+        entries,
         input.packageType,
-        reader.entries,
-        csvResults,
-        primaryXmlResults,
-        counts,
+        manifestById,
         queuedIssues,
       );
-    } else {
-      counts = buildCounts(reader.entries, csvResults, primaryXmlResults);
+
+      let rootFatal = false;
+      let readerStopped = false;
+      const rootEntries = new Map<string, KohoZipEntry>();
+      for (const path of ROOT_CSV_PATHS) {
+        const entry = entries.find(
+          (candidate) => candidate.normalizedPath === path,
+        );
+        if (!entry) {
+          rootFatal = true;
+          queueIssue(
+            queuedIssues,
+            2,
+            "required_csv_missing",
+            "failed",
+            undefined,
+            path,
+          );
+        } else {
+          rootEntries.set(path, entry);
+        }
+      }
+
+      if (!rootFatal) {
+        for (const path of ROOT_CSV_PATHS) {
+          const entry = rootEntries.get(path)!;
+          const outcome = await parseCsvEntry(
+            reader,
+            entry,
+            input,
+            dependencies,
+            manifestById,
+            queuedIssues,
+            true,
+            true,
+          );
+          if (outcome.attached) csvResults.push(outcome.attached);
+          if (
+            !outcome.attached ||
+            outcome.attached.result.status === "failed"
+          ) {
+            rootFatal = true;
+            readerStopped = outcome.stopReader;
+            break;
+          }
+        }
+      }
+
+      if (!rootFatal) {
+        const remainingCsv = entries
+          .filter(
+            (entry) =>
+              entry.role === "csv" &&
+              knownCsvLogicalFile(entry.normalizedPath) !== null &&
+              !ROOT_CSV_PATHS.includes(
+                entry.normalizedPath as (typeof ROOT_CSV_PATHS)[number],
+              ),
+          )
+          .sort(compareEntries);
+
+        for (const entry of remainingCsv) {
+          const canonical = isCanonicalCsvPath(
+            input.packageType,
+            entry.normalizedPath,
+          );
+          const outcome = await parseCsvEntry(
+            reader,
+            entry,
+            input,
+            dependencies,
+            manifestById,
+            queuedIssues,
+            canonical,
+            false,
+          );
+          if (outcome.attached) csvResults.push(outcome.attached);
+          if (outcome.stopReader) {
+            readerStopped = true;
+            break;
+          }
+        }
+
+        if (!readerStopped) {
+          const documentList = getDocumentListViews(csvResults);
+          const primaryEntries = entries
+            .filter(
+              (entry) =>
+                entry.role === "xml" &&
+                entry.pathCandidate === "primary_xml",
+            )
+            .sort(compareEntries);
+
+          for (const entry of primaryEntries) {
+            const outcome = await parsePrimaryXmlEntry(
+              reader,
+              entry,
+              input,
+              documentList,
+              dependencies,
+              manifestById,
+              queuedIssues,
+            );
+            if (outcome.attached) {
+              primaryXmlResults.push(outcome.attached);
+            }
+            if (outcome.stopReader) {
+              readerStopped = true;
+              break;
+            }
+          }
+        }
+      }
+
+      counts = buildCounts(entries, csvResults, primaryXmlResults);
+      if (!rootFatal && !readerStopped) {
+        runCrossChecks(
+          input.packageType,
+          entries,
+          csvResults,
+          primaryXmlResults,
+          counts,
+          queuedIssues,
+        );
+      }
     }
   } finally {
     if (reader) {
@@ -323,9 +358,9 @@ async function parseCsvEntry(
   issues: QueuedIssue[],
   failureIsFatal: boolean,
   requiredRoot: boolean,
-): Promise<KohoPackageCsvResult | null> {
+): Promise<EntryParseOutcome<KohoPackageCsvResult>> {
   const logicalFile = knownCsvLogicalFile(entry.normalizedPath);
-  if (!logicalFile) return null;
+  if (!logicalFile) return { attached: null, stopReader: false };
 
   if (!entry.canRead) {
     setManifest(manifestById, entry.id, "unreadable", failureIsFatal ? "failed" : "review_required");
@@ -340,39 +375,54 @@ async function parseCsvEntry(
       undefined,
       entryZipCause(entry),
     );
-    return null;
+    return { attached: null, stopReader: false };
   }
 
   let bytes: Uint8Array;
   try {
     bytes = await reader.readEntryBytes(entry.id);
   } catch (error) {
-    setManifest(manifestById, entry.id, "unreadable", failureIsFatal ? "failed" : "review_required");
+    const stopReader = shouldStopReaderAfterError(error);
+    const readFailureIsFatal = failureIsFatal || stopReader;
+    setManifest(
+      manifestById,
+      entry.id,
+      "unreadable",
+      readFailureIsFatal ? "failed" : "review_required",
+    );
     queueIssue(
       issues,
       3,
       requiredRoot ? "required_csv_unreadable" : "zip_entry_read_failed",
-      failureIsFatal ? "failed" : "review_required",
+      readFailureIsFatal ? "failed" : "review_required",
       entry.id,
       entry.normalizedPath,
       sectionFromPath(entry.normalizedPath),
       undefined,
       zipCause(error),
     );
-    return null;
+    return {
+      attached: null,
+      stopReader,
+    };
   }
 
-  const result = dependencies.parseCsv({
-    packageType: input.packageType,
-    logicalFile,
-    entryPath: entry.normalizedPath,
-    csv: bytes,
-    limits: input.limits.csv,
-  });
-  const manifestStatus = childStatus(result.status);
-  setManifest(manifestById, entry.id, "parsed_csv", manifestStatus);
-
-  if (result.status === "failed") {
+  let result: KohoCsvContractParseResult;
+  try {
+    result = dependencies.parseCsv({
+      packageType: input.packageType,
+      logicalFile,
+      entryPath: entry.normalizedPath,
+      csv: bytes,
+      limits: input.limits.csv,
+    });
+  } catch {
+    setManifest(
+      manifestById,
+      entry.id,
+      "parsed_csv",
+      failureIsFatal ? "failed" : "review_required",
+    );
     queueIssue(
       issues,
       4,
@@ -381,15 +431,34 @@ async function parseCsvEntry(
       entry.id,
       entry.normalizedPath,
       sectionFromPath(entry.normalizedPath),
-      undefined,
-      csvCause(result),
+    );
+    return { attached: null, stopReader: false };
+  }
+  const manifestStatus = childStatus(result.status);
+  setManifest(manifestById, entry.id, "parsed_csv", manifestStatus);
+
+  if (result.status === "failed") {
+    const failure = csvFailureMetadata(result);
+    queueIssue(
+      issues,
+      4,
+      "csv_parse_failed",
+      failureIsFatal ? "failed" : "review_required",
+      entry.id,
+      entry.normalizedPath,
+      sectionFromPath(entry.normalizedPath),
+      failure?.recordNumber,
+      failure?.cause,
     );
   }
 
   return {
-    entryId: entry.id,
-    normalizedPath: entry.normalizedPath,
-    result,
+    attached: {
+      entryId: entry.id,
+      normalizedPath: entry.normalizedPath,
+      result,
+    },
+    stopReader: false,
   };
 }
 
@@ -401,7 +470,7 @@ async function parsePrimaryXmlEntry(
   dependencies: PackageDependencies,
   manifestById: Map<number, KohoPackageManifestEntry>,
   issues: QueuedIssue[],
-): Promise<KohoPackageXmlResult | null> {
+): Promise<EntryParseOutcome<KohoPackageXmlResult>> {
   if (!entry.canRead) {
     setManifest(manifestById, entry.id, "unreadable", "failed");
     queueIssue(
@@ -415,7 +484,7 @@ async function parsePrimaryXmlEntry(
       undefined,
       entryZipCause(entry),
     );
-    return null;
+    return { attached: null, stopReader: false };
   }
 
   let bytes: Uint8Array;
@@ -434,7 +503,10 @@ async function parsePrimaryXmlEntry(
       undefined,
       zipCause(error),
     );
-    return null;
+    return {
+      attached: null,
+      stopReader: shouldStopReaderAfterError(error),
+    };
   }
 
   const baseInput: KohoXmlParseInput = {
@@ -443,7 +515,22 @@ async function parsePrimaryXmlEntry(
     xml: bytes,
     limits: input.limits.xml,
   };
-  const bootstrap = dependencies.parseXml(baseInput);
+  let bootstrap: KohoXmlParseResult;
+  try {
+    bootstrap = dependencies.parseXml(baseInput);
+  } catch {
+    setManifest(manifestById, entry.id, "parsed_primary_xml", "failed");
+    queueIssue(
+      issues,
+      6,
+      "primary_xml_parse_failed",
+      "failed",
+      entry.id,
+      entry.normalizedPath,
+      sectionFromPath(entry.normalizedPath),
+    );
+    return { attached: null, stopReader: false };
+  }
   let finalResult = bootstrap;
   const identity = xmlIdentity(bootstrap);
 
@@ -451,9 +538,8 @@ async function parsePrimaryXmlEntry(
     const matches = documentList.filter((record) =>
       publicationMatches(
         identity.publicationNumber,
-        identity.kind,
         record.publicationNumber,
-        record.knownKind,
+        identity.kind,
       ),
     );
     if (matches.length === 0) {
@@ -478,14 +564,28 @@ async function parsePrimaryXmlEntry(
       );
     } else {
       const consensus = matches[0];
-      finalResult = dependencies.parseXml({
-        ...baseInput,
-        indexHint: {
-          kindCode: consensus.kindCode,
-          publicationNumber: consensus.publicationNumber,
-          publicationDate: consensus.issuePublicationDate,
-        },
-      });
+      try {
+        finalResult = dependencies.parseXml({
+          ...baseInput,
+          indexHint: {
+            kindCode: consensus.kindCode,
+            publicationNumber: consensus.publicationNumber,
+            publicationDate: consensus.issuePublicationDate,
+          },
+        });
+      } catch {
+        setManifest(manifestById, entry.id, "parsed_primary_xml", "failed");
+        queueIssue(
+          issues,
+          6,
+          "primary_xml_parse_failed",
+          "failed",
+          entry.id,
+          entry.normalizedPath,
+          sectionFromPath(entry.normalizedPath),
+        );
+        return { attached: null, stopReader: false };
+      }
     }
   }
 
@@ -522,9 +622,12 @@ async function parsePrimaryXmlEntry(
     childStatus(finalResult.status),
   );
   return {
-    entryId: entry.id,
-    normalizedPath: entry.normalizedPath,
-    result: finalResult,
+    attached: {
+      entryId: entry.id,
+      normalizedPath: entry.normalizedPath,
+      result: finalResult,
+    },
+    stopReader: false,
   };
 }
 
@@ -537,6 +640,11 @@ function initializeManifestAndMetadataIssues(
   for (const entry of [...entries].sort((a, b) => a.id - b.id)) {
     let processing: KohoPackageManifestEntry["processing"] = "unclassified";
     let status: KohoPackageEntryStatus = "not_processed";
+    const selectedCsv =
+      entry.role === "csv" &&
+      knownCsvLogicalFile(entry.normalizedPath) !== null;
+    const selectedPrimaryXml =
+      entry.role === "xml" && entry.pathCandidate === "primary_xml";
 
     if (entry.role === "xml" && entry.pathCandidate === "nested_xml") {
       processing = "counted_nested_xml";
@@ -566,23 +674,32 @@ function initializeManifestAndMetadataIssues(
       );
     } else if (
       entry.role !== "csv" &&
-      !(entry.role === "xml" && entry.pathCandidate === "primary_xml")
+      !selectedPrimaryXml
     ) {
-      processing = entry.canRead ? "ignored_attachment" : "unreadable";
-      if (!entry.canRead && !entry.isDirectory) {
-        status = "review_required";
-        queueIssue(
-          issues,
-          2,
-          "unreadable_attachment",
-          "review_required",
-          entry.id,
-          entry.normalizedPath,
-          sectionFromPath(entry.normalizedPath),
-          undefined,
-          entryZipCause(entry),
-        );
-      }
+      processing =
+        entry.canRead || entry.isDirectory
+          ? "ignored_attachment"
+          : "unreadable";
+    }
+
+    if (
+      !selectedCsv &&
+      !selectedPrimaryXml &&
+      !entry.canRead &&
+      !entry.isDirectory
+    ) {
+      status = "review_required";
+      queueIssue(
+        issues,
+        2,
+        "unreadable_attachment",
+        "review_required",
+        entry.id,
+        entry.normalizedPath,
+        sectionFromPath(entry.normalizedPath),
+        undefined,
+        entryZipCause(entry),
+      );
     }
 
     const section = sectionFromPath(entry.normalizedPath);
@@ -658,10 +775,19 @@ function checkAbstract(
 
   for (const section of SECTIONS) {
     const candidateCount = counts.bySection[section].primaryXmlCandidates;
-    if (candidateCount === 0) continue;
     const matches = summaries.filter((item) => item.semantic.section === section);
     if (matches.length === 0) {
-      queueIssue(issues, 7, "abstract_summary_missing", "review_required", undefined, undefined, section);
+      if (candidateCount > 0) {
+        queueIssue(
+          issues,
+          7,
+          "abstract_summary_missing",
+          "review_required",
+          undefined,
+          undefined,
+          section,
+        );
+      }
       continue;
     }
     if (matches.length > 1) {
@@ -693,9 +819,8 @@ function checkDocumentList(
     const matches = records.filter((record) =>
       publicationMatches(
         identity.publicationNumber,
-        identity.kind,
         record.publicationNumber,
-        record.knownKind,
+        identity.kind,
       ),
     );
     if (matches.length === 0 && !hasIssue(issues, "document_list_match_missing", item.entryId)) {
@@ -729,9 +854,8 @@ function checkDocumentList(
     const matches = identities.filter(({ identity }) =>
       publicationMatches(
         identity.publicationNumber,
-        identity.kind,
         record.publicationNumber,
-        record.knownKind,
+        identity.kind,
       ),
     );
     if (matches.length === 0) {
@@ -778,7 +902,7 @@ function checkContents(
     );
 
   for (const section of fullSections) {
-    if (counts.bySection[section].primaryXmlCandidates === 0) continue;
+    const candidateCount = counts.bySection[section].primaryXmlCandidates;
     for (const logicalFile of ["contents1", "contents2"] as const) {
       const expectedPath = `DOCUMENT/${section}/${logicalFile === "contents1" ? "CONTENTS1.csv" : "CONTENTS2.csv"}`;
       const entry = entries.find((candidate) => candidate.normalizedPath === expectedPath);
@@ -786,16 +910,21 @@ function checkContents(
         (candidate) =>
           candidate.normalizedPath === expectedPath && candidate.result.logicalFile === logicalFile,
       );
-      if (!entry || !attached) {
-        queueIssue(
-          issues,
-          8,
-          "contents_file_missing",
-          "review_required",
-          entry?.id,
-          expectedPath,
-          section,
-        );
+      if (!entry) {
+        if (candidateCount > 0) {
+          queueIssue(
+            issues,
+            8,
+            "contents_file_missing",
+            "review_required",
+            undefined,
+            expectedPath,
+            section,
+          );
+        }
+        continue;
+      }
+      if (!attached) {
         continue;
       }
       if (attached.result.logicalFile !== logicalFile) continue;
@@ -809,8 +938,11 @@ function checkContents(
           const publicationNumber = contentsPublicationNumber(logicalFile, record);
           return (
             publicationNumber !== null &&
-            normalizePublicationNumber(publicationNumber, identity.kind) ===
-              normalizePublicationNumber(identity.publicationNumber, identity.kind)
+            publicationMatches(
+              identity.publicationNumber,
+              publicationNumber,
+              identity.kind,
+            )
           );
         });
         if (matches.length === 0) {
@@ -836,17 +968,14 @@ function checkContents(
         }
       }
 
-      const sectionKind: KohoDocumentKind =
-        section === "P_B1" ? "B1" : section === "P_P1" ? "P1" : "A1";
       for (const record of records) {
         const publicationNumber = contentsPublicationNumber(logicalFile, record);
         if (publicationNumber === null) continue;
         const matches = sectionXml.filter(({ identity }) =>
           publicationMatches(
             identity.publicationNumber,
-            identity.kind,
             publicationNumber,
-            sectionKind,
+            identity.kind,
           ),
         );
         if (matches.length === 0) {
@@ -1007,7 +1136,6 @@ function getDocumentListViews(
         record,
         publicationNumber: semantic.publicationNumber,
         kindCode: semantic.kindCode.sourceValue,
-        knownKind: semantic.kindCode.knownValue,
         issuePublicationDate: semantic.issuePublicationDate,
       },
     ];
@@ -1069,13 +1197,12 @@ function hasConsensus(matches: readonly DocumentListView[]): boolean {
 
 function publicationMatches(
   left: string,
-  leftKind: string | null,
   right: string,
-  rightKind: string | null,
+  kind: string | null,
 ): boolean {
   return (
-    normalizePublicationNumber(left, leftKind) ===
-    normalizePublicationNumber(right, rightKind)
+    normalizePublicationNumber(left, kind) ===
+    normalizePublicationNumber(right, kind)
   );
 }
 
@@ -1134,14 +1261,18 @@ function sectionAllowed(packageType: KohoPackageType, section: KohoPackageSectio
 }
 
 function compareEntries(a: KohoZipEntry, b: KohoZipEntry): number {
-  return a.normalizedPath.localeCompare(b.normalizedPath) || a.id - b.id;
+  return compareText(a.normalizedPath, b.normalizedPath) || a.id - b.id;
 }
 
 function compareAttachedResults(
   a: { normalizedPath: string; entryId: number },
   b: { normalizedPath: string; entryId: number },
 ): number {
-  return a.normalizedPath.localeCompare(b.normalizedPath) || a.entryId - b.entryId;
+  return compareText(a.normalizedPath, b.normalizedPath) || a.entryId - b.entryId;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function childStatus(status: string): KohoPackageEntryStatus {
@@ -1200,9 +1331,45 @@ function zipCause(error: unknown): KohoPackageIssueCause | undefined {
   return undefined;
 }
 
-function csvCause(result: KohoCsvContractParseResult): KohoPackageIssueCause | undefined {
-  const issue = result.issues.find((candidate) => candidate.status === "failed") ?? result.issues[0];
-  return issue ? { source: "csv", code: issue.code } : undefined;
+function shouldStopReaderAfterError(error: unknown): boolean {
+  return !(
+    error instanceof KohoZipError &&
+    (error.code === "encrypted_entry" ||
+      error.code === "unsupported_compression")
+  );
+}
+
+function csvFailureMetadata(
+  result: KohoCsvContractParseResult,
+):
+  | {
+      recordNumber?: number;
+      cause: KohoPackageIssueCause;
+    }
+  | undefined {
+  const candidates = [
+    ...result.issues.map((issue) => ({
+      issue,
+      recordNumber: undefined as number | undefined,
+    })),
+    ...result.records.flatMap((record) =>
+      record.issues.map((issue) => ({
+        issue,
+        recordNumber: record.recordNumber,
+      })),
+    ),
+  ];
+  const selected =
+    candidates.find(({ issue }) => issue.status === "failed") ??
+    candidates[0];
+  return selected
+    ? {
+        ...(selected.recordNumber === undefined
+          ? {}
+          : { recordNumber: selected.recordNumber }),
+        cause: { source: "csv", code: selected.issue.code },
+      }
+    : undefined;
 }
 
 function xmlCause(result: KohoXmlParseResult): KohoPackageIssueCause | undefined {
@@ -1249,12 +1416,15 @@ function sortIssues(items: readonly QueuedIssue[]): KohoPackageIssue[] {
     .sort(
       (a, b) =>
         a.stage - b.stage ||
-        (a.issue.normalizedPath ?? "").localeCompare(b.issue.normalizedPath ?? "") ||
+        compareText(
+          a.issue.normalizedPath ?? "",
+          b.issue.normalizedPath ?? "",
+        ) ||
         (a.issue.entryId ?? Number.MAX_SAFE_INTEGER) -
           (b.issue.entryId ?? Number.MAX_SAFE_INTEGER) ||
         (a.issue.recordNumber ?? Number.MAX_SAFE_INTEGER) -
           (b.issue.recordNumber ?? Number.MAX_SAFE_INTEGER) ||
-        a.issue.code.localeCompare(b.issue.code),
+        compareText(a.issue.code, b.issue.code),
     )
     .map((item) => item.issue);
 }

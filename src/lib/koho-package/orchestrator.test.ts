@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { parseKohoCsv, type KohoCsvContractParseResult } from "../koho-csv";
+import { parseKohoCsv } from "../koho-csv";
 import { buildZip } from "../koho-zip/__fixtures__/zip-builder";
 import { KohoZipError, type KohoZipEntry, type KohoZipReader } from "../koho-zip";
 import {
@@ -95,12 +95,12 @@ describe("parseKohoPackage public contract", () => {
     expect(result.status).toBe("success");
     expect(result.issues).toEqual([]);
     expect(result.zipSummary?.sourceType).toBe("buffer");
-    expect(result.csvResults.map((item) => item.result.logicalFile)).toEqual([
-      "contents1",
-      "contents2",
-      "abstract",
-      "document_list",
-    ].sort());
+    expect(result.csvResults.map((item) => item.normalizedPath)).toEqual([
+      "ABSTRACT.csv",
+      "DOCUMENT/P_A1/CONTENTS1.csv",
+      "DOCUMENT/P_A1/CONTENTS2.csv",
+      "DOCUMENT_LIST.csv",
+    ]);
     expect(result.primaryXmlResults).toHaveLength(1);
     expect(result.primaryXmlResults[0].result.status).toBe("success");
     expect(result.primaryXmlResults[0].result.issues.map((issue) => issue.code)).not.toContain(
@@ -133,11 +133,14 @@ describe("parseKohoPackage public contract", () => {
     const bytes = buildMinimalFictionalPackage("JPA", {
       includeNestedXml: true,
       includeIgnoredEntries: true,
+      documentListCsv: "JP,FICTIONAL-OTHER,A,20990111\r\n",
     });
     const first = await parseBuffer(bytes);
     const second = await parseBuffer(bytes);
 
     expect(first).toEqual(second);
+    expect(first.issues.length).toBeGreaterThan(1);
+    expect(first.issues).toEqual(second.issues);
     expect(first.manifest.map((entry) => entry.entryId)).toEqual(
       [...first.manifest.map((entry) => entry.entryId)].sort((a, b) => a - b),
     );
@@ -218,9 +221,13 @@ describe("validation and bounded entry selection", () => {
     expect(issueCodes(invalidPackage)).toEqual(["invalid_limits"]);
   });
 
-  it("fails when a root CSV is missing and does not parse primary XML", async () => {
+  it.each(["ABSTRACT.csv", "DOCUMENT_LIST.csv"])(
+    "fails when root %s is missing and does not parse primary XML",
+    async (missingPath) => {
     const bytes = buildZip({
-      entries: minimalJpaEntries().filter((entry) => entry.fileName !== "ABSTRACT.csv"),
+      entries: minimalJpaEntries().filter(
+        (entry) => entry.fileName !== missingPath,
+      ),
     }).bytes;
     const result = await parseBuffer(bytes);
 
@@ -230,7 +237,8 @@ describe("validation and bounded entry selection", () => {
     expect(
       result.manifest.find((entry) => entry.pathCandidate === "primary_xml")?.status,
     ).toBe("not_processed");
-  });
+    },
+  );
 
   it("does not read an unknown CSV body and marks it unclassified", async () => {
     const bytes = buildZip({
@@ -371,7 +379,9 @@ describe("resource closure and safe failure mapping", () => {
       },
       async close() {
         closed += 1;
-        throw new KohoZipError("source_invalid");
+        const error = new KohoZipError("source_invalid");
+        error.message = "FICTIONAL-SECRET-CLOSE-DETAIL";
+        throw error;
       },
     };
 
@@ -387,7 +397,15 @@ describe("resource closure and safe failure mapping", () => {
     expect(closed).toBe(1);
     expect(result.status).toBe("failed");
     expect(issueCodes(result)).toEqual(expect.arrayContaining(["required_csv_missing", "reader_close_failed"]));
-    expect(JSON.stringify(result.issues)).not.toContain("source_invalid");
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "reader_close_failed",
+        cause: { source: "zip", code: "source_invalid" },
+      }),
+    );
+    expect(JSON.stringify(result.issues)).not.toContain(
+      "FICTIONAL-SECRET-CLOSE-DETAIL",
+    );
   });
 
   it("reads selected entries sequentially and at most once", async () => {
@@ -396,6 +414,8 @@ describe("resource closure and safe failure mapping", () => {
     expect(baseline.status).toBe("success");
 
     const readOrder: number[] = [];
+    let activeReads = 0;
+    let maxActiveReads = 0;
     const actualReaderModule = await import("../koho-zip");
     const reader = await actualReaderModule.openKohoZip({
       source: { type: "buffer", bytes },
@@ -405,8 +425,15 @@ describe("resource closure and safe failure mapping", () => {
       entries: reader.entries,
       summary: reader.summary,
       async readEntryBytes(entryId) {
+        activeReads += 1;
+        maxActiveReads = Math.max(maxActiveReads, activeReads);
         readOrder.push(entryId);
-        return reader.readEntryBytes(entryId);
+        await Promise.resolve();
+        try {
+          return await reader.readEntryBytes(entryId);
+        } finally {
+          activeReads -= 1;
+        }
       },
       close: () => reader.close(),
     };
@@ -421,6 +448,7 @@ describe("resource closure and safe failure mapping", () => {
     );
 
     expect(result.status).toBe("success");
+    expect(maxActiveReads).toBe(1);
     expect(new Set(readOrder).size).toBe(readOrder.length);
     expect(readOrder.slice(0, 2)).toEqual([
       wrapped.entries.find((entry) => entry.normalizedPath === "ABSTRACT.csv")!.id,

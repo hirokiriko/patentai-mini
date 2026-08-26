@@ -75,6 +75,7 @@ export function fictionalContents1Csv(
     "0",
     packageType === "JPA" ? "A1" : "B1",
     publicationNumber ?? (packageType === "JPA" ? "2099000001" : "9999991"),
+    ...(packageType === "JPB" ? ["20990301"] : []),
     packageType === "JPA"
       ? "FICTIONAL-APPLICATION-A1-0001"
       : "FICTIONAL-APPLICATION-B1-0001",
@@ -112,7 +113,7 @@ export function fictionalContents2Csv(
     " ",
     " ",
     " ",
-    "G06F",
+    "FICTIONAL-CLASSIFICATION",
     "架空題名",
     "架空地",
     "FICTIONAL-PARTY-0001",
