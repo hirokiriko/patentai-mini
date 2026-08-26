@@ -164,11 +164,18 @@ A5/P5には`CONTENTS1.csv`と`CONTENTS2.csv`が観察されていない。
 
 heterogeneous recordであり、先頭recordと集計recordを同じschemaで扱わない。
 
+公開仕様の根拠は、特許庁「公報仕様 第1.5版 第II編 各ファイルの詳細」
+pp.48-49の抄録file format、および「公報仕様 第1.6版 第I編 全体構成」
+p.25の公報種別とdirectory名の対応である。
+
+- https://www.jpo.go.jp/system/laws/koho/shiyo/document/koujigou_vol15/1-2_file_kousei.pdf
+- https://www.jpo.go.jp/system/laws/koho/shiyo/document/koujigou_vol16/1-1_zentai_kousei.pdf
+
 先頭record:
 
 | position | 論理名 | 型 | 空欄 | 規則 |
 |---:|---|---|---|---|
-| 1 | `packageCode` | string | 不可 | JPA/JPB package識別用。未知値は未対応package |
+| 1 | `packageCode` | string | 不可 | public API互換名。公式の意味は公報仕様version codeで、`A_`または`B_`の発行区分prefixとASCII 3桁versionからなる。source valueを保持し、JPAは`A_`、JPBは`B_`だけをfamily一致として解決する。既存の`JPA`/`JPB`入力も互換値として維持する |
 | 2 | `publicationDate` | `YYYYMMDD` string | 不可 | package発行日。XMLの出願日・登録日と混同しない |
 | 3 | `issueNumber` | string | 不可 | 号識別子。文献番号として使わない |
 | 4 | `issueControlValue` | opaque string | 不可 | 観察値`01122`の意味は未確定 |
@@ -177,7 +184,7 @@ JPAの後続集計record:
 
 | position | 論理名 | 型 | 空欄 | 規則 |
 |---:|---|---|---|---|
-| 1 | `sectionName` | string | 不可 | A1/A5/P1/P5区分名。照合用viewだけ末尾paddingを除く |
+| 1 | `sectionName` | string | 不可 | 公式形式は`公報種別名(directory code)`を「全角40文字固定」とし、不足分を末尾ASCII spaceで埋める。sourceを保持し、照合用viewだけpaddingを除いてlabelとcodeの対応を検証する |
 | 2 | `publicationNumberRange` | string | 不可 | 名目範囲。実件数そのものではない |
 | 3 | `documentCountText` | 5桁zero埋めdecimal string | 不可 | integer派生値とsource valueを保持 |
 
@@ -185,11 +192,28 @@ JPBの後続集計record:
 
 | position | 論理名 | 型 | 空欄 | 規則 |
 |---:|---|---|---|---|
-| 1 | `sectionName` | string | 不可 | 特許公報区分 |
+| 1 | `sectionName` | string | 不可 | 公式形式は`公報種別名(P_B1)`を「全角40文字固定」とし、不足分を末尾ASCII spaceで埋める。label/code矛盾やpadding過不足は確認候補 |
 | 2 | `publicationNumberRange` | string | 不可 | 名目範囲 |
 | 3 | `documentCountText` | 5桁zero埋めdecimal string | 不可 | primary実件数との照合値 |
 | 4 | `missingNumbersInRange` | semicolon区切りstring list | 可 | 範囲内欠番。空なら空list |
 | 5 | `includedNumbersOutsideRange` | semicolon区切りstring list | 可 | 範囲外収録。空なら空list |
+
+公式labelとcanonical sectionの対応:
+
+| 公報種別 | canonical section |
+|---|---|
+| 公開特許公報 | `P_A1` |
+| 補正の掲載(公開特許公報) | `P_A5` |
+| 公表特許公報 | `P_P1` |
+| 国際公開後における補正の掲載 | `P_P5` |
+| 特許公報 | `P_B1` |
+
+末尾ASCII space以外の文字を一律trim/NFKCしない。括弧は公式どおりASCII、
+directory codeは既知canonical値とのexact一致とする。「全角40文字固定」は、
+JIS X 0208文字を2単位、JIS X 0201文字を1単位とする80単位の固定幅として検証する。
+UTF-8 byte長では判定しない。labelとcodeが矛盾する値、padding過不足、未知code、package
+familyと矛盾する仕様version codeは成功扱いしない。同じcanonical sectionが互換
+labelと公式formatの両方で現れた場合もduplicateとして確認候補にする。
 
 `01122`は文献識別、件数判定、kind分岐、日付変換に使用しない。source valueの
 `issueControlValue`としてのみ保持し、意味が確定するまでopaqueとする。
