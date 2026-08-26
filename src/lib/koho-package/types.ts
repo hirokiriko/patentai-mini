@@ -123,7 +123,7 @@ export interface KohoPackageSectionCountSummary {
   contents1Records: number;
   contents2Records: number;
   attachmentCount: number;
-  roleCounts: Readonly<Record<KohoZipEntryRole, number>>;
+  roleCounts: Record<KohoZipEntryRole, number>;
 }
 
 export interface KohoPackageCountSummary {
@@ -134,8 +134,8 @@ export interface KohoPackageCountSummary {
   nestedXmlCandidates: number;
   documentFolders: number;
   documentListRecords: number;
-  roleCounts: Readonly<Record<KohoZipEntryRole, number>>;
-  bySection: Readonly<Record<KohoPackageSection, KohoPackageSectionCountSummary>>;
+  roleCounts: Record<KohoZipEntryRole, number>;
+  bySection: Record<KohoPackageSection, KohoPackageSectionCountSummary>;
 }
 
 export interface KohoPackageParseResult {
