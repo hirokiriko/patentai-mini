@@ -48,6 +48,16 @@ function withStableRecordLength(cells: readonly string[]): string[] {
   throw new Error("fictional record length did not stabilize");
 }
 
+function officialSectionField(label: string, section: string): string {
+  const value = `${label}(${section})`;
+  const width = Array.from(value).reduce(
+    (sum, character) =>
+      sum + (character.codePointAt(0)! <= 0x7f ? 1 : 2),
+    0,
+  );
+  return `${value}${" ".repeat(80 - width)}`;
+}
+
 export function fictionalAbstractCsv(packageType: KohoPackageType): string {
   if (packageType === "JPA") {
     return (
@@ -58,6 +68,31 @@ export function fictionalAbstractCsv(packageType: KohoPackageType): string {
   return (
     "JPB,20990311,FICTIONAL-ISSUE-0002,01122\r\n" +
     "特許公報,FICTIONAL-RANGE-OPAQUE,00001,,\r\n"
+  );
+}
+
+export function fictionalOfficialAbstractCsv(
+  packageType: KohoPackageType,
+): string {
+  const packageCode = packageType === "JPA" ? "A_999" : "B_999";
+  const sections =
+    packageType === "JPA"
+      ? ([
+          ["公開特許公報", "P_A1", "00001"],
+          ["補正の掲載(公開特許公報)", "P_A5", "00000"],
+          ["公表特許公報", "P_P1", "00000"],
+          ["国際公開後における補正の掲載", "P_P5", "00000"],
+        ] as const)
+      : ([["特許公報", "P_B1", "00001"]] as const);
+  const summaries = sections.map(([label, section, count]) => {
+    const sectionName = officialSectionField(label, section);
+    return packageType === "JPA"
+      ? `${sectionName},FICTIONAL-RANGE-${section},${count}`
+      : `${sectionName},FICTIONAL-RANGE-${section},${count},,`;
+  });
+  return (
+    `${packageCode},20990228,FICTIONAL-ISSUE-SPEC,FICTIONAL-CONTROL\r\n` +
+    `${summaries.join("\r\n")}\r\n`
   );
 }
 
