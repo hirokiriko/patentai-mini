@@ -2,18 +2,18 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   parseKohoCsv,
-  type KohoCsvLimits,
-  type KohoCsvLogicalFile,
-  type KohoCsvParseInput,
-  type KohoCsvParseResult,
-  type KohoCsvStatus,
+  type KohoCsvContractLimits,
+  type KohoCsvContractLogicalFile,
+  type KohoCsvContractParseInput,
+  type KohoCsvContractParseResult,
+  type KohoCsvContractStatus,
 } from "./index";
 import {
   fictionalAbstractCsv,
   fictionalDocumentListCsv,
 } from "./__fixtures__/fictional-csv";
 
-const LIMITS: KohoCsvLimits = {
+const LIMITS: KohoCsvContractLimits = {
   maxInputBytes: 100_000,
   maxRecords: 100,
   maxColumnsPerRecord: 100,
@@ -21,7 +21,7 @@ const LIMITS: KohoCsvLimits = {
   maxTotalCharacters: 50_000,
 };
 
-function issueCodes(result: KohoCsvParseResult): string[] {
+function issueCodes(result: KohoCsvContractParseResult): string[] {
   return [
     ...result.issues.map((item) => item.code),
     ...result.records.flatMap((record) => record.issues.map((item) => item.code)),
@@ -94,16 +94,20 @@ function contents2Csv(packageType: "JPA" | "JPB", forceMismatch = false): string
   return `${rawRecord(cells)}\r\n`;
 }
 
-function parse(input: Omit<KohoCsvParseInput, "limits"> & { limits?: KohoCsvLimits }) {
+function parse(
+  input: Omit<KohoCsvContractParseInput, "limits"> & {
+    limits?: KohoCsvContractLimits;
+  },
+) {
   return parseKohoCsv({ ...input, limits: input.limits ?? LIMITS });
 }
 
 describe("Issue #40 public contract", () => {
   it("exports the lowercase logical-file and three-state contract", () => {
-    expectTypeOf<KohoCsvLogicalFile>().toEqualTypeOf<
+    expectTypeOf<KohoCsvContractLogicalFile>().toEqualTypeOf<
       "abstract" | "document_list" | "contents1" | "contents2"
     >();
-    expectTypeOf<KohoCsvStatus>().toEqualTypeOf<
+    expectTypeOf<KohoCsvContractStatus>().toEqualTypeOf<
       "success" | "review_required" | "failed"
     >();
   });

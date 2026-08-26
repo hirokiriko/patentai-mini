@@ -3,19 +3,23 @@ import type {
   KohoCsvContents1Projection as LegacyContents1Projection,
   KohoCsvContents2Projection as LegacyContents2Projection,
   KohoCsvDocumentListProjection as LegacyDocumentListProjection,
+  KohoCsvPackageType,
 } from "./types";
 
-export type KohoCsvPackageType = "JPA" | "JPB";
+export type KohoCsvContractPackageType = KohoCsvPackageType;
 
-export type KohoCsvLogicalFile =
+export type KohoCsvContractLogicalFile =
   | "abstract"
   | "document_list"
   | "contents1"
   | "contents2";
 
-export type KohoCsvStatus = "success" | "review_required" | "failed";
+export type KohoCsvContractStatus =
+  | "success"
+  | "review_required"
+  | "failed";
 
-export interface KohoCsvLimits {
+export interface KohoCsvContractLimits {
   maxInputBytes: number;
   maxRecords: number;
   maxColumnsPerRecord: number;
@@ -23,17 +27,18 @@ export interface KohoCsvLimits {
   maxTotalCharacters: number;
 }
 
-export interface KohoCsvParseInput {
-  packageType: KohoCsvPackageType;
-  logicalFile: KohoCsvLogicalFile;
+export interface KohoCsvContractParseInput {
+  packageType: KohoCsvContractPackageType;
+  logicalFile: KohoCsvContractLogicalFile;
   entryPath: string;
   csv: string | Uint8Array;
-  limits: KohoCsvLimits;
+  limits: KohoCsvContractLimits;
 }
 
-export type KohoCsvIssueCode =
+export type KohoCsvContractIssueCode =
   | "invalid_limits"
   | "input_too_large"
+  | "invalid_unicode_scalar"
   | "invalid_utf8"
   | "bom_unexpected"
   | "line_ending_unexpected"
@@ -68,24 +73,24 @@ export type KohoCsvIssueCode =
   | "empty_applicant_name"
   | "summary_missing";
 
-export interface KohoCsvIssue {
-  code: KohoCsvIssueCode;
-  status: Exclude<KohoCsvStatus, "success">;
+export interface KohoCsvContractIssue {
+  code: KohoCsvContractIssueCode;
+  status: Exclude<KohoCsvContractStatus, "success">;
   message: string;
   recordNumber?: number;
   columnPosition?: number;
   field?: string;
 }
 
-export interface KohoCsvEncodingMetadata {
+export interface KohoCsvContractEncodingMetadata {
   name: "utf-8";
-  inputType: "string" | "uint8array";
-  byteLength: number;
+  inputType: "string" | "uint8array" | "not_inspected";
+  byteLength: number | null;
   strictUtf8: true;
   bom: "present" | "absent" | "not_inspected";
 }
 
-export interface KohoCsvLineEndingMetadata {
+export interface KohoCsvContractLineEndingMetadata {
   style: "crlf" | "lf" | "cr" | "mixed" | "none";
   crlfCount: number;
   lfCount: number;
@@ -94,61 +99,74 @@ export interface KohoCsvLineEndingMetadata {
   hasTerminalCrlf: boolean;
 }
 
-export interface KohoCsvSourceMetadata {
-  encoding: KohoCsvEncodingMetadata;
+export interface KohoCsvContractSourceMetadata {
+  encoding: KohoCsvContractEncodingMetadata;
   delimiter: ",";
-  lineEndings: KohoCsvLineEndingMetadata | null;
+  lineEndings: KohoCsvContractLineEndingMetadata | null;
 }
 
-export type KohoCsvAbstractSemantic = LegacyAbstractProjection;
-export type KohoCsvDocumentListSemantic = LegacyDocumentListProjection;
-export type KohoCsvContents1Semantic = LegacyContents1Projection;
-export type KohoCsvContents2Semantic = LegacyContents2Projection & {
+export type KohoCsvContractAbstractSemantic = LegacyAbstractProjection;
+export type KohoCsvContractDocumentListSemantic =
+  LegacyDocumentListProjection;
+export type KohoCsvContractContents1Semantic = LegacyContents1Projection;
+export type KohoCsvContractContents2Semantic = LegacyContents2Projection & {
   semanticDisplaySlots: readonly (string | null)[];
 };
 
-export interface KohoCsvRecord<TSemantic> {
+export interface KohoCsvContractRecord<TSemantic> {
   recordNumber: number;
   startLine: number;
   endLine: number;
   rawRecord: string;
   sourceCells: string[];
   semantic: TSemantic | null;
-  status: KohoCsvStatus;
-  issues: KohoCsvIssue[];
+  status: KohoCsvContractStatus;
+  issues: KohoCsvContractIssue[];
 }
 
-interface KohoCsvResultBase<TLogicalFile extends KohoCsvLogicalFile, TSemantic> {
-  status: KohoCsvStatus;
-  packageType: KohoCsvPackageType;
+export interface KohoCsvContractResultBase<
+  TLogicalFile extends KohoCsvContractLogicalFile,
+  TSemantic,
+> {
+  status: KohoCsvContractStatus;
+  packageType: KohoCsvContractPackageType;
   logicalFile: TLogicalFile;
   sourceEntryPath: string;
   normalizedEntryPath: string | null;
-  source: KohoCsvSourceMetadata;
-  issues: KohoCsvIssue[];
+  source: KohoCsvContractSourceMetadata;
+  issues: KohoCsvContractIssue[];
   recordCount: number;
-  records: KohoCsvRecord<TSemantic>[];
+  records: KohoCsvContractRecord<TSemantic>[];
 }
 
-export type KohoCsvAbstractResult = KohoCsvResultBase<
+export type KohoCsvContractAbstractRecord =
+  KohoCsvContractRecord<KohoCsvContractAbstractSemantic>;
+export type KohoCsvContractDocumentListRecord =
+  KohoCsvContractRecord<KohoCsvContractDocumentListSemantic>;
+export type KohoCsvContractContents1Record =
+  KohoCsvContractRecord<KohoCsvContractContents1Semantic>;
+export type KohoCsvContractContents2Record =
+  KohoCsvContractRecord<KohoCsvContractContents2Semantic>;
+
+export type KohoCsvContractAbstractResult = KohoCsvContractResultBase<
   "abstract",
-  KohoCsvAbstractSemantic
+  KohoCsvContractAbstractSemantic
 >;
-export type KohoCsvDocumentListResult = KohoCsvResultBase<
+export type KohoCsvContractDocumentListResult = KohoCsvContractResultBase<
   "document_list",
-  KohoCsvDocumentListSemantic
+  KohoCsvContractDocumentListSemantic
 >;
-export type KohoCsvContents1Result = KohoCsvResultBase<
+export type KohoCsvContractContents1Result = KohoCsvContractResultBase<
   "contents1",
-  KohoCsvContents1Semantic
+  KohoCsvContractContents1Semantic
 >;
-export type KohoCsvContents2Result = KohoCsvResultBase<
+export type KohoCsvContractContents2Result = KohoCsvContractResultBase<
   "contents2",
-  KohoCsvContents2Semantic
+  KohoCsvContractContents2Semantic
 >;
 
-export type KohoCsvParseResult =
-  | KohoCsvAbstractResult
-  | KohoCsvDocumentListResult
-  | KohoCsvContents1Result
-  | KohoCsvContents2Result;
+export type KohoCsvContractParseResult =
+  | KohoCsvContractAbstractResult
+  | KohoCsvContractDocumentListResult
+  | KohoCsvContractContents1Result
+  | KohoCsvContractContents2Result;
