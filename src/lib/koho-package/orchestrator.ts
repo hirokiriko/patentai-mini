@@ -905,7 +905,11 @@ function checkContents(
     const candidateCount = counts.bySection[section].primaryXmlCandidates;
     for (const logicalFile of ["contents1", "contents2"] as const) {
       const expectedPath = `DOCUMENT/${section}/${logicalFile === "contents1" ? "CONTENTS1.csv" : "CONTENTS2.csv"}`;
-      const entry = entries.find((candidate) => candidate.normalizedPath === expectedPath);
+      const entry = entries.find(
+        (candidate) =>
+          candidate.normalizedPath === expectedPath &&
+          candidate.role === "csv",
+      );
       const attached = csvResults.find(
         (candidate) =>
           candidate.normalizedPath === expectedPath && candidate.result.logicalFile === logicalFile,

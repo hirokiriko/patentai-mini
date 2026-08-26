@@ -33,6 +33,15 @@ function issueCodes(result: KohoPackageParseResult): string[] {
   return result.issues.map((issue) => issue.code);
 }
 
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringValues);
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap(stringValues);
+  }
+  return [];
+}
+
 function minimalJpaEntries() {
   return [
     { fileName: "ABSTRACT.csv", data: fictionalAbstractCsv("JPA") },
@@ -130,17 +139,40 @@ describe("parseKohoPackage public contract", () => {
   });
 
   it("is deterministic and preserves manifest ID order", async () => {
-    const bytes = buildMinimalFictionalPackage("JPA", {
-      includeNestedXml: true,
-      includeIgnoredEntries: true,
-      documentListCsv: "JP,FICTIONAL-OTHER,A,20990111\r\n",
-    });
+    const entries = minimalJpaEntries().map((entry) =>
+      entry.fileName === "DOCUMENT_LIST.csv"
+        ? { ...entry, data: "JP,FICTIONAL-OTHER,A,20990111\r\n" }
+        : entry,
+    );
+    entries.push(
+      {
+        fileName:
+          "DOCUMENT/P_A1/999900/999990/2099000001/ATTACHMENT/NESTED.xml",
+        data: "<FICTIONAL-NESTED/>",
+      },
+      {
+        fileName: "DOCUMENT/P_A1/999900/999990/2099000001/image.png",
+        data: "FICTIONAL-IMAGE",
+      },
+      { fileName: "XSD/FICTIONAL.xsd", data: "<schema/>" },
+      { fileName: "LEGACY/FICTIONAL.app", data: "FICTIONAL-LEGACY" },
+      { fileName: "EXTRA/Z-BROKEN.xml", data: "<FICTIONAL-BROKEN" },
+      { fileName: "EXTRA/A-BROKEN.csv", data: "FICTIONAL-BROKEN" },
+    );
+    const bytes = buildZip({ entries: entries.reverse() }).bytes;
     const first = await parseBuffer(bytes);
     const second = await parseBuffer(bytes);
 
     expect(first).toEqual(second);
     expect(first.issues.length).toBeGreaterThan(1);
     expect(first.issues).toEqual(second.issues);
+    expect(issueCodes(first)).toEqual([
+      "unclassified_csv_entry",
+      "unclassified_xml_entry",
+      "document_list_match_missing",
+      "primary_xml_unconfirmed",
+      "document_list_orphan",
+    ]);
     expect(first.manifest.map((entry) => entry.entryId)).toEqual(
       [...first.manifest.map((entry) => entry.entryId)].sort((a, b) => a - b),
     );
@@ -167,7 +199,30 @@ describe("parseKohoPackage public contract", () => {
       expect(result.status).toBe("success");
       expect(result.zipSummary?.sourceType).toBe("file");
       expect(result.zipSummary?.sourceName).toBeNull();
-      expect(JSON.stringify(result)).not.toContain(filePath);
+      expect(stringValues(result).every((value) => !value.includes(filePath))).toBe(
+        true,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not return a local file path after a file-source parse failure", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "koho-package-failure-"));
+    const filePath = join(directory, "FICTIONAL-BROKEN.zip");
+    try {
+      await writeFile(filePath, "FICTIONAL-NOT-A-ZIP");
+      const result = await parseKohoPackage({
+        packageType: "JPA",
+        source: { type: "file", path: filePath },
+        limits: FICTIONAL_PACKAGE_LIMITS,
+      });
+
+      expect(result.status).toBe("failed");
+      expect(issueCodes(result)).toContain("zip_open_failed");
+      expect(stringValues(result).every((value) => !value.includes(filePath))).toBe(
+        true,
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -199,26 +254,62 @@ describe("validation and bounded entry selection", () => {
     expect(sourceTouched).toBe(false);
   });
 
-  it("rejects non-finite, fractional, negative, and invalid package values before source access", async () => {
-    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+  it("rejects non-finite, unsafe, fractional, negative, and invalid package values before source access", async () => {
+    for (const value of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      -1,
+      1.5,
+    ]) {
+      let sourceTouched = false;
       const limits = structuredClone(FICTIONAL_PACKAGE_LIMITS);
       limits.csv.maxInputBytes = value;
-      const result = await parseKohoPackage({
+      const input = {
         packageType: "JPA",
-        source: { type: "buffer", bytes: new Uint8Array() },
         limits,
-      });
+        get source() {
+          sourceTouched = true;
+          throw new Error("source must not be touched");
+        },
+      } as unknown as KohoPackageParseInput;
+      const result = await parseKohoPackage(input);
       expect(result.status).toBe("failed");
       expect(issueCodes(result)).toEqual(["invalid_limits"]);
+      expect(sourceTouched).toBe(false);
     }
 
+    let invalidPackageSourceTouched = false;
     const invalidPackage = await parseKohoPackage({
-      packageType: "INVALID" as "JPA",
-      source: { type: "buffer", bytes: new Uint8Array() },
+      packageType: "INVALID",
       limits: FICTIONAL_PACKAGE_LIMITS,
-    });
+      get source() {
+        invalidPackageSourceTouched = true;
+        throw new Error("source must not be touched");
+      },
+    } as unknown as KohoPackageParseInput);
     expect(invalidPackage.status).toBe("failed");
     expect(issueCodes(invalidPackage)).toEqual(["invalid_limits"]);
+    expect(invalidPackageSourceTouched).toBe(false);
+  });
+
+  it("rejects a missing limit field before source access", async () => {
+    const limits = structuredClone(FICTIONAL_PACKAGE_LIMITS) as KohoPackageLimits;
+    delete (limits.csv as Partial<KohoPackageLimits["csv"]>).maxRecords;
+    let sourceTouched = false;
+    const input = {
+      packageType: "JPA",
+      limits,
+      get source() {
+        sourceTouched = true;
+        throw new Error("source must not be touched");
+      },
+    } as unknown as KohoPackageParseInput;
+
+    const result = await parseKohoPackage(input);
+    expect(result.status).toBe("failed");
+    expect(issueCodes(result)).toEqual(["invalid_limits"]);
+    expect(sourceTouched).toBe(false);
   });
 
   it.each(["ABSTRACT.csv", "DOCUMENT_LIST.csv"])(
@@ -232,7 +323,12 @@ describe("validation and bounded entry selection", () => {
     const result = await parseBuffer(bytes);
 
     expect(result.status).toBe("failed");
-    expect(issueCodes(result)).toContain("required_csv_missing");
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "required_csv_missing",
+        normalizedPath: missingPath,
+      }),
+    );
     expect(result.primaryXmlResults).toEqual([]);
     expect(
       result.manifest.find((entry) => entry.pathCandidate === "primary_xml")?.status,
@@ -296,6 +392,11 @@ describe("cross checks", () => {
     );
 
     expect(result.primaryXmlResults[0].result.status).toBe("success");
+    expect(
+      result.csvResults.find(
+        (item) => item.normalizedPath === "DOCUMENT_LIST.csv",
+      )?.result.records,
+    ).toHaveLength(2);
     expect(issueCodes(result)).not.toContain("document_list_match_ambiguous");
     expect(result.status).toBe("review_required");
     expect(issueCodes(result)).toContain("document_list_count_mismatch");
@@ -308,6 +409,11 @@ describe("cross checks", () => {
     );
 
     expect(result.status).toBe("review_required");
+    expect(
+      result.csvResults.find(
+        (item) => item.normalizedPath === "DOCUMENT_LIST.csv",
+      )?.result.records,
+    ).toHaveLength(2);
     expect(issueCodes(result)).toContain("document_list_match_ambiguous");
     expect(issueCodes(result)).toContain("primary_xml_unconfirmed");
   });
@@ -326,26 +432,46 @@ describe("cross checks", () => {
     expect(JSON.stringify(abstractResult)).toContain("DO-NOT-EXPAND-2099000001-2099999999");
   });
 
-  it("reports missing canonical CONTENTS only when a full-publication section is populated", async () => {
-    const result = await parseBuffer(
-      buildMinimalFictionalPackage("JPA", { includeContents2: false }),
-    );
+  it.each(["CONTENTS1.csv", "CONTENTS2.csv"])(
+    "reports missing canonical %s only when a full-publication section is populated",
+    async (missingName) => {
+      const missingPath = `DOCUMENT/P_A1/${missingName}`;
+      const result = await parseBuffer(
+        buildZip({
+          entries: minimalJpaEntries().filter(
+            (entry) => entry.fileName !== missingPath,
+          ),
+        }).bytes,
+      );
 
-    expect(result.status).toBe("review_required");
-    expect(issueCodes(result)).toContain("contents_file_missing");
-  });
+      expect(result.status).toBe("review_required");
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: "contents_file_missing",
+          normalizedPath: missingPath,
+        }),
+      );
+    },
+  );
 
-  it("reports missing and orphan CONTENTS publication records", async () => {
-    const result = await parseBuffer(
-      buildMinimalFictionalPackage("JPA", {
-        contents1Csv: fictionalContents1Csv("JPA", "FICTIONAL-ORPHAN"),
-      }),
-    );
+  it.each([
+    ["CONTENTS1.csv", fictionalContents1Csv("JPA", "FICTIONAL-ORPHAN")],
+    ["CONTENTS2.csv", fictionalContents2Csv("JPA", "FICTIONAL-ORPHAN")],
+  ] as const)(
+    "reports missing and orphan %s publication records",
+    async (fileName, contentsCsv) => {
+      const entries = minimalJpaEntries().map((entry) =>
+        entry.fileName === `DOCUMENT/P_A1/${fileName}`
+          ? { ...entry, data: contentsCsv }
+          : entry,
+      );
+      const result = await parseBuffer(buildZip({ entries }).bytes);
 
-    expect(result.status).toBe("review_required");
-    expect(issueCodes(result)).toContain("contents_record_missing");
-    expect(issueCodes(result)).toContain("contents_record_orphan");
-  });
+      expect(result.status).toBe("review_required");
+      expect(issueCodes(result)).toContain("contents_record_missing");
+      expect(issueCodes(result)).toContain("contents_record_orphan");
+    },
+  );
 });
 
 describe("resource closure and safe failure mapping", () => {
@@ -409,7 +535,7 @@ describe("resource closure and safe failure mapping", () => {
   });
 
   it("reads selected entries sequentially and at most once", async () => {
-    const bytes = buildMinimalFictionalPackage("JPA");
+    const bytes = buildZip({ entries: [...minimalJpaEntries()].reverse() }).bytes;
     const baseline = await parseBuffer(bytes);
     expect(baseline.status).toBe("success");
 
@@ -453,6 +579,18 @@ describe("resource closure and safe failure mapping", () => {
     expect(readOrder.slice(0, 2)).toEqual([
       wrapped.entries.find((entry) => entry.normalizedPath === "ABSTRACT.csv")!.id,
       wrapped.entries.find((entry) => entry.normalizedPath === "DOCUMENT_LIST.csv")!.id,
+    ]);
+    expect(
+      readOrder.map(
+        (entryId) =>
+          wrapped.entries.find((entry) => entry.id === entryId)!.normalizedPath,
+      ),
+    ).toEqual([
+      "ABSTRACT.csv",
+      "DOCUMENT_LIST.csv",
+      "DOCUMENT/P_A1/CONTENTS1.csv",
+      "DOCUMENT/P_A1/CONTENTS2.csv",
+      fictionalPrimaryEntryPath("A1"),
     ]);
   });
 });

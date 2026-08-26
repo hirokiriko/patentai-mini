@@ -415,6 +415,52 @@ describe("package orchestration regression coverage", () => {
     );
   });
 
+  it("stops after a failed DOCUMENT_LIST parser without reading later bodies", async () => {
+    const entries = [
+      fakeEntry(0, "ABSTRACT.csv"),
+      fakeEntry(1, "DOCUMENT_LIST.csv"),
+      fakeEntry(2, "DOCUMENT/P_A1/CONTENTS1.csv"),
+      fakeEntry(3, fictionalPrimaryEntryPath("A1")),
+    ];
+    const readOrder: number[] = [];
+    let closeCount = 0;
+    const reader: KohoZipReader = {
+      entries,
+      summary: summaryFor(entries),
+      async readEntryBytes(entryId) {
+        readOrder.push(entryId);
+        if (entryId === 0) {
+          return textEncoder.encode(fictionalAbstractCsv("JPA"));
+        }
+        if (entryId === 1) {
+          return textEncoder.encode(
+            fictionalDocumentListCsv("JPA").replace("20990111", "20990230"),
+          );
+        }
+        throw new Error("later entry must not be read");
+      },
+      async close() {
+        closeCount += 1;
+      },
+    };
+
+    const result = await parseKohoPackageWithDependencies(packageInput(), {
+      openZip: async () => reader,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(readOrder).toEqual([0, 1]);
+    expect(closeCount).toBe(1);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "csv_parse_failed",
+        normalizedPath: "DOCUMENT_LIST.csv",
+        recordNumber: 1,
+        cause: { source: "csv", code: "invalid_date" },
+      }),
+    );
+  });
+
   it("retains a close failure when summary access fails after open", async () => {
     let closeCount = 0;
     const reader: KohoZipReader = {
@@ -449,6 +495,38 @@ describe("package orchestration regression coverage", () => {
         }),
       ]),
     );
+  });
+
+  it("rolls up a close failure after otherwise successful processing", async () => {
+    const bytes = buildMinimalFictionalPackage("JPA");
+    const actualReader = await openKohoZip({
+      source: { type: "buffer", bytes },
+      limits: FICTIONAL_PACKAGE_LIMITS.zip,
+    });
+    let closeCount = 0;
+    const reader: KohoZipReader = {
+      entries: actualReader.entries,
+      summary: actualReader.summary,
+      readEntryBytes: (entryId) => actualReader.readEntryBytes(entryId),
+      async close() {
+        closeCount += 1;
+        await actualReader.close();
+        throw new KohoZipError("reader_closed");
+      },
+    };
+
+    const result = await parseKohoPackageWithDependencies(packageInput(), {
+      openZip: async () => reader,
+    });
+
+    expect(closeCount).toBe(1);
+    expect(result.status).toBe("failed");
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        code: "reader_close_failed",
+        cause: { source: "zip", code: "reader_closed" },
+      }),
+    ]);
   });
 
   it("compares a positive ABSTRACT summary against zero primary candidates", async () => {
@@ -647,6 +725,38 @@ describe("package orchestration regression coverage", () => {
           issue.normalizedPath === "DOCUMENT/P_A1/CONTENTS1.csv",
       ),
     ).toBe(false);
+  });
+
+  it("does not treat a same-named directory as a canonical CONTENTS file", async () => {
+    const entries = minimalJpaEntries().filter(
+      (entry) => entry.fileName !== "DOCUMENT/P_A1/CONTENTS1.csv",
+    );
+    entries.push({
+      fileName: "DOCUMENT/P_A1/CONTENTS1.csv/",
+      data: new Uint8Array(),
+    });
+    const bytes = buildZip({ entries }).bytes;
+
+    const result = await parseKohoPackageWithDependencies(packageInput({
+      type: "buffer",
+      bytes,
+    }), {});
+
+    expect(result.status).toBe("review_required");
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "contents_file_missing",
+        normalizedPath: "DOCUMENT/P_A1/CONTENTS1.csv",
+        section: "P_A1",
+      }),
+    );
+    expect(result.manifest).toContainEqual(
+      expect.objectContaining({
+        normalizedPath: "DOCUMENT/P_A1/CONTENTS1.csv",
+        role: "directory",
+        processing: "ignored_attachment",
+      }),
+    );
   });
 
   it("matches a leading-zero B number before using an unknown DOCUMENT_LIST kind", async () => {
@@ -884,6 +994,54 @@ describe("package orchestration regression coverage", () => {
     expect(issueCodes(result)).toContain("package_section_mismatch");
   });
 
+  it("does not use JPA CONTENTS paths as JPB canonical substitutes", async () => {
+    const bytes = buildZip({
+      entries: [
+        { fileName: "ABSTRACT.csv", data: fictionalAbstractCsv("JPB") },
+        {
+          fileName: "DOCUMENT_LIST.csv",
+          data: fictionalDocumentListCsv("JPB"),
+        },
+        {
+          fileName: "DOCUMENT/P_A1/CONTENTS1.csv",
+          data: fictionalContents1Csv("JPB"),
+        },
+        {
+          fileName: "DOCUMENT/P_A1/CONTENTS2.csv",
+          data: fictionalContents2Csv("JPB"),
+        },
+        {
+          fileName: fictionalPrimaryEntryPath("B1"),
+          data: buildFictionalFullPublicationXml("B1"),
+        },
+      ],
+    }).bytes;
+
+    const result = await parseKohoPackageWithDependencies(
+      {
+        packageType: "JPB",
+        source: { type: "buffer", bytes },
+        limits: FICTIONAL_PACKAGE_LIMITS,
+      },
+      {},
+    );
+
+    expect(result.status).toBe("review_required");
+    expect(
+      result.csvResults
+        .filter((item) => item.normalizedPath.startsWith("DOCUMENT/P_A1/"))
+        .every((item) => item.result.status === "review_required"),
+    ).toBe(true);
+    expect(
+      result.issues
+        .filter((issue) => issue.code === "contents_file_missing")
+        .map((issue) => issue.normalizedPath),
+    ).toEqual([
+      "DOCUMENT/P_B1/CONTENTS1.csv",
+      "DOCUMENT/P_B1/CONTENTS2.csv",
+    ]);
+  });
+
   it("parses P5 CONTENTS without treating them as canonical cross-check files", async () => {
     const documentListCsv =
       fictionalDocumentListCsv("JPA") +
@@ -1021,10 +1179,18 @@ describe("package orchestration regression coverage", () => {
     expect(JSON.stringify(result.issues)).not.toContain(secretXmlBody);
   });
 
-  it("keeps duplicate CONTENTS records and reports an ambiguous match", async () => {
-    const record = fictionalContents1Csv("JPA");
+  it.each([
+    ["CONTENTS1.csv", fictionalContents1Csv("JPA")],
+    ["CONTENTS2.csv", fictionalContents2Csv("JPA")],
+  ] as const)(
+    "keeps duplicate %s records and reports an ambiguous match",
+    async (fileName, record) => {
     const bytes = buildZip({
-      entries: minimalJpaEntries({ contents1Csv: record + record }),
+      entries: minimalJpaEntries(
+        fileName === "CONTENTS1.csv"
+          ? { contents1Csv: record + record }
+          : { contents2Csv: record + record },
+      ),
     }).bytes;
 
     const result = await parseKohoPackageWithDependencies(packageInput({
@@ -1035,10 +1201,11 @@ describe("package orchestration regression coverage", () => {
     expect(result.status).toBe("review_required");
     expect(issueCodes(result)).toContain("contents_record_ambiguous");
     const contents = result.csvResults.find(
-      (item) => item.normalizedPath === "DOCUMENT/P_A1/CONTENTS1.csv",
+      (item) => item.normalizedPath === `DOCUMENT/P_A1/${fileName}`,
     );
     expect(contents?.result.records).toHaveLength(2);
-  });
+    },
+  );
 
   it("parses a package containing both stored and deflate entries", async () => {
     const entries = minimalJpaEntries().map((entry, index) => ({
