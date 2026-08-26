@@ -147,7 +147,7 @@ describe("parseKohoPackage public contract", () => {
   });
 
   it("matches a fictional formatted JPB publication number in contents CSV files", async () => {
-    const formattedPublicationNumber = "特許-9999991";
+    const formattedPublicationNumber = "\u7279-09999991";
     const result = await parseKohoPackage({
       packageType: "JPB",
       source: {
@@ -170,7 +170,7 @@ describe("parseKohoPackage public contract", () => {
   });
 
   it("matches a fictional formatted JPB B2 publication number only for contents checks", async () => {
-    const formattedPublicationNumber = "特許-9999992";
+    const formattedPublicationNumber = "\u7279-09999992";
     const asB2 = (value: string) => value.replace(",B1,", ",B2,");
     const bytes = buildZip({
       entries: [
@@ -211,7 +211,7 @@ describe("parseKohoPackage public contract", () => {
       source: {
         type: "buffer",
         bytes: buildMinimalFictionalPackage("JPB", {
-          documentListCsv: "JP,特許-0009999991,B1,20990311\r\n",
+          documentListCsv: "JP,\u7279-09999991,B1,20990311\r\n",
         }),
       },
       limits: FICTIONAL_PACKAGE_LIMITS,

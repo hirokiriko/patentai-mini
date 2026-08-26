@@ -64,7 +64,7 @@ const ROLE_NAMES: readonly KohoZipEntryRole[] = [
   "other",
 ];
 const DASH_OR_SPACE = /[\s\-‐‑‒–—―]/gu;
-const JPB_FORMATTED_PUBLICATION_NUMBER = /^特許[-‐‑‒–—―](\d+)$/u;
+const JPB_FORMATTED_PUBLICATION_NUMBER = /^\u7279[-‐‑‒–—―](\d+)$/u;
 
 const SAFE_MESSAGES: Record<KohoPackageIssueCode, string> = {
   invalid_limits: "Package parser limits or package type are invalid",
