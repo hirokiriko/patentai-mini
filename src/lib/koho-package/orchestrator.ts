@@ -11,6 +11,7 @@ import {
   type KohoXmlParseInput,
   type KohoXmlParseResult,
 } from "../koho-xml";
+import { inspectKohoEntryPath } from "../koho-xml/path";
 import {
   KohoZipError,
   openKohoZip,
@@ -110,7 +111,7 @@ const DEFAULT_DEPENDENCIES: PackageDependencies = {
 };
 
 interface XmlIdentity {
-  publicationNumber: string;
+  packagePublicationNumber: string;
   kind: KohoDocumentKind;
   entryType: "full_publication" | "amendment";
   identityConfirmed: boolean;
@@ -537,7 +538,7 @@ async function parsePrimaryXmlEntry(
   if (bootstrap.status !== "failed" && identity) {
     const matches = documentList.filter((record) =>
       publicationMatches(
-        identity.publicationNumber,
+        identity.packagePublicationNumber,
         record.publicationNumber,
         identity.kind,
       ),
@@ -552,7 +553,7 @@ async function parsePrimaryXmlEntry(
         entry.normalizedPath,
         sectionFromPath(entry.normalizedPath),
       );
-    } else if (!hasConsensus(matches)) {
+    } else if (!hasUsableDocumentListConsensus(matches, identity.kind)) {
       queueIssue(
         issues,
         5,
@@ -818,7 +819,7 @@ function checkDocumentList(
   for (const { item, identity } of identities) {
     const matches = records.filter((record) =>
       publicationMatches(
-        identity.publicationNumber,
+        identity.packagePublicationNumber,
         record.publicationNumber,
         identity.kind,
       ),
@@ -835,7 +836,7 @@ function checkDocumentList(
       );
     } else if (
       matches.length > 1 &&
-      !hasConsensus(matches) &&
+      !hasUsableDocumentListConsensus(matches, identity.kind) &&
       !hasIssue(issues, "document_list_match_ambiguous", item.entryId)
     ) {
       queueIssue(
@@ -853,7 +854,7 @@ function checkDocumentList(
   for (const record of records) {
     const matches = identities.filter(({ identity }) =>
       publicationMatches(
-        identity.publicationNumber,
+        identity.packagePublicationNumber,
         record.publicationNumber,
         identity.kind,
       ),
@@ -943,7 +944,7 @@ function checkContents(
           return (
             publicationNumber !== null &&
             publicationMatches(
-              identity.publicationNumber,
+              identity.packagePublicationNumber,
               publicationNumber,
               identity.kind,
             )
@@ -977,7 +978,7 @@ function checkContents(
         if (publicationNumber === null) continue;
         const matches = sectionXml.filter(({ identity }) =>
           publicationMatches(
-            identity.publicationNumber,
+            identity.packagePublicationNumber,
             publicationNumber,
             identity.kind,
           ),
@@ -1166,7 +1167,7 @@ function xmlIdentity(result: KohoXmlParseResult): XmlIdentity | null {
     const document = result.document ?? result.candidate;
     if (!document || !result.kind) return null;
     return {
-      publicationNumber: document.publicationNumber.value,
+      packagePublicationNumber: document.publicationNumber.value,
       kind: result.kind,
       entryType: "full_publication",
       identityConfirmed: result.identityConfirmed,
@@ -1175,14 +1176,24 @@ function xmlIdentity(result: KohoXmlParseResult): XmlIdentity | null {
   if ("amendment" in result) {
     const amendment = result.amendment ?? result.candidate;
     if (!amendment || !result.kind) return null;
+    const packagePublicationNumber =
+      result.kind === "P5"
+        ? primaryDocumentNumber(result.source.normalizedEntryPath)
+        : amendment.publicationNumber.value;
+    if (!packagePublicationNumber) return null;
     return {
-      publicationNumber: amendment.publicationNumber.value,
+      packagePublicationNumber,
       kind: result.kind,
       entryType: "amendment",
       identityConfirmed: result.identityConfirmed,
     };
   }
   return null;
+}
+
+function primaryDocumentNumber(normalizedPath: string): string | null {
+  const path = inspectKohoEntryPath(normalizedPath);
+  return path.ok && path.isPrimaryXml ? path.documentNumber : null;
 }
 
 function isIdentityConfirmed(result: KohoXmlParseResult): boolean {
@@ -1197,6 +1208,13 @@ function hasConsensus(matches: readonly DocumentListView[]): boolean {
       item.kindCode === first.kindCode &&
       item.issuePublicationDate === first.issuePublicationDate,
   );
+}
+
+function hasUsableDocumentListConsensus(
+  matches: readonly DocumentListView[],
+  kind: KohoDocumentKind,
+): boolean {
+  return kind === "P5" ? matches.length === 1 : hasConsensus(matches);
 }
 
 function publicationMatches(

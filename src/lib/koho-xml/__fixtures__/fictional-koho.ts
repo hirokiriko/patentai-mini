@@ -100,6 +100,7 @@ interface FictionalKindDefinition {
   rootLocalName: string;
   schemaBasename: string;
   publicationNumber: string;
+  packagePublicationNumber: string;
   applicationNumber: string;
   applicationDate: string;
   publicationDate: string;
@@ -127,6 +128,7 @@ const KIND_DEFINITIONS = {
     rootLocalName: "UnexaminedPatentPublication",
     schemaBasename: "JPUnexaminedPatentPublication_V1_0.xsd",
     publicationNumber: "2099000001",
+    packagePublicationNumber: "2099000001",
     applicationNumber: "FICTIONAL-APPLICATION-A1-0001",
     applicationDate: "2098-01-01",
     publicationDate: "2099-01-11",
@@ -142,6 +144,7 @@ const KIND_DEFINITIONS = {
     rootLocalName: "UnexaminedPatentPublicationAmendment",
     schemaBasename: "JPUnexaminedPatentPublicationAmendment_V1_0.xsd",
     publicationNumber: "2099000005",
+    packagePublicationNumber: "2099000005",
     applicationNumber: "FICTIONAL-APPLICATION-A5-0005",
     applicationDate: "2098-01-05",
     publicationDate: "2099-01-15",
@@ -155,7 +158,8 @@ const KIND_DEFINITIONS = {
     section: "P_P1",
     rootLocalName: "InternationalPatentPublication",
     schemaBasename: "JPInternationalPatentPublication_V1_0.xsd",
-    publicationNumber: "WO2099000001",
+    publicationNumber: "2099000002",
+    packagePublicationNumber: "2099000002",
     applicationNumber: "FICTIONAL-APPLICATION-P1-0001",
     applicationDate: "2098-02-01",
     publicationDate: "2099-02-11",
@@ -171,6 +175,7 @@ const KIND_DEFINITIONS = {
     rootLocalName: "InternationalPatentPublicationAmendment",
     schemaBasename: "JPInternationalPatentPublicationAmendment_V1_0.xsd",
     publicationNumber: "WO2099000005",
+    packagePublicationNumber: "2099000006",
     applicationNumber: "FICTIONAL-APPLICATION-P5-0005",
     applicationDate: "2098-02-05",
     publicationDate: "2099-02-15",
@@ -185,6 +190,7 @@ const KIND_DEFINITIONS = {
     rootLocalName: "RegisteredPatentPublication",
     schemaBasename: "JPRegisteredPatentPublication_V1_0.xsd",
     publicationNumber: "9999991",
+    packagePublicationNumber: "9999991",
     applicationNumber: "FICTIONAL-APPLICATION-B1-0001",
     applicationDate: "2098-03-01",
     publicationDate: "2099-03-11",
@@ -201,6 +207,7 @@ const KIND_DEFINITIONS = {
     rootLocalName: "RegisteredPatentPublication",
     schemaBasename: "JPRegisteredPatentPublication_V1_0.xsd",
     publicationNumber: "9999992",
+    packagePublicationNumber: "9999992",
     applicationNumber: "FICTIONAL-APPLICATION-B2-0002",
     applicationDate: "2098-03-02",
     publicationDate: "2099-03-12",
@@ -858,7 +865,7 @@ export function buildFictionalAmendmentXml(
   ]);
   const nationalPublicationNumber = optionOrDefault(
     options.nationalPublicationNumber,
-    kind === "P5" ? "FICTIONAL-NATIONAL-PUBLICATION-P5" : null,
+    kind === "P5" ? definition.packagePublicationNumber : null,
   );
   const previousPublicationDate = optionOrDefault(
     options.previousPublicationDate,
@@ -935,7 +942,7 @@ export function buildFictionalAmendmentXml(
 
 export function fictionalPrimaryEntryPath(kind: KohoDocumentKind): string {
   const definition = KIND_DEFINITIONS[kind];
-  const documentNumber = definition.publicationNumber;
+  const documentNumber = definition.packagePublicationNumber;
   return `DOCUMENT/${definition.section}/999900/999990/${documentNumber}/${documentNumber}.xml`;
 }
 
@@ -951,7 +958,7 @@ export function createFictionalKohoInput(
       : buildFictionalFullPublicationXml(kind);
   const defaultIndexHint: NonNullable<KohoXmlParseInput["indexHint"]> = {
     kindCode: definition.indexKindCode,
-    publicationNumber: definition.publicationNumber,
+    publicationNumber: definition.packagePublicationNumber,
     publicationDate: definition.indexPublicationDate,
   };
   const indexHint =
