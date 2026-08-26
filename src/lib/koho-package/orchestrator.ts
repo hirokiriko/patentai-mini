@@ -64,6 +64,7 @@ const ROLE_NAMES: readonly KohoZipEntryRole[] = [
   "other",
 ];
 const DASH_OR_SPACE = /[\s\-‐‑‒–—―]/gu;
+const JPB_FORMATTED_PUBLICATION_NUMBER = /^特許[-‐‑‒–—―](\d+)$/u;
 
 const SAFE_MESSAGES: Record<KohoPackageIssueCode, string> = {
   invalid_limits: "Package parser limits or package type are invalid",
@@ -942,7 +943,7 @@ function checkContents(
           const publicationNumber = contentsPublicationNumber(logicalFile, record);
           return (
             publicationNumber !== null &&
-            publicationMatches(
+            contentsPublicationMatches(
               identity.publicationNumber,
               publicationNumber,
               identity.kind,
@@ -976,7 +977,7 @@ function checkContents(
         const publicationNumber = contentsPublicationNumber(logicalFile, record);
         if (publicationNumber === null) continue;
         const matches = sectionXml.filter(({ identity }) =>
-          publicationMatches(
+          contentsPublicationMatches(
             identity.publicationNumber,
             publicationNumber,
             identity.kind,
@@ -1216,6 +1217,24 @@ function normalizePublicationNumber(value: string, kind: string | null): string 
     normalized = normalized.replace(/^0+(?=\d)/, "");
   }
   return normalized;
+}
+
+function contentsPublicationMatches(
+  xmlPublicationNumber: string,
+  contentsPublicationNumber: string,
+  kind: string | null,
+): boolean {
+  let normalizedContents = contentsPublicationNumber;
+  if (kind === "B1" || kind === "B2") {
+    const formatted = JPB_FORMATTED_PUBLICATION_NUMBER.exec(
+      contentsPublicationNumber.normalize("NFC").toUpperCase(),
+    );
+    normalizedContents = formatted?.[1] ?? normalizedContents;
+  }
+  return (
+    normalizePublicationNumber(xmlPublicationNumber, kind) ===
+    normalizePublicationNumber(normalizedContents, kind)
+  );
 }
 
 function knownCsvLogicalFile(

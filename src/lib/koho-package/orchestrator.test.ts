@@ -33,6 +33,14 @@ function issueCodes(result: KohoPackageParseResult): string[] {
   return result.issues.map((issue) => issue.code);
 }
 
+function contentsSourcePublicationNumbers(result: KohoPackageParseResult): string[] {
+  return result.csvResults.flatMap((item) =>
+    item.result.logicalFile === "contents1" || item.result.logicalFile === "contents2"
+      ? item.result.records.flatMap((record) => record.sourceCells[2] ?? [])
+      : [],
+  );
+}
+
 function stringValues(value: unknown): string[] {
   if (typeof value === "string") return [value];
   if (Array.isArray(value)) return value.flatMap(stringValues);
@@ -136,6 +144,82 @@ describe("parseKohoPackage public contract", () => {
     expect(result.issues).toEqual([]);
     expect(result.primaryXmlResults[0].result.status).toBe("success");
     expect(result.counts.bySection.P_B1.confirmedFullPublications).toBe(1);
+  });
+
+  it("matches a fictional formatted JPB publication number in contents CSV files", async () => {
+    const formattedPublicationNumber = "特許-9999991";
+    const result = await parseKohoPackage({
+      packageType: "JPB",
+      source: {
+        type: "buffer",
+        bytes: buildMinimalFictionalPackage("JPB", {
+          contents1Csv: fictionalContents1Csv("JPB", formattedPublicationNumber),
+          contents2Csv: fictionalContents2Csv("JPB", formattedPublicationNumber),
+        }),
+      },
+      limits: FICTIONAL_PACKAGE_LIMITS,
+    });
+
+    expect(result.status).toBe("success");
+    expect(result.issues).toEqual([]);
+    expect(result.counts.bySection.P_B1.confirmedFullPublications).toBe(1);
+    expect(contentsSourcePublicationNumbers(result)).toEqual([
+      formattedPublicationNumber,
+      formattedPublicationNumber,
+    ]);
+  });
+
+  it("matches a fictional formatted JPB B2 publication number only for contents checks", async () => {
+    const formattedPublicationNumber = "特許-9999992";
+    const asB2 = (value: string) => value.replace(",B1,", ",B2,");
+    const bytes = buildZip({
+      entries: [
+        { fileName: "ABSTRACT.csv", data: fictionalAbstractCsv("JPB") },
+        { fileName: "DOCUMENT_LIST.csv", data: "JP,0009999992,B2,20990312\r\n" },
+        {
+          fileName: "DOCUMENT/P_B1/CONTENTS1.csv",
+          data: asB2(fictionalContents1Csv("JPB", formattedPublicationNumber)),
+        },
+        {
+          fileName: "DOCUMENT/P_B1/CONTENTS2.csv",
+          data: asB2(fictionalContents2Csv("JPB", formattedPublicationNumber)),
+        },
+        {
+          fileName: fictionalPrimaryEntryPath("B2"),
+          data: buildFictionalFullPublicationXml("B2"),
+        },
+      ],
+    }).bytes;
+    const result = await parseKohoPackage({
+      packageType: "JPB",
+      source: { type: "buffer", bytes },
+      limits: FICTIONAL_PACKAGE_LIMITS,
+    });
+
+    expect(issueCodes(result)).not.toContain("contents_record_missing");
+    expect(issueCodes(result)).not.toContain("contents_record_orphan");
+    expect(result.counts.bySection.P_B1.confirmedFullPublications).toBe(1);
+    expect(contentsSourcePublicationNumbers(result)).toEqual([
+      formattedPublicationNumber,
+      formattedPublicationNumber,
+    ]);
+  });
+
+  it("does not apply contents-only JPB formatting to DOCUMENT_LIST", async () => {
+    const result = await parseKohoPackage({
+      packageType: "JPB",
+      source: {
+        type: "buffer",
+        bytes: buildMinimalFictionalPackage("JPB", {
+          documentListCsv: "JP,特許-0009999991,B1,20990311\r\n",
+        }),
+      },
+      limits: FICTIONAL_PACKAGE_LIMITS,
+    });
+
+    expect(result.status).toBe("review_required");
+    expect(issueCodes(result)).toContain("document_list_match_missing");
+    expect(issueCodes(result)).toContain("document_list_orphan");
   });
 
   it("is deterministic and preserves manifest ID order", async () => {
