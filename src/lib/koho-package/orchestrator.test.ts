@@ -21,6 +21,7 @@ import {
   fictionalContents1Csv,
   fictionalContents2Csv,
   fictionalDocumentListCsv,
+  fictionalOfficialAbstractCsv,
 } from "./__fixtures__/fictional-package";
 import type {
   KohoPackageLimits,
@@ -129,6 +130,94 @@ describe("parseKohoPackage public contract", () => {
     expect(result.counts.bySection.P_A1.contents1Records).toBe(1);
     expect(result.counts.bySection.P_A1.contents2Records).toBe(1);
   });
+
+  it.each([
+    ["JPA", "P_A1"],
+    ["JPB", "P_B1"],
+  ] as const)(
+    "resolves a fictional %s package with the JPO official ABSTRACT format",
+    async (packageType, section) => {
+      const abstractCsv = fictionalOfficialAbstractCsv(packageType);
+      const [metadataRawRecord, summaryRawRecord] = abstractCsv.split("\r\n");
+      const result = await parseKohoPackage({
+        packageType,
+        source: {
+          type: "buffer",
+          bytes: buildMinimalFictionalPackage(packageType, {
+            abstractCsv,
+          }),
+          sourceName: "fictional-official-abstract-package.zip",
+        },
+        limits: FICTIONAL_PACKAGE_LIMITS,
+      });
+      const abstract = result.csvResults.find(
+        (item) => item.result.logicalFile === "abstract",
+      );
+      if (!abstract || abstract.result.logicalFile !== "abstract") {
+        throw new Error("expected an ABSTRACT result");
+      }
+      const abstractIssues = abstract.result.records.flatMap((record) =>
+        record.issues.map((issue) => issue.code),
+      );
+      const metadata = abstract.result.records.find(
+        (record) => record.semantic?.recordType === "metadata",
+      );
+      const summaries = abstract.result.records.filter(
+        (record) => record.semantic?.recordType === "summary",
+      );
+      const expectedSections =
+        packageType === "JPA"
+          ? (["P_A1", "P_A5", "P_P1", "P_P5"] as const)
+          : (["P_B1"] as const);
+
+      expect(result.status).toBe("success");
+      expect(result.packageType).toBe(packageType);
+      expect(metadata?.rawRecord).toBe(metadataRawRecord);
+      expect(metadata?.sourceCells[0]).toBe(
+        packageType === "JPA" ? "A_999" : "B_999",
+      );
+      expect(metadata?.semantic).toEqual(
+        expect.objectContaining({
+          packageCode: packageType === "JPA" ? "A_999" : "B_999",
+        }),
+      );
+      expect(summaries[0]?.rawRecord).toBe(summaryRawRecord);
+      expect(summaries[0]?.sourceCells[0]).toBe(
+        summaryRawRecord.slice(0, summaryRawRecord.indexOf(",")),
+      );
+      for (const code of ["unknown_package_code", "unknown_section"]) {
+        expect(abstractIssues).not.toContain(code);
+      }
+      const packageIssues = issueCodes(result);
+      for (const code of [
+        "abstract_summary_missing",
+        "abstract_summary_ambiguous",
+        "abstract_count_mismatch",
+      ]) {
+        expect(packageIssues).not.toContain(code);
+      }
+      expect(summaries).toHaveLength(expectedSections.length);
+      for (const expectedSection of expectedSections) {
+        const summary = summaries.find(
+          (record) =>
+            record.semantic?.recordType === "summary" &&
+            record.semantic.section === expectedSection,
+        );
+        const candidateCount =
+          result.counts.bySection[expectedSection].primaryXmlCandidates;
+        expect(summary?.semantic).toEqual(
+          expect.objectContaining({
+            section: expectedSection,
+            documentCount: {
+              sourceValue: candidateCount === 0 ? "00000" : "00001",
+              value: candidateCount,
+            },
+          }),
+        );
+      }
+      expect(result.counts.bySection[section].primaryXmlCandidates).toBe(1);
+    },
+  );
 
   it("parses a minimal fictional JPB deflate package and matches leading-zero B publication numbers", async () => {
     const result = await parseKohoPackage({

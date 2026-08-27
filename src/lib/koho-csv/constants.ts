@@ -14,6 +14,20 @@ export const ABSTRACT_SECTION_NAMES: Readonly<
   },
 };
 
+export const ABSTRACT_OFFICIAL_SECTION_LABELS: Readonly<
+  Record<KohoCsvPackageType, Readonly<Record<string, KohoCsvSection>>>
+> = {
+  JPA: {
+    公開特許公報: "P_A1",
+    "補正の掲載(公開特許公報)": "P_A5",
+    公表特許公報: "P_P1",
+    国際公開後における補正の掲載: "P_P5",
+  },
+  JPB: {
+    特許公報: "P_B1",
+  },
+};
+
 export const KNOWN_DISPLAY_FLAGS: Readonly<
   Record<KohoCsvPackageType, ReadonlySet<string>>
 > = {

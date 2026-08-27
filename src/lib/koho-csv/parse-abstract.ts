@@ -1,4 +1,7 @@
-import { ABSTRACT_SECTION_NAMES } from "./constants";
+import {
+  ABSTRACT_OFFICIAL_SECTION_LABELS,
+  ABSTRACT_SECTION_NAMES,
+} from "./constants";
 import {
   addIssueOnce,
   createIssue,
@@ -10,6 +13,7 @@ import type {
   KohoCsvAbstractRecord,
   KohoCsvIssue,
   KohoCsvPackageType,
+  KohoCsvSection,
   ParsedCsvRecord,
 } from "./types";
 
@@ -22,6 +26,55 @@ export interface ParseAbstractOutput {
   status: "success" | "review_required" | "failed";
   issues: KohoCsvIssue[];
   records: KohoCsvAbstractRecord[];
+}
+
+const OFFICIAL_PACKAGE_VERSION_CODE: Readonly<
+  Record<KohoCsvPackageType, RegExp>
+> = {
+  JPA: /^A_[0-9]{3}$/u,
+  JPB: /^B_[0-9]{3}$/u,
+};
+
+const OFFICIAL_SECTION_FORMAT =
+  /^(.+)\((P_(?:A1|A5|P1|P5|B1))\)$/u;
+const OFFICIAL_SECTION_FIELD_WIDTH = 80;
+
+function matchesPackageCode(
+  sourceValue: string,
+  packageType: KohoCsvPackageType,
+): boolean {
+  return (
+    sourceValue === packageType ||
+    OFFICIAL_PACKAGE_VERSION_CODE[packageType].test(sourceValue)
+  );
+}
+
+function resolveSection(
+  sourceSectionName: string,
+  packageType: KohoCsvPackageType,
+): KohoCsvSection | null {
+  const normalizedSectionName = sourceSectionName.replace(/ +$/u, "");
+  const compatibleNames = ABSTRACT_SECTION_NAMES[packageType];
+  if (Object.hasOwn(compatibleNames, normalizedSectionName)) {
+    return compatibleNames[normalizedSectionName];
+  }
+
+  const match = OFFICIAL_SECTION_FORMAT.exec(normalizedSectionName);
+  if (!match) return null;
+  const [, label, sourceSection] = match;
+  const officialLabels = ABSTRACT_OFFICIAL_SECTION_LABELS[packageType];
+  if (!Object.hasOwn(officialLabels, label)) return null;
+  const section = officialLabels[label];
+  if (section !== sourceSection) return null;
+  const sourceWidth = Array.from(normalizedSectionName).reduce(
+    (sum, character) =>
+      sum + (character.codePointAt(0)! <= 0x7f ? 1 : 2),
+    0,
+  );
+  const padding = OFFICIAL_SECTION_FIELD_WIDTH - sourceWidth;
+  if (padding < 0) return null;
+  const officialSource = `${normalizedSectionName}${" ".repeat(padding)}`;
+  return sourceSectionName === officialSource ? section : null;
 }
 
 function isGregorianDate(value: string): boolean {
@@ -99,7 +152,7 @@ function parseMetadata(
       }),
     );
   }
-  if (packageCode !== packageType) {
+  if (!matchesPackageCode(packageCode, packageType)) {
     record.issues.push(
       createIssue("package_code_mismatch", {
         recordOrdinal: parsed.ordinal,
@@ -149,10 +202,7 @@ function parseSummary(
   const [sectionName = "", publicationNumberRange = "", countText = ""] =
     parsed.sourceCells;
   const normalizedSectionName = sectionName.replace(/ +$/u, "");
-  const knownSections = ABSTRACT_SECTION_NAMES[packageType];
-  const section = Object.hasOwn(knownSections, normalizedSectionName)
-    ? knownSections[normalizedSectionName]
-    : null;
+  const section = resolveSection(sectionName, packageType);
   const parsedDocumentCount = documentCount(countText);
   const missing = semicolonList(parsed.sourceCells[3] ?? "");
   const included = semicolonList(parsed.sourceCells[4] ?? "");
@@ -238,11 +288,19 @@ function parseSummary(
   return finalizeRecord(record);
 }
 
-function addDuplicateSectionIssues(records: KohoCsvAbstractRecord[]): void {
+function addDuplicateSectionIssues(
+  records: KohoCsvAbstractRecord[],
+  packageType: KohoCsvPackageType,
+): void {
   const bySection = new Map<string, KohoCsvAbstractRecord[]>();
   for (const record of records.slice(1)) {
     const normalized = record.sourceCells[0] ?? "";
-    const key = normalized.replace(/ +$/u, "");
+    const normalizedSectionName = normalized.replace(/ +$/u, "");
+    const section = resolveSection(normalized, packageType);
+    const key =
+      section === null
+        ? `source:${normalizedSectionName}`
+        : `section:${section}`;
     const matches = bySection.get(key) ?? [];
     matches.push(record);
     bySection.set(key, matches);
@@ -277,7 +335,7 @@ export function parseAbstractRecords(
       ? parseMetadata(record, input.packageType)
       : parseSummary(record, input.packageType),
   );
-  addDuplicateSectionIssues(records);
+  addDuplicateSectionIssues(records, input.packageType);
   return {
     status: rollupFileStatus(issues, records),
     issues,
