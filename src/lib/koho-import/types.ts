@@ -46,10 +46,20 @@ export interface BuildKohoImportPlanInput {
 }
 
 export type KohoImportPlanValidationErrorCode =
+  | "invalid_plan_shape"
+  | "invalid_document_shape"
   | "invalid_source_sha256"
   | "invalid_package_type"
   | "invalid_package_status"
+  | "invalid_document_count"
   | "invalid_counts"
+  | "invalid_counts_json"
+  | "invalid_issues_json"
+  | "invalid_applicants_json"
+  | "invalid_ipc_json"
+  | "invalid_fi_json"
+  | "invalid_parse_issues_json"
+  | "invalid_source_metadata_json"
   | "invalid_primary_xml_result"
   | "invalid_entry_id"
   | "invalid_entry_type"
@@ -59,7 +69,9 @@ export type KohoImportPlanValidationErrorCode =
   | "invalid_issue_section"
   | "invalid_normalized_entry_path"
   | "duplicate_normalized_entry_path"
-  | "inconsistent_source_metadata";
+  | "inconsistent_source_metadata"
+  | "invalid_content_sha256"
+  | "content_sha256_mismatch";
 
 /** Validation details intentionally omit source content and rejected values. */
 export class KohoImportPlanValidationError extends Error {

@@ -1,17 +1,25 @@
-import { createHash } from "node:crypto";
 import type {
   KohoPackageCountSummary,
   KohoPackageParseResult,
-  KohoPackageSection,
   KohoPackageXmlResult,
 } from "../koho-package";
 import type {
   KohoClassification,
-  KohoDocumentKind,
   KohoFullPublicationResult,
   KohoIngestStatus,
 } from "../koho-xml";
 import { inspectKohoEntryPath } from "../koho-xml/path";
+import {
+  createKohoImportDocumentPlan,
+  serializeKohoImportApplicantsJson,
+  serializeKohoImportCountsJson,
+  serializeKohoImportFiJson,
+  serializeKohoImportIpcJson,
+  serializeKohoImportIssuesJson,
+  serializeKohoImportParseIssuesJson,
+  serializeKohoImportSourceMetadataJson,
+  type KohoImportRunIssueAggregate,
+} from "./persistence-contract";
 import {
   KohoImportPlanValidationError,
   type BuildKohoImportPlanInput,
@@ -62,15 +70,6 @@ interface SelectedDocument {
   result: ConfirmedFullPublicationResult;
 }
 
-interface KohoRunIssueAggregate {
-  source: "package" | "xml";
-  code: string;
-  status: Exclude<KohoIngestStatus, "success">;
-  kind: KohoDocumentKind | null;
-  section: KohoPackageSection | null;
-  count: number;
-}
-
 function invalid(code: KohoImportPlanValidationErrorCode): never {
   throw new KohoImportPlanValidationError(code);
 }
@@ -81,16 +80,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function compareNullableText(
-  left: string | null,
-  right: string | null,
-): number {
-  if (left === right) return 0;
-  if (left === null) return -1;
-  if (right === null) return 1;
-  return compareText(left, right);
 }
 
 function assertSafePrimaryPath(pathValue: unknown): asserts pathValue is string {
@@ -162,53 +151,6 @@ function assertCounts(
       }
     }
   }
-}
-
-function projectRoleCounts(
-  roleCounts: KohoPackageCountSummary["roleCounts"],
-): KohoPackageCountSummary["roleCounts"] {
-  return {
-    directory: roleCounts.directory,
-    xml: roleCounts.xml,
-    csv: roleCounts.csv,
-    schema: roleCounts.schema,
-    image: roleCounts.image,
-    other: roleCounts.other,
-  };
-}
-
-function projectCountsJson(counts: KohoPackageCountSummary): string {
-  const bySection = Object.fromEntries(
-    SECTIONS.map((section) => {
-      const source = counts.bySection[section];
-      return [
-        section,
-        {
-          primaryXmlCandidates: source.primaryXmlCandidates,
-          finalXmlResults: source.finalXmlResults,
-          confirmedFullPublications: source.confirmedFullPublications,
-          confirmedAmendments: source.confirmedAmendments,
-          documentFolders: source.documentFolders,
-          contents1Records: source.contents1Records,
-          contents2Records: source.contents2Records,
-          attachmentCount: source.attachmentCount,
-          roleCounts: projectRoleCounts(source.roleCounts),
-        },
-      ];
-    }),
-  );
-
-  return JSON.stringify({
-    primaryXmlCandidates: counts.primaryXmlCandidates,
-    finalXmlResults: counts.finalXmlResults,
-    confirmedFullPublications: counts.confirmedFullPublications,
-    confirmedAmendments: counts.confirmedAmendments,
-    nestedXmlCandidates: counts.nestedXmlCandidates,
-    documentFolders: counts.documentFolders,
-    documentListRecords: counts.documentListRecords,
-    roleCounts: projectRoleCounts(counts.roleCounts),
-    bySection,
-  });
 }
 
 function assertPrimaryXmlResult(item: KohoPackageXmlResult): void {
@@ -345,12 +287,6 @@ function projectClassification(
   };
 }
 
-function sha256CanonicalJson(payload: object): string {
-  return createHash("sha256")
-    .update(Buffer.from(JSON.stringify(payload), "utf8"))
-    .digest("hex");
-}
-
 function projectDocument(item: SelectedDocument): KohoImportDocumentPlan {
   const { result } = item;
   const { document } = result;
@@ -366,7 +302,7 @@ function projectDocument(item: SelectedDocument): KohoImportDocumentPlan {
     inventionTitle: document.inventionTitle.plainText,
     abstractText: document.abstract?.plainText ?? null,
     claimsText: document.claims.map((claim) => claim.plainText).join("\n\n"),
-    applicantsJson: JSON.stringify(
+    applicantsJson: serializeKohoImportApplicantsJson(
       document.applicants.map((applicant) => ({
         ordinal: applicant.ordinal,
         sequenceNumber: applicant.sequenceNumber,
@@ -377,16 +313,16 @@ function projectDocument(item: SelectedDocument): KohoImportDocumentPlan {
         })),
       })),
     ),
-    ipcJson: JSON.stringify(document.ipc.map(projectClassification)),
-    fiJson: JSON.stringify(document.fi.map(projectClassification)),
-    parseIssuesJson: JSON.stringify(
+    ipcJson: serializeKohoImportIpcJson(document.ipc.map(projectClassification)),
+    fiJson: serializeKohoImportFiJson(document.fi.map(projectClassification)),
+    parseIssuesJson: serializeKohoImportParseIssuesJson(
       result.issues.map((issue) => ({
         code: issue.code,
         status: issue.status,
         field: issue.field ?? null,
       })),
     ),
-    sourceMetadataJson: JSON.stringify({
+    sourceMetadataJson: serializeKohoImportSourceMetadataJson({
       normalizedEntryPath: document.source.normalizedEntryPath,
       rootLocalName: document.source.rootLocalName,
       rootNamespaceUri: document.source.rootNamespaceUri,
@@ -398,13 +334,12 @@ function projectDocument(item: SelectedDocument): KohoImportDocumentPlan {
     }),
   } satisfies Omit<KohoImportDocumentPlan, "contentSha256">;
 
-  return {
-    ...payload,
-    contentSha256: sha256CanonicalJson(payload),
-  };
+  return createKohoImportDocumentPlan(payload);
 }
 
-function issueAggregateKey(issue: Omit<KohoRunIssueAggregate, "count">): string {
+function issueAggregateKey(
+  issue: Omit<KohoImportRunIssueAggregate, "count">,
+): string {
   return JSON.stringify([
     issue.source,
     issue.code,
@@ -415,8 +350,8 @@ function issueAggregateKey(issue: Omit<KohoRunIssueAggregate, "count">): string 
 }
 
 function projectIssuesJson(packageResult: KohoPackageParseResult): string {
-  const aggregates = new Map<string, KohoRunIssueAggregate>();
-  const add = (issue: Omit<KohoRunIssueAggregate, "count">): void => {
+  const aggregates = new Map<string, KohoImportRunIssueAggregate>();
+  const add = (issue: Omit<KohoImportRunIssueAggregate, "count">): void => {
     const key = issueAggregateKey(issue);
     const existing = aggregates.get(key);
     if (existing) {
@@ -454,16 +389,7 @@ function projectIssuesJson(packageResult: KohoPackageParseResult): string {
     }
   }
 
-  const sorted = [...aggregates.values()].sort((left, right) => {
-    return (
-      compareText(left.source, right.source) ||
-      compareText(left.code, right.code) ||
-      compareText(left.status, right.status) ||
-      compareNullableText(left.kind, right.kind) ||
-      compareNullableText(left.section, right.section)
-    );
-  });
-  return JSON.stringify(sorted);
+  return serializeKohoImportIssuesJson([...aggregates.values()]);
 }
 
 export function buildKohoImportPlan(
@@ -504,7 +430,7 @@ export function buildKohoImportPlan(
     documentCount: documents.length,
     amendmentCount: packageResult.counts.confirmedAmendments,
     nestedSt26Count: packageResult.counts.nestedXmlCandidates,
-    countsJson: projectCountsJson(packageResult.counts),
+    countsJson: serializeKohoImportCountsJson(packageResult.counts),
     issuesJson: projectIssuesJson(packageResult),
     documents,
   };
