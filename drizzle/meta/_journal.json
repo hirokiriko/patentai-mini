@@ -8,6 +8,13 @@
       "when": 1779317966922,
       "tag": "0000_loud_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787810352336,
+      "tag": "0001_regular_black_bolt",
+      "breakpoints": true
     }
   ]
 }

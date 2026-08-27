@@ -11,7 +11,10 @@ export {
   searchQuerySetRepo,
   priorArtDocumentRepo,
   comparisonResultRepo,
+  kohoImportRepo,
 } from "./drizzle";
+
+export { KohoImportRepositoryValidationError } from "./types";
 
 export type {
   Case,
@@ -20,9 +23,14 @@ export type {
   SearchQuerySet,
   PriorArtDocument,
   ComparisonResult,
+  KohoImportRun,
+  KohoImportDocument,
+  KohoImportSaveResult,
+  KohoImportRepositoryValidationErrorCode,
   CaseRepository,
   DraftPatentRepository,
   SearchQuerySetRepository,
   PriorArtDocumentRepository,
   ComparisonResultRepository,
+  KohoImportRepository,
 } from "./types";
