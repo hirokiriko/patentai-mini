@@ -865,7 +865,7 @@ export function buildFictionalAmendmentXml(
   ]);
   const nationalPublicationNumber = optionOrDefault(
     options.nationalPublicationNumber,
-    kind === "P5" ? definition.packagePublicationNumber : null,
+    kind === "P5" ? "2098000007" : null,
   );
   const previousPublicationDate = optionOrDefault(
     options.previousPublicationDate,

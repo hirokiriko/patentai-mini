@@ -508,7 +508,6 @@ function addP5EventPublicationNumberCheck(
 function addP5PackageIdentityChecks(
   input: KohoXmlParseInput,
   path: KohoEntryPathInfo,
-  nationalPublicationNumber: string | null,
   issues: KohoParseIssue[],
 ): void {
   const pathNumber = path.documentNumber;
@@ -541,7 +540,12 @@ function addP5PackageIdentityChecks(
       ),
     );
   }
+}
 
+function addP5NationalPublicationNumberCheck(
+  nationalPublicationNumber: string | null,
+  issues: KohoParseIssue[],
+): void {
   if (nationalPublicationNumber === null) {
     return;
   }
@@ -551,26 +555,6 @@ function addP5PackageIdentityChecks(
     hasExpectedP5PackagePublicationNumberFormat,
     issues,
   );
-  const nationalKey = normalizePublicationNumber(
-    nationalPublicationNumber,
-    "P5",
-  );
-  const conflictsWithPath =
-    pathNumber !== null &&
-    normalizePublicationNumber(pathNumber, "P5") !== nationalKey;
-  const conflictsWithIndex =
-    indexNumber !== undefined &&
-    normalizePublicationNumber(indexNumber, "P5") !== nationalKey;
-  if (conflictsWithPath || conflictsWithIndex) {
-    issues.push(
-      issue(
-        "publication_number_mismatch",
-        "review_required",
-        "The optional national publication number conflicts with the package identity.",
-        "nationalPublicationNumber",
-      ),
-    );
-  }
 }
 
 function addPublicationDateIdentityCheck(
@@ -639,6 +623,9 @@ function addAmendmentIdentityChecks(
     addP5PackageIdentityChecks(
       input,
       path,
+      issues,
+    );
+    addP5NationalPublicationNumberCheck(
       amendment.nationalPublicationNumber?.value ?? null,
       issues,
     );

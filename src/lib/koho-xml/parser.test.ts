@@ -126,7 +126,7 @@ describe("parseKohoXml success cases", () => {
     expect(amendment.contentExtraction).toBe("structured_snapshot");
     expect(amendment.amendmentContent.localName).toBe("WrittenAmendmentBag");
     expect(amendment.nationalPublicationNumber?.value ?? null).toBe(
-      kind === "P5" ? "2099000006" : null,
+      kind === "P5" ? "2098000007" : null,
     );
   });
 
@@ -469,7 +469,7 @@ describe("parseKohoXml identity cross-checks", () => {
     });
     const amendment = extractedAmendment(result);
     expect(amendment.publicationNumber.value).toBe("WO2099000005");
-    expect(amendment.nationalPublicationNumber?.value).toBe("2099000006");
+    expect(amendment.nationalPublicationNumber?.value).toBe("2098000007");
   });
 
   it("confirms a P5 package identity when the optional national number is absent", () => {
@@ -486,7 +486,7 @@ describe("parseKohoXml identity cross-checks", () => {
     expect(extractedAmendment(result).nationalPublicationNumber).toBeNull();
   });
 
-  it("keeps a P5 package identity unconfirmed when the optional national number conflicts", () => {
+  it("keeps a distinct valid P5 national number without using it as the package key", () => {
     const result = parseKohoXml(
       createFictionalKohoInput("P5", {
         xml: buildFictionalAmendmentXml("P5", {
@@ -495,12 +495,42 @@ describe("parseKohoXml identity cross-checks", () => {
       }),
     );
 
-    expect(result.status).toBe("review_required");
-    expect(issuesFor(result, "publication_number_mismatch")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ field: "nationalPublicationNumber" }),
-      ]),
+    expectSuccess(result);
+    expect(result).toMatchObject({ identityConfirmed: true });
+    expect(extractedAmendment(result).nationalPublicationNumber?.value).toBe(
+      "2099000099",
     );
+  });
+
+  it("keeps a P5 package identity unconfirmed when the optional national number format is invalid", () => {
+    const result = parseKohoXml(
+      createFictionalKohoInput("P5", {
+        xml: buildFictionalAmendmentXml("P5", {
+          nationalPublicationNumber: "FICTIONAL-NATIONAL-P5",
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("review_required");
+    expect(issuesFor(result, "publication_number_mismatch")).toEqual([
+      expect.objectContaining({ field: "nationalPublicationNumber" }),
+    ]);
+    expect(result).toMatchObject({ identityConfirmed: false });
+  });
+
+  it("keeps a P5 package identity unconfirmed when the optional national number is empty", () => {
+    const result = parseKohoXml(
+      createFictionalKohoInput("P5", {
+        xml: buildFictionalAmendmentXml("P5", {
+          nationalPublicationNumber: "",
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("review_required");
+    expect(issuesFor(result, "publication_number_mismatch")).toEqual([
+      expect.objectContaining({ field: "nationalPublicationNumber" }),
+    ]);
     expect(result).toMatchObject({ identityConfirmed: false });
   });
 

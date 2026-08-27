@@ -505,7 +505,7 @@ NFC化し外側空白だけ除いた値をexact matchし、未知表示または
 | 補正内容 | `R/jppat:WrittenAmendmentBag` | `1`を取込契約とする | subtree、順序、種類を保持 |
 | 補正claims | `R/jppat:WrittenAmendmentBag//pat:Claims/pat:Claim` | `0..∞`任意 | `amendedClaims`として別保存。本体claimsへ自動合算しない |
 | 補正書提出日 | `R/jppat:WrittenAmendmentBag/jppat:WrittenAmendment/pat:FilingDate` | 公開仕様上、WrittenAmendmentごとに`1`必須。出力も`1`必須 | `YYYY-MM-DD`。出願日・event発行日と別field。欠損・不正値は`取込失敗` |
-| P5国内公開番号 | `H/jppat:NationalPublicationNumber` | P5`0..1`、A5非該当 | optionalな補助evidence。欠損自体はidentity failureにしない。存在時はpath／indexのpackage keyへ照合し、矛盾・重複はrecord未確定の`確認候補` |
+| P5国内公開番号 | `H/jppat:NationalPublicationNumber` | P5`0..1`、A5非該当 | P5 package keyとは別のoptional link identifier。欠損自体はidentity failureにしない。存在時は国内側10桁形式を独立検証し、空値・形式不正・重複はrecord未確定の`確認候補`。path／indexやevent番号との非等値だけでは未確定にしない |
 | P5前回公開日 | `H/jppat:PreviousPublicationDate` | P5`0..1`、A5非該当 | `YYYY-MM-DD`。event発行日・出願日と別field。不正値は`取込失敗` |
 | P5年次番号 | `H/jppat:AnnualNumber` | P5`0..1`、A5非該当 | opaque stringとして保持 |
 
@@ -522,10 +522,11 @@ A1/P1から暗黙にcopyしない。補正subtree内の断片は`amendmentConten
 
 P5では`NationalPublicationNumber`、`PreviousPublicationDate`、
 `AnnualNumber`がそれぞれ93件中49件で観察された。存在を必須にせず、
-`NationalPublicationNumber`は存在時だけpackage identityの補助evidenceとする。
-`ApplicationNumber`は抽出・保持するが自動link keyにしない。path／index欠損、
-番号・kind矛盾、重複候補、optional evidenceの矛盾は`確認候補`であり、推測で
-結合しない。
+`NationalPublicationNumber`はP5 package keyとは別のoptional link identifierとして
+source値を保持し、path／indexやevent番号との等値をidentity条件にしない。
+存在時は国内側10桁形式、空値、cardinalityを独立検証する。`ApplicationNumber`は
+抽出・保持するが自動link keyにしない。path／index欠損、番号・kind矛盾、
+重複候補は`確認候補`であり、推測で結合しない。
 
 ### 7.5 日付fieldの意味
 
@@ -812,8 +813,10 @@ fixture、test codeは作成しない。
 - A1/A5/P1/P5/B1/B2をroot、namespace、path、kind、番号、schemaの複合条件で
   識別する。
 - P1の国内側XML番号をpath／indexへ照合し、P5ではevent国際公開番号と国内側
-  package keyを分離する。P5のoptional national番号は欠損を許容し、存在時の
-  矛盾とDOCUMENT_LIST重複候補ではidentityを確定しない。
+  package keyを分離する。P5のoptional national番号は別のlink identifierとして
+  欠損を許容し、存在時は国内側10桁形式・空値・cardinalityを独立検証する。
+  path／indexとの非等値だけでは未確定にせず、DOCUMENT_LIST重複候補では
+  identityを確定しない。
 - primary公報XML、nested ST.26、legacy配列表、画像等の添付を分離して数える。
 - 第7章の対象fieldを種別別cardinality、必須性、欠損規則どおり構造化抽出
   する。
