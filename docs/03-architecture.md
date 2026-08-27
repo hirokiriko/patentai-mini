@@ -7,8 +7,8 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - API / Orchestrator: Next.js API Routes (Route Handlers)
 - 言語: TypeScript のみ（DR-0004 により Python 併用なし）
 - ORM: Drizzle ORM + drizzle-kit（DR-0005）
-- DB: SQLite
-- Vector store: 初期は SQLite 拡張またはファイルベース、必要なら pgvector/Qdrant へ拡張
+- DB: Postgres（DR-0010）
+- Vector store: 現時点では専用storeなし。必要なら pgvector/Qdrant へ拡張
 - LLM: AI SDK (Vercel AI SDK) でプロバイダー切り替え（DR-0003）
 - パッケージマネージャ: pnpm（DR-0006）
 - File storage: ローカルディスク
@@ -61,6 +61,15 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - source_csv_row_json
 - normalized_elements_json
 
+`PriorArtDocument`は案件単位の検索結果・比較対象であり、次のglobal公報corpusとは
+分離する。
+
+### KohoImportRun / KohoImportDocument
+- package typeとsource SHA-256で識別するglobalな公報package取込履歴
+- identity確認済みのA1／P1／B1／B2 full publicationだけを保存する公報document
+- case_idを持たず、case削除の対象にしない
+- 保存契約は[公報package保存仕様](07-koho-import-persistence-spec.md)を参照
+
 ### ComparisonResult
 - result_id
 - case_id
@@ -94,6 +103,6 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 
 ## 将来拡張
 - OCR 付き PDF 詳細解析
-- 公報本文の自動取り込み
+- 公報package取込API／scheduler／自動取得（parserと保存基盤までは実装済み）
 - 代理人向けレビュー画面
-- ケース横断の先行技術ナレッジ蓄積
+- global公報corpusから案件の比較対象を選択する接続機能

@@ -6,6 +6,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const cases = pgTable("cases", {
@@ -72,3 +73,62 @@ export const comparisonResults = pgTable("comparison_results", {
   matchedElementsJson: text("matched_elements_json"),
   riskLabel: text("risk_label"),
 });
+
+export const kohoImportRuns = pgTable(
+  "koho_import_runs",
+  {
+    importId: serial("import_id").primaryKey(),
+    packageType: text("package_type").notNull(),
+    sourceSha256: text("source_sha256").notNull(),
+    packageStatus: text("package_status").notNull(),
+    documentCount: integer("document_count").notNull(),
+    amendmentCount: integer("amendment_count").notNull(),
+    nestedSt26Count: integer("nested_st26_count").notNull(),
+    countsJson: text("counts_json").notNull(),
+    issuesJson: text("issues_json").notNull(),
+    createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { mode: "string", withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("koho_import_runs_package_type_source_sha256_unique").on(
+      table.packageType,
+      table.sourceSha256,
+    ),
+  ],
+);
+
+export const kohoImportDocuments = pgTable(
+  "koho_import_documents",
+  {
+    documentId: serial("document_id").primaryKey(),
+    importId: integer("import_id")
+      .notNull()
+      .references(() => kohoImportRuns.importId, { onDelete: "cascade" }),
+    normalizedEntryPath: text("normalized_entry_path").notNull(),
+    parseStatus: text("parse_status").notNull(),
+    kind: text("kind").notNull(),
+    publicationNumber: text("publication_number").notNull(),
+    applicationNumber: text("application_number").notNull(),
+    publicationDate: text("publication_date").notNull(),
+    registrationNumber: text("registration_number"),
+    registrationDate: text("registration_date"),
+    inventionTitle: text("invention_title").notNull(),
+    abstractText: text("abstract_text"),
+    claimsText: text("claims_text").notNull(),
+    applicantsJson: text("applicants_json").notNull(),
+    ipcJson: text("ipc_json").notNull(),
+    fiJson: text("fi_json").notNull(),
+    parseIssuesJson: text("parse_issues_json").notNull(),
+    sourceMetadataJson: text("source_metadata_json").notNull(),
+    contentSha256: text("content_sha256").notNull(),
+  },
+  (table) => [
+    uniqueIndex(
+      "koho_import_documents_import_id_normalized_entry_path_unique",
+    ).on(table.importId, table.normalizedEntryPath),
+  ],
+);

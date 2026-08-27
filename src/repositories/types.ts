@@ -1,3 +1,8 @@
+import type {
+  KohoImportDocumentPlan,
+  KohoImportPlan,
+} from "@/lib/koho-import";
+
 /**
  * リポジトリ層の型定義。
  * DB 実装（Drizzle/Turso, Firebase, DynamoDB 等）に依存しない
@@ -57,6 +62,70 @@ export interface ComparisonResult {
   structuralScore: number | null;
   matchedElementsJson: string | null;
   riskLabel: string | null;
+}
+
+export interface KohoImportRun {
+  importId: number;
+  packageType: KohoImportPlan["packageType"];
+  sourceSha256: string;
+  packageStatus: KohoImportPlan["packageStatus"];
+  documentCount: number;
+  amendmentCount: number;
+  nestedSt26Count: number;
+  countsJson: string;
+  issuesJson: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KohoImportDocument {
+  documentId: number;
+  importId: number;
+  normalizedEntryPath: string;
+  parseStatus: KohoImportDocumentPlan["parseStatus"];
+  kind: KohoImportDocumentPlan["kind"];
+  publicationNumber: string;
+  applicationNumber: string;
+  publicationDate: string;
+  registrationNumber: string | null;
+  registrationDate: string | null;
+  inventionTitle: string;
+  abstractText: string | null;
+  claimsText: string;
+  applicantsJson: string;
+  ipcJson: string;
+  fiJson: string;
+  parseIssuesJson: string;
+  sourceMetadataJson: string;
+  contentSha256: string;
+}
+
+export interface KohoImportSaveResult {
+  run: KohoImportRun;
+  savedDocumentCount: number;
+}
+
+export type KohoImportRepositoryValidationErrorCode =
+  | "invalid_package_type"
+  | "invalid_source_sha256"
+  | "invalid_package_status"
+  | "invalid_document_count"
+  | "invalid_document_parse_status"
+  | "invalid_document_kind"
+  | "invalid_normalized_entry_path"
+  | "duplicate_normalized_entry_path"
+  | "invalid_content_sha256"
+  | "invalid_import_id"
+  | "invalid_document_payload";
+
+export class KohoImportRepositoryValidationError extends Error {
+  readonly code: KohoImportRepositoryValidationErrorCode;
+
+  constructor(code: KohoImportRepositoryValidationErrorCode) {
+    super(`Koho import repository validation failed: ${code}`);
+    this.name = "KohoImportRepositoryValidationError";
+    this.code = code;
+  }
 }
 
 // --- Repository interfaces ---
@@ -119,4 +188,13 @@ export interface PriorArtDocumentRepository {
 export interface ComparisonResultRepository {
   findByCaseId(caseId: number): Promise<ComparisonResult[]>;
   replaceByCaseId(caseId: number, results: Omit<ComparisonResult, "resultId">[]): Promise<number>;
+}
+
+export interface KohoImportRepository {
+  savePlan(plan: KohoImportPlan): Promise<KohoImportSaveResult>;
+  findRunBySource(
+    packageType: KohoImportPlan["packageType"],
+    sourceSha256: string,
+  ): Promise<KohoImportRun | null>;
+  findDocumentsByRunId(importId: number): Promise<KohoImportDocument[]>;
 }

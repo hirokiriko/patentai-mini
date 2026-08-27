@@ -155,3 +155,21 @@
   - 現行状態はGitHub Issue／PR、default branch、CI、および必要な実環境から確認する
   - 旧履歴文書の本文を新しいIssue／PRへ無差別に転記しない
   - 検出結果は分類、件数、PASS／FAILで扱い、値を再掲しない
+
+## DR-0012: global公報corpusを案件単位の先行技術から分離する
+- Date: 2026-08-27
+- Status: Accepted
+- Context:
+  - 公報package parserの結果を、案件に紐付く既存`prior_art_documents`へ混在させると、取込履歴、再利用範囲、case削除時のownershipが曖昧になる
+  - full publication、補正掲載、nested ST.26、identity未確認candidateを同じdocumentとして保存すると、比較対象の根拠が不明確になる
+  - raw XMLやdescription全文を初期段階から保存せず、比較・追跡に必要なsource evidenceへ限定する必要がある
+- Decision:
+  - `koho_import_runs`と`koho_import_documents`を案件に紐付かないglobal corpusとし、既存`prior_art_documents`の意味を変更しない
+  - 初期document保存対象はidentity確認済みのA1／P1／B1／B2 full publicationに限定する。`review_required`でもidentity確認済みならstatusとissue codeを保持して保存する
+  - A5／P5 amendmentとnested ST.26はdocument rowへ保存せず、run summaryの件数へ残す。identity未確認、unknown、unsupported、failed resultもdocument rowへ保存しない
+  - source metadataと比較用plain textを必要最小限に決定的projectionし、raw XML／CSV、description、reference、画像・添付物を保存しない
+  - package typeとsource SHA-256を冪等keyとし、同一runのdocumentを単一transactionでreplaceする
+- Consequence:
+  - case削除はglobal corpusへ影響せず、案件単位の比較対象と公報取込履歴のlifecycleを独立させられる
+  - parser、import plan、schema、repository coreまでを保存基盤とし、API／UI／scheduler／自動取得との接続は別Issueで設計する
+  - 実JPA／JPB packageと一時Postgresによる全件保存、冪等性、rollbackはLocal検証で行い、Production migrationは別途明示的に扱う
