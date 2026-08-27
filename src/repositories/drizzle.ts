@@ -1,4 +1,4 @@
-import { db } from "@/db";
+import { db } from "../db";
 import {
   cases,
   draftPatents,
@@ -7,8 +7,15 @@ import {
   comparisonResults,
   kohoImportDocuments,
   kohoImportRuns,
-} from "@/db/schema";
-import { inspectKohoEntryPath } from "@/lib/koho-xml/path";
+} from "../db/schema";
+import {
+  assertKohoImportDocumentPlan,
+  assertKohoImportRunContract,
+  createKohoImportPlanSnapshot,
+  KohoImportPlanValidationError,
+  type KohoImportDocumentPlan,
+  type KohoImportRunContract,
+} from "../lib/koho-import";
 import { eq, desc, asc, and, inArray, sql } from "drizzle-orm";
 import { KohoImportRepositoryValidationError } from "./types";
 import type {
@@ -86,121 +93,44 @@ function assertSha256(
   }
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function isJsonText(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function isExpectedDocumentPath(
-  packageType: KohoImportRun["packageType"],
-  kind: KohoImportDocument["kind"],
-  normalizedEntryPath: string,
-): boolean {
-  const path = inspectKohoEntryPath(normalizedEntryPath);
-  if (
-    !path.ok ||
-    path.normalizedPath !== normalizedEntryPath ||
-    !path.isPrimaryXml
-  ) {
-    return false;
-  }
-
-  if (packageType === "JPA") {
-    return (
-      (kind === "A1" && path.section === "P_A1") ||
-      (kind === "P1" && path.section === "P_P1")
-    );
-  }
-  return (kind === "B1" || kind === "B2") && path.section === "P_B1";
-}
-
-function isNormalizedPrimaryXmlPath(value: unknown): value is string {
-  if (typeof value !== "string") return false;
-  const path = inspectKohoEntryPath(value);
-  return path.ok && path.normalizedPath === value && path.isPrimaryXml;
-}
-
 function assertImportId(importId: unknown): asserts importId is number {
   if (!Number.isSafeInteger(importId) || (importId as number) <= 0) {
     invalid("invalid_import_id");
   }
 }
 
-function assertPlan(
-  plan: Parameters<KohoImportRepository["savePlan"]>[0] | null | undefined,
-): asserts plan is Parameters<KohoImportRepository["savePlan"]>[0] {
-  if (!plan || typeof plan !== "object") {
-    invalid("invalid_document_payload");
-  }
-  assertPackageType(plan.packageType);
-  assertSha256(plan.sourceSha256, "invalid_source_sha256");
-  assertPackageStatus(plan.packageStatus);
-
-  if (
-    !Array.isArray(plan.documents) ||
-    !isNonNegativeInteger(plan.documentCount) ||
-    plan.documentCount !== plan.documents.length ||
-    !isNonNegativeInteger(plan.amendmentCount) ||
-    !isNonNegativeInteger(plan.nestedSt26Count)
-  ) {
-    invalid("invalid_document_count");
-  }
-  if (!isJsonText(plan.countsJson) || !isJsonText(plan.issuesJson)) {
-    invalid("invalid_document_payload");
-  }
-
-  const paths = new Set<string>();
-  for (const document of plan.documents) {
-    assertDocumentParseStatus(document.parseStatus);
-    assertDocumentKind(document.kind);
-    assertSha256(document.contentSha256, "invalid_content_sha256");
-
-    if (
-      typeof document.normalizedEntryPath !== "string" ||
-      !isExpectedDocumentPath(
-        plan.packageType,
-        document.kind,
-        document.normalizedEntryPath,
-      )
-    ) {
-      invalid("invalid_normalized_entry_path");
-    }
-    if (paths.has(document.normalizedEntryPath)) {
-      invalid("duplicate_normalized_entry_path");
-    }
-    paths.add(document.normalizedEntryPath);
-
-    if (
-      typeof document.publicationNumber !== "string" ||
-      typeof document.applicationNumber !== "string" ||
-      typeof document.publicationDate !== "string" ||
-      !isNullableString(document.registrationNumber) ||
-      !isNullableString(document.registrationDate) ||
-      typeof document.inventionTitle !== "string" ||
-      !isNullableString(document.abstractText) ||
-      typeof document.claimsText !== "string" ||
-      !isJsonText(document.applicantsJson) ||
-      !isJsonText(document.ipcJson) ||
-      !isJsonText(document.fiJson) ||
-      !isJsonText(document.parseIssuesJson) ||
-      !isJsonText(document.sourceMetadataJson)
-    ) {
+function rethrowRepositoryValidation(error: unknown): never {
+  if (!(error instanceof KohoImportPlanValidationError)) throw error;
+  switch (error.code) {
+    case "invalid_package_type":
+    case "invalid_source_sha256":
+    case "invalid_package_status":
+    case "invalid_document_count":
+    case "invalid_document_kind":
+    case "invalid_normalized_entry_path":
+    case "duplicate_normalized_entry_path":
+    case "invalid_content_sha256":
+    case "content_sha256_mismatch":
+      invalid(error.code);
+    case "invalid_document_status":
+      invalid("invalid_document_parse_status");
+    default:
       invalid("invalid_document_payload");
-    }
   }
+}
+
+function validateRepositoryContract<T>(validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    rethrowRepositoryValidation(error);
+  }
+}
+
+function validatedPlanSnapshot(
+  plan: Parameters<KohoImportRepository["savePlan"]>[0] | null | undefined,
+): Parameters<KohoImportRepository["savePlan"]>[0] {
+  return validateRepositoryContract(() => createKohoImportPlanSnapshot(plan));
 }
 
 function toKohoImportRun(
@@ -212,15 +142,18 @@ function toKohoImportRun(
   assertPackageType(packageType);
   assertSha256(row.sourceSha256, "invalid_source_sha256");
   assertPackageStatus(packageStatus);
-  if (
-    !isNonNegativeInteger(row.documentCount) ||
-    !isNonNegativeInteger(row.amendmentCount) ||
-    !isNonNegativeInteger(row.nestedSt26Count) ||
-    !isJsonText(row.countsJson) ||
-    !isJsonText(row.issuesJson) ||
-    typeof row.createdAt !== "string" ||
-    typeof row.updatedAt !== "string"
-  ) {
+  const contract: KohoImportRunContract = {
+    packageType,
+    sourceSha256: row.sourceSha256,
+    packageStatus,
+    documentCount: row.documentCount,
+    amendmentCount: row.amendmentCount,
+    nestedSt26Count: row.nestedSt26Count,
+    countsJson: row.countsJson,
+    issuesJson: row.issuesJson,
+  };
+  validateRepositoryContract(() => assertKohoImportRunContract(contract));
+  if (typeof row.createdAt !== "string" || typeof row.updatedAt !== "string") {
     invalid("invalid_document_payload");
   }
   return { ...row, packageType, packageStatus };
@@ -228,6 +161,7 @@ function toKohoImportRun(
 
 function toKohoImportDocument(
   row: typeof kohoImportDocuments.$inferSelect,
+  packageType: KohoImportRun["packageType"],
 ): KohoImportDocument {
   const parseStatus = row.parseStatus;
   const kind = row.kind;
@@ -235,27 +169,29 @@ function toKohoImportDocument(
   assertImportId(row.importId);
   assertDocumentParseStatus(parseStatus);
   assertDocumentKind(kind);
-  assertSha256(row.contentSha256, "invalid_content_sha256");
-
-  if (
-    !isNormalizedPrimaryXmlPath(row.normalizedEntryPath) ||
-    typeof row.publicationNumber !== "string" ||
-    typeof row.applicationNumber !== "string" ||
-    typeof row.publicationDate !== "string" ||
-    !isNullableString(row.registrationNumber) ||
-    !isNullableString(row.registrationDate) ||
-    typeof row.inventionTitle !== "string" ||
-    !isNullableString(row.abstractText) ||
-    typeof row.claimsText !== "string" ||
-    !isJsonText(row.applicantsJson) ||
-    !isJsonText(row.ipcJson) ||
-    !isJsonText(row.fiJson) ||
-    !isJsonText(row.parseIssuesJson) ||
-    !isJsonText(row.sourceMetadataJson)
-  ) {
-    invalid("invalid_document_payload");
-  }
-  return { ...row, parseStatus, kind };
+  const document: KohoImportDocumentPlan = {
+    normalizedEntryPath: row.normalizedEntryPath,
+    parseStatus,
+    kind,
+    publicationNumber: row.publicationNumber,
+    applicationNumber: row.applicationNumber,
+    publicationDate: row.publicationDate,
+    registrationNumber: row.registrationNumber,
+    registrationDate: row.registrationDate,
+    inventionTitle: row.inventionTitle,
+    abstractText: row.abstractText,
+    claimsText: row.claimsText,
+    applicantsJson: row.applicantsJson,
+    ipcJson: row.ipcJson,
+    fiJson: row.fiJson,
+    parseIssuesJson: row.parseIssuesJson,
+    sourceMetadataJson: row.sourceMetadataJson,
+    contentSha256: row.contentSha256,
+  };
+  validateRepositoryContract(() =>
+    assertKohoImportDocumentPlan(document, packageType),
+  );
+  return { documentId: row.documentId, importId: row.importId, ...document };
 }
 
 export const caseRepo: CaseRepository = {
@@ -474,30 +410,30 @@ export const comparisonResultRepo: ComparisonResultRepository = {
 
 export const kohoImportRepo: KohoImportRepository = {
   async savePlan(plan) {
-    assertPlan(plan);
+    const validatedPlan = validatedPlanSnapshot(plan);
 
     return db.transaction(async (tx) => {
       const [runRow] = await tx
         .insert(kohoImportRuns)
         .values({
-          packageType: plan.packageType,
-          sourceSha256: plan.sourceSha256,
-          packageStatus: plan.packageStatus,
-          documentCount: plan.documentCount,
-          amendmentCount: plan.amendmentCount,
-          nestedSt26Count: plan.nestedSt26Count,
-          countsJson: plan.countsJson,
-          issuesJson: plan.issuesJson,
+          packageType: validatedPlan.packageType,
+          sourceSha256: validatedPlan.sourceSha256,
+          packageStatus: validatedPlan.packageStatus,
+          documentCount: validatedPlan.documentCount,
+          amendmentCount: validatedPlan.amendmentCount,
+          nestedSt26Count: validatedPlan.nestedSt26Count,
+          countsJson: validatedPlan.countsJson,
+          issuesJson: validatedPlan.issuesJson,
         })
         .onConflictDoUpdate({
           target: [kohoImportRuns.packageType, kohoImportRuns.sourceSha256],
           set: {
-            packageStatus: plan.packageStatus,
-            documentCount: plan.documentCount,
-            amendmentCount: plan.amendmentCount,
-            nestedSt26Count: plan.nestedSt26Count,
-            countsJson: plan.countsJson,
-            issuesJson: plan.issuesJson,
+            packageStatus: validatedPlan.packageStatus,
+            documentCount: validatedPlan.documentCount,
+            amendmentCount: validatedPlan.amendmentCount,
+            nestedSt26Count: validatedPlan.nestedSt26Count,
+            countsJson: validatedPlan.countsJson,
+            issuesJson: validatedPlan.issuesJson,
             updatedAt: sql`now()`,
           },
         })
@@ -512,11 +448,11 @@ export const kohoImportRepo: KohoImportRepository = {
         .where(eq(kohoImportDocuments.importId, runRow.importId));
 
       let savedDocumentCount = 0;
-      if (plan.documents.length > 0) {
+      if (validatedPlan.documents.length > 0) {
         const inserted = await tx
           .insert(kohoImportDocuments)
           .values(
-            plan.documents.map((document) => ({
+            validatedPlan.documents.map((document) => ({
               importId: runRow.importId,
               normalizedEntryPath: document.normalizedEntryPath,
               parseStatus: document.parseStatus,
@@ -567,6 +503,13 @@ export const kohoImportRepo: KohoImportRepository = {
   async findDocumentsByRunId(importId) {
     assertImportId(importId);
 
+    const [runRow] = await db
+      .select()
+      .from(kohoImportRuns)
+      .where(eq(kohoImportRuns.importId, importId));
+    if (!runRow) return [];
+    const run = toKohoImportRun(runRow);
+
     const rows = await db
       .select()
       .from(kohoImportDocuments)
@@ -575,6 +518,6 @@ export const kohoImportRepo: KohoImportRepository = {
         asc(kohoImportDocuments.normalizedEntryPath),
         asc(kohoImportDocuments.documentId),
       );
-    return rows.map(toKohoImportDocument);
+    return rows.map((row) => toKohoImportDocument(row, run.packageType));
   },
 };

@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  buildMinimalFictionalPackage,
+  FICTIONAL_PACKAGE_LIMITS,
+} from "../koho-package/__fixtures__/fictional-package";
+import { parseKohoPackage } from "../koho-package";
 import type {
   KohoPackageCountSummary,
   KohoPackageIssue,
@@ -25,6 +30,35 @@ import {
 
 const SOURCE_SHA256 = "1".repeat(64);
 type FictionalFullKind = Extract<KohoDocumentKind, "A1" | "P1" | "B1" | "B2">;
+
+const MINIMAL_PACKAGE_GOLDEN = {
+  JPA: {
+    countsJson: "d5b72ec4fc93a159337e0cc58661dd82901e43cda04d1829b1857e563538a621",
+    issuesJson: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    applicantsJson: "3a6e5f7ed72e89062ed9bfb95228a7fc4144dae834b358fc35e8ee13c54ae6d2",
+    ipcJson: "cbf83532e65a7c57fa45c9ebf6408aab6bbd1a133b84928b98accc77c928d978",
+    fiJson: "f1936ef9e40781ac501c308690b616ffeeed3f29f2e3b22083ed03d1bd1c1284",
+    parseIssuesJson: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    sourceMetadataJson:
+      "ebec27c6d74d6f705cbaa3eb67fc8a9b14f2aa1039189dfe4fa9446467a26610",
+    contentSha256: "a0fa285247653575094acccbd629f20339a7eb4bf946e9e26d82252660c4fc3c",
+  },
+  JPB: {
+    countsJson: "20921336df755a72ecd80ad957a4c38b37accc70bd94196ac30dbc463211c329",
+    issuesJson: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    applicantsJson: "3a6e5f7ed72e89062ed9bfb95228a7fc4144dae834b358fc35e8ee13c54ae6d2",
+    ipcJson: "cbf83532e65a7c57fa45c9ebf6408aab6bbd1a133b84928b98accc77c928d978",
+    fiJson: "f1936ef9e40781ac501c308690b616ffeeed3f29f2e3b22083ed03d1bd1c1284",
+    parseIssuesJson: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    sourceMetadataJson:
+      "ebd485a251b3c8d436068c174b750ab1b35d56a371dae835facf8865ba815746",
+    contentSha256: "08501ddec37b0c5e8a8b07a712601aa72bfeedcacffce604a862f852800a5b5d",
+  },
+} as const;
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 function emptyRoleCounts() {
   return {
@@ -517,4 +551,51 @@ describe("buildKohoImportPlan", () => {
       expect.objectContaining({ code: "invalid_normalized_entry_path" }),
     );
   });
+});
+
+describe("buildKohoImportPlan golden compatibility", () => {
+  it.each(["JPA", "JPB"] as const)(
+    "keeps the fictional minimal %s package JSON bytes and digest stable",
+    async (packageType) => {
+      const packageResult = await parseKohoPackage({
+        packageType,
+        source: {
+          type: "buffer",
+          bytes: buildMinimalFictionalPackage(packageType),
+          sourceName: `fictional-${packageType.toLowerCase()}-package.zip`,
+        },
+        limits: FICTIONAL_PACKAGE_LIMITS,
+      });
+      const first = buildKohoImportPlan({
+        packageResult,
+        sourceSha256: SOURCE_SHA256,
+      });
+      const second = buildKohoImportPlan({
+        packageResult,
+        sourceSha256: SOURCE_SHA256,
+      });
+
+      expect(second).toEqual(first);
+      expect(first).toMatchObject({
+        packageType,
+        packageStatus: "success",
+        documentCount: 1,
+        amendmentCount: 0,
+        nestedSt26Count: 0,
+      });
+      expect(first.documents).toHaveLength(1);
+
+      const document = first.documents[0];
+      expect({
+        countsJson: sha256Text(first.countsJson),
+        issuesJson: sha256Text(first.issuesJson),
+        applicantsJson: sha256Text(document.applicantsJson),
+        ipcJson: sha256Text(document.ipcJson),
+        fiJson: sha256Text(document.fiJson),
+        parseIssuesJson: sha256Text(document.parseIssuesJson),
+        sourceMetadataJson: sha256Text(document.sourceMetadataJson),
+        contentSha256: document.contentSha256,
+      }).toEqual(MINIMAL_PACKAGE_GOLDEN[packageType]);
+    },
+  );
 });

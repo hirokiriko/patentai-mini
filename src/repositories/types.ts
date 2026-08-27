@@ -115,6 +115,7 @@ export type KohoImportRepositoryValidationErrorCode =
   | "invalid_normalized_entry_path"
   | "duplicate_normalized_entry_path"
   | "invalid_content_sha256"
+  | "content_sha256_mismatch"
   | "invalid_import_id"
   | "invalid_document_payload";
 
