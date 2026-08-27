@@ -68,7 +68,7 @@ export type KohoBoundedTempSourceRunner = <T>(
   request: Request,
   maxSourceBytes: number,
   declaredContentLength: number | null,
-  useSource: (source: KohoBoundedTempSource) => Promise<T>,
+  consumeSource: (source: KohoBoundedTempSource) => Promise<T>,
   options?: KohoBoundedTempSourceOptions,
 ) => Promise<T>;
 
@@ -192,7 +192,7 @@ export async function withBoundedKohoTempSource<T>(
   request: Request,
   maxSourceBytes: number,
   declaredContentLength: number | null,
-  useSource: (source: KohoBoundedTempSource) => Promise<T>,
+  consumeSource: (source: KohoBoundedTempSource) => Promise<T>,
   options: KohoBoundedTempSourceOptions = {},
 ): Promise<T> {
   const directory = await mkdtemp(
@@ -242,7 +242,7 @@ export async function withBoundedKohoTempSource<T>(
     await handle.close();
     handle = null;
 
-    return await useSource({
+    return await consumeSource({
       path: sourcePath,
       sourceSha256: hash.digest("hex"),
       byteLength: observedBytes,
