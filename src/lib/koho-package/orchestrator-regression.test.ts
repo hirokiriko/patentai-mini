@@ -810,15 +810,15 @@ describe("package orchestration regression coverage", () => {
       },
       {
         fileName: "DOCUMENT_LIST.csv",
-        data: "JP,wo 2099—000001,A,20990211\r\n",
+        data: "JP,20 99—000002,A,20990211\r\n",
       },
       {
         fileName: "DOCUMENT/P_P1/CONTENTS1.csv",
-        data: fictionalContents1Csv("JPA", "WO2099000001"),
+        data: fictionalContents1Csv("JPA", "2099000002"),
       },
       {
         fileName: "DOCUMENT/P_P1/CONTENTS2.csv",
-        data: fictionalContents2Csv("JPA", "WO2099000001"),
+        data: fictionalContents2Csv("JPA", "2099000002"),
       },
       {
         fileName: fictionalPrimaryEntryPath("P1"),
@@ -1045,7 +1045,7 @@ describe("package orchestration regression coverage", () => {
   it("parses P5 CONTENTS without treating them as canonical cross-check files", async () => {
     const documentListCsv =
       fictionalDocumentListCsv("JPA") +
-      "JP,WO2099000005,A5,20990215\r\n";
+      "JP,2099000006,A5,20990215\r\n";
     const entries: ZipFixtureEntryInput[] = [
       ...minimalJpaEntries({ documentListCsv }),
       {
@@ -1083,8 +1083,134 @@ describe("package orchestration regression coverage", () => {
     expect(
       result.primaryXmlResults.find(
         (item) => item.normalizedPath === fictionalPrimaryEntryPath("P5"),
-      )?.result.kind,
-    ).toBe("P5");
+      )?.result,
+    ).toMatchObject({
+      status: "success",
+      kind: "P5",
+      identityConfirmed: true,
+    });
+  });
+
+  it("uses the normalized P5 entry document number for DOCUMENT_LIST bootstrap", async () => {
+    const documentListCsv =
+      fictionalDocumentListCsv("JPA") +
+      "JP,2099000006,A5,20990215\r\n";
+    const entries: ZipFixtureEntryInput[] = [
+      ...minimalJpaEntries({ documentListCsv }),
+      {
+        fileName: fictionalPrimaryEntryPath("P5"),
+        data: buildFictionalAmendmentXml("P5", {
+          nationalPublicationNumber: null,
+        }),
+      },
+    ];
+    const bytes = buildZip({ entries }).bytes;
+    const xmlInputs: KohoXmlParseInput[] = [];
+
+    const result = await parseKohoPackageWithDependencies(packageInput({
+      type: "buffer",
+      bytes,
+    }), {
+      parseXml(input) {
+        xmlInputs.push(input);
+        return parseKohoXml(input);
+      },
+    });
+
+    const p5Inputs = xmlInputs.filter(
+      (input) => input.entryPath === fictionalPrimaryEntryPath("P5"),
+    );
+    expect(p5Inputs).toHaveLength(2);
+    expect(p5Inputs[0].indexHint).toBeUndefined();
+    expect(p5Inputs[1].indexHint).toEqual({
+      kindCode: "A5",
+      publicationNumber: "2099000006",
+      publicationDate: "20990215",
+    });
+    const p5Result = result.primaryXmlResults.find(
+      (item) => item.normalizedPath === fictionalPrimaryEntryPath("P5"),
+    )?.result;
+    expect(p5Result).toMatchObject({
+      status: "success",
+      kind: "P5",
+      identityConfirmed: true,
+    });
+    if (!p5Result || !("amendment" in p5Result)) {
+      throw new Error("expected a P5 amendment result");
+    }
+    expect(p5Result.amendment?.publicationNumber.value).toBe("WO2099000005");
+    expect(p5Result.amendment?.nationalPublicationNumber).toBeNull();
+    expect(result.counts.confirmedAmendments).toBe(1);
+    expect(issueCodes(result)).not.toContain("document_list_match_missing");
+    expect(issueCodes(result)).not.toContain("document_list_orphan");
+  });
+
+  it("does not use the P5 event publication number as the package comparison key", async () => {
+    const documentListCsv =
+      fictionalDocumentListCsv("JPA") +
+      "JP,WO2099000005,A5,20990215\r\n";
+    const entries: ZipFixtureEntryInput[] = [
+      ...minimalJpaEntries({ documentListCsv }),
+      {
+        fileName: fictionalPrimaryEntryPath("P5"),
+        data: buildFictionalAmendmentXml("P5"),
+      },
+    ];
+    const result = await parseKohoPackageWithDependencies(packageInput({
+      type: "buffer",
+      bytes: buildZip({ entries }).bytes,
+    }), {});
+
+    const p5 = result.primaryXmlResults.find(
+      (item) => item.normalizedPath === fictionalPrimaryEntryPath("P5"),
+    );
+    expect(p5?.result).toMatchObject({
+      status: "review_required",
+      kind: "P5",
+      identityConfirmed: false,
+    });
+    expect(issueCodes(result)).toEqual(
+      expect.arrayContaining([
+        "document_list_match_missing",
+        "document_list_orphan",
+        "primary_xml_unconfirmed",
+      ]),
+    );
+  });
+
+  it("does not identity-confirm P5 from duplicate identical DOCUMENT_LIST candidates", async () => {
+    const duplicate = "JP,2099000006,A5,20990215\r\n";
+    const documentListCsv = fictionalDocumentListCsv("JPA") + duplicate + duplicate;
+    const entries: ZipFixtureEntryInput[] = [
+      ...minimalJpaEntries({ documentListCsv }),
+      {
+        fileName: fictionalPrimaryEntryPath("P5"),
+        data: buildFictionalAmendmentXml("P5"),
+      },
+    ];
+    const result = await parseKohoPackageWithDependencies(packageInput({
+      type: "buffer",
+      bytes: buildZip({ entries }).bytes,
+    }), {});
+
+    const p5 = result.primaryXmlResults.find(
+      (item) => item.normalizedPath === fictionalPrimaryEntryPath("P5"),
+    );
+    expect(p5?.result).toMatchObject({
+      status: "review_required",
+      kind: "P5",
+      identityConfirmed: false,
+    });
+    expect(p5?.result.issues.map((item) => item.code)).toContain(
+      "index_hint_missing",
+    );
+    expect(
+      result.issues.some(
+        (item) =>
+          item.code === "document_list_match_ambiguous" &&
+          item.normalizedPath === fictionalPrimaryEntryPath("P5"),
+      ),
+    ).toBe(true);
   });
 
   it.each([

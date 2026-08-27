@@ -100,12 +100,16 @@ TIFを本文XMLとして扱ったり、画像から黙って本文を補完し�
 |---|---|---|---|---|---|
 | JPA | `P_A1` | 公開特許公報（特開） | `A` | `jppat:UnexaminedPatentPublication` | full publication。path、root、公開番号が一致すること |
 | JPA | `P_A5` | 補正の掲載（公開特許公報） | `A5` | `jppat:UnexaminedPatentPublicationAmendment` | 補正掲載event。元公報全文として扱わない |
-| JPA | `P_P1` | 公表特許公報（特表） | `A` | `jppat:InternationalPatentPublication` | full publication。`A`だけでA1と区別しない |
-| JPA | `P_P5` | 国際公開後における補正の掲載 | `A5` | `jppat:InternationalPatentPublicationAmendment` | 補正掲載event。`A5`だけでA5と区別しない |
+| JPA | `P_P1` | 公表特許公報（特表） | `A` | `jppat:InternationalPatentPublication` | full publication。XMLの国内側公開番号をpath／indexと照合し、`A`だけでA1と区別しない |
+| JPA | `P_P5` | 国際公開後における補正の掲載 | `A5` | `jppat:InternationalPatentPublicationAmendment` | 補正掲載event。event国際公開番号とpath／indexの国内側package keyを分離し、`A5`だけでA5と区別しない |
 | JPB | `P_B1` | 特許公報 | `B1` / `B2` | `jppat:RegisteredPatentPublication` | full publication。B1/B2はCSV kindとXML表示を照合する |
 
 A5/P5は訂正公報の別名ではない。`WrittenAmendmentBag`を持つ補正掲載event
 として保存し、既存のA1/P1 recordを上書きしない。
+
+P5のXML `PublicationNumber`はevent自身の国際公開番号であり、entry folderや
+`DOCUMENT_LIST`の番号へ直接照合しない。P5のpackage identityは正規化した
+entry pathの`document-no`と`DOCUMENT_LIST`の国内側番号・kindから確認する。
 
 ### 3.2 path形状
 
@@ -154,7 +158,7 @@ root、namespace、kind、番号、schema照合を続ける。
 | 論理file | 配置 | 役割 | primary XMLとの照合 |
 |---|---|---|---|
 | `ABSTRACT.csv` | ZIP root | package metadataと区分別集計 | 集計値をdirectory/root別primary件数と照合する |
-| `DOCUMENT_LIST.csv` | ZIP root | 1文献1recordの文献一覧 | normalized publication number、kind、発行日をXMLと照合する |
+| `DOCUMENT_LIST.csv` | ZIP root | 1文献1recordの文献一覧 | normalized package番号、kind、発行日を照合する。P5ではevent番号でなくentry pathの国内側番号を使う |
 | `CONTENTS1.csv` | `DOCUMENT/<full-publication-section>/` | 反復を保持する詳細索引 | publication numberでXMLへ対応付け、複数分類・出願人を照合する |
 | `CONTENTS2.csv` | `DOCUMENT/<full-publication-section>/` | 固定列の縮約索引 | 先頭分類・先頭出願人だけを照合に使い、完全情報源にしない |
 
@@ -225,13 +229,14 @@ labelと公式formatの両方で現れた場合もduplicateとして確認候補
 | position | 論理名 | 型 | 空欄 | 規則 |
 |---:|---|---|---|---|
 | 1 | `countryCode` | string | 不可 | 観察packageの国code。未知値は確認候補 |
-| 2 | `publicationNumber` | string | 不可 | leading zeroを保持し、XML番号と照合 |
+| 2 | `publicationNumber` | string | 不可 | leading zeroを保持するpackage照合番号。P5ではXML event番号へ直接照合せず、entry pathの国内側番号へ照合 |
 | 3 | `kindCode` | string | 不可 | `A`、`A5`、`B1`、`B2`。A/P区別にはroot/pathも必要 |
 | 4 | `issuePublicationDate` | `YYYYMMDD` string | 不可 | 当該recordを収録した公報発行日 |
 
 A5/P5の`issuePublicationDate`を元のA1/P1公報発行日と解釈しない。
-同一publication numberの重複record、XML番号不在、kind矛盾、日付矛盾は
-`確認候補`とする。
+同一publication numberの重複record、対応するpackage key不在、kind矛盾、
+日付矛盾は`確認候補`とする。P5は同一内容の重複recordでも単一候補とみなさず、
+identityを確定しない。
 
 ### 4.4 `CONTENTS1.csv`
 
@@ -367,15 +372,17 @@ catalogで解決する。`sequence-list.dtd`、`mathml2.dtd`、`soextblx.dtd`、
 1. **ZIP entry path**: 安全な相対pathで、第3章のprimary形状かを判定する。
 2. **root elementとnamespace URI**: 区分別rootと`jppat` URIを組で照合する。
 3. **directory区分**: `P_A1`等とrootの対応を照合する。
-4. **文献番号**: XML identification、parent folder、CSVの番号を正規化keyで
-   照合する。
+4. **文献番号**: P1はXML identification、parent folder、CSVの国内側番号を
+   正規化keyで照合する。P5はXML event番号を独立検証し、parent folderとCSVの
+   国内側package keyを別に照合する。
 5. **kind code**: `DOCUMENT_LIST`、root、B1/B2表示を照合する。
 6. **schema参照と版**: schema basename、ST.96版、IPO版を照合する。
 
-番号の比較keyはkind別formatを検証したうえで作る。表示用space/hyphenを
-除き、B1/B2のfolder名とXML番号を照合するときはnumeric coreのleading zeroを
-比較key上だけ正規化する。source番号は必ず残し、保存値のleading zeroや`WO`
-prefixを失わない。
+番号の比較keyは責務別formatを検証したうえで作る。P1 full publicationとP5
+package keyは国内側10桁decimal、P5 event番号は`WO` + 10桁として独立に検証する。
+表示用space/hyphenを除き、B1/B2のfolder名とXML番号を照合するときはnumeric
+coreのleading zeroを比較key上だけ正規化する。source番号は必ず残し、保存値の
+leading zeroやP5 event番号の`WO` prefixを失わない。
 
 ### 6.2 kind確定
 
@@ -421,7 +428,7 @@ full publicationのroot、bibliographic data、party bagを次のように置換
 
 | field | XPath | cardinality・必須性 | 値形式・正規化 | 欠損時と種別差 |
 |---|---|---|---|---|
-| 公開番号／公報番号 | `B/jppat:PatentPublicationIdentification/pat:PublicationNumber` | leaf XSD `0..1`、観察`1`、出力`1`必須 | string。外側空白だけ除きsource valueを保持。数値化しない | 欠損は`取込失敗`。folder/CSV不一致はrecord未確定の`確認候補` |
+| 公開番号／公報番号 | `B/jppat:PatentPublicationIdentification/pat:PublicationNumber` | leaf XSD `0..1`、観察`1`、出力`1`必須 | string。外側空白だけ除きsource valueを保持。数値化しない。P1は国内側10桁番号 | 欠損は`取込失敗`。folder/CSV不一致はrecord未確定の`確認候補` |
 | 登録番号 | B1/B2では上記`pat:PublicationNumber`を登録公報番号としても写像。A1/P1は非該当 | A1/P1出力`0`、B1/B2出力`1`必須 | XMLに独立`RegistrationNumber`があるという観察事実ではなく、B1/B2用normalized outputの取込契約。source valueを同値写像する | B1/B2で欠損は`取込失敗`。A1/P1へは生成しない |
 | 出願番号 | `B/jppat:ApplicationIdentification/com:ApplicationNumber/com:ApplicationNumberText` | identification required、leaf XSD`0..1`、観察/出力`1`必須 | string。source value・prefix・leading zeroを保持 | 欠損は`取込失敗`。priority/related document側の番号と混同しない |
 | 出願日 | `B/jppat:ApplicationIdentification/pat:FilingDate` | XSD`0..1`、観察/出力`1`必須 | XMLは`YYYY-MM-DD`としてdate parseしsource valueも保持 | 欠損・不正dateは`取込失敗` |
@@ -488,9 +495,9 @@ NFC化し外側空白だけ除いた値をexact matchし、未知表示または
 
 | field | XPath | 出力cardinality・必須性 | 規則 |
 |---|---|---|---|
-| event公開番号 | `H/jppat:PatentPublicationIdentification/pat:PublicationNumber` | `1`必須 | A5は10桁decimal string、P5は`WO` + 10桁。source valueを保持しCSV/folderと照合 |
+| event公開番号 | `H/jppat:PatentPublicationIdentification/pat:PublicationNumber` | `1`必須 | A5は10桁decimal string、P5は`WO` + 10桁。source valueを保持する。P5ではCSV/folderへ直接照合しない |
 | event公報発行日 | `H/jppat:PatentPublicationIdentification/com:PublicationDate` | `1`必須 | `YYYY-MM-DD`。元公報日ではなく補正掲載eventの日付。不正値は`取込失敗` |
-| 出願番号 | `H/jppat:ApplicationIdentification/com:ApplicationNumber/com:ApplicationNumberText` | `1`必須 | 元full publicationへの主link候補 |
+| 出願番号 | `H/jppat:ApplicationIdentification/com:ApplicationNumber/com:ApplicationNumberText` | `1`必須 | 抽出・保持するが、元P1との自動結合や無条件identity確定には使わない |
 | 出願日 | `H/jppat:ApplicationIdentification/pat:FilingDate` | `0..1`任意 | 存在時は`YYYY-MM-DD`。欠損を推測補完せず、不正値は`取込失敗` |
 | 補正対象category | `H/jppat:CorrectedPublicationCategory` | `1`を取込契約とする | source code/textを保持。未知値は`確認候補` |
 | IPC | `H/jppat:IPCClassification/pat:MainClassification \| H/jppat:IPCClassification/pat:FurtherClassification` | `0..∞`任意 | full publicationのIPCへ自動上書きしない |
@@ -498,7 +505,7 @@ NFC化し外側空白だけ除いた値をexact matchし、未知表示または
 | 補正内容 | `R/jppat:WrittenAmendmentBag` | `1`を取込契約とする | subtree、順序、種類を保持 |
 | 補正claims | `R/jppat:WrittenAmendmentBag//pat:Claims/pat:Claim` | `0..∞`任意 | `amendedClaims`として別保存。本体claimsへ自動合算しない |
 | 補正書提出日 | `R/jppat:WrittenAmendmentBag/jppat:WrittenAmendment/pat:FilingDate` | 公開仕様上、WrittenAmendmentごとに`1`必須。出力も`1`必須 | `YYYY-MM-DD`。出願日・event発行日と別field。欠損・不正値は`取込失敗` |
-| P5国内公開番号 | `H/jppat:NationalPublicationNumber` | P5`0..1`、A5非該当 | 補助link。2026-155号ではP5の一部にのみ存在 |
+| P5国内公開番号 | `H/jppat:NationalPublicationNumber` | P5`0..1`、A5非該当 | P5 package keyとは別のoptional link identifier。欠損自体はidentity failureにしない。存在時は国内側10桁形式を独立検証し、空値・形式不正・重複はrecord未確定の`確認候補`。path／indexやevent番号との非等値だけでは未確定にしない |
 | P5前回公開日 | `H/jppat:PreviousPublicationDate` | P5`0..1`、A5非該当 | `YYYY-MM-DD`。event発行日・出願日と別field。不正値は`取込失敗` |
 | P5年次番号 | `H/jppat:AnnualNumber` | P5`0..1`、A5非該当 | opaque stringとして保持 |
 
@@ -515,8 +522,11 @@ A1/P1から暗黙にcopyしない。補正subtree内の断片は`amendmentConten
 
 P5では`NationalPublicationNumber`、`PreviousPublicationDate`、
 `AnnualNumber`がそれぞれ93件中49件で観察された。存在を必須にせず、
-`ApplicationNumber`を主link、`NationalPublicationNumber`を補助linkとする。
-link不能または複数候補は`確認候補`であり、推測で結合しない。
+`NationalPublicationNumber`はP5 package keyとは別のoptional link identifierとして
+source値を保持し、path／indexやevent番号との等値をidentity条件にしない。
+存在時は国内側10桁形式、空値、cardinalityを独立検証する。`ApplicationNumber`は
+抽出・保持するが自動link keyにしない。path／index欠損、番号・kind矛盾、
+重複候補は`確認候補`であり、推測で結合しない。
 
 ### 7.5 日付fieldの意味
 
@@ -802,6 +812,11 @@ fixture、test codeは作成しない。
 - path traversal、重複path、外部実体、外部network解決を拒否する。
 - A1/A5/P1/P5/B1/B2をroot、namespace、path、kind、番号、schemaの複合条件で
   識別する。
+- P1の国内側XML番号をpath／indexへ照合し、P5ではevent国際公開番号と国内側
+  package keyを分離する。P5のoptional national番号は別のlink identifierとして
+  欠損を許容し、存在時は国内側10桁形式・空値・cardinalityを独立検証する。
+  path／indexとの非等値だけでは未確定にせず、DOCUMENT_LIST重複候補では
+  identityを確定しない。
 - primary公報XML、nested ST.26、legacy配列表、画像等の添付を分離して数える。
 - 第7章の対象fieldを種別別cardinality、必須性、欠損規則どおり構造化抽出
   する。

@@ -65,6 +65,7 @@ const IDENTITY_CARDINALITY_FIELDS = new Set([
   "applicationDate",
   "plainLanguageDesignationText",
   "amendmentHeader",
+  "nationalPublicationNumber",
 ]);
 
 const IDENTITY_SCALAR_STRUCTURE_FIELDS = new Set([
@@ -74,6 +75,7 @@ const IDENTITY_SCALAR_STRUCTURE_FIELDS = new Set([
   "applicationDate",
   "plainLanguageDesignationText",
   "correctedPublicationCategory",
+  "nationalPublicationNumber",
 ]);
 
 function isFullPublicationKind(
@@ -383,26 +385,58 @@ function normalizePublicationNumber(
   return compact;
 }
 
-function hasExpectedPublicationNumberFormat(
-  value: string,
-  kind: KohoDocumentKind,
-): boolean {
+function hasDomesticPublicationNumberFormat(value: string): boolean {
   const normalized = value.trim().normalize("NFC");
-  if (kind === "A1" || kind === "A5") {
-    return /^\d{10}$/.test(normalized);
-  }
-  if (kind === "P1" || kind === "P5") {
-    return /^WO\d{10}$/.test(normalized);
-  }
-  return /^\d+$/.test(normalized);
+  return /^\d{10}$/.test(normalized);
 }
 
-function addDocumentIdentityChecks(
+function hasExpectedP1FullPublicationNumberFormat(value: string): boolean {
+  return hasDomesticPublicationNumberFormat(value);
+}
+
+function hasExpectedP5EventPublicationNumberFormat(value: string): boolean {
+  return /^WO\d{10}$/.test(value.trim().normalize("NFC"));
+}
+
+function hasExpectedP5PackagePublicationNumberFormat(value: string): boolean {
+  return hasDomesticPublicationNumberFormat(value);
+}
+
+function hasExpectedSharedPublicationNumberFormat(
+  value: string,
+  kind: Exclude<KohoDocumentKind, "P1" | "P5">,
+): boolean {
+  if (kind === "A1" || kind === "A5") {
+    return hasDomesticPublicationNumberFormat(value);
+  }
+  return /^\d+$/.test(value.trim().normalize("NFC"));
+}
+
+function addPublicationNumberFormatCheck(
+  value: string | null | undefined,
+  field: string,
+  formatCheck: (candidate: string) => boolean,
+  issues: KohoParseIssue[],
+): void {
+  if (value === null || value === undefined || formatCheck(value)) {
+    return;
+  }
+  issues.push(
+    issue(
+      "publication_number_mismatch",
+      "review_required",
+      "A publication number does not match the expected identity format.",
+      field,
+    ),
+  );
+}
+
+function addSamePublicationNumberIdentityChecks(
   input: KohoXmlParseInput,
   path: KohoEntryPathInfo,
   kind: KohoDocumentKind,
   publicationNumber: string,
-  publicationDate: string,
+  formatCheck: (candidate: string) => boolean,
   issues: KohoParseIssue[],
 ): void {
   const documentKey = normalizePublicationNumber(publicationNumber, kind);
@@ -412,20 +446,7 @@ function addDocumentIdentityChecks(
     [input.indexHint?.publicationNumber, "indexHint.publicationNumber"],
   ];
   for (const [value, field] of formatChecks) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    if (hasExpectedPublicationNumberFormat(value, kind)) {
-      continue;
-    }
-    issues.push(
-      issue(
-        "publication_number_mismatch",
-        "review_required",
-        "A publication number does not match the expected kind format.",
-        field,
-      ),
-    );
+    addPublicationNumberFormatCheck(value, field, formatCheck, issues);
   }
   if (
     path.documentNumber &&
@@ -454,7 +475,93 @@ function addDocumentIdentityChecks(
       ),
     );
   }
+}
 
+function addP1FullPublicationIdentityChecks(
+  input: KohoXmlParseInput,
+  path: KohoEntryPathInfo,
+  publicationNumber: string,
+  issues: KohoParseIssue[],
+): void {
+  addSamePublicationNumberIdentityChecks(
+    input,
+    path,
+    "P1",
+    publicationNumber,
+    hasExpectedP1FullPublicationNumberFormat,
+    issues,
+  );
+}
+
+function addP5EventPublicationNumberCheck(
+  publicationNumber: string,
+  issues: KohoParseIssue[],
+): void {
+  addPublicationNumberFormatCheck(
+    publicationNumber,
+    "publicationNumber",
+    hasExpectedP5EventPublicationNumberFormat,
+    issues,
+  );
+}
+
+function addP5PackageIdentityChecks(
+  input: KohoXmlParseInput,
+  path: KohoEntryPathInfo,
+  issues: KohoParseIssue[],
+): void {
+  const pathNumber = path.documentNumber;
+  const indexNumber = input.indexHint?.publicationNumber;
+  addPublicationNumberFormatCheck(
+    pathNumber,
+    "entryPath",
+    hasExpectedP5PackagePublicationNumberFormat,
+    issues,
+  );
+  addPublicationNumberFormatCheck(
+    indexNumber,
+    "indexHint.publicationNumber",
+    hasExpectedP5PackagePublicationNumberFormat,
+    issues,
+  );
+
+  if (
+    pathNumber &&
+    indexNumber &&
+    normalizePublicationNumber(pathNumber, "P5") !==
+      normalizePublicationNumber(indexNumber, "P5")
+  ) {
+    issues.push(
+      issue(
+        "publication_number_mismatch",
+        "review_required",
+        "The entry folder conflicts with the package index publication number.",
+        "indexHint.publicationNumber",
+      ),
+    );
+  }
+}
+
+function addP5NationalPublicationNumberCheck(
+  nationalPublicationNumber: string | null,
+  issues: KohoParseIssue[],
+): void {
+  if (nationalPublicationNumber === null) {
+    return;
+  }
+  addPublicationNumberFormatCheck(
+    nationalPublicationNumber,
+    "nationalPublicationNumber",
+    hasExpectedP5PackagePublicationNumberFormat,
+    issues,
+  );
+}
+
+function addPublicationDateIdentityCheck(
+  input: KohoXmlParseInput,
+  publicationDate: string,
+  issues: KohoParseIssue[],
+): void {
   if (input.indexHint?.publicationDate) {
     const hintDate = input.indexHint.publicationDate.trim();
     const xmlDate = publicationDate.replace(/-/g, "");
@@ -469,6 +576,75 @@ function addDocumentIdentityChecks(
       );
     }
   }
+}
+
+function addFullPublicationIdentityChecks(
+  input: KohoXmlParseInput,
+  path: KohoEntryPathInfo,
+  document: KohoFullPublicationDocument,
+  issues: KohoParseIssue[],
+): void {
+  if (document.kind === "P1") {
+    addP1FullPublicationIdentityChecks(
+      input,
+      path,
+      document.publicationNumber.value,
+      issues,
+    );
+  } else {
+    const sharedKind = document.kind;
+    addSamePublicationNumberIdentityChecks(
+      input,
+      path,
+      sharedKind,
+      document.publicationNumber.value,
+      (value) => hasExpectedSharedPublicationNumberFormat(value, sharedKind),
+      issues,
+    );
+  }
+  addPublicationDateIdentityCheck(
+    input,
+    document.publicationDate.value,
+    issues,
+  );
+}
+
+function addAmendmentIdentityChecks(
+  input: KohoXmlParseInput,
+  path: KohoEntryPathInfo,
+  amendment: KohoAmendmentDocument,
+  issues: KohoParseIssue[],
+): void {
+  if (amendment.kind === "P5") {
+    addP5EventPublicationNumberCheck(
+      amendment.publicationNumber.value,
+      issues,
+    );
+    addP5PackageIdentityChecks(
+      input,
+      path,
+      issues,
+    );
+    addP5NationalPublicationNumberCheck(
+      amendment.nationalPublicationNumber?.value ?? null,
+      issues,
+    );
+  } else {
+    const sharedKind = amendment.kind;
+    addSamePublicationNumberIdentityChecks(
+      input,
+      path,
+      sharedKind,
+      amendment.publicationNumber.value,
+      (value) => hasExpectedSharedPublicationNumberFormat(value, sharedKind),
+      issues,
+    );
+  }
+  addPublicationDateIdentityCheck(
+    input,
+    amendment.publicationDate.value,
+    issues,
+  );
 }
 
 function registeredKind(
@@ -738,14 +914,7 @@ export function parseKohoXml(input: KohoXmlParseInput): KohoXmlParseResult {
     if (!document) {
       return failedResult(source, issues, "full_publication", kind);
     }
-    addDocumentIdentityChecks(
-      input,
-      path,
-      kind,
-      document.publicationNumber.value,
-      document.publicationDate.value,
-      issues,
-    );
+    addFullPublicationIdentityChecks(input, path, document, issues);
     const identityConfirmed = !hasIdentityIssue(issues);
     if (identityConfirmed) {
       return {
@@ -792,14 +961,7 @@ export function parseKohoXml(input: KohoXmlParseInput): KohoXmlParseResult {
   if (!amendment) {
     return failedResult(source, issues, "amendment", kind);
   }
-  addDocumentIdentityChecks(
-    input,
-    path,
-    kind,
-    amendment.publicationNumber.value,
-    amendment.publicationDate.value,
-    issues,
-  );
+  addAmendmentIdentityChecks(input, path, amendment, issues);
   const identityConfirmed = !hasIdentityIssue(issues);
   if (identityConfirmed) {
     return {
