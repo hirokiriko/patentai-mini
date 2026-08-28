@@ -16,7 +16,13 @@ import {
   type KohoImportDocumentPlan,
   type KohoImportRunContract,
 } from "../lib/koho-import";
-import { eq, desc, asc, and, inArray, sql } from "drizzle-orm";
+import {
+  buildKohoCorpusAttachPlan,
+  KohoCorpusDomainError,
+  type KohoCorpusSearchSummary,
+  type KohoCorpusSourceDocument,
+} from "../lib/koho-corpus/domain";
+import { eq, desc, asc, and, inArray, or, sql } from "drizzle-orm";
 import { KohoImportRepositoryValidationError } from "./types";
 import type {
   CaseRepository,
@@ -28,9 +34,11 @@ import type {
   KohoImportDocument,
   KohoImportRepository,
   KohoImportRun,
+  KohoCorpusRepository,
 } from "./types";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const POSTGRES_INTEGER_MAX = 2_147_483_647;
 const KOHO_PACKAGE_TYPES = new Set<string>(["JPA", "JPB"]);
 const KOHO_PACKAGE_STATUSES = new Set<string>([
   "success",
@@ -192,6 +200,88 @@ function toKohoImportDocument(
     assertKohoImportDocumentPlan(document, packageType),
   );
   return { documentId: row.documentId, importId: row.importId, ...document };
+}
+
+function unavailableKohoCorpus(): KohoCorpusDomainError {
+  return new KohoCorpusDomainError("koho_corpus_unavailable");
+}
+
+function rethrowKohoCorpusError(error: unknown): never {
+  if (error instanceof KohoCorpusDomainError) throw error;
+  throw unavailableKohoCorpus();
+}
+
+function isValidYyyyMmDd(value: string): boolean {
+  if (!/^\d{8}$/.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6));
+  const day = Number(value.slice(6, 8));
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day <= daysInMonth[month - 1];
+}
+
+function toKohoCorpusSourceDocument(
+  documentRow: typeof kohoImportDocuments.$inferSelect,
+  runRow: typeof kohoImportRuns.$inferSelect,
+): KohoCorpusSourceDocument {
+  const run = toKohoImportRun(runRow);
+  const document = toKohoImportDocument(documentRow, run.packageType);
+  if (!isValidYyyyMmDd(document.publicationDate)) {
+    throw unavailableKohoCorpus();
+  }
+  return {
+    ...document,
+    packageType: run.packageType,
+    sourceSha256: run.sourceSha256,
+  };
+}
+
+function toKohoCorpusSearchSummary(
+  document: KohoCorpusSourceDocument,
+): KohoCorpusSearchSummary {
+  return {
+    documentId: document.documentId,
+    packageType: document.packageType,
+    parseStatus: document.parseStatus,
+    kind: document.kind,
+    publicationNumber: document.publicationNumber,
+    applicationNumber: document.applicationNumber,
+    publicationDate: document.publicationDate,
+    inventionTitle: document.inventionTitle,
+    abstractPreview:
+      document.abstractText === null
+        ? null
+        : Array.from(document.abstractText).slice(0, 300).join(""),
+  };
+}
+
+function assertNoDuplicateExistingPublicationNumbers(
+  documents: readonly (typeof priorArtDocuments.$inferSelect)[],
+): void {
+  const publicationNumbers = new Set<string>();
+  for (const document of documents) {
+    if (document.publicationNo === null) continue;
+    if (publicationNumbers.has(document.publicationNo)) {
+      throw unavailableKohoCorpus();
+    }
+    publicationNumbers.add(document.publicationNo);
+  }
 }
 
 export const caseRepo: CaseRepository = {
@@ -519,5 +609,184 @@ export const kohoImportRepo: KohoImportRepository = {
         asc(kohoImportDocuments.documentId),
       );
     return rows.map((row) => toKohoImportDocument(row, run.packageType));
+  },
+};
+
+export const kohoCorpusRepo: KohoCorpusRepository = {
+  async searchForCase(caseId, query, limit) {
+    try {
+      if (
+        !Number.isSafeInteger(caseId) ||
+        caseId < 1 ||
+        caseId > POSTGRES_INTEGER_MAX
+      ) {
+        throw new KohoCorpusDomainError("case_not_found");
+      }
+      const [caseRow] = await db
+        .select({ caseId: cases.caseId })
+        .from(cases)
+        .where(eq(cases.caseId, caseId))
+        .limit(1);
+      if (!caseRow) {
+        throw new KohoCorpusDomainError("case_not_found");
+      }
+
+      const rows = await db
+        .select({
+          document: kohoImportDocuments,
+          run: kohoImportRuns,
+        })
+        .from(kohoImportDocuments)
+        .innerJoin(
+          kohoImportRuns,
+          eq(kohoImportDocuments.importId, kohoImportRuns.importId),
+        )
+        .where(
+          or(
+            sql<boolean>`strpos(lower(${kohoImportDocuments.publicationNumber}), lower(cast(${query} as text))) > 0`,
+            sql<boolean>`strpos(lower(${kohoImportDocuments.applicationNumber}), lower(cast(${query} as text))) > 0`,
+            sql<boolean>`strpos(lower(${kohoImportDocuments.inventionTitle}), lower(cast(${query} as text))) > 0`,
+          ),
+        )
+        .orderBy(
+          desc(kohoImportDocuments.publicationDate),
+          asc(kohoImportDocuments.publicationNumber),
+          asc(kohoImportDocuments.documentId),
+        )
+        .limit(limit);
+
+      return rows.map(({ document, run }) =>
+        toKohoCorpusSearchSummary(
+          toKohoCorpusSourceDocument(document, run),
+        ),
+      );
+    } catch (error) {
+      rethrowKohoCorpusError(error);
+    }
+  },
+
+  async attachToCase(caseId, documentIds) {
+    try {
+      if (
+        !Number.isSafeInteger(caseId) ||
+        caseId < 1 ||
+        caseId > POSTGRES_INTEGER_MAX
+      ) {
+        throw new KohoCorpusDomainError("case_not_found");
+      }
+      return await db.transaction(async (tx) => {
+        const [caseRow] = await tx
+          .select({ caseId: cases.caseId })
+          .from(cases)
+          .where(eq(cases.caseId, caseId))
+          .for("update");
+        if (!caseRow) {
+          throw new KohoCorpusDomainError("case_not_found");
+        }
+        if (
+          documentIds.some(
+            (documentId) =>
+              !Number.isSafeInteger(documentId) ||
+              documentId < 1 ||
+              documentId > POSTGRES_INTEGER_MAX,
+          )
+        ) {
+          throw new KohoCorpusDomainError("koho_document_not_found");
+        }
+
+        const selectedRows =
+          documentIds.length === 0
+            ? []
+            : await tx
+                .select({
+                  document: kohoImportDocuments,
+                  run: kohoImportRuns,
+                })
+                .from(kohoImportDocuments)
+                .innerJoin(
+                  kohoImportRuns,
+                  eq(kohoImportDocuments.importId, kohoImportRuns.importId),
+                )
+                .where(inArray(kohoImportDocuments.documentId, documentIds));
+        const sourceDocuments = selectedRows.map(({ document, run }) =>
+          toKohoCorpusSourceDocument(document, run),
+        );
+
+        const selectionPlan = buildKohoCorpusAttachPlan({
+          caseId,
+          documentIds,
+          documents: sourceDocuments,
+          existingDocuments: [],
+        });
+        const selectedPublicationNumbers = selectionPlan.inserted.map(
+          ({ snapshot }) => snapshot.publicationNo,
+        );
+
+        const existingDocuments = await tx
+          .select()
+          .from(priorArtDocuments)
+          .where(
+            and(
+              eq(priorArtDocuments.caseId, caseId),
+              inArray(
+                priorArtDocuments.publicationNo,
+                selectedPublicationNumbers,
+              ),
+            ),
+          )
+          .orderBy(asc(priorArtDocuments.docId))
+          .for("update");
+        assertNoDuplicateExistingPublicationNumbers(existingDocuments);
+
+        const plan = buildKohoCorpusAttachPlan({
+          caseId,
+          documentIds,
+          documents: sourceDocuments,
+          existingDocuments,
+        });
+
+        if (plan.inserted.length > 0) {
+          const inserted = await tx
+            .insert(priorArtDocuments)
+            .values(plan.inserted.map(({ snapshot }) => snapshot))
+            .returning({ docId: priorArtDocuments.docId });
+          if (inserted.length !== plan.inserted.length) {
+            throw unavailableKohoCorpus();
+          }
+        }
+
+        for (const operation of plan.updated) {
+          const [updated] = await tx
+            .update(priorArtDocuments)
+            .set(operation.snapshot)
+            .where(
+              and(
+                eq(priorArtDocuments.caseId, caseId),
+                eq(priorArtDocuments.docId, operation.docId),
+              ),
+            )
+            .returning({ docId: priorArtDocuments.docId });
+          if (!updated) {
+            throw unavailableKohoCorpus();
+          }
+        }
+
+        if (plan.analysisCleared) {
+          await tx
+            .delete(comparisonResults)
+            .where(eq(comparisonResults.caseId, caseId));
+        }
+
+        return {
+          selected: plan.selected,
+          inserted: plan.inserted.length,
+          updated: plan.updated.length,
+          unchanged: plan.unchanged.length,
+          analysisCleared: plan.analysisCleared,
+        };
+      });
+    } catch (error) {
+      rethrowKohoCorpusError(error);
+    }
   },
 };

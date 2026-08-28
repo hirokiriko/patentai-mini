@@ -2,6 +2,10 @@ import type {
   KohoImportDocumentPlan,
   KohoImportPlan,
 } from "@/lib/koho-import";
+import type {
+  KohoCorpusAttachResult,
+  KohoCorpusSearchSummary,
+} from "@/lib/koho-corpus/domain";
 
 /**
  * リポジトリ層の型定義。
@@ -198,4 +202,16 @@ export interface KohoImportRepository {
     sourceSha256: string,
   ): Promise<KohoImportRun | null>;
   findDocumentsByRunId(importId: number): Promise<KohoImportDocument[]>;
+}
+
+export interface KohoCorpusRepository {
+  searchForCase(
+    caseId: number,
+    query: string,
+    limit: number,
+  ): Promise<KohoCorpusSearchSummary[]>;
+  attachToCase(
+    caseId: number,
+    documentIds: number[],
+  ): Promise<KohoCorpusAttachResult>;
 }

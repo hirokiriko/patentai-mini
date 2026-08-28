@@ -45,5 +45,6 @@ Codexがユーザーへ進捗・完了を報告する際は、`## 🚨 Codexへ�
 - [公報XMLパーサー仕様](docs/06-koho-xml-parser-spec.md)
 - [公報package保存仕様](docs/07-koho-import-persistence-spec.md)
 - [公報package手動取込API仕様](docs/08-koho-manual-import-api-spec.md)
+- [公報corpus案件接続仕様](docs/09-koho-corpus-case-connection-spec.md)
 
 Issueにない機能や将来拡張は同時に追加せず、現在の受入条件を満たす最小変更に限定します。
