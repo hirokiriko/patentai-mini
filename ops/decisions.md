@@ -173,3 +173,20 @@
   - case削除はglobal corpusへ影響せず、案件単位の比較対象と公報取込履歴のlifecycleを独立させられる
   - parser、import plan、schema、repository coreまでを保存基盤とし、API／UI／scheduler／自動取得との接続は別Issueで設計する
   - 実JPA／JPB packageと一時Postgresによる全件保存、冪等性、rollbackはLocal検証で行い、Production migrationは別途明示的に扱う
+
+## DR-0013: 管理者限定の公報package手動取込APIはfail-closedとする
+- Date: 2026-08-28
+- Status: Accepted
+- Context:
+  - global公報corpusへpackageを投入する最小経路が必要だが、raw ZIP全体buffer化、無制限入力、secret未設定時の公開、raw source永続化は避ける必要がある
+  - scheduler／自動取得／UIを同時に導入せず、既存parser・import plan・repositoryを安全に接続したい
+- Decision:
+  - `POST /api/admin/koho-imports`だけを追加し、管理tokenとsource byte上限の両設定が有効な場合だけ処理を許可する
+  - raw ZIPはOS一時fileへbounded streamingし、同じchunk列からSHA-256を算出して既存の冪等保存keyへ使用する
+  - 一時fileは成功・失敗・abortを問わず即時削除し、cleanup完了を確認できない場合は成功responseを返さずstable internal errorとする。raw ZIPをDB、Blob、repository artifactへ永続化しない
+  - `success`／`review_required`だけを保存し、`failed`は保存しない
+  - endpointにUI、scheduler、自動取得を追加しない
+- Consequence:
+  - runtime設定が欠損または不正ならendpointはbodyやDBへ触れず`koho_import_disabled`で停止する
+  - Production有効化は公報保存migrationの適用、2つのruntime設定、専用Local検証を別途完了した後に行う
+  - Cloud実装はProduction DB、Azure resource、secret、runtime環境変数を変更しない

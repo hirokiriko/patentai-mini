@@ -387,3 +387,18 @@ preemptive optimization that the Issue does not require.
 When reporting verification, explicitly state any test that was not run, any UI
 that was not visually confirmed, and any Production behavior that was not
 confirmed. Never report an unexecuted check as successful.
+
+## 14. Manual Koho Import Runtime Safety
+
+The manual administrator import route uses these configuration names:
+
+- `KOHO_IMPORT_ADMIN_TOKEN`
+- `KOHO_IMPORT_MAX_SOURCE_BYTES`
+
+Never commit, print, or copy their runtime values into GitHub. The manual import
+endpoint must fail closed with `koho_import_disabled` unless both settings pass
+the documented validation. A code deploy does not authorize enabling the route.
+Production activation requires the separately approved koho import migration,
+separate runtime configuration of both variables, and the dedicated Local
+verification. Do not apply the migration or change Azure resources, secrets, or
+environment variables as part of ordinary Cloud implementation or verification.

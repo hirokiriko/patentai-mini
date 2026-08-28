@@ -117,6 +117,25 @@ For `AI_PROVIDER=openai`, add:
 - `AI_MODEL` when overriding the default model
 - `FAST_AI_MODEL` when overriding the default fast model
 
+## Manual koho import activation gate
+
+`POST /api/admin/koho-imports` is disabled by application configuration unless
+both `KOHO_IMPORT_ADMIN_TOKEN` and `KOHO_IMPORT_MAX_SOURCE_BYTES` are valid.
+Merging the route does not authorize changing Azure runtime configuration.
+
+Before enabling the endpoint in Production:
+
+1. Apply the already-approved koho import schema migration through the separate
+   Production migration procedure.
+2. Configure both manual-import runtime variables through the separately
+   controlled Azure Container Apps configuration path; never place their values
+   in this repository or workflow logs.
+3. Complete the dedicated Local verification with real JPA／JPB packages and a
+   disposable Postgres instance.
+
+Until all three are complete, leave the two manual-import variables unset so the
+endpoint remains fail-closed with `koho_import_disabled`.
+
 ## Deployment Flow
 
 1. Push to `main` or run the workflow manually.

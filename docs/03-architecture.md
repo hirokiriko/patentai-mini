@@ -69,6 +69,7 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - identity確認済みのA1／P1／B1／B2 full publicationだけを保存する公報document
 - case_idを持たず、case削除の対象にしない
 - 保存契約は[公報package保存仕様](07-koho-import-persistence-spec.md)を参照
+- 管理者の明示操作による手動取込経路は[公報package手動取込API仕様](08-koho-manual-import-api-spec.md)に従う。raw ZIPは一時fileへbounded streamingし、保存後に残さない
 
 ### ComparisonResult
 - result_id
@@ -103,6 +104,6 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 
 ## 将来拡張
 - OCR 付き PDF 詳細解析
-- 公報package取込API／scheduler／自動取得（parserと保存基盤までは実装済み）
+- 公報package scheduler／自動取得／Production有効化（parser・保存基盤・管理者限定の手動取込APIまでは実装済み）
 - 代理人向けレビュー画面
 - global公報corpusから案件の比較対象を選択する接続機能
