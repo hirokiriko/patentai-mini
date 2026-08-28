@@ -81,7 +81,7 @@ describe("koho corpus Drizzle boundary", () => {
     );
     expect(attach).toContain("buildKohoCorpusAttachPlan");
     expect(attach).toContain("if (plan.analysisCleared)");
-    expect(attach).toContain("tx\n            .delete(comparisonResults)");
+    expect(attach).toMatch(/tx\r?\n\s+\.delete\(comparisonResults\)/);
     expect(attach.match(/\.delete\(comparisonResults\)/g)).toHaveLength(1);
 
     const invalidationStart = attach.indexOf("if (plan.analysisCleared)");
