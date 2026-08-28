@@ -14,6 +14,7 @@ import { IntegrateButton } from "./integrate-button";
 import { GenerateQueriesButton } from "./generate-queries-button";
 import { UploadCsvForm } from "./upload-csv-form";
 import { UploadPatentFilesForm } from "./upload-patent-files-form";
+import { KohoCorpusPicker } from "./koho-corpus-picker";
 import { AnalyzeButton } from "./analyze-button";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { StepProgressBar } from "@/components/step-progress-bar";
@@ -1081,7 +1082,7 @@ export default async function CaseDetailPage({
         >
           <h2 className="text-xl font-bold">4. 先行技術文献の取り込み</h2>
           <p className="mt-2 text-sm text-gray-600">
-            方法 A と方法 B は併用可。どちらか一方だけでも分析に進めます。
+            方法 A・方法 B・取り込み済み公報からの追加は併用可。いずれか一つだけでも分析に進めます。
           </p>
 
           <div className="mt-4 space-y-4">
@@ -1092,6 +1093,9 @@ export default async function CaseDetailPage({
             <div className="rounded-lg border border-gray-200 px-4 py-3">
               <p className="text-sm font-medium text-gray-500 mb-2">方法B: 個別の特許文献ファイル（検索式なしで直接取り込み可）</p>
               <UploadPatentFilesForm caseId={caseIdNum} />
+            </div>
+            <div className="rounded-lg border border-gray-200 px-4 py-3">
+              <KohoCorpusPicker caseId={caseIdNum} />
             </div>
           </div>
 

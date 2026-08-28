@@ -62,7 +62,8 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - normalized_elements_json
 
 `PriorArtDocument`は案件単位の検索結果・比較対象であり、次のglobal公報corpusとは
-分離する。
+分離する。global公報を案件へ追加する場合も、global rowを直接関連付けず、比較に
+必要な値と限定provenanceを`PriorArtDocument`へsnapshot copyする。
 
 ### KohoImportRun / KohoImportDocument
 - package typeとsource SHA-256で識別するglobalな公報package取込履歴
@@ -70,6 +71,17 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - case_idを持たず、case削除の対象にしない
 - 保存契約は[公報package保存仕様](07-koho-import-persistence-spec.md)を参照
 - 管理者の明示操作による手動取込経路は[公報package手動取込API仕様](08-koho-manual-import-api-spec.md)に従う。raw ZIPは一時fileへbounded streamingし、保存後に残さない
+- 案件への検索・snapshot追加は[公報corpus案件接続仕様](09-koho-corpus-case-connection-spec.md)に従う
+
+### Global corpusから案件への接続
+- `GET /api/cases/[caseId]/koho-corpus`は公開番号、出願番号、発明名称をliteral substringで検索し、公開用summaryだけを返す
+- `POST /api/cases/[caseId]/koho-corpus`は選択したglobal documentを既存`prior_art_documents`へ単一transactionでsnapshot copyする
+- attach transactionは対象caseをlockし、同一案件の並行attachを直列化する。schemaやrelation tableは追加しない
+- snapshotの`source_csv_row_json`はsource種別、package type、source/content digest、正規化entry path、parse status、kind、公開日だけをcanonical JSONで保持する
+- raw XML／CSV、description、reference、画像、添付、Applicant／IPC／FI JSON、issue messageはcase snapshotへ含めない
+- global rowの更新・削除は既存snapshotへ伝播せず、case削除もglobal corpusへ影響させない
+- insertまたはupdateがあった場合だけ、同じtransactionで対象caseの`comparison_results`を削除する
+- 案件pageの初期renderはglobal corpusへqueryせず、ユーザーの明示検索時だけAPIを呼ぶ
 
 ### ComparisonResult
 - result_id
@@ -86,7 +98,7 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 1. 特許案を解析して請求項と構成要素を抽出
 2. 検索式候補を生成
 3. ユーザーが J-PlatPat で調査し結果を持ち帰る
-4. CSV を取り込み既存文献を正規化
+4. CSV／個別fileを取り込むか、global公報corpusから公報を明示選択し、案件の比較対象を作る
 5. 自身の請求項と既存文献要素を比較
 6. 総合スコアと説明文を生成
 7. レポート表示
@@ -106,4 +118,4 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - OCR 付き PDF 詳細解析
 - 公報package scheduler／自動取得／Production有効化（parser・保存基盤・管理者限定の手動取込APIまでは実装済み）
 - 代理人向けレビュー画面
-- global公報corpusから案件の比較対象を選択する接続機能
+- semantic／vector corpus検索、advanced filter、pagination、公報詳細画面

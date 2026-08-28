@@ -190,3 +190,24 @@
   - runtime設定が欠損または不正ならendpointはbodyやDBへ触れず`koho_import_disabled`で停止する
   - Production有効化は公報保存migrationの適用、2つのruntime設定、専用Local検証を別途完了した後に行う
   - Cloud実装はProduction DB、Azure resource、secret、runtime環境変数を変更しない
+
+## DR-0014: global公報は案件の先行技術へsnapshot copyする
+- Date: 2026-08-28
+- Status: Accepted
+- Extends: DR-0012
+- Context:
+  - global公報corpusを複数案件で再利用しつつ、既存の重なり分析は案件単位の`prior_art_documents`を入力とする必要がある
+  - global rowをcaseへ直接関連付けると、後続のglobal更新・削除が過去の比較対象へ意図せず伝播し、案件分析の再現性を損なう
+  - 比較対象が変わっていない再追加で既存`comparison_results`を削除すると、不要な再分析を発生させる
+- Decision:
+  - relation tableやschemaを追加せず、ユーザーが選択した時点の比較用値を既存`prior_art_documents`へsnapshot copyする
+  - 同一案件・同一公開番号を1つの比較対象とし、全snapshot fieldの完全一致でinsert／update／unchangedを決定する
+  - attachはcase row lockを含む単一transactionで直列化し、lookup、保存契約検証、projection、merge、analysis invalidationをatomicに行う
+  - snapshot provenanceは追跡に必要な8 fieldのcanonical JSONだけとし、raw source、description、reference、画像、添付、Applicant／IPC／FI JSON、issue messageを含めない
+  - insertまたはupdateが1件以上ある場合だけ、同一transactionで対象caseの`comparison_results`を削除する
+  - global rowの更新・削除を既存snapshotへ伝播せず、case削除もglobal corpusへ影響させない
+- Consequence:
+  - 既存分析APIと`PriorArtDocument`表示を変更せず、global corpusを比較フローへ接続できる
+  - 同一内容の再追加は既存`docId`と分析結果を維持する
+  - 案件pageは初期renderでcorpusへqueryせず、storage未準備時は明示検索・追加だけがstableな利用不可応答になる
+  - Production migration、corpus投入、Azure resource、secret、runtime環境変数の操作は別Issueとする

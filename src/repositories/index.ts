@@ -12,6 +12,7 @@ export {
   priorArtDocumentRepo,
   comparisonResultRepo,
   kohoImportRepo,
+  kohoCorpusRepo,
 } from "./drizzle";
 
 export { KohoImportRepositoryValidationError } from "./types";
@@ -33,4 +34,5 @@ export type {
   PriorArtDocumentRepository,
   ComparisonResultRepository,
   KohoImportRepository,
+  KohoCorpusRepository,
 } from "./types";

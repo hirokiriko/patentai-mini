@@ -44,6 +44,8 @@ Azure Hackathon migration target:
   - `analyze-overlap.ts`: prior-art screening and overlap analysis.
   - `integrate-claims.ts`: base-application/addition integration.
   - `parse-jplatpat-csv.ts`: J-PlatPat CSV parsing.
+  - `koho-corpus`: global public-gazette corpus search, case snapshot
+    projection, idempotent merge planning, and stable API handling.
 - `src/db`: Drizzle database connection and schema.
 - `src/repositories`: Repository interfaces and Drizzle implementation.
 - `scripts`: Utility scripts, including `copy-pdfjs-assets.mjs` and
@@ -402,3 +404,23 @@ Production activation requires the separately approved koho import migration,
 separate runtime configuration of both variables, and the dedicated Local
 verification. Do not apply the migration or change Azure resources, secrets, or
 environment variables as part of ordinary Cloud implementation or verification.
+
+## 15. Koho Corpus Case Connection Safety
+
+- `GET` / `POST /api/cases/[caseId]/koho-corpus` and
+  `src/lib/koho-corpus/**` implement explicit corpus search and case snapshot
+  attachment.
+- Keep `koho_import_documents` global. Do not add `case_id`, a relation table,
+  or automatic synchronization to case data without a separate approved Issue.
+- A case snapshot may contain only the comparison fields and canonical
+  provenance defined in `docs/09-koho-corpus-case-connection-spec.md`.
+- Never copy raw XML / CSV, description, references, images, attachments,
+  Applicant / IPC / FI JSON, parse issue messages, or other raw source content
+  into a case snapshot.
+- Search must be explicit. Do not query the corpus during initial page render or
+  only because the user typed into the search input.
+- Keep lookup, persisted-row validation, snapshot merge, and conditional
+  analysis invalidation atomic for attach operations.
+- Production corpus availability, migrations, data loading, Azure resources,
+  secrets, and runtime environment configuration remain separately approved
+  work.
