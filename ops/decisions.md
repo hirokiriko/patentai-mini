@@ -183,7 +183,7 @@
 - Decision:
   - `POST /api/admin/koho-imports`だけを追加し、管理tokenとsource byte上限の両設定が有効な場合だけ処理を許可する
   - raw ZIPはOS一時fileへbounded streamingし、同じchunk列からSHA-256を算出して既存の冪等保存keyへ使用する
-  - 一時fileは成功・失敗・abortを問わず即時削除し、raw ZIPをDB、Blob、repository artifactへ永続化しない
+  - 一時fileは成功・失敗・abortを問わず即時削除し、cleanup完了を確認できない場合は成功responseを返さずstable internal errorとする。raw ZIPをDB、Blob、repository artifactへ永続化しない
   - `success`／`review_required`だけを保存し、`failed`は保存しない
   - endpointにUI、scheduler、自動取得を追加しない
 - Consequence:

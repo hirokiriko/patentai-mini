@@ -62,6 +62,7 @@ export interface KohoBoundedTempSource {
 
 export interface KohoBoundedTempSourceOptions {
   tempRoot?: string;
+  removeTempDirectory?: (directory: string) => Promise<void>;
 }
 
 export type KohoBoundedTempSourceRunner = <T>(
@@ -195,12 +196,18 @@ export async function withBoundedKohoTempSource<T>(
   consumeSource: (source: KohoBoundedTempSource) => Promise<T>,
   options: KohoBoundedTempSourceOptions = {},
 ): Promise<T> {
+  const removeTempDirectory =
+    options.removeTempDirectory ??
+    ((directory: string) => rm(directory, { recursive: true, force: true }));
   const directory = await mkdtemp(
     join(options.tempRoot ?? tmpdir(), TEMP_PREFIX),
   );
   const sourcePath = join(directory, randomUUID());
   let handle: FileHandle | null = null;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let abortBodyRead: (() => void) | null = null;
+  let cancelBodyRead: (() => void) | null = null;
+  let bodyComplete = false;
 
   try {
     handle = await open(sourcePath, "wx", 0o600);
@@ -209,18 +216,45 @@ export async function withBoundedKohoTempSource<T>(
       throw new KohoManualImportHttpError(400, "empty_body");
     }
 
-    reader = body.getReader();
+    const bodyReader = body.getReader();
+    reader = bodyReader;
+    let rejectAbortedRead: (reason: Error) => void = () => undefined;
+    const abortedRead = new Promise<never>((_resolve, reject) => {
+      rejectAbortedRead = reject;
+    });
+    let bodyCancelRequested = false;
+    cancelBodyRead = () => {
+      if (bodyCancelRequested) return;
+      bodyCancelRequested = true;
+      void bodyReader.cancel().catch(() => undefined);
+    };
+    let abortTriggered = false;
+    abortBodyRead = () => {
+      if (abortTriggered) return;
+      abortTriggered = true;
+      rejectAbortedRead(new Error("request aborted"));
+      cancelBodyRead?.();
+    };
+    request.signal.addEventListener("abort", abortBodyRead, { once: true });
+    if (request.signal.aborted) abortBodyRead();
+
     const hash = createHash("sha256");
     let observedBytes = 0;
 
     while (true) {
+      const { done, value } = await Promise.race([
+        bodyReader.read(),
+        abortedRead,
+      ]);
       if (request.signal.aborted) {
         throw new Error("request aborted");
       }
-      const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        bodyComplete = true;
+        break;
+      }
       if (value.byteLength > maxSourceBytes - observedBytes) {
-        await reader.cancel().catch(() => undefined);
+        cancelBodyRead();
         throw new KohoManualImportHttpError(413, "package_too_large");
       }
 
@@ -248,7 +282,12 @@ export async function withBoundedKohoTempSource<T>(
       byteLength: observedBytes,
     });
   } finally {
+    let cleanupFailed = false;
+    if (abortBodyRead !== null) {
+      request.signal.removeEventListener("abort", abortBodyRead);
+    }
     if (reader !== null) {
+      if (!bodyComplete) cancelBodyRead?.();
       try {
         reader.releaseLock();
       } catch {
@@ -256,9 +295,23 @@ export async function withBoundedKohoTempSource<T>(
       }
     }
     if (handle !== null) {
-      await handle.close().catch(() => undefined);
+      try {
+        await handle.close();
+      } catch {
+        cleanupFailed = true;
+      }
     }
-    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    try {
+      await removeTempDirectory(directory);
+    } catch {
+      cleanupFailed = true;
+    }
+    if (cleanupFailed) {
+      throw new KohoManualImportHttpError(
+        500,
+        "koho_import_internal_error",
+      );
+    }
   }
 }
 

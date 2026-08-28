@@ -59,7 +59,7 @@ bodyはWeb streamを逐次読み、`mkdtemp`で作ったOS一時directory内のe
 - 宣言Content-Lengthと実測値の不一致: `400 content_length_mismatch`
 - 完了時SHA-256: lowercase ASCII hex 64文字
 
-成功、request abort、stream error、limit超過、parser／validation／storage errorの全経路でfile handleを閉じ、一時fileと専用directoryを削除する。raw ZIPはDB、Blob、repository、artifactへ永続化しない。
+成功、request abort、stream error、limit超過、parser／validation／storage errorの全経路でfile handleを閉じ、一時fileと専用directoryを削除する。cleanup完了を確認できない場合は成功responseを返さず、入力値やpathを含まない`500 koho_import_internal_error`とする。raw ZIPはDB、Blob、repository、artifactへ永続化しない。
 
 ## 5. Package limits
 

@@ -16,10 +16,11 @@ import {
   withBoundedKohoTempSource,
 } from "./manual-api";
 import { KohoImportPlanValidationError, type KohoImportPlan } from "./types";
-import type {
-  KohoImportRepository,
-  KohoImportSaveResult,
-} from "@/repositories/types";
+import {
+  KohoImportRepositoryValidationError,
+  type KohoImportRepository,
+  type KohoImportSaveResult,
+} from "../../repositories/types";
 
 const TOKEN = "FICTIONAL-ADMIN-TOKEN-0123456789-ABCDEFG";
 const DEFAULT_MAX_SOURCE_BYTES = "2000000";
@@ -40,14 +41,10 @@ function environment(
   return (name: keyof typeof values) => values[name];
 }
 
-function chunkStream(
-  chunks: readonly Uint8Array[],
-  onPull?: () => void,
-): ReadableStream<Uint8Array> {
+function chunkStream(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
   let index = 0;
   return new ReadableStream<Uint8Array>({
     pull(controller) {
-      onPull?.();
       if (index >= chunks.length) {
         controller.close();
         return;
@@ -71,7 +68,7 @@ function requestWithBody(input: {
   contentLength?: string;
   authorization?: string | null;
   signal?: AbortSignal;
-  onPull?: () => void;
+  onBodyAccess?: () => void;
 } = {}): Request {
   const params = new URLSearchParams();
   if (input.packageType !== undefined) params.append("packageType", input.packageType);
@@ -83,9 +80,9 @@ function requestWithBody(input: {
   if (input.authorization !== null) {
     headers.set("authorization", input.authorization ?? `Bearer ${TOKEN}`);
   }
-  const body = chunkStream(input.chunks ?? [new TextEncoder().encode("fictional")], input.onPull);
+  const body = chunkStream(input.chunks ?? [new TextEncoder().encode("fictional")]);
 
-  return new Request(
+  const request = new Request(
     `http://localhost/api/admin/koho-imports?${params.toString()}`,
     {
       method: "POST",
@@ -95,6 +92,19 @@ function requestWithBody(input: {
       duplex: "half",
     } as RequestInit & { duplex: "half" },
   );
+
+  if (input.onBodyAccess !== undefined) {
+    const requestBody = request.body;
+    Object.defineProperty(request, "body", {
+      configurable: true,
+      get() {
+        input.onBodyAccess?.();
+        return requestBody;
+      },
+    });
+  }
+
+  return request;
 }
 
 class FakeKohoImportRepository
@@ -158,7 +168,7 @@ describe("manual koho import validation ordering", () => {
   ] as const)(
     "disables before body, temp, parser, or repository access",
     async (configuredToken, configuredMax) => {
-      let bodyPulls = 0;
+      let bodyAccesses = 0;
       const withTempSource = vi.fn();
       const parsePackage = vi.fn();
       const repository = new FakeKohoImportRepository();
@@ -173,12 +183,15 @@ describe("manual koho import validation ordering", () => {
       });
 
       const response = await handler(
-        requestWithBody({ packageType: "JPA", onPull: () => bodyPulls += 1 }),
+        requestWithBody({
+          packageType: "JPA",
+          onBodyAccess: () => bodyAccesses += 1,
+        }),
       );
 
       expect(response.status).toBe(503);
       expect(await errorBody(response)).toEqual({ error: "koho_import_disabled" });
-      expect(bodyPulls).toBe(0);
+      expect(bodyAccesses).toBe(0);
       expect(withTempSource).not.toHaveBeenCalled();
       expect(parsePackage).not.toHaveBeenCalled();
       expect(repository.calls).toHaveLength(0);
@@ -188,7 +201,7 @@ describe("manual koho import validation ordering", () => {
   it.each([null, "Basic FICTIONAL", "Bearer", "Bearer wrong-token"])(
     "rejects bad authorization before body access",
     async (authorization) => {
-      let bodyPulls = 0;
+      let bodyAccesses = 0;
       const withTempSource = vi.fn();
       const repository = new FakeKohoImportRepository();
       const handler = createKohoManualImportPostHandler({
@@ -201,13 +214,13 @@ describe("manual koho import validation ordering", () => {
         requestWithBody({
           packageType: "JPA",
           authorization,
-          onPull: () => bodyPulls += 1,
+          onBodyAccess: () => bodyAccesses += 1,
         }),
       );
 
       expect(response.status).toBe(401);
       expect(await errorBody(response)).toEqual({ error: "unauthorized" });
-      expect(bodyPulls).toBe(0);
+      expect(bodyAccesses).toBe(0);
       expect(withTempSource).not.toHaveBeenCalled();
       expect(repository.calls).toHaveLength(0);
     },
@@ -220,7 +233,7 @@ describe("manual koho import validation ordering", () => {
     [{ packageType: "JPA", contentLength: "not-a-number" }, 400, "invalid_content_length"],
     [{ packageType: "JPA", contentLength: "2000001" }, 413, "package_too_large"],
   ] as const)("validates request metadata before body access", async (options, status, code) => {
-    let bodyPulls = 0;
+    let bodyAccesses = 0;
     const withTempSource = vi.fn();
     const repository = new FakeKohoImportRepository();
     const handler = createKohoManualImportPostHandler({
@@ -230,55 +243,63 @@ describe("manual koho import validation ordering", () => {
     });
 
     const response = await handler(
-      requestWithBody({ ...options, onPull: () => bodyPulls += 1 }),
+      requestWithBody({
+        ...options,
+        onBodyAccess: () => bodyAccesses += 1,
+      }),
     );
 
     expect(response.status).toBe(status);
     expect(await errorBody(response)).toEqual({ error: code });
-    expect(bodyPulls).toBe(0);
+    expect(bodyAccesses).toBe(0);
     expect(withTempSource).not.toHaveBeenCalled();
     expect(repository.calls).toHaveLength(0);
   });
 });
 
 describe("bounded request streaming", () => {
-  it("writes multiple chunks exactly, hashes them, and removes the temp directory", async () => {
-    const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
-    const chunks = [
-      new TextEncoder().encode("fictional-"),
-      new TextEncoder().encode("zip-"),
-      new TextEncoder().encode("bytes"),
-    ];
-    const expected = new TextEncoder().encode("fictional-zip-bytes");
-    const request = requestWithBody({
-      packageType: "JPA",
-      chunks,
-      contentLength: String(expected.byteLength),
-    });
+  it.each([true, false])(
+    "writes multiple chunks exactly, hashes them, and removes the temp directory (Content-Length: %s)",
+    async (hasContentLength) => {
+      const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
+      const chunks = [
+        new TextEncoder().encode("fictional-"),
+        new TextEncoder().encode("zip-"),
+        new TextEncoder().encode("bytes"),
+      ];
+      const expected = new TextEncoder().encode("fictional-zip-bytes");
+      const request = requestWithBody({
+        packageType: "JPA",
+        chunks,
+        contentLength: hasContentLength
+          ? String(expected.byteLength)
+          : undefined,
+      });
 
-    try {
-      const observed = await withBoundedKohoTempSource(
-        request,
-        1_000,
-        expected.byteLength,
-        async (source) => ({
-          bytes: await readFile(source.path),
-          digest: source.sourceSha256,
-          byteLength: source.byteLength,
-        }),
-        { tempRoot: root },
-      );
+      try {
+        const observed = await withBoundedKohoTempSource(
+          request,
+          1_000,
+          hasContentLength ? expected.byteLength : null,
+          async (source) => ({
+            bytes: await readFile(source.path),
+            digest: source.sourceSha256,
+            byteLength: source.byteLength,
+          }),
+          { tempRoot: root },
+        );
 
-      expect(observed.bytes).toEqual(Buffer.from(expected));
-      expect(observed.byteLength).toBe(expected.byteLength);
-      expect(observed.digest).toBe(
-        createHash("sha256").update(expected).digest("hex"),
-      );
-      expect(await readdir(root)).toEqual([]);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        expect(observed.bytes).toEqual(Buffer.from(expected));
+        expect(observed.byteLength).toBe(expected.byteLength);
+        expect(observed.digest).toBe(
+          createHash("sha256").update(expected).digest("hex"),
+        );
+        expect(await readdir(root)).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("supports an absent Content-Length while enforcing the measured limit", async () => {
     const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
@@ -376,6 +397,128 @@ describe("bounded request streaming", () => {
         ),
       ).rejects.toThrow();
       expect(await readdir(root)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a stable sanitized error for a body stream failure", async () => {
+    const repository = new FakeKohoImportRepository();
+    const handler = createKohoManualImportPostHandler({
+      repository,
+      getEnvironmentValue: environment(),
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("FICTIONAL-RAW-STREAM-MESSAGE"));
+      },
+    });
+    const request = new Request(
+      "http://localhost/api/admin/koho-imports?packageType=JPA",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/zip",
+          authorization: `Bearer ${TOKEN}`,
+        },
+        body: stream,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" },
+    );
+
+    const response = await handler(request);
+    const text = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(text).toBe(JSON.stringify({ error: "koho_import_internal_error" }));
+    expect(text).not.toContain("FICTIONAL-RAW-STREAM-MESSAGE");
+    expect(repository.calls).toHaveLength(0);
+  });
+
+  it("cancels a pending body read and cleans up when the request aborts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
+    const abortController = new AbortController();
+    let pullCount = 0;
+    let markPendingReadStarted: () => void = () => undefined;
+    const pendingReadStarted = new Promise<void>((resolve) => {
+      markPendingReadStarted = resolve;
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          return;
+        }
+        markPendingReadStarted();
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const request = new Request(
+      "http://localhost/api/admin/koho-imports?packageType=JPA",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/zip",
+          authorization: `Bearer ${TOKEN}`,
+        },
+        body: stream,
+        signal: abortController.signal,
+        duplex: "half",
+      } as RequestInit & { duplex: "half" },
+    );
+
+    try {
+      const result = withBoundedKohoTempSource(
+        request,
+        100,
+        null,
+        async () => "unreachable",
+        { tempRoot: root },
+      );
+      await pendingReadStarted;
+      abortController.abort();
+
+      await expect(result).rejects.toThrow();
+      expect(await readdir(root)).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a stable error when temp directory cleanup fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
+    const repository = new FakeKohoImportRepository();
+    const removeTempDirectory = vi.fn(async () => {
+      throw new Error("FICTIONAL-RAW-CLEANUP-MESSAGE");
+    });
+    const handler = createKohoManualImportPostHandler({
+      repository,
+      getEnvironmentValue: environment(),
+      withTempSource: (request, maxSourceBytes, declaredContentLength, consumeSource) =>
+        withBoundedKohoTempSource(
+          request,
+          maxSourceBytes,
+          declaredContentLength,
+          consumeSource,
+          { tempRoot: root, removeTempDirectory },
+        ),
+    });
+
+    try {
+      const response = await handler(
+        requestWithBody({
+          packageType: "JPA",
+          chunks: splitBytes(buildMinimalFictionalPackage("JPA")),
+        }),
+      );
+      const text = await response.text();
+
+      expect(response.status).toBe(500);
+      expect(text).toBe(JSON.stringify({ error: "koho_import_internal_error" }));
+      expect(text).not.toContain("FICTIONAL-RAW-CLEANUP-MESSAGE");
+      expect(removeTempDirectory).toHaveBeenCalledTimes(1);
+      expect(repository.calls).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -512,6 +655,17 @@ describe("manual koho import orchestration", () => {
         },
       },
       {
+        expectedStatus: 500,
+        expectedCode: "koho_import_internal_error",
+        dependencies: {
+          repository: new FakeKohoImportRepository(),
+          parsePackage: async () => success,
+          buildPlan: () => {
+            throw new Error("FICTIONAL-RAW-BUILDER-MESSAGE");
+          },
+        },
+      },
+      {
         expectedStatus: 503,
         expectedCode: "koho_import_storage_unavailable",
         dependencies: {
@@ -523,20 +677,58 @@ describe("manual koho import orchestration", () => {
           parsePackage: async () => success,
         },
       },
+      {
+        expectedStatus: 422,
+        expectedCode: "package_validation_failed",
+        dependencies: {
+          repository: {
+            async savePlan() {
+              throw new KohoImportRepositoryValidationError(
+                "invalid_package_type",
+              );
+            },
+          },
+          parsePackage: async () => success,
+          isValidationError: (error: unknown) =>
+            error instanceof KohoImportPlanValidationError ||
+            error instanceof KohoImportRepositoryValidationError,
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
-      const handler = createKohoManualImportPostHandler({
-        ...testCase.dependencies,
-        getEnvironmentValue: environment(),
-      });
-      const response = await handler(requestWithBody({ packageType: "JPA" }));
-      const text = await response.text();
-      expect(response.status).toBe(testCase.expectedStatus);
-      expect(text).toBe(JSON.stringify({ error: testCase.expectedCode }));
-      expect(text).not.toContain("FICTIONAL-RAW");
-      expect(text).not.toContain(TOKEN);
-      expect(text).not.toContain("patentai-koho-import-");
+      const root = await mkdtemp(join(tmpdir(), "patentai-koho-stream-test-"));
+      try {
+        const handler = createKohoManualImportPostHandler({
+          ...testCase.dependencies,
+          getEnvironmentValue: environment(),
+          withTempSource: (
+            request,
+            maxSourceBytes,
+            declaredContentLength,
+            consumeSource,
+          ) =>
+            withBoundedKohoTempSource(
+              request,
+              maxSourceBytes,
+              declaredContentLength,
+              consumeSource,
+              { tempRoot: root },
+            ),
+        });
+        const response = await handler(
+          requestWithBody({ packageType: "JPA" }),
+        );
+        const text = await response.text();
+        expect(response.status).toBe(testCase.expectedStatus);
+        expect(text).toBe(JSON.stringify({ error: testCase.expectedCode }));
+        expect(text).not.toContain("FICTIONAL-RAW");
+        expect(text).not.toContain(TOKEN);
+        expect(text).not.toContain("patentai-koho-import-");
+        expect(await readdir(root)).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 });
