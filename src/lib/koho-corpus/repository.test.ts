@@ -1,6 +1,21 @@
 import { readFile } from "node:fs/promises";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  buildKohoImportPlan,
+  createKohoImportDocumentPlan,
+} from "../koho-import";
+import {
+  buildMinimalFictionalPackage,
+  FICTIONAL_PACKAGE_LIMITS,
+} from "../koho-package/__fixtures__/fictional-package";
+import { parseKohoPackage } from "../koho-package";
+import { toKohoCorpusSourceDocument } from "../../repositories/drizzle";
+import {
+  buildKohoCorpusSnapshot,
+  KohoCorpusDomainError,
+  searchKohoCorpusDocuments,
+} from "./domain";
 
 const DRIZZLE_REPOSITORY_URL = new URL(
   "../../repositories/drizzle.ts",
@@ -11,7 +26,141 @@ async function repositorySource(): Promise<string> {
   return readFile(DRIZZLE_REPOSITORY_URL, "utf8");
 }
 
+type FictionalImportPlan = ReturnType<typeof buildKohoImportPlan>;
+
+let fictionalImportPlan: FictionalImportPlan;
+
+beforeAll(async () => {
+  const packageResult = await parseKohoPackage({
+    packageType: "JPA",
+    source: {
+      type: "buffer",
+      bytes: buildMinimalFictionalPackage("JPA"),
+      sourceName: "fictional-jpa-package.zip",
+    },
+    limits: FICTIONAL_PACKAGE_LIMITS,
+  });
+  fictionalImportPlan = buildKohoImportPlan({
+    packageResult,
+    sourceSha256: "1".repeat(64),
+  });
+});
+
+function fictionalPersistenceRows(publicationDate: string) {
+  const baseDocument = fictionalImportPlan.documents[0];
+  if (!baseDocument) throw new Error("fictional document is required");
+  const { contentSha256, ...payload } = baseDocument;
+  if (!/^[0-9a-f]{64}$/.test(contentSha256)) {
+    throw new Error("fictional document digest is required");
+  }
+  const document = createKohoImportDocumentPlan({
+    ...payload,
+    publicationDate,
+  });
+
+  return {
+    document: {
+      documentId: 91,
+      importId: 41,
+      ...document,
+    },
+    run: {
+      importId: 41,
+      packageType: fictionalImportPlan.packageType,
+      sourceSha256: fictionalImportPlan.sourceSha256,
+      packageStatus: fictionalImportPlan.packageStatus,
+      documentCount: fictionalImportPlan.documentCount,
+      amendmentCount: fictionalImportPlan.amendmentCount,
+      nestedSt26Count: fictionalImportPlan.nestedSt26Count,
+      countsJson: fictionalImportPlan.countsJson,
+      issuesJson: fictionalImportPlan.issuesJson,
+      createdAt: "2099-01-01T00:00:00.000Z",
+      updatedAt: "2099-01-01T00:00:00.000Z",
+    },
+  };
+}
+
 describe("koho corpus Drizzle boundary", () => {
+  it("normalizes a persistence-valid leap date for search and snapshot provenance", () => {
+    const { document, run } = fictionalPersistenceRows("2024-02-29");
+
+    const source = toKohoCorpusSourceDocument(document, run);
+    const [summary] = searchKohoCorpusDocuments(
+      [source],
+      source.publicationNumber,
+      1,
+    );
+    const snapshot = buildKohoCorpusSnapshot(7, source);
+    const provenance = JSON.parse(snapshot.sourceCsvRowJson) as Record<
+      string,
+      unknown
+    >;
+
+    expect(source.publicationDate).toBe("20240229");
+    expect(summary.publicationDate).toBe("20240229");
+    expect(Object.keys(summary)).toEqual([
+      "documentId",
+      "packageType",
+      "parseStatus",
+      "kind",
+      "publicationNumber",
+      "applicationNumber",
+      "publicationDate",
+      "inventionTitle",
+      "abstractPreview",
+    ]);
+    expect(Object.keys(snapshot)).toEqual([
+      "caseId",
+      "publicationNo",
+      "title",
+      "abstract",
+      "claimsText",
+      "normalizedElementsJson",
+      "sourceCsvRowJson",
+    ]);
+    expect(provenance.publicationDate).toBe("20240229");
+    expect(Object.keys(provenance)).toEqual([
+      "source",
+      "packageType",
+      "sourceSha256",
+      "normalizedEntryPath",
+      "parseStatus",
+      "kind",
+      "publicationDate",
+      "contentSha256",
+    ]);
+  });
+
+  it("normalizes a regular persistence date deterministically", () => {
+    const rows = fictionalPersistenceRows("2099-01-02");
+
+    const first = toKohoCorpusSourceDocument(rows.document, rows.run);
+    const second = toKohoCorpusSourceDocument(rows.document, rows.run);
+
+    expect(first.publicationDate).toBe("20990102");
+    expect(second).toEqual(first);
+  });
+
+  it.each([
+    "2023-02-29",
+    "2024-02-30",
+    "2024/02/29",
+    "20240229",
+    " 2024-02-29",
+  ])("fails closed for a noncanonical persisted date: %s", (publicationDate) => {
+    const { document, run } = fictionalPersistenceRows(publicationDate);
+
+    let caught: unknown;
+    try {
+      toKohoCorpusSourceDocument(document, run);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(KohoCorpusDomainError);
+    expect(caught).toMatchObject({ code: "koho_corpus_unavailable" });
+  });
+
   it("passes joined run and document rows through the existing persistence validators", async () => {
     const source = await repositorySource();
     const adapterStart = source.indexOf("function toKohoCorpusSourceDocument");
