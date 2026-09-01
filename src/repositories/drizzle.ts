@@ -236,17 +236,26 @@ function isValidYyyyMmDd(value: string): boolean {
   return day <= daysInMonth[month - 1];
 }
 
-function toKohoCorpusSourceDocument(
+function normalizeKohoCorpusPublicationDate(value: string): string {
+  const match = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(value);
+  if (!match) throw unavailableKohoCorpus();
+  const normalized = `${match[1]}${match[2]}${match[3]}`;
+  if (!isValidYyyyMmDd(normalized)) throw unavailableKohoCorpus();
+  return normalized;
+}
+
+export function toKohoCorpusSourceDocument(
   documentRow: typeof kohoImportDocuments.$inferSelect,
   runRow: typeof kohoImportRuns.$inferSelect,
 ): KohoCorpusSourceDocument {
   const run = toKohoImportRun(runRow);
   const document = toKohoImportDocument(documentRow, run.packageType);
-  if (!isValidYyyyMmDd(document.publicationDate)) {
-    throw unavailableKohoCorpus();
-  }
+  const publicationDate = normalizeKohoCorpusPublicationDate(
+    document.publicationDate,
+  );
   return {
     ...document,
+    publicationDate,
     packageType: run.packageType,
     sourceSha256: run.sourceSha256,
   };
