@@ -12,7 +12,7 @@ const MAX_PREFILTER_CANDIDATES = 100;
 const CJK_RUN_PATTERN =
   /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+$/u;
 const WORD_PATTERN =
-  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+|[\p{L}\p{M}\p{N}]+/gu;
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+|(?:(?![\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー])[\p{L}\p{M}\p{N}])+/gu;
 
 export interface PatentWatchPrefilterCandidate {
   document: PatentWatchCorpusDocument;

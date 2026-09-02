@@ -165,6 +165,27 @@ describe("patent watch UI contract", () => {
     }
   });
 
+  it("keeps an explicit retry path for a persisted running run", () => {
+    const persistedRunHtml = renderWatchState("running", run("running"));
+    const pendingRequestHtml = renderWatchState("starting", run("running"));
+    const buttonPattern = /<button[^>]*>今すぐ監視<\/button>/u;
+    const saveButtonPattern = /<button[^>]*>設定を保存<\/button>/u;
+    const persistedRunButton = persistedRunHtml.match(buttonPattern)?.[0];
+    const pendingRequestButton = pendingRequestHtml.match(buttonPattern)?.[0];
+    const persistedRunSaveButton =
+      persistedRunHtml.match(saveButtonPattern)?.[0];
+    const disabledAttribute = /\sdisabled(?:=|\s|>)/u;
+
+    expect(persistedRunHtml).toContain("監視実行中");
+    expect(pendingRequestHtml).toContain("監視実行中");
+    expect(persistedRunButton).toBeDefined();
+    expect(persistedRunButton ?? "").not.toMatch(disabledAttribute);
+    expect(pendingRequestButton).toBeDefined();
+    expect(pendingRequestButton ?? "").toMatch(disabledAttribute);
+    expect(persistedRunSaveButton).toBeDefined();
+    expect(persistedRunSaveButton ?? "").toMatch(disabledAttribute);
+  });
+
   it("fetches initial status once with GET and no run or corpus request", async () => {
     const calls: Array<{ input: string; init?: RequestInit }> = [];
     const fetchImpl: PatentWatchFetch = async (input, init) => {
@@ -314,6 +335,23 @@ describe("patent watch UI contract", () => {
     expect(source).toContain("disabled={unavailable || busy}");
     expect(source).toContain("{unavailable ? (");
     expect(source).toContain("利用不可");
+  });
+
+  it("keeps report case lookup failures inside the safe unavailable boundary", async () => {
+    const source = await readFile(REPORT_PAGE_SOURCE_URL, "utf8");
+    const unavailableDeclaration = source.indexOf("let unavailable = false;");
+    const boundaryStart = source.indexOf("try {", unavailableDeclaration);
+    const caseLookup = source.indexOf("await caseRepo.findById(caseId)");
+    const boundaryEnd = source.indexOf("} catch {", boundaryStart);
+    const missingCaseCheck = source.indexOf(
+      "if (!unavailable && !caseExists) notFound();",
+    );
+
+    expect(unavailableDeclaration).toBeGreaterThanOrEqual(0);
+    expect(boundaryStart).toBeGreaterThan(unavailableDeclaration);
+    expect(caseLookup).toBeGreaterThan(boundaryStart);
+    expect(caseLookup).toBeLessThan(boundaryEnd);
+    expect(missingCaseCheck).toBeGreaterThan(boundaryEnd);
   });
 
   it("provides a print-safe human-review report without private provenance", async () => {

@@ -18,6 +18,13 @@ import type {
 
 const PRIVATE_HASH = "a".repeat(64);
 const PRIVATE_LOCAL_PATH = ["C:", "\\", "private\\fictional.xml"].join("");
+const PRIVATE_SIGNED_URL_SECRET = "FICTIONAL_SAS_SIGNATURE";
+const PRIVATE_SIGNED_URL = [
+  "https",
+  "://",
+  "fictional.blob.core.windows.net/private?sv=2099-01-01&sig=",
+  PRIVATE_SIGNED_URL_SECRET,
+].join("");
 const API_SOURCE_URL = new URL("./api.ts", import.meta.url);
 
 function setting(
@@ -212,7 +219,7 @@ describe("patent watch GET/PUT handlers", () => {
         ...finding({
           inventionTitle: `架空 ${PRIVATE_HASH}`,
           analysisJson: JSON.stringify({
-            matchedElements: ["軌道プリズム"],
+            matchedElements: [`軌道プリズム ${PRIVATE_SIGNED_URL}`],
             unmatchedElements: ["架空の制約"],
             explanation: `${PRIVATE_LOCAL_PATH} の重なり候補です`,
             rawAi: "FICTIONAL-RAW-AI-LEAK",
@@ -274,6 +281,7 @@ describe("patent watch GET/PUT handlers", () => {
     for (const forbidden of [
       PRIVATE_HASH,
       PRIVATE_LOCAL_PATH,
+      PRIVATE_SIGNED_URL_SECRET,
       "FICTIONAL-RAW-AI-LEAK",
       "FICTIONAL-RAW-XML-LEAK",
       "FICTIONAL-FULL-CLAIMS-LEAK",

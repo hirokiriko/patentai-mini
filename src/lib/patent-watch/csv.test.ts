@@ -100,13 +100,20 @@ describe("patent watch CSV", () => {
     const sourceKey = "a".repeat(64);
     const leakedDigest = "b".repeat(64);
     const localPath = ["C:", "\\", "private\\fictional.xml"].join("");
+    const signedUrlSecret = "FICTIONAL_SAS_SIGNATURE";
+    const signedUrl = [
+      "https",
+      "://",
+      "fictional.blob.core.windows.net/private?sv=2099-01-01&sig=",
+      signedUrlSecret,
+    ].join("");
     const csv = buildPatentWatchReportCsv([
       {
         ...finding({
           sourceKey,
           inventionTitle: `架空 ${leakedDigest}`,
           analysisJson: JSON.stringify({
-            matchedElements: [],
+            matchedElements: [signedUrl],
             unmatchedElements: [],
             explanation: `${localPath} ${leakedDigest}`,
           }),
@@ -120,6 +127,7 @@ describe("patent watch CSV", () => {
       sourceKey,
       leakedDigest,
       localPath,
+      signedUrlSecret,
       "FICTIONAL-RAW-XML-SENTINEL",
       "FICTIONAL-FULL-CLAIMS-SENTINEL",
       "FICTIONAL-DB-ERROR-SENTINEL",
