@@ -307,6 +307,9 @@ describe("patent watch public analysis safety", () => {
     "https://example.invalid/object?x-amz-security-token=FICTIONAL_URL_SECRET",
     "https://example.invalid/object?x-api-key=FICTIONAL_URL_SECRET",
     "https://example.invalid/object#access_token=FICTIONAL_URL_SECRET",
+    "https://example.invalid/object?sessionToken=FICTIONAL_URL_SECRET",
+    "https://example.invalid/object?auth_token=FICTIONAL_URL_SECRET",
+    "https://example.invalid/object?csrf-token=FICTIONAL_URL_SECRET",
     "https://example.invalid/function?code=FICTIONAL_FUNCTION_CODE",
     "https://example.invalid/callback?auth=FICTIONAL_AUTH_VALUE",
     "(https://example.invalid/function?code=FICTIONAL_FUNCTION_CODE)",
@@ -336,9 +339,16 @@ describe("patent watch public analysis safety", () => {
     "SharedAccessKey: FICTIONAL_HEADER_SECRET",
     "Authorization: Basic RklDVElPTkFMX0NSRURFTlRJQUw=",
     "Proxy-Authorization: Digest FICTIONAL_HEADER_SECRET",
+    "Cookie: session=FICTIONAL_HEADER_SECRET",
+    "Set-Cookie: auth=FICTIONAL_HEADER_SECRET; HttpOnly",
+    "X-Auth-Token: FICTIONAL_HEADER_SECRET",
     "TOKEN=FICTIONAL_HEADER_SECRET",
     '{"apiKey":"FICTIONAL_HEADER_SECRET"}',
     '{"token":"FICTIONAL_HEADER_SECRET"}',
+    '{"sessionToken":"FICTIONAL_HEADER_SECRET"}',
+    '{"authToken":"FICTIONAL_HEADER_SECRET"}',
+    '{"csrfToken":"FICTIONAL_HEADER_SECRET"}',
+    '{"credential":"FICTIONAL_HEADER_SECRET"}',
     'API_KEY: "FICTIONAL_HEADER_SECRET WITH SPACES"',
     "API_KEY：FICTIONAL_HEADER_SECRET",
     "API_\u200bKEY=FICTIONAL_HEADER_SECRET",
@@ -347,11 +357,48 @@ describe("patent watch public analysis safety", () => {
     'Authorization = "Basic FICTIONAL_HEADER_SECRET"',
     '{\\"apiKey\\":\\"FICTIONAL_HEADER_SECRET\\"}',
     'payload={\\"token\\":\\"FICTIONAL_HEADER_SECRET\\"}',
+    '{\\"sessionToken\\":\\"FICTIONAL_HEADER_SECRET\\"}',
     "`password`: `FICTIONAL_HEADER_SECRET WITH SPACES`",
   ])("redacts a credential header or assignment: %s", (unsafeHeader) => {
     expect(sanitizePatentWatchPublicText(unsafeHeader)).not.toContain(
       "FICTIONAL_HEADER_SECRET",
     );
+  });
+
+  it("redacts a complete credential header without crossing a line", () => {
+    const sanitized = sanitizePatentWatchPublicText(
+      "X-Auth-Token: FICTIONAL_FIRST_SECRET second=FICTIONAL_SECOND_SECRET\r\nPUBLIC_LINE",
+    );
+
+    expect(sanitized).toBe("[非表示]\r\nPUBLIC_LINE");
+    expect(sanitizePatentWatchPublicText("Cookie:\nPUBLIC_LINE")).toContain(
+      "PUBLIC_LINE",
+    );
+    expect(
+      sanitizePatentWatchPublicText(
+        "Cookie: session=FICTIONAL_FIRST|FICTIONAL_SECOND",
+      ),
+    ).toBe("[非表示]");
+    expect(
+      sanitizePatentWatchPublicText(
+        "Authorization: Basic FICTIONAL_SECRET | https://example.invalid/public",
+      ),
+    ).toBe("[非表示] | https://example.invalid/public");
+    expect(
+      sanitizePatentWatchPublicText(
+        `Cookie: token=${" ".repeat(20_000)}FICTIONAL_SECRET`,
+      ),
+    ).toBe("[非表示]");
+    expect(
+      sanitizePatentWatchPublicText(
+        "Ｃｏｏｋｉｅ： session=FICTIONAL_FIRST|FICTIONAL_SECOND",
+      ),
+    ).toBe("[非表示]");
+    expect(
+      sanitizePatentWatchPublicText(
+        "Coo\u200bkie: session=FICTIONAL_FIRST|FICTIONAL_SECOND",
+      ),
+    ).toBe("[非表示]");
   });
 
   it.each([
@@ -365,6 +412,14 @@ describe("patent watch public analysis safety", () => {
     "The token = public session token.",
     "signature=optical-arrangement",
     "sig=measurement-waveform",
+    "Cookie policy: public",
+    "X-Auth-Token-Version: 1",
+    '{"credentialType":"public"}',
+    "credential: optical coupler",
+    "https://example.invalid/object?credential=public",
+    '{"sessionTokenCount":3}',
+    "sessionTokenization: optical",
+    "The session token = optical session identifier.",
   ])("keeps a non-credential assignment: %s", (publicAssignment) => {
     expect(sanitizePatentWatchPublicText(publicAssignment)).toBe(
       publicAssignment,
@@ -427,6 +482,11 @@ describe("patent watch public analysis safety", () => {
     "この発明は特許可能である。",
     "本願は拒絶すべきである。",
     "本願は登録すべきである。",
+    "本願は拒絶の可能性が高い。",
+    "本願は登録が見込まれる。",
+    "本願は登録が見込まれる 。",
+    "本願は登録が見込まれるため、人による確認が必要である。",
+    "この発明は特許される。",
     "請求項1は先行技術から容易に想到できる。",
     "請求項1は容易想到である。",
     "本願発明は想到容易である。",
@@ -509,6 +569,18 @@ describe("patent watch public analysis safety", () => {
     "The difference is obvious to a person skilled in the art.",
     "Claim 1 is allowable.",
     "Claim 1 is deemed allowable.",
+    "Claim 1 should be allowed.",
+    "Allowance is likely.",
+    "Allowance is likely because D1 lacks the feature.",
+    "Allowance is likely; human review is required.",
+    "The examiner will allow claim 1.",
+    "The patent should issue.",
+    "The patent should be issued.",
+    "The patent will likely issue.",
+    "The patent may never issue.",
+    "Claim 1 should be allowed because D1 lacks the feature.",
+    "The examiner will allow claim 1 because D1 lacks the feature.",
+    "The patent should issue because the objection was withdrawn.",
     "Claim 1 is rejected.",
     "Claim 1 will likely be rejected.",
     "Claim 1 is likely to be rejected.",
@@ -626,9 +698,20 @@ describe("patent watch public analysis safety", () => {
     "入力を拒絶するフィルタを備える。",
     "請求項は無効なトークンを除外する。",
     "発明は端末を登録できる。",
+    "端末登録が見込まれる。",
+    "この発明はセンサを特許データベースに登録する。",
     "新規であるセッションIDを生成する。",
     "接続は新規であるため初期化する。",
     "新規ではない既存レコードを更新する。",
+    "The parser should be allowed to continue.",
+    "The patent service should issue a session token.",
+    "The allowance is stored as a billing field.",
+    "The examiner will allow the parser to continue.",
+    "Claim 1 should be allowed through the parser.",
+    "The claim is allowed as schema input.",
+    "The invention is issued a tracking identifier.",
+    "本願は登録が見込まれる利用者を保持する。",
+    "この発明は特許される文書を分類する。",
   ])("keeps descriptive use of novelty wording: %s", (descriptiveText) => {
     expect(
       sanitizePatentWatchAnalysis({

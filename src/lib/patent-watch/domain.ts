@@ -72,15 +72,29 @@ const LEGAL_NAMED_SOURCE_ANTICIPATION_PATTERN = new RegExp(
 );
 const LEGAL_STRONG_STATUS_SUBJECT_PATTERN = String.raw`(?:${LEGAL_STRONG_SUBJECT_WITH_IDENTIFIER_PATTERN}|\b(?:(?:the|this|that|these|those|each|all)\s+)?patents?(?:\s+${CLAIM_IDENTIFIER_PATTERN})?|\b(?:patent\s+)?${PATENT_PUBLICATION_ID_PATTERN}(?![\p{L}\p{M}\p{N}_]))`;
 const LEGAL_STRONG_STATUS_SUBJECT_PREDICATE_PREFIX_PATTERN = `${LEGAL_STRONG_STATUS_SUBJECT_PATTERN}${LEGAL_SOURCE_QUALIFIED_SUBJECT_SUFFIX_PATTERN}${LEGAL_SUBJECT_PREDICATE_SEPARATOR_PATTERN}`;
-const LEGAL_STATUS_CONTINUATION_PATTERN = String.raw`(?=\s*(?:[.,;:!?]|$)|\s+(?:(?:under|over|in\s+(?:view|light)\s+of|based\s+(?:on|upon))\s+(?:${LEGAL_ANTICIPATION_SOURCE_PATTERN}|${LEGAL_ANTICIPATION_STATUTE_PATTERN})|by\s+(?:(?:the\s+)?(?:examiner|patent\s+office|office|board|court))))`;
+const LEGAL_STATUS_CONTINUATION_PATTERN = String.raw`(?=\s*(?:[.,;:!?]|$)|\s+(?:(?:because|since)\b|(?:under|over|in\s+(?:view|light)\s+of|based\s+(?:on|upon))\s+(?:${LEGAL_ANTICIPATION_SOURCE_PATTERN}|${LEGAL_ANTICIPATION_STATUTE_PATTERN})|by\s+(?:(?:the\s+)?(?:examiner|patent\s+office|office|board|court))))`;
 const LEGAL_SUBJECT_STATUS_PATTERN = new RegExp(
   `${LEGAL_STRONG_STATUS_SUBJECT_PREDICATE_PREFIX_PATTERN}${LEGAL_JUDGMENT_LINK_PATTERN}\\s+${LEGAL_PREDICATE_ASSESSMENT_PATTERN}(?:invalid|valid|granted|rejected|allowable)\\b`,
   "iu",
 );
-const LEGAL_APPLICATION_STATUS_PATTERN = new RegExp(
-  `${LEGAL_APPLICATION_SUBJECT_PREDICATE_PREFIX_PATTERN}${LEGAL_JUDGMENT_LINK_PATTERN}\\s+${LEGAL_PREDICATE_ASSESSMENT_PATTERN}(?:invalid|valid|granted|rejected|allowable)\\b${LEGAL_STATUS_CONTINUATION_PATTERN}`,
+const LEGAL_SUBJECT_DISPOSITION_PATTERN = new RegExp(
+  `${LEGAL_STRONG_STATUS_SUBJECT_PREDICATE_PREFIX_PATTERN}${LEGAL_JUDGMENT_LINK_PATTERN}\\s+${LEGAL_PREDICATE_ASSESSMENT_PATTERN}(?:allowed|issued)\\b${LEGAL_STATUS_CONTINUATION_PATTERN}`,
   "iu",
 );
+const LEGAL_APPLICATION_STATUS_PATTERN = new RegExp(
+  `${LEGAL_APPLICATION_SUBJECT_PREDICATE_PREFIX_PATTERN}${LEGAL_JUDGMENT_LINK_PATTERN}\\s+${LEGAL_PREDICATE_ASSESSMENT_PATTERN}(?:invalid|valid|granted|rejected|allowable|allowed|issued)\\b${LEGAL_STATUS_CONTINUATION_PATTERN}`,
+  "iu",
+);
+const LEGAL_PATENT_ISSUE_PATTERN = new RegExp(
+  String.raw`\b(?:(?:the|this|that|each)\s+)?patents?\s+(?:will|would|could|should|may|might|can|must)\s+${LEGAL_PREDICATE_QUALIFIER_PATTERN}issue\b(?=\s*(?:[.!?]|$)|\s+(?:because|since)\b)`,
+  "iu",
+);
+const LEGAL_EXAMINER_DISPOSITION_PATTERN = new RegExp(
+  String.raw`\b(?:(?:the|an)\s+)?(?:examiner|patent\s+office|office|board|court)\s+(?:will|would|could|should|may|might|can|must)\s+(?:not\s+)?(?:allow|reject|grant)\s+(?:${LEGAL_NUMBERED_CLAIM_OBJECT_PATTERN}|${LEGAL_NUMBERED_APPLICATION_OBJECT_PATTERN})(?=\s*(?:[.!?;]|$)|\s+(?:because|since)\b)`,
+  "iu",
+);
+const LEGAL_STANDALONE_DISPOSITION_LIKELIHOOD_PATTERN =
+  /^(?:the\s+)?(?:allowance|rejection|grant|invalidity|patentability)\s+(?:is|appears|seems)\s+(?:highly\s+)?(?:likely|unlikely)\b(?=\s*(?:[.!?;]|$)|\s+(?:because|since)\b)/iu;
 const LEGAL_SUBJECT_OBVIOUSNESS_PATTERN = new RegExp(
   `${LEGAL_SUBJECT_PREDICATE_PREFIX_PATTERN}${LEGAL_JUDGMENT_LINK_PATTERN}\\s+${LEGAL_PREDICATE_ASSESSMENT_PATTERN}obvious\\b`,
   "iu",
@@ -123,6 +137,10 @@ const JAPANESE_LEGAL_ACTION_STATUS_PATTERN = new RegExp(
   `${JAPANESE_LEGAL_SUBJECT_PATTERN}${JAPANESE_LEGAL_SUBJECT_SEPARATOR_PATTERN}(?:拒絶(?:され(?:る|た|ます|ました|ない|ません)?|する|した|すべき(?:で(?:は)?ある|だ)?|となる|となった|(?=[。、.!?]|$))|登録(?:され(?:る|た|ます|ました|ない|ません)?|でき(?:る|ない|ます|ません)|する|した|すべき(?:で(?:は)?ある|だ)?|可能|不可|不能))`,
   "u",
 );
+const JAPANESE_LEGAL_LIKELIHOOD_STATUS_PATTERN = new RegExp(
+  `${JAPANESE_LEGAL_SUBJECT_PATTERN}${JAPANESE_LEGAL_SUBJECT_SEPARATOR_PATTERN}(?:(?:拒絶|登録|権利化|無効|侵害)(?:の)?(?:可能性|見込み|蓋然性|おそれ)(?:が)?(?:高い|低い|ある|ない|大きい|小さい)|(?:拒絶|登録|権利化)(?:が)?見込まれ(?:る|ない|ます|ません|た|ました)|特許され(?:る|ない|ます|ません|た|ました))(?=\\s*(?:[。、.!?]|$|ため|ので|ことから))`,
+  "u",
+);
 const JAPANESE_LEGAL_OBVIOUSNESS_PATTERN = new RegExp(
   `${JAPANESE_LEGAL_SUBJECT_PATTERN}${JAPANESE_LEGAL_SUBJECT_SEPARATOR_PATTERN}(?:${JAPANESE_LEGAL_SOURCE_PATTERN}\\s*(?:から|により|に基づき)\\s*)?(?:容易に想到でき(?:る|ない|ます|ません)|(?:容易想到|想到容易|自明|公知)${JAPANESE_LEGAL_JUDGMENT_END_PATTERN}|特許要件を満た(?:す|さない|します|しません))`,
   "iu",
@@ -156,6 +174,7 @@ const LEGAL_CONCLUSION_PATTERNS = [
   /進歩性/u,
   JAPANESE_LEGAL_ADJECTIVE_STATUS_PATTERN,
   JAPANESE_LEGAL_ACTION_STATUS_PATTERN,
+  JAPANESE_LEGAL_LIKELIHOOD_STATUS_PATTERN,
   JAPANESE_LEGAL_OBVIOUSNESS_PATTERN,
   JAPANESE_LEGAL_PROCEDURE_PATTERN,
   JAPANESE_LEGAL_INFRINGEMENT_PATTERN,
@@ -171,7 +190,11 @@ const LEGAL_CONCLUSION_PATTERNS = [
   LEGAL_SOURCE_ANTICIPATION_PATTERN,
   LEGAL_NAMED_SOURCE_ANTICIPATION_PATTERN,
   LEGAL_SUBJECT_STATUS_PATTERN,
+  LEGAL_SUBJECT_DISPOSITION_PATTERN,
   LEGAL_APPLICATION_STATUS_PATTERN,
+  LEGAL_PATENT_ISSUE_PATTERN,
+  LEGAL_EXAMINER_DISPOSITION_PATTERN,
+  LEGAL_STANDALONE_DISPOSITION_LIKELIHOOD_PATTERN,
   LEGAL_SUBJECT_OBVIOUSNESS_PATTERN,
   LEGAL_DIFFERENCE_OBVIOUSNESS_PATTERN,
   LEGAL_SOURCE_COMBINATION_OBVIOUSNESS_PATTERN,
@@ -441,8 +464,8 @@ export function containsLegalConclusion(value: string): boolean {
 }
 
 const PUBLIC_TEXT_TOKEN_PATTERN = /[^\s<>"']+/gu;
-const CREDENTIAL_QUERY_KEY_NAME_PATTERN = String.raw`(?:x-amz-signature|x-goog-signature|x-amz-security-token|access[_-]?token|id[_-]?token|refresh[_-]?token|subscription[_-]?key|ocp-apim-subscription-key|x[_-]api[_-]key|api[_-]?key|apikey|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key)`;
-const CREDENTIAL_ASSIGNMENT_KEY_NAME_PATTERN = String.raw`(?:x-amz-signature|x-goog-signature|x-amz-security-token|access[_-]?token|id[_-]?token|refresh[_-]?token|subscription[_-]?key|ocp-apim-subscription-key|x[_-]api[_-]key|api[_-]?key|apikey|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key|storage[_-]?account[_-]?key|password|secret|connection[_-]?string|(?:proxy[-_ ]?)?authorization)`;
+const CREDENTIAL_QUERY_KEY_NAME_PATTERN = String.raw`(?:x-amz-signature|x-goog-signature|x-amz-security-token|access[_-]?token|id[_-]?token|refresh[_-]?token|(?:session|auth|csrf)[_-]?token|x[_-]?auth[_-]?token|subscription[_-]?key|ocp-apim-subscription-key|x[_-]api[_-]key|api[_-]?key|apikey|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key)`;
+const CREDENTIAL_ASSIGNMENT_KEY_NAME_PATTERN = String.raw`(?:x-amz-signature|x-goog-signature|x-amz-security-token|access[_-]?token|id[_-]?token|refresh[_-]?token|(?:session|auth|csrf)[_-]?token|x[_-]?auth[_-]?token|subscription[_-]?key|ocp-apim-subscription-key|x[_-]api[_-]key|api[_-]?key|apikey|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key|storage[_-]?account[_-]?key|password|secret|connection[_-]?string|(?:proxy[-_ ]?)?authorization)`;
 const CREDENTIAL_PARAMETER_PATTERN = new RegExp(
   String.raw`(?:(?:^|[?&#;])${CREDENTIAL_QUERY_KEY_NAME_PATTERN}=|[?&#;](?:sig|signature|token|key)=|[?&#;](?:code|auth)=[a-z0-9._~+/%=-]{8,}(?=$|[&#;)\]},>。、，]))`,
   "iu",
@@ -453,11 +476,11 @@ const CREDENTIAL_ASSIGNMENT_PATTERN = new RegExp(
   "giu",
 );
 const JSON_CREDENTIAL_ASSIGNMENT_PATTERN = new RegExp(
-  String.raw`\\?["'](?:${CREDENTIAL_ASSIGNMENT_KEY_NAME_PATTERN}|token)\\?["']\s*:\s*\\?["'][^\r\n]*?\\?["']`,
+  String.raw`\\?["'](?:${CREDENTIAL_ASSIGNMENT_KEY_NAME_PATTERN}|token|credentials?)\\?["']\s*:\s*\\?["'][^\r\n]*?\\?["']`,
   "giu",
 );
-const AUTHORIZATION_HEADER_PATTERN =
-  /(?<![\p{L}\p{M}\p{N}_/.-])(?:proxy[-_ ]?)?authorization\s*:\s*[^\r\n|]+/giu;
+const CREDENTIAL_HEADER_PATTERN =
+  /(?<![\p{L}\p{M}\p{N}_/.-])(?:(?:proxy[-_ ]?)?authorization|set-cookie|cookie|x[_-]?auth[_-]?token)[^\S\r\n]*:[^\S\r\n]*[^\r\n]+/giu;
 const UPPERCASE_TOKEN_ASSIGNMENT_PATTERN =
   /(?<![\p{L}\p{M}\p{N}_/.-])TOKEN\s*[:=]\s*[^\s,]+/gu;
 const PERCENT_ESCAPE_RUN_PATTERN = /(?:%[0-9a-f]{2})+/giu;
@@ -497,17 +520,82 @@ function redactCredentialBearingTokens(value: string): string {
   );
 }
 
+function isHorizontalWhitespace(value: string): boolean {
+  return /[^\S\r\n]/u.test(value);
+}
+
+function transformPublicTextLineSegments(
+  value: string,
+  transform: (segment: string) => string,
+): string {
+  let result = "";
+  let segmentStart = 0;
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    if (value[cursor] !== "|") {
+      cursor += 1;
+      continue;
+    }
+
+    let separatorStart = cursor;
+    while (
+      separatorStart > segmentStart &&
+      isHorizontalWhitespace(value[separatorStart - 1])
+    ) {
+      separatorStart -= 1;
+    }
+    let separatorEnd = cursor + 1;
+    while (
+      separatorEnd < value.length &&
+      isHorizontalWhitespace(value[separatorEnd])
+    ) {
+      separatorEnd += 1;
+    }
+    if (separatorStart === cursor || separatorEnd === cursor + 1) {
+      cursor += 1;
+      continue;
+    }
+
+    result += transform(value.slice(segmentStart, separatorStart));
+    result += value.slice(separatorStart, separatorEnd);
+    segmentStart = separatorEnd;
+    cursor = separatorEnd;
+  }
+
+  return result + transform(value.slice(segmentStart));
+}
+
+function transformPublicTextSegments(
+  value: string,
+  transform: (segment: string) => string,
+): string {
+  return value
+    .split(/(\r\n|\r|\n)/u)
+    .map((part, index) =>
+      index % 2 === 0
+        ? transformPublicTextLineSegments(part, transform)
+        : part,
+    )
+    .join("");
+}
+
+function redactCredentialHeaders(value: string): string {
+  return transformPublicTextSegments(value, (segment) =>
+    segment.replace(CREDENTIAL_HEADER_PATTERN, "[非表示]"),
+  );
+}
+
 function containsCredentialAssignment(value: string): boolean {
-  const redacted = value
+  const redacted = redactCredentialHeaders(value)
     .replace(JSON_CREDENTIAL_ASSIGNMENT_PATTERN, "[非表示]")
-    .replace(AUTHORIZATION_HEADER_PATTERN, "[非表示]")
     .replace(UPPERCASE_TOKEN_ASSIGNMENT_PATTERN, "[非表示]")
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, "[非表示]");
   return redacted !== value;
 }
 
 function redactNormalizedCredentialSegments(value: string): string {
-  return value.replace(/[^\r\n|]+/gu, (segment) => {
+  return transformPublicTextSegments(value, (segment) => {
     const normalizedSegment = normalizeCredentialCandidate(segment);
     return normalizedSegment !== segment &&
       containsCredentialAssignment(normalizedSegment)
@@ -518,7 +606,9 @@ function redactNormalizedCredentialSegments(value: string): string {
 
 /** 公開レスポンスやreportへ内部識別子・local pathを持ち込まない。 */
 export function sanitizePatentWatchPublicText(value: string): string {
-  return redactCredentialBearingTokens(redactNormalizedCredentialSegments(value))
+  return redactCredentialHeaders(
+    redactCredentialBearingTokens(redactNormalizedCredentialSegments(value)),
+  )
     .replace(/(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])/giu, "[非表示]")
     .replace(/\bfile:\/\/[^\s,;]*/giu, "[非表示]")
     .replace(/(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\r\n,;|]*/gu, "[非表示]")
@@ -532,7 +622,6 @@ export function sanitizePatentWatchPublicText(value: string): string {
       "[非表示]",
     )
     .replace(JSON_CREDENTIAL_ASSIGNMENT_PATTERN, "[非表示]")
-    .replace(AUTHORIZATION_HEADER_PATTERN, "[非表示]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, "[非表示]")
     .replace(UPPERCASE_TOKEN_ASSIGNMENT_PATTERN, "[非表示]")
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, "[非表示]");

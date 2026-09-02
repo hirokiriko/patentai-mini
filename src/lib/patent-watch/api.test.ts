@@ -19,6 +19,7 @@ import type {
 const PRIVATE_HASH = "a".repeat(64);
 const PRIVATE_LOCAL_PATH = ["C:", "\\", "private\\fictional.xml"].join("");
 const PRIVATE_SIGNED_URL_SECRET = "FICTIONAL_SAS_SIGNATURE";
+const PRIVATE_SESSION_SECRET = "FICTIONAL_SESSION_SECRET";
 const PRIVATE_SIGNED_URL = [
   "https",
   "://",
@@ -219,8 +220,13 @@ describe("patent watch GET/PUT handlers", () => {
         ...finding({
           inventionTitle: `架空 ${PRIVATE_HASH}`,
           analysisJson: JSON.stringify({
-            matchedElements: [`軌道プリズム ${PRIVATE_SIGNED_URL}`],
-            unmatchedElements: ["架空の制約"],
+            matchedElements: [
+              `軌道プリズム ${PRIVATE_SIGNED_URL}`,
+              `Cookie: session=${PRIVATE_SESSION_SECRET}`,
+            ],
+            unmatchedElements: [
+              `{"sessionToken":"${PRIVATE_SESSION_SECRET}"}`,
+            ],
             explanation: `${PRIVATE_LOCAL_PATH} の重なり候補です`,
             rawAi: "FICTIONAL-RAW-AI-LEAK",
           }),
@@ -282,6 +288,7 @@ describe("patent watch GET/PUT handlers", () => {
       PRIVATE_HASH,
       PRIVATE_LOCAL_PATH,
       PRIVATE_SIGNED_URL_SECRET,
+      PRIVATE_SESSION_SECRET,
       "FICTIONAL-RAW-AI-LEAK",
       "FICTIONAL-RAW-XML-LEAK",
       "FICTIONAL-FULL-CLAIMS-LEAK",

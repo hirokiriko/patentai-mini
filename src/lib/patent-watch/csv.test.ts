@@ -101,6 +101,7 @@ describe("patent watch CSV", () => {
     const leakedDigest = "b".repeat(64);
     const localPath = ["C:", "\\", "private\\fictional.xml"].join("");
     const signedUrlSecret = "FICTIONAL_SAS_SIGNATURE";
+    const sessionSecret = "FICTIONAL_SESSION_SECRET";
     const signedUrl = [
       "https",
       "://",
@@ -113,8 +114,13 @@ describe("patent watch CSV", () => {
           sourceKey,
           inventionTitle: `架空 ${leakedDigest}`,
           analysisJson: JSON.stringify({
-            matchedElements: [signedUrl],
-            unmatchedElements: [],
+            matchedElements: [
+              signedUrl,
+              `Set-Cookie: session=${sessionSecret}; HttpOnly`,
+            ],
+            unmatchedElements: [
+              `{"credential":"${sessionSecret}"}`,
+            ],
             explanation: `${localPath} ${leakedDigest}`,
           }),
         }),
@@ -128,6 +134,7 @@ describe("patent watch CSV", () => {
       leakedDigest,
       localPath,
       signedUrlSecret,
+      sessionSecret,
       "FICTIONAL-RAW-XML-SENTINEL",
       "FICTIONAL-FULL-CLAIMS-SENTINEL",
       "FICTIONAL-DB-ERROR-SENTINEL",
