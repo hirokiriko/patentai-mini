@@ -211,3 +211,24 @@
   - 同一内容の再追加は既存`docId`と分析結果を維持する
   - 案件pageは初期renderでcorpusへqueryせず、storage未準備時は明示検索・追加だけがstableな利用不可応答になる
   - Production migration、corpus投入、Azure resource、secret、runtime環境変数の操作は別Issueとする
+
+## DR-0015: 出願後ウォッチングは既存corpusを固定upper cursorで差分処理する
+
+- Date: 2026-09-02
+- Status: Accepted
+- Extends: DR-0012
+- Context:
+  - 出願済み案件について、前回確認後に取り込まれた公報だけを再現可能な範囲で比較したい
+  - run中にもglobal corpusへ新しいimportが追加され得るため、単純な最新値更新では公報を飛ばす可能性がある
+  - J-PlatPatの自動操作、scheduler、queue、Production設定をMVPへ先取りしない境界が必要である
+- Decision:
+  - J-PlatPatを自動操作せず、既に取り込まれたglobal公報corpusだけをユーザーの明示操作で処理する
+  - `koho_import_runs.updated_at`と`import_id`のtupleをcursorとし、run開始transactionでbaseとupperを固定する
+  - corpus保存とupper固定を共通のtransaction-scoped advisory lockで直列化し、importの`updated_at`を既存最大よりmicrosecond精度で必ず後になるよう付与する
+  - 監視開始日もrun開始transactionでsnapshotし、初回はその日付以降、以後はbaseより後かつ固定upper以下のdocumentだけを処理し、成功時だけcursorをupperへ進める
+  - 公開番号とcontent digestのcanonical JSON SHA-256をfinding identityとし、再取込時のDB IDやpackageに依存しない
+  - 決定的prefilterでAI入力を最大100件、詳細分析を最大20件に制限し、AI失敗時は人手確認を明示した決定的fallbackを用いる
+- Consequence:
+  - run中の新規importは次回へ確実に残り、failed runはcursorを進めない
+  - 同一内容の再取込や再実行でfindingを重複保存しない
+  - scheduler、自動取得、外部通知、Production migration、Azure resource／secret／runtime設定は別承認とする

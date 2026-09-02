@@ -6,6 +6,13 @@ import type {
   KohoCorpusAttachResult,
   KohoCorpusSearchSummary,
 } from "@/lib/koho-corpus/domain";
+import type {
+  CaseWatchFinding,
+  CaseWatchRun,
+  CaseWatchSetting,
+  PatentWatchErrorCode,
+  PatentWatchRunRepository,
+} from "@/lib/patent-watch/types";
 
 /**
  * リポジトリ層の型定義。
@@ -133,6 +140,18 @@ export class KohoImportRepositoryValidationError extends Error {
   }
 }
 
+export type PatentWatchRepositoryErrorCode = PatentWatchErrorCode;
+
+export class PatentWatchRepositoryError extends Error {
+  readonly code: PatentWatchRepositoryErrorCode;
+
+  constructor(code: PatentWatchRepositoryErrorCode) {
+    super(`Patent watch repository failed: ${code}`);
+    this.name = "PatentWatchRepositoryError";
+    this.code = code;
+  }
+}
+
 // --- Repository interfaces ---
 
 export interface CaseRepository {
@@ -214,4 +233,24 @@ export interface KohoCorpusRepository {
     caseId: number,
     documentIds: number[],
   ): Promise<KohoCorpusAttachResult>;
+}
+
+export interface PatentWatchRepository extends PatentWatchRunRepository {
+  getSetting(caseId: number): Promise<CaseWatchSetting | null>;
+  upsertSetting(
+    caseId: number,
+    data: Pick<CaseWatchSetting, "enabled" | "monitoringFromDate">,
+  ): Promise<CaseWatchSetting>;
+  getRun(caseId: number, runId: number): Promise<CaseWatchRun | null>;
+  listRuns(caseId: number, limit: number): Promise<CaseWatchRun[]>;
+  listFindings(
+    caseId: number,
+    options: { runId?: number; limit: number },
+  ): Promise<CaseWatchFinding[]>;
+  countUnreviewedFindings(caseId: number): Promise<number>;
+  updateFindingReviewStatus(
+    caseId: number,
+    findingId: number,
+    reviewStatus: CaseWatchFinding["reviewStatus"],
+  ): Promise<CaseWatchFinding | null>;
 }

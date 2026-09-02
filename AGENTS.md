@@ -424,3 +424,35 @@ environment variables as part of ordinary Cloud implementation or verification.
 - Production corpus availability, migrations, data loading, Azure resources,
   secrets, and runtime environment configuration remain separately approved
   work.
+
+## 16. Patent Watch Safety
+
+- `src/lib/patent-watch/**`, `GET` / `PUT /api/cases/[caseId]/watch`, watch run,
+  finding review, CSV, and print-report routes implement the post-filing watch
+  MVP defined in `docs/10-patent-watching-mvp-spec.md`.
+- A watch run may inspect only corpus documents inside the base/upper cursor
+  range and monitoring-date snapshot fixed when that run starts. Do not reread
+  the mutable setting date for an active run. Advance the setting cursor only
+  when the success finalization transaction completes.
+- Before rejecting a new run as already active, recover a `running` row older
+  than five minutes as `failed` / `watch_internal_error` in the same start
+  transaction. Do not advance its cursor. The five-minute threshold must stay
+  above the synchronous route's 120-second budget.
+- Keep corpus persistence and watch upper-cursor capture on their shared
+  transaction-scoped advisory lock. Preserve Postgres microsecond precision
+  when assigning and comparing `updated_at`; millisecond-only comparison can
+  skip an import permanently.
+- Derive finding identity only from publication number plus content digest.
+  Do not use document IDs, import IDs, package identity, or paths as stable
+  identity.
+- Never expose source keys, source/content hashes, entry paths, full claims,
+  raw source content, DB errors, AI errors, secrets, or customer information in
+  watch API responses, CSV files, HTML reports, logs, Issues, or pull requests.
+- Watch results are overlap candidates and risk signals requiring human review.
+  Do not generate or display legal conclusions.
+- Do not start a watch run or corpus query during the case page's initial
+  render. A status-only watch GET is allowed from the independent client
+  section.
+- Production migration, corpus loading, scheduler, automatic acquisition,
+  notifications, Azure resources, secrets, and runtime environment changes are
+  not enabled by the watch implementation and require separate approval.
