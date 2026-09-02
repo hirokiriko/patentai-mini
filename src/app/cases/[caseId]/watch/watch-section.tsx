@@ -58,6 +58,7 @@ export type WatchSummary = {
 export type PatentWatchLoadState =
   | "loading"
   | "ready"
+  | "starting"
   | "running"
   | "failed"
   | "unavailable"
@@ -142,8 +143,10 @@ function statusMessage(
   latestRun: WatchRunView | null,
 ): string {
   if (state === "loading") return "読み込み中";
-  if (state === "running" || latestRun?.status === "running") return "監視実行中";
-  if (state === "failed" || latestRun?.status === "failed") return "監視失敗";
+  if (state === "starting" || state === "running") return "監視実行中";
+  if (state === "failed") return "監視失敗";
+  if (latestRun?.status === "running") return "監視実行中";
+  if (latestRun?.status === "failed") return "監視失敗";
   if (state === "fallback") {
     return "監視完了（fallback・人による確認が必要）";
   }
@@ -267,7 +270,7 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
   }
 
   async function startRun() {
-    setState("running");
+    setState("starting");
     setMessage(null);
     try {
       const response = await fetch(`/api/cases/${caseId}/watch/runs`, {
@@ -361,7 +364,9 @@ export function PatentWatchSectionView({
 }: PatentWatchSectionViewProps) {
   const latestRun = summary.latestRun;
   const unavailable = state === "unavailable";
-  const busy = state === "loading" || state === "running";
+  const busy =
+    state === "loading" || state === "starting" || state === "running";
+  const runButtonBusy = state === "loading" || state === "starting";
 
   return (
     <section className="mt-6 rounded-xl border-2 border-indigo-200 bg-indigo-50/40 px-6 py-5">
@@ -426,7 +431,7 @@ export function PatentWatchSectionView({
         <button
           type="button"
           onClick={onStartRun}
-          disabled={unavailable || busy || !summary.setting?.enabled}
+          disabled={unavailable || runButtonBusy || !summary.setting?.enabled}
           className="rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           今すぐ監視

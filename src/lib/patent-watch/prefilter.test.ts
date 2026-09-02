@@ -70,6 +70,16 @@ describe("Unicode-aware patent watch tokenization", () => {
     expect(tokens.some((token) => token.includes("𠮷"))).toBe(true);
   });
 
+  it("separates Latin and number runs from adjacent CJK text", () => {
+    const tokens = tokenizePatentWatchText("AI装置 3Dプリンタ");
+
+    expect(tokens).toEqual(
+      expect.arrayContaining(["ai", "装置", "3d", "プリ", "リン", "ンタ"]),
+    );
+    expect(tokens).not.toContain("ai装置");
+    expect(tokens).not.toContain("3dプリンタ");
+  });
+
   it("uses a fixed set-based Dice score", () => {
     expect(lexicalOverlapScore(["alpha", "beta"], ["beta", "gamma"])).toBe(
       0.5,
@@ -79,6 +89,20 @@ describe("Unicode-aware patent watch tokenization", () => {
 });
 
 describe("patent watch deterministic prefilter", () => {
+  it("keeps mixed Latin and CJK overlap eligible", () => {
+    const claims = extractedClaims([
+      { claimNo: 1, text: "AI装置", isIndependent: true },
+    ]);
+    const result = prefilterPatentWatchDocuments(claims, [
+      document(1, "AI制御装置"),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].matchedTokens).toEqual(
+      expect.arrayContaining(["ai", "装置"]),
+    );
+  });
+
   it("uses independent claims and ignores dependent-only matches", () => {
     const claims = extractedClaims([
       { claimNo: 1, text: "orbital prism detector", isIndependent: true },

@@ -386,8 +386,12 @@ describe("patent watch run service", () => {
         successfulAnalysis(999),
         {
           ...successfulAnalysis(1),
-          matchedElements: ["orbital prism", "登録できない"],
-          explanation: "この発明は拒絶される",
+          matchedElements: [
+            "orbital prism",
+            "登録できない",
+            "The claim is novel.",
+          ],
+          explanation: "この請求項は新規ではない",
         },
       ],
     });
@@ -396,7 +400,9 @@ describe("patent watch run service", () => {
     expect(success.analysisMode).toBe("ai");
     expect(success.findings).toHaveLength(1);
     const serialized = JSON.stringify(success.findings[0]);
-    expect(serialized).not.toMatch(/拒絶される|登録できない/);
+    expect(serialized).not.toMatch(
+      /登録できない|The claim is novel|新規ではない/u,
+    );
     expect(serialized).toContain("人による確認が必要です");
   });
 
@@ -428,6 +434,8 @@ describe("patent watch run service", () => {
   it("does not persist complete draft or source claims echoed by AI", async () => {
     const sourceClaim =
       "orbital prism detector controller with a completely fictional relay";
+    const draftEcho = CLAIMS.claims[0].text.toUpperCase();
+    const sourceEcho = sourceClaim.toUpperCase();
     const repository = new FakeRunRepository(
       start(),
       batch([
@@ -447,18 +455,18 @@ describe("patent watch run service", () => {
         {
           ...successfulAnalysis(1),
           matchedElements: [
-            CLAIMS.claims[0].text,
-            sourceClaim,
+            draftEcho,
+            sourceEcho,
             "orbital prism",
           ],
-          explanation: `echoed source: ${sourceClaim}`,
+          explanation: `echoed source: ${sourceEcho}`,
         },
       ],
     });
 
     const analysisJson = repository.success[0].findings[0].analysisJson;
-    expect(analysisJson).not.toContain(CLAIMS.claims[0].text);
-    expect(analysisJson).not.toContain(sourceClaim);
+    expect(analysisJson).not.toContain(draftEcho);
+    expect(analysisJson).not.toContain(sourceEcho);
     expect(analysisJson).toContain("orbital prism");
     expect(analysisJson).toContain("人による確認が必要です");
   });

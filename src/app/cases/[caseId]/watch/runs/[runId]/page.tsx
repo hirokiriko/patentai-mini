@@ -150,8 +150,6 @@ export default async function PatentWatchReportPage({
   const runId = positiveInteger(values.runId);
   if (caseId === null || runId === null) notFound();
 
-  if (!(await caseRepo.findById(caseId))) notFound();
-
   let report:
     | {
         run: NonNullable<Awaited<ReturnType<typeof patentWatchRepo.getRun>>>;
@@ -159,20 +157,30 @@ export default async function PatentWatchReportPage({
       }
     | null = null;
   let unavailable = false;
+  let caseExists = false;
 
   try {
-    const run = await patentWatchRepo.getRun(caseId, runId);
-    if (run) {
-      report = {
-        run,
-        findings: await patentWatchRepo.listFindings(caseId, {
-          runId,
-          limit: 100,
-        }),
-      };
-    }
+    caseExists = Boolean(await caseRepo.findById(caseId));
   } catch {
     unavailable = true;
+  }
+  if (!unavailable && !caseExists) notFound();
+
+  if (!unavailable) {
+    try {
+      const run = await patentWatchRepo.getRun(caseId, runId);
+      if (run) {
+        report = {
+          run,
+          findings: await patentWatchRepo.listFindings(caseId, {
+            runId,
+            limit: 100,
+          }),
+        };
+      }
+    } catch {
+      unavailable = true;
+    }
   }
 
   if (!unavailable && !report) notFound();
