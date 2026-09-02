@@ -313,20 +313,27 @@ describe("patent watch run service", () => {
       batch(documents),
     );
     const screen = vi.fn(async (
-      _claims: ExtractedClaims,
+      claims: ExtractedClaims,
       priorArts: PatentWatchScreeningSummary[],
-    ) => ({
-      relevantDocIds: [
-        999_999,
-        ...priorArts.map((item) => item.docId),
-        priorArts[0].docId,
-      ],
-      reasoning: "fictional screening",
-    }));
+    ) => {
+      void claims;
+      return {
+        relevantDocIds: [
+          999_999,
+          ...priorArts.map((item) => item.docId),
+          priorArts[0].docId,
+        ],
+        reasoning: "fictional screening",
+      };
+    });
     const analyze = vi.fn(async (
-      _claims: ExtractedClaims,
-      _priorArts: PatentWatchAnalysisDetail[],
-    ) => []);
+      claims: ExtractedClaims,
+      priorArts: PatentWatchAnalysisDetail[],
+    ) => {
+      void claims;
+      void priorArts;
+      return [];
+    });
 
     await runPatentWatch(7, {
       repository,

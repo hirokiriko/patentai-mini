@@ -231,7 +231,13 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
   }, [caseId]);
 
   useEffect(() => {
-    void loadWatch();
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) void loadWatch();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [loadWatch]);
 
   async function saveSetting() {
