@@ -25,6 +25,7 @@ import { CopyButton } from "@/components/copy-button";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { CaseDetailClient } from "./case-detail-client";
 import { PriorArtTable } from "./prior-art-table";
+import { PatentWatchSection } from "./watch/watch-section";
 import {
   getOriginalFileDisplayName,
   isOriginalFileBlobName,
@@ -1227,6 +1228,8 @@ export default async function CaseDetailPage({
           )}
         </section>
       )}
+
+      <PatentWatchSection caseId={caseIdNum} />
 
       <ScrollToTop />
     </main>

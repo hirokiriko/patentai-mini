@@ -7,6 +7,9 @@ import {
   comparisonResults,
   kohoImportDocuments,
   kohoImportRuns,
+  caseWatchSettings,
+  caseWatchRuns,
+  caseWatchFindings,
 } from "../db/schema";
 import {
   assertKohoImportDocumentPlan,
@@ -22,8 +25,23 @@ import {
   type KohoCorpusSearchSummary,
   type KohoCorpusSourceDocument,
 } from "../lib/koho-corpus/domain";
-import { eq, desc, asc, and, inArray, or, sql } from "drizzle-orm";
-import { KohoImportRepositoryValidationError } from "./types";
+import {
+  eq,
+  desc,
+  asc,
+  and,
+  inArray,
+  or,
+  sql,
+  gt,
+  gte,
+  lt,
+  lte,
+} from "drizzle-orm";
+import {
+  KohoImportRepositoryValidationError,
+  PatentWatchRepositoryError,
+} from "./types";
 import type {
   CaseRepository,
   DraftPatentRepository,
@@ -35,7 +53,26 @@ import type {
   KohoImportRepository,
   KohoImportRun,
   KohoCorpusRepository,
+  PatentWatchRepository,
 } from "./types";
+import type {
+  CaseWatchFinding,
+  CaseWatchRun,
+  CaseWatchSetting,
+  PatentWatchAnalysisMode,
+  PatentWatchCursor,
+  PatentWatchCorpusDocument,
+  PatentWatchDocumentKind,
+  PatentWatchErrorCode,
+  PatentWatchPackageType,
+  PatentWatchReviewStatus,
+  PatentWatchRiskLabel,
+  PatentWatchRunStatus,
+} from "../lib/patent-watch/types";
+import {
+  comparePatentWatchCursors,
+  isValidPatentWatchTimestamp,
+} from "../lib/patent-watch/domain";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
@@ -242,6 +279,364 @@ function normalizeKohoCorpusPublicationDate(value: string): string {
   const normalized = `${match[1]}${match[2]}${match[3]}`;
   if (!isValidYyyyMmDd(normalized)) throw unavailableKohoCorpus();
   return normalized;
+}
+
+const PATENT_WATCH_RUN_STATUSES = new Set<PatentWatchRunStatus>([
+  "running",
+  "completed",
+  "failed",
+]);
+const PATENT_WATCH_ANALYSIS_MODES = new Set<PatentWatchAnalysisMode>([
+  "none",
+  "ai",
+  "fallback",
+]);
+const PATENT_WATCH_REVIEW_STATUSES = new Set<PatentWatchReviewStatus>([
+  "unreviewed",
+  "reviewed",
+]);
+const PATENT_WATCH_PACKAGE_TYPES = new Set<PatentWatchPackageType>([
+  "JPA",
+  "JPB",
+]);
+const PATENT_WATCH_DOCUMENT_KINDS = new Set<PatentWatchDocumentKind>([
+  "A1",
+  "P1",
+  "B1",
+  "B2",
+]);
+const PATENT_WATCH_RISK_LABELS = new Set<PatentWatchRiskLabel>([
+  "High",
+  "Medium",
+  "Low",
+  "Unknown",
+]);
+const PATENT_WATCH_ERROR_CODES = new Set<PatentWatchErrorCode>([
+  "invalid_watch_setting",
+  "invalid_watch_review_status",
+  "invalid_watch_run_request",
+  "case_not_found",
+  "watch_not_configured",
+  "watch_disabled",
+  "watch_claims_not_ready",
+  "watch_run_in_progress",
+  "watch_run_not_found",
+  "watch_finding_not_found",
+  "watch_corpus_unavailable",
+  "watch_unavailable",
+  "watch_analysis_failed",
+  "watch_internal_error",
+]);
+const PATENT_WATCH_LIST_LIMIT_MAX = 100;
+const PATENT_WATCH_SOURCE_KEY_BATCH_SIZE = 1_000;
+// Serializes corpus persistence and watch upper-cursor capture. The import
+// timestamp is assigned only after this transaction-scoped lock is acquired.
+const KOHO_IMPORT_WATCH_CURSOR_LOCK_ID = 70_000_001;
+
+function patentWatchError(code: PatentWatchErrorCode): never {
+  throw new PatentWatchRepositoryError(code);
+}
+
+function rethrowPatentWatchRepositoryError(
+  error: unknown,
+  fallback: "watch_unavailable" | "watch_corpus_unavailable",
+): never {
+  if (error instanceof PatentWatchRepositoryError) throw error;
+  patentWatchError(fallback);
+}
+
+function assertPatentWatchId(
+  value: unknown,
+  code:
+    | "case_not_found"
+    | "watch_not_configured"
+    | "watch_run_not_found"
+    | "watch_finding_not_found",
+): asserts value is number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 1 ||
+    (value as number) > POSTGRES_INTEGER_MAX
+  ) {
+    patentWatchError(code);
+  }
+}
+
+function assertPatentWatchTimestamp(
+  value: unknown,
+  fallback: "watch_unavailable" | "watch_corpus_unavailable",
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    !isValidPatentWatchTimestamp(value)
+  ) {
+    patentWatchError(fallback);
+  }
+}
+
+function toPatentWatchCursor(
+  runUpdatedAt: string | null,
+  importId: number | null,
+  fallback: "watch_unavailable" | "watch_corpus_unavailable",
+): PatentWatchCursor | null {
+  if (runUpdatedAt === null && importId === null) return null;
+  if (runUpdatedAt === null || importId === null) {
+    patentWatchError(fallback);
+  }
+  assertPatentWatchTimestamp(runUpdatedAt, fallback);
+  if (
+    !Number.isSafeInteger(importId) ||
+    importId < 1 ||
+    importId > POSTGRES_INTEGER_MAX
+  ) {
+    patentWatchError(fallback);
+  }
+  return { runUpdatedAt, importId };
+}
+
+function comparePatentWatchCursor(
+  left: PatentWatchCursor,
+  right: PatentWatchCursor,
+): number {
+  return comparePatentWatchCursors(left, right);
+}
+
+function assertPatentWatchCount(value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    patentWatchError("watch_unavailable");
+  }
+}
+
+function toCaseWatchSetting(
+  row: typeof caseWatchSettings.$inferSelect,
+): CaseWatchSetting {
+  assertPatentWatchId(row.watchId, "watch_not_configured");
+  assertPatentWatchId(row.caseId, "case_not_found");
+  if (
+    typeof row.enabled !== "boolean" ||
+    !isValidYyyyMmDd(row.monitoringFromDate)
+  ) {
+    patentWatchError("watch_unavailable");
+  }
+  toPatentWatchCursor(
+    row.cursorRunUpdatedAt,
+    row.cursorImportId,
+    "watch_unavailable",
+  );
+  assertPatentWatchTimestamp(row.createdAt, "watch_unavailable");
+  assertPatentWatchTimestamp(row.updatedAt, "watch_unavailable");
+  return row;
+}
+
+function toCaseWatchRun(row: typeof caseWatchRuns.$inferSelect): CaseWatchRun {
+  assertPatentWatchId(row.runId, "watch_run_not_found");
+  assertPatentWatchId(row.watchId, "watch_not_configured");
+  if (!PATENT_WATCH_RUN_STATUSES.has(row.status as PatentWatchRunStatus)) {
+    patentWatchError("watch_unavailable");
+  }
+  if (!isValidYyyyMmDd(row.monitoringFromDate)) {
+    patentWatchError("watch_unavailable");
+  }
+  if (
+    !PATENT_WATCH_ANALYSIS_MODES.has(
+      row.analysisMode as PatentWatchAnalysisMode,
+    )
+  ) {
+    patentWatchError("watch_unavailable");
+  }
+  toPatentWatchCursor(
+    row.baseCursorRunUpdatedAt,
+    row.baseCursorImportId,
+    "watch_unavailable",
+  );
+  toPatentWatchCursor(
+    row.upperCursorRunUpdatedAt,
+    row.upperCursorImportId,
+    "watch_unavailable",
+  );
+  assertPatentWatchTimestamp(row.startedAt, "watch_unavailable");
+  if (row.completedAt !== null) {
+    assertPatentWatchTimestamp(row.completedAt, "watch_unavailable");
+  }
+  for (const count of [
+    row.scannedImportRunCount,
+    row.scannedDocumentCount,
+    row.prefilteredCount,
+    row.analyzedCount,
+    row.newFindingCount,
+    row.fallbackFindingCount,
+  ]) {
+    assertPatentWatchCount(count);
+  }
+  if (
+    row.errorCode !== null &&
+    !PATENT_WATCH_ERROR_CODES.has(row.errorCode as PatentWatchErrorCode)
+  ) {
+    patentWatchError("watch_unavailable");
+  }
+
+  return {
+    runId: row.runId,
+    watchId: row.watchId,
+    status: row.status as PatentWatchRunStatus,
+    monitoringFromDate: row.monitoringFromDate,
+    baseRunUpdatedAt: row.baseCursorRunUpdatedAt,
+    baseImportId: row.baseCursorImportId,
+    upperRunUpdatedAt: row.upperCursorRunUpdatedAt,
+    upperImportId: row.upperCursorImportId,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+    scannedImportRunCount: row.scannedImportRunCount,
+    scannedDocumentCount: row.scannedDocumentCount,
+    prefilteredCount: row.prefilteredCount,
+    analyzedCount: row.analyzedCount,
+    newFindingCount: row.newFindingCount,
+    fallbackFindingCount: row.fallbackFindingCount,
+    analysisMode: row.analysisMode as PatentWatchAnalysisMode,
+    errorCode: row.errorCode as PatentWatchErrorCode | null,
+  };
+}
+
+function toCaseWatchFinding(
+  row: typeof caseWatchFindings.$inferSelect,
+): CaseWatchFinding {
+  assertPatentWatchId(row.findingId, "watch_finding_not_found");
+  assertPatentWatchId(row.watchId, "watch_not_configured");
+  assertPatentWatchId(row.firstRunId, "watch_run_not_found");
+  if (
+    !SHA256_PATTERN.test(row.sourceKey) ||
+    !PATENT_WATCH_PACKAGE_TYPES.has(
+      row.packageType as PatentWatchPackageType,
+    ) ||
+    !PATENT_WATCH_DOCUMENT_KINDS.has(row.kind as PatentWatchDocumentKind) ||
+    !isValidYyyyMmDd(row.publicationDate) ||
+    !PATENT_WATCH_RISK_LABELS.has(row.riskLabel as PatentWatchRiskLabel) ||
+    !PATENT_WATCH_ANALYSIS_MODES.has(
+      row.analysisMode as PatentWatchAnalysisMode,
+    ) ||
+    row.analysisMode === "none" ||
+    !PATENT_WATCH_REVIEW_STATUSES.has(
+      row.reviewStatus as PatentWatchReviewStatus,
+    )
+  ) {
+    patentWatchError("watch_unavailable");
+  }
+  for (const score of [
+    row.lexicalScore,
+    row.elementScore,
+    row.semanticScore,
+    row.structuralScore,
+  ]) {
+    if (!Number.isFinite(score) || score < 0 || score > 1) {
+      patentWatchError("watch_unavailable");
+    }
+  }
+  assertPatentWatchAnalysisJson(row.analysisJson, "watch_unavailable");
+  assertPatentWatchTimestamp(row.firstSeenAt, "watch_unavailable");
+
+  return {
+    ...row,
+    packageType: row.packageType as PatentWatchPackageType,
+    kind: row.kind as PatentWatchDocumentKind,
+    riskLabel: row.riskLabel as PatentWatchRiskLabel,
+    analysisMode: row.analysisMode as Exclude<PatentWatchAnalysisMode, "none">,
+    reviewStatus: row.reviewStatus as PatentWatchReviewStatus,
+  };
+}
+
+function normalizePatentWatchListLimit(limit: number): number {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > PATENT_WATCH_LIST_LIMIT_MAX
+  ) {
+    patentWatchError("watch_internal_error");
+  }
+  return limit;
+}
+
+function assertPatentWatchAnalysisJson(
+  value: unknown,
+  errorCode: "watch_internal_error" | "watch_unavailable" =
+    "watch_internal_error",
+): asserts value is string {
+  if (typeof value !== "string") {
+    patentWatchError(errorCode);
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      patentWatchError(errorCode);
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      Object.keys(record).join(",") !==
+        "matchedElements,unmatchedElements,explanation" ||
+      !Array.isArray(record.matchedElements) ||
+      !record.matchedElements.every((item) => typeof item === "string") ||
+      !Array.isArray(record.unmatchedElements) ||
+      !record.unmatchedElements.every((item) => typeof item === "string") ||
+      typeof record.explanation !== "string"
+    ) {
+      patentWatchError(errorCode);
+    }
+    if (
+      value !==
+      JSON.stringify({
+        matchedElements: record.matchedElements,
+        unmatchedElements: record.unmatchedElements,
+        explanation: record.explanation,
+      })
+    ) {
+      patentWatchError(errorCode);
+    }
+  } catch (error) {
+    if (error instanceof PatentWatchRepositoryError) throw error;
+    patentWatchError(errorCode);
+  }
+}
+
+function assertPatentWatchFindingInsert(
+  finding: Parameters<
+    PatentWatchRepository["finalizeRunSuccess"]
+  >[0]["findings"][number],
+): void {
+  if (
+    !SHA256_PATTERN.test(finding.sourceKey) ||
+    (finding.corpusDocumentId !== null &&
+      (!Number.isSafeInteger(finding.corpusDocumentId) ||
+        finding.corpusDocumentId < 1 ||
+        finding.corpusDocumentId > POSTGRES_INTEGER_MAX)) ||
+    !PATENT_WATCH_PACKAGE_TYPES.has(finding.packageType) ||
+    !PATENT_WATCH_DOCUMENT_KINDS.has(finding.kind) ||
+    !isValidYyyyMmDd(finding.publicationDate) ||
+    !PATENT_WATCH_RISK_LABELS.has(finding.riskLabel) ||
+    (finding.analysisMode !== "ai" && finding.analysisMode !== "fallback") ||
+    finding.reviewStatus !== "unreviewed" ||
+    typeof finding.publicationNumber !== "string" ||
+    finding.publicationNumber.length === 0 ||
+    typeof finding.inventionTitle !== "string" ||
+    finding.inventionTitle.length === 0 ||
+    (finding.abstractPreview !== null &&
+      typeof finding.abstractPreview !== "string")
+  ) {
+    patentWatchError("watch_internal_error");
+  }
+  for (const score of [
+    finding.lexicalScore,
+    finding.elementScore,
+    finding.semanticScore,
+    finding.structuralScore,
+  ]) {
+    if (!Number.isFinite(score) || score < 0 || score > 1) {
+      patentWatchError("watch_internal_error");
+    }
+  }
+  assertPatentWatchAnalysisJson(finding.analysisJson);
 }
 
 export function toKohoCorpusSourceDocument(
@@ -512,6 +907,21 @@ export const kohoImportRepo: KohoImportRepository = {
     const validatedPlan = validatedPlanSnapshot(plan);
 
     return db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(${KOHO_IMPORT_WATCH_CURSOR_LOCK_ID}::bigint)`,
+      );
+      const [latestCursor] = await tx
+        .select({ updatedAt: kohoImportRuns.updatedAt })
+        .from(kohoImportRuns)
+        .orderBy(
+          desc(kohoImportRuns.updatedAt),
+          desc(kohoImportRuns.importId),
+        )
+        .limit(1);
+      const nextUpdatedAt = latestCursor
+        ? sql<string>`greatest(clock_timestamp(), ${latestCursor.updatedAt}::timestamptz + interval '1 microsecond')`
+        : sql<string>`clock_timestamp()`;
+
       const [runRow] = await tx
         .insert(kohoImportRuns)
         .values({
@@ -523,6 +933,7 @@ export const kohoImportRepo: KohoImportRepository = {
           nestedSt26Count: validatedPlan.nestedSt26Count,
           countsJson: validatedPlan.countsJson,
           issuesJson: validatedPlan.issuesJson,
+          updatedAt: nextUpdatedAt,
         })
         .onConflictDoUpdate({
           target: [kohoImportRuns.packageType, kohoImportRuns.sourceSha256],
@@ -533,7 +944,7 @@ export const kohoImportRepo: KohoImportRepository = {
             nestedSt26Count: validatedPlan.nestedSt26Count,
             countsJson: validatedPlan.countsJson,
             issuesJson: validatedPlan.issuesJson,
-            updatedAt: sql`now()`,
+            updatedAt: nextUpdatedAt,
           },
         })
         .returning();
@@ -618,6 +1029,659 @@ export const kohoImportRepo: KohoImportRepository = {
         asc(kohoImportDocuments.documentId),
       );
     return rows.map((row) => toKohoImportDocument(row, run.packageType));
+  },
+};
+
+export const patentWatchRepo: PatentWatchRepository = {
+  async getSetting(caseId) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      const [row] = await db
+        .select({
+          caseId: cases.caseId,
+          setting: caseWatchSettings,
+        })
+        .from(cases)
+        .leftJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.caseId, cases.caseId),
+        )
+        .where(eq(cases.caseId, caseId))
+        .limit(1);
+      if (!row) patentWatchError("case_not_found");
+      return row.setting === null ? null : toCaseWatchSetting(row.setting);
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async upsertSetting(caseId, data) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      if (
+        typeof data.enabled !== "boolean" ||
+        !isValidYyyyMmDd(data.monitoringFromDate)
+      ) {
+        patentWatchError("invalid_watch_setting");
+      }
+
+      return await db.transaction(async (tx) => {
+        const [caseRow] = await tx
+          .select({ caseId: cases.caseId })
+          .from(cases)
+          .where(eq(cases.caseId, caseId))
+          .for("update");
+        if (!caseRow) patentWatchError("case_not_found");
+
+        const [settingRow] = await tx
+          .insert(caseWatchSettings)
+          .values({
+            caseId,
+            enabled: data.enabled,
+            monitoringFromDate: data.monitoringFromDate,
+          })
+          .onConflictDoUpdate({
+            target: caseWatchSettings.caseId,
+            set: {
+              enabled: data.enabled,
+              monitoringFromDate: data.monitoringFromDate,
+              updatedAt: sql`now()`,
+            },
+          })
+          .returning();
+        if (!settingRow) patentWatchError("watch_unavailable");
+        return toCaseWatchSetting(settingRow);
+      });
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async startRun(caseId) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      return await db.transaction(async (tx) => {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(${KOHO_IMPORT_WATCH_CURSOR_LOCK_ID}::bigint)`,
+        );
+        const [caseRow] = await tx
+          .select({ caseId: cases.caseId })
+          .from(cases)
+          .where(eq(cases.caseId, caseId))
+          .for("update");
+        if (!caseRow) patentWatchError("case_not_found");
+
+        const [settingRow] = await tx
+          .select()
+          .from(caseWatchSettings)
+          .where(eq(caseWatchSettings.caseId, caseId))
+          .for("update");
+        if (!settingRow) patentWatchError("watch_not_configured");
+        const setting = toCaseWatchSetting(settingRow);
+        if (!setting.enabled) patentWatchError("watch_disabled");
+
+        const [runningRow] = await tx
+          .select({ runId: caseWatchRuns.runId })
+          .from(caseWatchRuns)
+          .where(
+            and(
+              eq(caseWatchRuns.watchId, setting.watchId),
+              eq(caseWatchRuns.status, "running"),
+            ),
+          )
+          .limit(1);
+        if (runningRow) patentWatchError("watch_run_in_progress");
+
+        const [draftRow] = await tx
+          .select({ extractedClaimsJson: draftPatents.extractedClaimsJson })
+          .from(draftPatents)
+          .where(
+            and(
+              eq(draftPatents.caseId, caseId),
+              eq(draftPatents.kind, "main"),
+            ),
+          )
+          .orderBy(desc(draftPatents.draftId))
+          .limit(1);
+        if (!draftRow?.extractedClaimsJson?.trim()) {
+          patentWatchError("watch_claims_not_ready");
+        }
+
+        let upperRow:
+          | { updatedAt: string; importId: number }
+          | undefined;
+        try {
+          [upperRow] = await tx
+            .select({
+              updatedAt: kohoImportRuns.updatedAt,
+              importId: kohoImportRuns.importId,
+            })
+            .from(kohoImportRuns)
+            .orderBy(
+              desc(kohoImportRuns.updatedAt),
+              desc(kohoImportRuns.importId),
+            )
+            .limit(1);
+        } catch {
+          patentWatchError("watch_corpus_unavailable");
+        }
+
+        const baseCursor = toPatentWatchCursor(
+          setting.cursorRunUpdatedAt,
+          setting.cursorImportId,
+          "watch_unavailable",
+        );
+        const upperCursor = upperRow
+          ? toPatentWatchCursor(
+              upperRow.updatedAt,
+              upperRow.importId,
+              "watch_corpus_unavailable",
+            )
+          : null;
+        if (
+          baseCursor !== null &&
+          (upperCursor === null ||
+            comparePatentWatchCursor(upperCursor, baseCursor) < 0)
+        ) {
+          patentWatchError("watch_corpus_unavailable");
+        }
+
+        const [runRow] = await tx.insert(caseWatchRuns).values({
+          watchId: setting.watchId,
+          status: "running",
+          monitoringFromDate: setting.monitoringFromDate,
+          baseCursorRunUpdatedAt: baseCursor?.runUpdatedAt ?? null,
+          baseCursorImportId: baseCursor?.importId ?? null,
+          upperCursorRunUpdatedAt: upperCursor?.runUpdatedAt ?? null,
+          upperCursorImportId: upperCursor?.importId ?? null,
+        }).returning();
+        if (!runRow) patentWatchError("watch_unavailable");
+
+        return {
+          caseId,
+          watchId: setting.watchId,
+          runId: runRow.runId,
+          monitoringFromDate: setting.monitoringFromDate,
+          baseCursor,
+          upperCursor,
+          extractedClaimsJson: draftRow.extractedClaimsJson,
+        };
+      });
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async findDocumentsForRun(runId) {
+    assertPatentWatchId(runId, "watch_run_not_found");
+
+    let context:
+      | {
+          run: typeof caseWatchRuns.$inferSelect;
+          setting: typeof caseWatchSettings.$inferSelect;
+        }
+      | undefined;
+    try {
+      [context] = await db
+        .select({ run: caseWatchRuns, setting: caseWatchSettings })
+        .from(caseWatchRuns)
+        .innerJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
+        )
+        .where(eq(caseWatchRuns.runId, runId))
+        .limit(1);
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+    if (!context) {
+      patentWatchError("watch_run_not_found");
+    }
+    const run = toCaseWatchRun(context.run);
+    if (run.status !== "running") {
+      patentWatchError("watch_run_not_found");
+    }
+    const baseCursor = toPatentWatchCursor(
+      context.run.baseCursorRunUpdatedAt,
+      context.run.baseCursorImportId,
+      "watch_unavailable",
+    );
+    const upperCursor = toPatentWatchCursor(
+      context.run.upperCursorRunUpdatedAt,
+      context.run.upperCursorImportId,
+      "watch_unavailable",
+    );
+    if (upperCursor === null) {
+      return {
+        documents: [],
+        scannedImportRunCount: 0,
+        scannedDocumentCount: 0,
+      };
+    }
+
+    const afterBase =
+      baseCursor === null
+        ? undefined
+        : or(
+            gt(kohoImportRuns.updatedAt, baseCursor.runUpdatedAt),
+            and(
+              eq(kohoImportRuns.updatedAt, baseCursor.runUpdatedAt),
+              gt(kohoImportRuns.importId, baseCursor.importId),
+            ),
+          );
+    const throughUpper = or(
+      lt(kohoImportRuns.updatedAt, upperCursor.runUpdatedAt),
+      and(
+        eq(kohoImportRuns.updatedAt, upperCursor.runUpdatedAt),
+        lte(kohoImportRuns.importId, upperCursor.importId),
+      ),
+    );
+
+    try {
+      const rows = await db
+        .select({ run: kohoImportRuns, document: kohoImportDocuments })
+        .from(kohoImportRuns)
+        .leftJoin(
+          kohoImportDocuments,
+          baseCursor === null
+            ? and(
+                eq(kohoImportDocuments.importId, kohoImportRuns.importId),
+                gte(
+                  sql<string>`replace(${kohoImportDocuments.publicationDate}, '-', '')`,
+                  run.monitoringFromDate,
+                ),
+              )
+            : eq(kohoImportDocuments.importId, kohoImportRuns.importId),
+        )
+        .where(
+          afterBase === undefined
+            ? throughUpper
+            : and(afterBase, throughUpper),
+        )
+        .orderBy(
+          asc(kohoImportRuns.updatedAt),
+          asc(kohoImportRuns.importId),
+          asc(kohoImportDocuments.documentId),
+        );
+
+      const importIds = new Set<number>();
+      const documents: PatentWatchCorpusDocument[] = [];
+      for (const row of rows) {
+        importIds.add(row.run.importId);
+        if (row.document === null) continue;
+        const document = toKohoCorpusSourceDocument(row.document, row.run);
+        documents.push({
+          documentId: document.documentId,
+          importId: document.importId,
+          importRunUpdatedAt: row.run.updatedAt,
+          packageType: document.packageType,
+          kind: document.kind,
+          publicationNumber: document.publicationNumber,
+          publicationDate: document.publicationDate,
+          inventionTitle: document.inventionTitle,
+          abstractText: document.abstractText,
+          claimsText: document.claimsText,
+          contentSha256: document.contentSha256,
+        });
+      }
+      return {
+        documents,
+        scannedImportRunCount: importIds.size,
+        scannedDocumentCount: documents.length,
+      };
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_corpus_unavailable");
+    }
+  },
+
+  async findExistingSourceKeys(watchId, sourceKeys) {
+    try {
+      assertPatentWatchId(watchId, "watch_not_configured");
+      const uniqueSourceKeys = Array.from(new Set(sourceKeys));
+      if (uniqueSourceKeys.some((sourceKey) => !SHA256_PATTERN.test(sourceKey))) {
+        patentWatchError("watch_internal_error");
+      }
+      if (uniqueSourceKeys.length === 0) return [];
+
+      const found = new Set<string>();
+      for (
+        let offset = 0;
+        offset < uniqueSourceKeys.length;
+        offset += PATENT_WATCH_SOURCE_KEY_BATCH_SIZE
+      ) {
+        const sourceKeyBatch = uniqueSourceKeys.slice(
+          offset,
+          offset + PATENT_WATCH_SOURCE_KEY_BATCH_SIZE,
+        );
+        const rows = await db
+          .select({ sourceKey: caseWatchFindings.sourceKey })
+          .from(caseWatchFindings)
+          .where(
+            and(
+              eq(caseWatchFindings.watchId, watchId),
+              inArray(caseWatchFindings.sourceKey, sourceKeyBatch),
+            ),
+          )
+          .orderBy(asc(caseWatchFindings.sourceKey));
+        for (const row of rows) found.add(row.sourceKey);
+      }
+      return Array.from(found).sort();
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async finalizeRunSuccess(input) {
+    try {
+      assertPatentWatchId(input.caseId, "case_not_found");
+      assertPatentWatchId(input.runId, "watch_run_not_found");
+      for (const count of Object.values(input.counts)) {
+        if (!Number.isSafeInteger(count) || count < 0) {
+          patentWatchError("watch_internal_error");
+        }
+      }
+      if (!PATENT_WATCH_ANALYSIS_MODES.has(input.analysisMode)) {
+        patentWatchError("watch_internal_error");
+      }
+      input.findings.forEach(assertPatentWatchFindingInsert);
+
+      return await db.transaction(async (tx) => {
+        const [context] = await tx
+          .select({ run: caseWatchRuns, setting: caseWatchSettings })
+          .from(caseWatchRuns)
+          .innerJoin(
+            caseWatchSettings,
+            eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
+          )
+          .where(
+            and(
+              eq(caseWatchRuns.runId, input.runId),
+              eq(caseWatchSettings.caseId, input.caseId),
+            ),
+          )
+          .for("update");
+        if (!context || toCaseWatchRun(context.run).status !== "running") {
+          patentWatchError("watch_run_not_found");
+        }
+
+        const insertedRows =
+          input.findings.length === 0
+            ? []
+            : await tx
+                .insert(caseWatchFindings)
+                .values(
+                  input.findings.map((finding) => ({
+                    watchId: context.setting.watchId,
+                    firstRunId: context.run.runId,
+                    sourceKey: finding.sourceKey,
+                    corpusDocumentId: finding.corpusDocumentId,
+                    packageType: finding.packageType,
+                    kind: finding.kind,
+                    publicationNumber: finding.publicationNumber,
+                    publicationDate: finding.publicationDate,
+                    inventionTitle: finding.inventionTitle,
+                    abstractPreview: finding.abstractPreview,
+                    lexicalScore: finding.lexicalScore,
+                    elementScore: finding.elementScore,
+                    semanticScore: finding.semanticScore,
+                    structuralScore: finding.structuralScore,
+                    riskLabel: finding.riskLabel,
+                    analysisJson: finding.analysisJson,
+                    analysisMode: finding.analysisMode,
+                    reviewStatus: "unreviewed",
+                  })),
+                )
+                .onConflictDoNothing({
+                  target: [
+                    caseWatchFindings.watchId,
+                    caseWatchFindings.sourceKey,
+                  ],
+                })
+                .returning({ analysisMode: caseWatchFindings.analysisMode });
+        const fallbackFindingCount = insertedRows.filter(
+          (row) => row.analysisMode === "fallback",
+        ).length;
+
+        const [completedRun] = await tx
+          .update(caseWatchRuns)
+          .set({
+            status: "completed",
+            completedAt: sql`now()`,
+            scannedImportRunCount: input.counts.scannedImportRunCount,
+            scannedDocumentCount: input.counts.scannedDocumentCount,
+            prefilteredCount: input.counts.prefilteredCount,
+            analyzedCount: input.counts.analyzedCount,
+            newFindingCount: insertedRows.length,
+            fallbackFindingCount,
+            analysisMode: input.analysisMode,
+            errorCode: null,
+          })
+          .where(
+            and(
+              eq(caseWatchRuns.runId, input.runId),
+              eq(caseWatchRuns.status, "running"),
+            ),
+          )
+          .returning();
+        if (!completedRun) patentWatchError("watch_run_not_found");
+
+        const [updatedSetting] = await tx
+          .update(caseWatchSettings)
+          .set({
+            cursorRunUpdatedAt: context.run.upperCursorRunUpdatedAt,
+            cursorImportId: context.run.upperCursorImportId,
+            updatedAt: sql`now()`,
+          })
+          .where(
+            and(
+              eq(caseWatchSettings.watchId, context.setting.watchId),
+              eq(caseWatchSettings.caseId, input.caseId),
+            ),
+          )
+          .returning({ watchId: caseWatchSettings.watchId });
+        if (!updatedSetting) patentWatchError("watch_unavailable");
+
+        return toCaseWatchRun(completedRun);
+      });
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async finalizeRunFailure(input) {
+    try {
+      assertPatentWatchId(input.caseId, "case_not_found");
+      assertPatentWatchId(input.runId, "watch_run_not_found");
+      if (!PATENT_WATCH_ERROR_CODES.has(input.errorCode)) {
+        patentWatchError("watch_internal_error");
+      }
+
+      return await db.transaction(async (tx) => {
+        const [context] = await tx
+          .select({ run: caseWatchRuns, setting: caseWatchSettings })
+          .from(caseWatchRuns)
+          .innerJoin(
+            caseWatchSettings,
+            eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
+          )
+          .where(
+            and(
+              eq(caseWatchRuns.runId, input.runId),
+              eq(caseWatchSettings.caseId, input.caseId),
+            ),
+          )
+          .for("update");
+        if (!context || toCaseWatchRun(context.run).status !== "running") {
+          patentWatchError("watch_run_not_found");
+        }
+
+        const [failedRun] = await tx
+          .update(caseWatchRuns)
+          .set({
+            status: "failed",
+            completedAt: sql`now()`,
+            errorCode: input.errorCode,
+          })
+          .where(
+            and(
+              eq(caseWatchRuns.runId, input.runId),
+              eq(caseWatchRuns.status, "running"),
+            ),
+          )
+          .returning();
+        if (!failedRun) patentWatchError("watch_run_not_found");
+        return toCaseWatchRun(failedRun);
+      });
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async getRun(caseId, runId) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      assertPatentWatchId(runId, "watch_run_not_found");
+      const [row] = await db
+        .select({ run: caseWatchRuns })
+        .from(caseWatchRuns)
+        .innerJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
+        )
+        .where(
+          and(
+            eq(caseWatchSettings.caseId, caseId),
+            eq(caseWatchRuns.runId, runId),
+          ),
+        )
+        .limit(1);
+      return row ? toCaseWatchRun(row.run) : null;
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async listRuns(caseId, limit) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      limit = normalizePatentWatchListLimit(limit);
+      const rows = await db
+        .select({ run: caseWatchRuns })
+        .from(caseWatchRuns)
+        .innerJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
+        )
+        .where(eq(caseWatchSettings.caseId, caseId))
+        .orderBy(
+          desc(caseWatchRuns.startedAt),
+          desc(caseWatchRuns.runId),
+        )
+        .limit(limit);
+      return rows.map((row) => toCaseWatchRun(row.run));
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async listFindings(caseId, options) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      const limit = normalizePatentWatchListLimit(options.limit);
+      if (options.runId !== undefined) {
+        assertPatentWatchId(options.runId, "watch_run_not_found");
+      }
+      const rows = await db
+        .select({ finding: caseWatchFindings })
+        .from(caseWatchFindings)
+        .innerJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.watchId, caseWatchFindings.watchId),
+        )
+        .where(
+          and(
+            eq(caseWatchSettings.caseId, caseId),
+            options.runId === undefined
+              ? undefined
+              : eq(caseWatchFindings.firstRunId, options.runId),
+          ),
+        )
+        .orderBy(
+          desc(caseWatchFindings.firstSeenAt),
+          desc(caseWatchFindings.findingId),
+        )
+        .limit(limit);
+      return rows.map((row) => toCaseWatchFinding(row.finding));
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async countUnreviewedFindings(caseId) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      const [row] = await db
+        .select({ count: sql<number>`count(*)::integer` })
+        .from(caseWatchFindings)
+        .innerJoin(
+          caseWatchSettings,
+          eq(caseWatchSettings.watchId, caseWatchFindings.watchId),
+        )
+        .where(
+          and(
+            eq(caseWatchSettings.caseId, caseId),
+            eq(caseWatchFindings.reviewStatus, "unreviewed"),
+          ),
+        );
+      const count = Number(row?.count ?? 0);
+      assertPatentWatchCount(count);
+      return count;
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
+  },
+
+  async updateFindingReviewStatus(caseId, findingId, reviewStatus) {
+    try {
+      assertPatentWatchId(caseId, "case_not_found");
+      assertPatentWatchId(findingId, "watch_finding_not_found");
+      if (!PATENT_WATCH_REVIEW_STATUSES.has(reviewStatus)) {
+        patentWatchError("watch_internal_error");
+      }
+
+      return await db.transaction(async (tx) => {
+        const [ownedFinding] = await tx
+          .select({ finding: caseWatchFindings })
+          .from(caseWatchFindings)
+          .innerJoin(
+            caseWatchSettings,
+            eq(caseWatchSettings.watchId, caseWatchFindings.watchId),
+          )
+          .where(
+            and(
+              eq(caseWatchSettings.caseId, caseId),
+              eq(caseWatchFindings.findingId, findingId),
+            ),
+          )
+          .for("update");
+        if (!ownedFinding) return null;
+
+        const [updated] = await tx
+          .update(caseWatchFindings)
+          .set({ reviewStatus })
+          .where(
+            and(
+              eq(caseWatchFindings.watchId, ownedFinding.finding.watchId),
+              eq(caseWatchFindings.findingId, findingId),
+            ),
+          )
+          .returning();
+        if (!updated) patentWatchError("watch_finding_not_found");
+        return toCaseWatchFinding(updated);
+      });
+    } catch (error) {
+      rethrowPatentWatchRepositoryError(error, "watch_unavailable");
+    }
   },
 };
 

@@ -21,6 +21,7 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 5. Claim Element Extractor
 6. Similarity Engine
 7. Risk Report Generator
+8. Patent Watch Service
 
 ## 最小データモデル
 ### Case
@@ -94,6 +95,15 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - matched_elements_json
 - risk_label
 
+### CaseWatchSetting / CaseWatchRun / CaseWatchFinding
+
+- `CaseWatchSetting`は案件ごとに1件だけ持ち、有効状態、監視開始日、前回成功runのcursor tupleを保存する
+- cursorは`koho_import_runs.updated_at`と`import_id`を同時にnullまたは同時にnon-nullで保持する
+- `CaseWatchRun`は開始transactionで監視開始日、base cursor、現在のupper cursorを固定し、running／completed／failedと処理件数を保存する
+- `CaseWatchFinding`はwatch内で公開番号とcontent digestから作る安定source identityをuniqueにし、比較結果と確認状態を保存する
+- findingと公開用API／CSV／HTMLにはraw XML／CSV、全文claims、source hash、entry path、DB／AI raw errorを含めない
+- 詳細契約は[出願後ウォッチングMVP仕様](10-patent-watching-mvp-spec.md)を参照する
+
 ## 処理流れ
 1. 特許案を解析して請求項と構成要素を抽出
 2. 検索式候補を生成
@@ -102,6 +112,18 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 5. 自身の請求項と既存文献要素を比較
 6. 総合スコアと説明文を生成
 7. レポート表示
+
+## 出願後ウォッチングの処理流れ
+
+1. ユーザーが案件のウォッチ設定と監視開始日を保存する
+2. 「今すぐ監視」で単一transactionを開始し、case／setting／重複running runを検証してbase／upper cursorを固定する
+3. 初回は監視開始日以降、以後はbaseより後かつupper以下のglobal corpus documentだけを読む
+4. 独立請求項（なければ全請求項）との決定的な語彙重なりで最大100件へ絞る
+5. 既存`screenPriorArt`で最大20件を選び、既存`analyzeOverlap`で比較する。AI失敗時は決定的fallbackを用いる
+6. finding insert、run complete、setting cursor更新を単一transactionで確定する。失敗時はrunをfailedにしcursorを進めない
+7. 案件画面、CSV、印刷用HTMLで新着確認候補とrun履歴を提供する
+
+corpus保存とupper固定は共通のtransaction-scoped advisory lockで直列化し、import timestampをmicrosecond精度で単調にする。この直列化とfixed upper cursorにより、run中に追加されたimportは今回の対象へ混入せず、次回runへ残る。案件pageの初期renderはwatch tableを直接参照せず、独立client sectionがwatch状態だけを取得するため、Production migration未適用でも既存フローを壊さない。
 
 ## ベース出願モード（FR-07）の処理流れ
 0. 案件作成時にベース出願モードを選択
@@ -119,3 +141,4 @@ PoC では **複雑な分散構成は不要** です。まずは以下で十分�
 - 公報package scheduler／自動取得／Production有効化（parser・保存基盤・管理者限定の手動取込APIまでは実装済み）
 - 代理人向けレビュー画面
 - semantic／vector corpus検索、advanced filter、pagination、公報詳細画面
+- 出願後ウォッチングのscheduler、自動取得、queue、外部通知、PDF binary生成

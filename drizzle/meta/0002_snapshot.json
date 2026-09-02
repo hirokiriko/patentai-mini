@@ -1,0 +1,1117 @@
+{
+  "id": "815386ef-aa79-4082-992e-76590e15cbfc",
+  "prevId": "620abc33-49dd-4a32-8306-0a2c43ab9721",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.case_watch_findings": {
+      "name": "case_watch_findings",
+      "schema": "",
+      "columns": {
+        "finding_id": {
+          "name": "finding_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "watch_id": {
+          "name": "watch_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_run_id": {
+          "name": "first_run_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "corpus_document_id": {
+          "name": "corpus_document_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "package_type": {
+          "name": "package_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_number": {
+          "name": "publication_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invention_title": {
+          "name": "invention_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "abstract_preview": {
+          "name": "abstract_preview",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lexical_score": {
+          "name": "lexical_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "element_score": {
+          "name": "element_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "structural_score": {
+          "name": "structural_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "risk_label": {
+          "name": "risk_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "analysis_json": {
+          "name": "analysis_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "analysis_mode": {
+          "name": "analysis_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "review_status": {
+          "name": "review_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unreviewed'"
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_watch_findings_watch_id_source_key_unique": {
+          "name": "case_watch_findings_watch_id_source_key_unique",
+          "columns": [
+            {
+              "expression": "watch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_watch_findings_watch_id_case_watch_settings_watch_id_fk": {
+          "name": "case_watch_findings_watch_id_case_watch_settings_watch_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "case_watch_settings",
+          "columnsFrom": [
+            "watch_id"
+          ],
+          "columnsTo": [
+            "watch_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_watch_findings_first_run_id_case_watch_runs_run_id_fk": {
+          "name": "case_watch_findings_first_run_id_case_watch_runs_run_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "case_watch_runs",
+          "columnsFrom": [
+            "first_run_id"
+          ],
+          "columnsTo": [
+            "run_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_watch_findings_corpus_document_id_koho_import_documents_document_id_fk": {
+          "name": "case_watch_findings_corpus_document_id_koho_import_documents_document_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "koho_import_documents",
+          "columnsFrom": [
+            "corpus_document_id"
+          ],
+          "columnsTo": [
+            "document_id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_findings_source_key_check": {
+          "name": "case_watch_findings_source_key_check",
+          "value": "\"case_watch_findings\".\"source_key\" ~ '^[0-9a-f]{64}$'"
+        },
+        "case_watch_findings_score_check": {
+          "name": "case_watch_findings_score_check",
+          "value": "\"case_watch_findings\".\"lexical_score\" between 0 and 1 and \"case_watch_findings\".\"element_score\" between 0 and 1 and \"case_watch_findings\".\"semantic_score\" between 0 and 1 and \"case_watch_findings\".\"structural_score\" between 0 and 1"
+        },
+        "case_watch_findings_analysis_mode_check": {
+          "name": "case_watch_findings_analysis_mode_check",
+          "value": "\"case_watch_findings\".\"analysis_mode\" in ('ai', 'fallback')"
+        },
+        "case_watch_findings_review_status_check": {
+          "name": "case_watch_findings_review_status_check",
+          "value": "\"case_watch_findings\".\"review_status\" in ('unreviewed', 'reviewed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.case_watch_runs": {
+      "name": "case_watch_runs",
+      "schema": "",
+      "columns": {
+        "run_id": {
+          "name": "run_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "watch_id": {
+          "name": "watch_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "monitoring_from_date": {
+          "name": "monitoring_from_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_cursor_run_updated_at": {
+          "name": "base_cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_cursor_import_id": {
+          "name": "base_cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upper_cursor_run_updated_at": {
+          "name": "upper_cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upper_cursor_import_id": {
+          "name": "upper_cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scanned_import_run_count": {
+          "name": "scanned_import_run_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "scanned_document_count": {
+          "name": "scanned_document_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "prefiltered_count": {
+          "name": "prefiltered_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "analyzed_count": {
+          "name": "analyzed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "new_finding_count": {
+          "name": "new_finding_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "fallback_finding_count": {
+          "name": "fallback_finding_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "analysis_mode": {
+          "name": "analysis_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "case_watch_runs_watch_id_case_watch_settings_watch_id_fk": {
+          "name": "case_watch_runs_watch_id_case_watch_settings_watch_id_fk",
+          "tableFrom": "case_watch_runs",
+          "tableTo": "case_watch_settings",
+          "columnsFrom": [
+            "watch_id"
+          ],
+          "columnsTo": [
+            "watch_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_runs_status_check": {
+          "name": "case_watch_runs_status_check",
+          "value": "\"case_watch_runs\".\"status\" in ('running', 'completed', 'failed')"
+        },
+        "case_watch_runs_base_cursor_pair_check": {
+          "name": "case_watch_runs_base_cursor_pair_check",
+          "value": "(\"case_watch_runs\".\"base_cursor_run_updated_at\" is null and \"case_watch_runs\".\"base_cursor_import_id\" is null) or (\"case_watch_runs\".\"base_cursor_run_updated_at\" is not null and \"case_watch_runs\".\"base_cursor_import_id\" is not null and \"case_watch_runs\".\"base_cursor_import_id\" > 0)"
+        },
+        "case_watch_runs_upper_cursor_pair_check": {
+          "name": "case_watch_runs_upper_cursor_pair_check",
+          "value": "(\"case_watch_runs\".\"upper_cursor_run_updated_at\" is null and \"case_watch_runs\".\"upper_cursor_import_id\" is null) or (\"case_watch_runs\".\"upper_cursor_run_updated_at\" is not null and \"case_watch_runs\".\"upper_cursor_import_id\" is not null and \"case_watch_runs\".\"upper_cursor_import_id\" > 0)"
+        },
+        "case_watch_runs_counts_check": {
+          "name": "case_watch_runs_counts_check",
+          "value": "\"case_watch_runs\".\"scanned_import_run_count\" >= 0 and \"case_watch_runs\".\"scanned_document_count\" >= 0 and \"case_watch_runs\".\"prefiltered_count\" >= 0 and \"case_watch_runs\".\"analyzed_count\" >= 0 and \"case_watch_runs\".\"new_finding_count\" >= 0 and \"case_watch_runs\".\"fallback_finding_count\" >= 0"
+        },
+        "case_watch_runs_analysis_mode_check": {
+          "name": "case_watch_runs_analysis_mode_check",
+          "value": "\"case_watch_runs\".\"analysis_mode\" in ('none', 'ai', 'fallback')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.case_watch_settings": {
+      "name": "case_watch_settings",
+      "schema": "",
+      "columns": {
+        "watch_id": {
+          "name": "watch_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "monitoring_from_date": {
+          "name": "monitoring_from_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cursor_run_updated_at": {
+          "name": "cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cursor_import_id": {
+          "name": "cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_watch_settings_case_id_unique": {
+          "name": "case_watch_settings_case_id_unique",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_watch_settings_case_id_cases_case_id_fk": {
+          "name": "case_watch_settings_case_id_cases_case_id_fk",
+          "tableFrom": "case_watch_settings",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_settings_cursor_pair_check": {
+          "name": "case_watch_settings_cursor_pair_check",
+          "value": "(\"case_watch_settings\".\"cursor_run_updated_at\" is null and \"case_watch_settings\".\"cursor_import_id\" is null) or (\"case_watch_settings\".\"cursor_run_updated_at\" is not null and \"case_watch_settings\".\"cursor_import_id\" is not null and \"case_watch_settings\".\"cursor_import_id\" > 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.cases": {
+      "name": "cases",
+      "schema": "",
+      "columns": {
+        "case_id": {
+          "name": "case_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "base_application_mode": {
+          "name": "base_application_mode",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "base_application_number": {
+          "name": "base_application_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.comparison_results": {
+      "name": "comparison_results",
+      "schema": "",
+      "columns": {
+        "result_id": {
+          "name": "result_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "draft_claim_id": {
+          "name": "draft_claim_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prior_doc_id": {
+          "name": "prior_doc_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lexical_score": {
+          "name": "lexical_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "structural_score": {
+          "name": "structural_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "matched_elements_json": {
+          "name": "matched_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "risk_label": {
+          "name": "risk_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "comparison_results_case_id_cases_case_id_fk": {
+          "name": "comparison_results_case_id_cases_case_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk": {
+          "name": "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "prior_art_documents",
+          "columnsFrom": [
+            "prior_doc_id"
+          ],
+          "columnsTo": [
+            "doc_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.draft_patents": {
+      "name": "draft_patents",
+      "schema": "",
+      "columns": {
+        "draft_id": {
+          "name": "draft_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'main'"
+        },
+        "source_file_path": {
+          "name": "source_file_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parsed_text": {
+          "name": "parsed_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "extracted_claims_json": {
+          "name": "extracted_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "draft_patents_case_id_cases_case_id_fk": {
+          "name": "draft_patents_case_id_cases_case_id_fk",
+          "tableFrom": "draft_patents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.koho_import_documents": {
+      "name": "koho_import_documents",
+      "schema": "",
+      "columns": {
+        "document_id": {
+          "name": "document_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "import_id": {
+          "name": "import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalized_entry_path": {
+          "name": "normalized_entry_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parse_status": {
+          "name": "parse_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_number": {
+          "name": "publication_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "application_number": {
+          "name": "application_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "registration_number": {
+          "name": "registration_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "registration_date": {
+          "name": "registration_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invention_title": {
+          "name": "invention_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "abstract_text": {
+          "name": "abstract_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_text": {
+          "name": "claims_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "applicants_json": {
+          "name": "applicants_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ipc_json": {
+          "name": "ipc_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fi_json": {
+          "name": "fi_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parse_issues_json": {
+          "name": "parse_issues_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_metadata_json": {
+          "name": "source_metadata_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content_sha256": {
+          "name": "content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "koho_import_documents_import_id_normalized_entry_path_unique": {
+          "name": "koho_import_documents_import_id_normalized_entry_path_unique",
+          "columns": [
+            {
+              "expression": "import_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "normalized_entry_path",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "koho_import_documents_import_id_koho_import_runs_import_id_fk": {
+          "name": "koho_import_documents_import_id_koho_import_runs_import_id_fk",
+          "tableFrom": "koho_import_documents",
+          "tableTo": "koho_import_runs",
+          "columnsFrom": [
+            "import_id"
+          ],
+          "columnsTo": [
+            "import_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.koho_import_runs": {
+      "name": "koho_import_runs",
+      "schema": "",
+      "columns": {
+        "import_id": {
+          "name": "import_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "package_type": {
+          "name": "package_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_sha256": {
+          "name": "source_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "package_status": {
+          "name": "package_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "document_count": {
+          "name": "document_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amendment_count": {
+          "name": "amendment_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nested_st26_count": {
+          "name": "nested_st26_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "counts_json": {
+          "name": "counts_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issues_json": {
+          "name": "issues_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "koho_import_runs_package_type_source_sha256_unique": {
+          "name": "koho_import_runs_package_type_source_sha256_unique",
+          "columns": [
+            {
+              "expression": "package_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_sha256",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.prior_art_documents": {
+      "name": "prior_art_documents",
+      "schema": "",
+      "columns": {
+        "doc_id": {
+          "name": "doc_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_no": {
+          "name": "publication_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "abstract": {
+          "name": "abstract",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_text": {
+          "name": "claims_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_csv_row_json": {
+          "name": "source_csv_row_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "normalized_elements_json": {
+          "name": "normalized_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "prior_art_documents_case_id_cases_case_id_fk": {
+          "name": "prior_art_documents_case_id_cases_case_id_fk",
+          "tableFrom": "prior_art_documents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.search_query_sets": {
+      "name": "search_query_sets",
+      "schema": "",
+      "columns": {
+        "query_set_id": {
+          "name": "query_set_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "broad_query": {
+          "name": "broad_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "balanced_query": {
+          "name": "balanced_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "narrow_query": {
+          "name": "narrow_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rationale_json": {
+          "name": "rationale_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "search_query_sets_case_id_cases_case_id_fk": {
+          "name": "search_query_sets_case_id_cases_case_id_fk",
+          "tableFrom": "search_query_sets",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

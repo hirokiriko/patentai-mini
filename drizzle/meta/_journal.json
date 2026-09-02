@@ -15,6 +15,13 @@
       "when": 1787810352336,
       "tag": "0001_regular_black_bolt",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788308618345,
+      "tag": "0002_calm_red_ghost",
+      "breakpoints": true
     }
   ]
 }

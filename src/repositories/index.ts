@@ -13,9 +13,13 @@ export {
   comparisonResultRepo,
   kohoImportRepo,
   kohoCorpusRepo,
+  patentWatchRepo,
 } from "./drizzle";
 
-export { KohoImportRepositoryValidationError } from "./types";
+export {
+  KohoImportRepositoryValidationError,
+  PatentWatchRepositoryError,
+} from "./types";
 
 export type {
   Case,
@@ -35,4 +39,21 @@ export type {
   ComparisonResultRepository,
   KohoImportRepository,
   KohoCorpusRepository,
+  PatentWatchRepositoryErrorCode,
+  PatentWatchRepository,
 } from "./types";
+
+export type {
+  CaseWatchSetting,
+  CaseWatchRun,
+  CaseWatchFinding,
+  PatentWatchCursor,
+  PatentWatchCorpusDocument,
+  PatentWatchCorpusBatch,
+  PatentWatchRunStart,
+  PatentWatchFindingInsert,
+  PatentWatchRunCounts,
+  PatentWatchRunSuccessInput,
+  PatentWatchRunFailureInput,
+  PatentWatchRunRepository,
+} from "@/lib/patent-watch/types";
