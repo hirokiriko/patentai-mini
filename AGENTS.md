@@ -434,6 +434,10 @@ environment variables as part of ordinary Cloud implementation or verification.
   range and monitoring-date snapshot fixed when that run starts. Do not reread
   the mutable setting date for an active run. Advance the setting cursor only
   when the success finalization transaction completes.
+- Before rejecting a new run as already active, recover a `running` row older
+  than five minutes as `failed` / `watch_internal_error` in the same start
+  transaction. Do not advance its cursor. The five-minute threshold must stay
+  above the synchronous route's 120-second budget.
 - Keep corpus persistence and watch upper-cursor capture on their shared
   transaction-scoped advisory lock. Preserve Postgres microsecond precision
   when assigning and comparing `updated_at`; millisecond-only comparison can

@@ -16,7 +16,7 @@
 
 初回有効化ではcursorを先取りしない。監視開始日を変更しても既存findingを削除しない。
 
-cursorは`koho_import_runs.updated_at ASC, import_id ASC`のtupleである。timestamp比較はPostgresのmicrosecond精度を保つ。run開始時の単一repository transactionでcaseとsettingを検証し、同watchのrunning runがないことを確認し、監視開始日、現在のcursorを`baseCursor`、現在存在する最大tupleを`upperCursor`としてrunning rowへ固定する。run開始後にsettingの監視開始日が変更されても、実行中runの対象範囲は開始時snapshotから変えない。
+cursorは`koho_import_runs.updated_at ASC, import_id ASC`のtupleである。timestamp比較はPostgresのmicrosecond精度を保つ。run開始時の単一repository transactionでcaseとsettingを検証し、5分以内に開始された同watchのrunning runがないことを確認し、監視開始日、現在のcursorを`baseCursor`、現在存在する最大tupleを`upperCursor`としてrunning rowへ固定する。5分を超えて残っているrunning runは、120秒の同期route budgetを超えて中断されたrunとして同transaction内で`failed`／`watch_internal_error`へ回収し、cursorを変更しない。その後に新しいrunを開始できる。run開始後にsettingの監視開始日が変更されても、実行中runの対象範囲は開始時snapshotから変えない。
 
 対象import runは`baseCursor`より大きく固定`upperCursor`以下とする。初回は全runを候補とし、documentの`publicationDate >= monitoringFromDate`を追加条件とする。corpus保存とupper固定は共通のtransaction-scoped advisory lockで直列化する。importの`updated_at`はlock取得後に、wall clockと既存最大timestamp + 1 microsecondの大きい方を設定する。これによりupper固定前に進行中のimportは今回に含まれ、固定後のimportは必ず次回へ残る。corpusに新しいimportがない場合もcompleted runを保存し、AIを呼ばない。
 
@@ -75,7 +75,7 @@ fallbackをAI成功として扱わない。AI／fallbackとも「拒絶される
 
 ### `case_watch_runs`
 
-setting参照、`running | completed | failed`、run開始時の監視開始日snapshot、base／upper cursor、started/completed timestamp、scanned import run／document、prefiltered、analyzed、新規finding、fallback findingの各count、`none | ai | fallback`、stable error codeを保存する。同一watchのrunning重複はtransactionで拒否する。
+setting参照、`running | completed | failed`、run開始時の監視開始日snapshot、base／upper cursor、started/completed timestamp、scanned import run／document、prefiltered、analyzed、新規finding、fallback findingの各count、`none | ai | fallback`、stable error codeを保存する。同一watchのactiveなrunning重複はtransactionで拒否する。同期route budgetを十分に超えた5分超のrunning runは、次回開始transactionでcursorを進めずfailedへ回収する。
 
 ### `case_watch_findings`
 

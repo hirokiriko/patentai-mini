@@ -102,6 +102,33 @@ describe("PatentWatchRepository public contract", () => {
     );
   });
 
+  it("recovers stale running runs without advancing the cursor", async () => {
+    const repository = await source(REPOSITORY_URL);
+    const startRun = methodBlock(repository, "startRun", "findDocumentsForRun");
+    const recoveryIndex = startRun.indexOf(".update(caseWatchRuns)");
+    const recoveryEndIndex = startRun.indexOf("const [runningRow]", recoveryIndex);
+    const activeRunCheckIndex = startRun.indexOf(
+      ".select({ runId: caseWatchRuns.runId })",
+    );
+    const recovery = startRun.slice(recoveryIndex, recoveryEndIndex);
+
+    expect(repository).toContain(
+      "const PATENT_WATCH_STALE_RUN_TIMEOUT_MINUTES = 5;",
+    );
+    expect(recoveryIndex).toBeGreaterThanOrEqual(0);
+    expect(recoveryEndIndex).toBeGreaterThan(recoveryIndex);
+    expect(activeRunCheckIndex).toBeGreaterThan(recoveryIndex);
+    expect(recovery).toContain("caseWatchRuns.watchId");
+    expect(recovery).toContain('eq(caseWatchRuns.status, "running")');
+    expect(recovery).toContain("lt(");
+    expect(recovery).toContain("caseWatchRuns.startedAt");
+    expect(recovery).toContain("interval '1 minute'");
+    expect(recovery).toContain('status: "failed"');
+    expect(recovery).toContain("completedAt: sql`now()`");
+    expect(recovery).toContain('errorCode: "watch_internal_error"');
+    expect(startRun).not.toMatch(/tx\s*\.update\(caseWatchSettings\)/);
+  });
+
   it("serializes import persistence with upper capture and assigns a monotonic cursor", async () => {
     const repository = await source(REPOSITORY_URL);
     const savePlanStart = repository.indexOf("async savePlan");
@@ -156,7 +183,14 @@ describe("PatentWatchRepository public contract", () => {
     const failure = methodBlock(repository, "finalizeRunFailure", "getRun");
 
     expect(success).toContain("db.transaction(async (tx)");
+    expect(success.indexOf(".from(caseWatchSettings)")).toBeLessThan(
+      success.indexOf(".from(caseWatchRuns)"),
+    );
+    expect(success.match(/\.for\("update"\)/g)).toHaveLength(2);
     expect(success).toMatch(/tx\s*\.insert\(caseWatchFindings\)/);
+    expect(success.indexOf('run.status !== "running"')).toBeLessThan(
+      success.indexOf(".insert(caseWatchFindings)"),
+    );
     expect(success).toContain("onConflictDoNothing");
     expect(success).toContain('status: "completed"');
     expect(success).toMatch(/tx\s*\.update\(caseWatchSettings\)/);
@@ -165,6 +199,10 @@ describe("PatentWatchRepository public contract", () => {
     );
 
     expect(failure).toContain("db.transaction(async (tx)");
+    expect(failure.indexOf(".from(caseWatchSettings)")).toBeLessThan(
+      failure.indexOf(".from(caseWatchRuns)"),
+    );
+    expect(failure.match(/\.for\("update"\)/g)).toHaveLength(2);
     expect(failure).toContain('status: "failed"');
     expect(failure).not.toMatch(/tx\s*\.update\(caseWatchSettings\)/);
   });

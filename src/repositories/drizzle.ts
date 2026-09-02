@@ -329,6 +329,10 @@ const PATENT_WATCH_ERROR_CODES = new Set<PatentWatchErrorCode>([
 ]);
 const PATENT_WATCH_LIST_LIMIT_MAX = 100;
 const PATENT_WATCH_SOURCE_KEY_BATCH_SIZE = 1_000;
+// The synchronous route has a 120-second budget. Runs older than five minutes
+// cannot still be served by that request and are safe to recover without
+// advancing the watch cursor.
+const PATENT_WATCH_STALE_RUN_TIMEOUT_MINUTES = 5;
 // Serializes corpus persistence and watch upper-cursor capture. The import
 // timestamp is assigned only after this transaction-scoped lock is acquired.
 const KOHO_IMPORT_WATCH_CURSOR_LOCK_ID = 70_000_001;
@@ -1120,6 +1124,24 @@ export const patentWatchRepo: PatentWatchRepository = {
         const setting = toCaseWatchSetting(settingRow);
         if (!setting.enabled) patentWatchError("watch_disabled");
 
+        await tx
+          .update(caseWatchRuns)
+          .set({
+            status: "failed",
+            completedAt: sql`now()`,
+            errorCode: "watch_internal_error",
+          })
+          .where(
+            and(
+              eq(caseWatchRuns.watchId, setting.watchId),
+              eq(caseWatchRuns.status, "running"),
+              lt(
+                caseWatchRuns.startedAt,
+                sql`now() - (${PATENT_WATCH_STALE_RUN_TIMEOUT_MINUTES}::integer * interval '1 minute')`,
+              ),
+            ),
+          );
+
         const [runningRow] = await tx
           .select({ runId: caseWatchRuns.runId })
           .from(caseWatchRuns)
@@ -1386,21 +1408,27 @@ export const patentWatchRepo: PatentWatchRepository = {
       input.findings.forEach(assertPatentWatchFindingInsert);
 
       return await db.transaction(async (tx) => {
-        const [context] = await tx
-          .select({ run: caseWatchRuns, setting: caseWatchSettings })
+        const [settingRow] = await tx
+          .select()
+          .from(caseWatchSettings)
+          .where(eq(caseWatchSettings.caseId, input.caseId))
+          .for("update");
+        if (!settingRow) patentWatchError("watch_run_not_found");
+        const setting = toCaseWatchSetting(settingRow);
+
+        const [runRow] = await tx
+          .select()
           .from(caseWatchRuns)
-          .innerJoin(
-            caseWatchSettings,
-            eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
-          )
           .where(
             and(
               eq(caseWatchRuns.runId, input.runId),
-              eq(caseWatchSettings.caseId, input.caseId),
+              eq(caseWatchRuns.watchId, setting.watchId),
             ),
           )
           .for("update");
-        if (!context || toCaseWatchRun(context.run).status !== "running") {
+        if (!runRow) patentWatchError("watch_run_not_found");
+        const run = toCaseWatchRun(runRow);
+        if (run.status !== "running") {
           patentWatchError("watch_run_not_found");
         }
 
@@ -1411,8 +1439,8 @@ export const patentWatchRepo: PatentWatchRepository = {
                 .insert(caseWatchFindings)
                 .values(
                   input.findings.map((finding) => ({
-                    watchId: context.setting.watchId,
-                    firstRunId: context.run.runId,
+                    watchId: setting.watchId,
+                    firstRunId: run.runId,
                     sourceKey: finding.sourceKey,
                     corpusDocumentId: finding.corpusDocumentId,
                     packageType: finding.packageType,
@@ -1468,13 +1496,13 @@ export const patentWatchRepo: PatentWatchRepository = {
         const [updatedSetting] = await tx
           .update(caseWatchSettings)
           .set({
-            cursorRunUpdatedAt: context.run.upperCursorRunUpdatedAt,
-            cursorImportId: context.run.upperCursorImportId,
+            cursorRunUpdatedAt: run.upperRunUpdatedAt,
+            cursorImportId: run.upperImportId,
             updatedAt: sql`now()`,
           })
           .where(
             and(
-              eq(caseWatchSettings.watchId, context.setting.watchId),
+              eq(caseWatchSettings.watchId, setting.watchId),
               eq(caseWatchSettings.caseId, input.caseId),
             ),
           )
@@ -1497,21 +1525,27 @@ export const patentWatchRepo: PatentWatchRepository = {
       }
 
       return await db.transaction(async (tx) => {
-        const [context] = await tx
-          .select({ run: caseWatchRuns, setting: caseWatchSettings })
+        const [settingRow] = await tx
+          .select()
+          .from(caseWatchSettings)
+          .where(eq(caseWatchSettings.caseId, input.caseId))
+          .for("update");
+        if (!settingRow) patentWatchError("watch_run_not_found");
+        const setting = toCaseWatchSetting(settingRow);
+
+        const [runRow] = await tx
+          .select()
           .from(caseWatchRuns)
-          .innerJoin(
-            caseWatchSettings,
-            eq(caseWatchSettings.watchId, caseWatchRuns.watchId),
-          )
           .where(
             and(
               eq(caseWatchRuns.runId, input.runId),
-              eq(caseWatchSettings.caseId, input.caseId),
+              eq(caseWatchRuns.watchId, setting.watchId),
             ),
           )
           .for("update");
-        if (!context || toCaseWatchRun(context.run).status !== "running") {
+        if (!runRow) patentWatchError("watch_run_not_found");
+        const run = toCaseWatchRun(runRow);
+        if (run.status !== "running") {
           patentWatchError("watch_run_not_found");
         }
 
