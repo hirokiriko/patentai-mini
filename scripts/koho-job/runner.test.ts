@@ -817,6 +817,7 @@ describe("koho one-shot job lifecycle", () => {
 
   it("uses the finite timeout without retrying an unknown import", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime("2026-09-03T00:00:00Z");
     const fixture = defaultDependencies();
     fixture.dependencies.now = () => Date.now();
     fixture.dependencies.sendImport.mockImplementationOnce(
