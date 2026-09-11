@@ -24,6 +24,35 @@ to Azure Container Apps through GitHub Actions.
 
 ## Current State
 
+### Issue #86 execution checkpoint (2026-09-12 JST)
+
+The latest Issue #86 `LOCAL_AUTONOMOUS_EXECUTION_V2` body authorizes this
+one-time Local run: OpenAI, Document Intelligence, Storage and PostgreSQL
+recovery; UAMI image pull and ACR admin disablement; Incident #79 completion;
+PR #85 Squash Merge with the expected head and normal deploy; then real DB,
+AI and browser verification using the public fictional TXT samples and scoped
+cleanup. The initial estimate must be at most JPY 800; total additional cost,
+including tax and previously incurred usage, must stay within JPY 1,000.
+
+At this checkpoint, the existing local SDK credential chain and silent OS
+broker did not authenticate; the available browser requires sign-in. Production
+changes, paid smoke calls and new test cases in this run are zero. Recovery,
+merge, deployment and real-runtime verification remain incomplete. Record
+further measured results in Issue #86; neither this documentation nor earlier
+successful observations establish the current production state.
+
+Keep the Local secret process boundary and one-writer rule in `AGENTS.md`.
+The Issue #86 pause remains until its acceptance conditions are met. Before
+removing it, confirm there is no other incident stop; retain other Issues'
+stop labels. Do not
+use documentation work as a new prerequisite for recovery, or substitute
+GitHub Actions OIDC for the independent authorized Local/DB management path.
+
+### Earlier recorded state
+
+The observations below predate this checkpoint and are not evidence that
+Issue #86's recovery or current acceptance checks have passed.
+
 - The Postgres schema from `drizzle/0000_loud_forge.sql` has been applied to
   the Azure PostgreSQL database.
 - The Japan East Azure OpenAI account exists, but chat model deployment is

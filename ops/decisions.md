@@ -232,3 +232,23 @@
   - run中の新規importは次回へ確実に残り、failed runはcursorを進めない
   - 同一内容の再取込や再実行でfindingを重複保存しない
   - scheduler、自動取得、外部通知、Production migration、Azure resource／secret／runtime設定は別承認とする
+
+## DR-0016: Issue #86だけに限定したLocal自律実行
+
+- Date: 2026-09-12
+- Status: Accepted（今回限定の実行方針。実行完了を意味しない）
+- Extends: DR-0010、DR-0011。既存の一般承認条件を維持する
+- Decision:
+  - Issue #86最新本文の`LOCAL_AUTONOMOUS_EXECUTION_V2`に明記された復旧、
+    merge、deploy、実DB・実AI・実画面検証、限定cleanupをLocal単一writerが
+    自律実行する。通常工程の既承認操作をユーザーへ戻さない
+  - secretはLocal processのmemory、非表示pipe、必要時のowner-only一時領域
+    だけで扱う。Cloudは本文で許可されたmetadataと公開可能な検証記録に限定し、
+    Local-only source、diff、logを渡さない。公開証跡に値を含めない
+  - 費用・時間・回数上限、preflight、停止条件、automation pause、完了判定は
+    Issue本文に従う。migration、watch、公報投入、外部J-PlatPat自動化、
+    顧客data受入れは対象外とする
+- Consequence:
+  - 恒久的な一般権限は拡大しない。各工程の完了・未完了はIssue／PRに実測で
+    記録し、この判断から本番復旧や検証成功を推定しない
+  - 文書は同じ作業の必要修正PRで反映し、本番復旧前の待機条件にしない

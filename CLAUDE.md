@@ -45,6 +45,13 @@ or individual account information into Issues, pull requests, commits, logs, or
 agent documents. Use classifications and PASS/FAIL results without reproducing
 the detected value.
 
+For Issue #86 only, follow the one-time Local autonomous execution exception in
+`AGENTS.md` and the latest `LOCAL_AUTONOMOUS_EXECUTION_V2` Issue body. Its
+approval covers only its stated phases and limits. Preserve the Local secret
+process boundary, metadata-only Cloud participation, sole Local writer,
+automation pause and measured completion gate. Do not request routine approvals
+already supplied there. This is not standing authorization for future tasks.
+
 ## Current stack
 
 - Next.js 16 / React 19 with App Router
