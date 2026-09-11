@@ -34,10 +34,12 @@ AI and browser verification using the public fictional TXT samples and scoped
 cleanup. The initial estimate must be at most JPY 800; total additional cost,
 including tax and previously incurred usage, must stay within JPY 1,000.
 
-At this checkpoint, the existing local SDK credential chain and silent OS
-broker did not authenticate; the available browser requires sign-in. Production
-changes, paid smoke calls and new test cases in this run are zero. Recovery,
-merge, deployment and real-runtime verification remain incomplete. Record
+At this checkpoint, common preflight has not passed and Phase 1 has not started.
+Detailed environment findings remain Local; public records contain only the
+unmet acceptance classification. Production changes, paid smoke calls and new
+test cases in this run are zero. Recovery, merge, deployment and real-runtime
+verification remain incomplete. Do not broaden the existing procedure to resolve
+an unmet prerequisite without the decision required by Issue #86. Record
 further measured results in Issue #86; neither this documentation nor earlier
 successful observations establish the current production state.
 
