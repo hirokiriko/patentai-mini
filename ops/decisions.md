@@ -233,7 +233,7 @@
   - 同一内容の再取込や再実行でfindingを重複保存しない
   - scheduler、自動取得、外部通知、Production migration、Azure resource／secret／runtime設定は別承認とする
 
-## DR-0016: Issue #86だけに限定したLocal自律実行
+## DR-0017: Issue #86だけに限定したLocal自律実行
 
 - Date: 2026-09-12
 - Status: Accepted（今回限定の実行方針。実行完了を意味しない）
@@ -242,6 +242,13 @@
   - Issue #86最新本文の`LOCAL_AUTONOMOUS_EXECUTION_V2`に明記された復旧、
     merge、deploy、実DB・実AI・実画面検証、限定cleanupをLocal単一writerが
     自律実行する。通常工程の既承認操作をユーザーへ戻さない
+  - OWNER承認済み`DB_RUNTIME_CREDENTIAL_BOUNDARY_V1`は専用アプリLOGINへの
+    必要object権限の直接付与と、既存管理LOGINを維持したpassword交換・別系統の
+    安全保管に限定する。アプリへ管理者／所有者roleを継承させず、所有権移転、
+    共有／PUBLIC ACL変更、RLSやschema変更を行わない。正式Issue統合・関連DB
+    条項整合と既存preflightの成立後に実行し、承認受領を実施済みと扱わない
+  - 承認済みの限定例外は既存PUBLIC由来TEMPORARYの残存だけを許容する。
+    直接付与、永続DDL、一時schema経由の権限昇格、共有ACL変更は許可しない
   - secretはLocal processのmemory、非表示pipe、必要時のowner-only一時領域
     だけで扱う。Cloudは本文で許可されたmetadataと公開可能な検証記録に限定し、
     Local-only source、diff、logを渡さない。公開証跡に値を含めない

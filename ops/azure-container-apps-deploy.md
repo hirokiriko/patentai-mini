@@ -34,6 +34,17 @@ AI and browser verification using the public fictional TXT samples and scoped
 cleanup. The initial estimate must be at most JPY 800; total additional cost,
 including tax and previously incurred usage, must stay within JPY 1,000.
 
+The OWNER has also approved `DB_RUNTIME_CREDENTIAL_BOUNDARY_V1`: separate a
+least-privilege application login, retain the management login while rotating
+its password, and verify retrieval from separate approved secure storage. Do
+not pass management membership, ownership or broad privileges to the app. This
+is an execution contract, not a statement of the environment's current roles
+or a completed rotation. Formal Issue integration and unchanged preflight gates
+still precede production writes; detailed results remain in the Local boundary.
+The approved narrow exception permits existing PUBLIC-derived TEMPORARY access
+without a direct grant. Permanent DDL, escalation through temporary schemas and
+changes to shared ACLs remain prohibited.
+
 At this checkpoint, common preflight has not passed and Phase 1 has not started.
 Detailed environment findings remain Local; public records contain only the
 unmet acceptance classification. Production changes, paid smoke calls and new
@@ -48,7 +59,7 @@ The Issue #86 pause remains until its acceptance conditions are met. Before
 removing it, confirm there is no other incident stop; retain other Issues'
 stop labels. Do not
 use documentation work as a new prerequisite for recovery, or substitute
-GitHub Actions OIDC for the independent authorized Local/DB management path.
+GitHub Actions OIDC for the authorized Local/DB management path.
 
 ### Earlier recorded state
 

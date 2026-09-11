@@ -308,13 +308,29 @@ Local root is the sole writer; auxiliary reviews are read-only. Do not return
 already-authorized routine operations or approvals to the user, or require
 Issues #81/#83 to resume as a prerequisite.
 
-Existing Azure CLI/SDK/OS-store authentication and independent DB administration
+Existing Azure CLI/SDK/OS-store authentication and legitimate DB administration
 credentials may be used inside the authorized Local process. Secret values,
 password verifiers and authenticated URLs must stay in process memory,
 non-displayed pipes, or owner-only temporary storage. Never expose them through
 argv, shell history, raw errors, model-visible output, Cloud, GitHub or logs.
 Cloud participation is limited to the metadata and public-safe verification
 records permitted by Issue #86; Local-only source, diffs and logs stay Local.
+
+The OWNER-approved `DB_RUNTIME_CREDENTIAL_BOUNDARY_V1` branch separates one
+least-privilege application login from the retained management login. Grant only
+the existing application's required object privileges directly; never inherit
+administrator/owner roles, grant broad privileges or transfer ownership to the
+application. Rotate the management password while retaining LOGIN, privileges
+and ownership. Store the new management credential separately in the existing
+OS credential store or an already-approved management vault, and verify retrieval
+before retiring the old password. Do not require a different administrator name
+or disable the management login. Shared/PUBLIC ACLs, RLS, default privileges,
+schema and production data remain outside the permitted change. Integrate the
+approved branch into Issue #86 and align #80/#79 before production changes;
+document preparation and the additional approval do not establish completion.
+The approved exception retains only existing PUBLIC-derived TEMPORARY access:
+do not grant it directly or change shared ACLs. Permanent DDL and privilege
+escalation through temporary schemas remain prohibited.
 
 Task-specific standard tooling is permitted within that Issue's limits, without
 OS-wide configuration or project package/lockfile changes. Its cost, time and
