@@ -219,6 +219,7 @@ export async function extractClaims(
           system: SYSTEM_PROMPT,
           prompt: trimmed,
           maxRetries: 1,
+          maxOutputTokens: 8192,
           timeout: 35000,
         });
 

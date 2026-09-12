@@ -24,6 +24,48 @@ to Azure Container Apps through GitHub Actions.
 
 ## Current State
 
+### Issue #86 execution checkpoint (2026-09-12 JST)
+
+The latest Issue #86 `LOCAL_AUTONOMOUS_EXECUTION_V2` body authorizes this
+one-time Local run: OpenAI, Document Intelligence, Storage and PostgreSQL
+recovery; UAMI image pull and ACR admin disablement; Incident #79 completion;
+PR #85 Squash Merge with the expected head and normal deploy; then real DB,
+AI and browser verification using the public fictional TXT samples and scoped
+cleanup. The initial estimate must be at most JPY 800; total additional cost,
+including tax and previously incurred usage, must stay within JPY 1,000.
+
+The OWNER has also approved `DB_RUNTIME_CREDENTIAL_BOUNDARY_V1`: separate a
+least-privilege application login, retain the management login while rotating
+its password, and verify retrieval from separate approved secure storage. Do
+not pass management membership, ownership or broad privileges to the app. This
+is an execution contract, not a statement of the environment's current roles
+or a completed rotation. Formal Issue integration and unchanged preflight gates
+still precede production writes; detailed results remain in the Local boundary.
+The approved narrow exception permits existing PUBLIC-derived TEMPORARY access
+without a direct grant. Permanent DDL, escalation through temporary schemas and
+changes to shared ACLs remain prohibited.
+
+At this checkpoint, common preflight has not passed and Phase 1 has not started.
+Detailed environment findings remain Local; public records contain only the
+unmet acceptance classification. Production changes, paid smoke calls and new
+test cases in this run are zero. Recovery, merge, deployment and real-runtime
+verification remain incomplete. Do not broaden the existing procedure to resolve
+an unmet prerequisite without the decision required by Issue #86. Record
+further measured results in Issue #86; neither this documentation nor earlier
+successful observations establish the current production state.
+
+Keep the Local secret process boundary and one-writer rule in `AGENTS.md`.
+The Issue #86 pause remains until its acceptance conditions are met. Before
+removing it, confirm there is no other incident stop; retain other Issues'
+stop labels. Do not
+use documentation work as a new prerequisite for recovery, or substitute
+GitHub Actions OIDC for the authorized Local/DB management path.
+
+### Earlier recorded state
+
+The observations below predate this checkpoint and are not evidence that
+Issue #86's recovery or current acceptance checks have passed.
+
 - The Postgres schema from `drizzle/0000_loud_forge.sql` has been applied to
   the Azure PostgreSQL database.
 - The Japan East Azure OpenAI account exists, but chat model deployment is
@@ -42,7 +84,8 @@ to Azure Container Apps through GitHub Actions.
 - `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and
   `AZURE_DOCUMENT_INTELLIGENCE_KEY` are required for scanned PDF and OCR/layout
   fallback.
-- `/api/health` has been verified with `database.ok=true`.
+- The earlier `/api/health` verification with `database.ok=true` predates the
+  Issue #84 contract below; it does not verify that change in Production.
 - Minimal AI SDK calls to deployments `patentai-gpt54` and
   `patentai-gpt54-mini` returned `OK`.
 - Local Docker is not available in the Codex workspace.
@@ -58,6 +101,46 @@ to Azure Container Apps through GitHub Actions.
   such as `Azure Container Apps Contributor` on the app/resource group or an
   equivalent least-privilege custom role. Without this, image build/push can
   succeed while the deploy step fails at `az containerapp update`.
+
+## Health readiness contract (Issue #84)
+
+The implemented `GET /api/health` contract keeps the Node.js runtime and returns
+only the following JSON, with `Cache-Control: no-store` in both cases:
+
+- HTTP 200: `{"ok":true,"status":"ok","database":{"ok":true,"type":"postgres"}}`
+- HTTP 503: `{"ok":false,"status":"unavailable","database":{"ok":false,"type":"postgres"}}`
+
+The readiness check uses a dedicated `pg.Client` per request and only the fixed
+SQL `SELECT 1 AS ok`. It reads `DATABASE_URL` at request time, connects once,
+executes at most one query without retries, and ends the client after success or
+failure. A missing configuration creates no client. The connection settings are
+`connectionTimeoutMillis: 3000`, `statement_timeout: 3000`, and
+`query_timeout: 3000`; `statement_timeout` applies only to that client session.
+Success requires exactly one result row with `ok === 1` and successful cleanup.
+Missing configuration, connection/query errors, timeouts, invalid results,
+driver error events, and cleanup failures produce the same HTTP 503 response.
+
+The check does not read business tables, case counts, or migration state, cache
+DB results, or connect to the DB during build. It does not expose connection
+details, environment values, case data, or exceptions in responses or logs.
+Shared Drizzle connections and pool settings are unchanged.
+
+This code change is not deployed to Production. Issue #84 verification uses
+fake clients; real DB, real AI, UI flow, and Production behavior remain
+unverified for this change. Keep the Issue #79 automation pause in effect: a
+branch push or Draft PR does not authorize Draft removal, merge, a Production
+workflow dispatch, or resuming automated workers/verifiers. A future merge to
+`main` may trigger the existing Azure deployment workflow and requires the
+separate incident/deployment gate to be resolved first.
+
+At an approved future deployment, confirm the intended use of the Production
+probe and its handling of HTTP 503. This DB-dependent readiness response is not
+approval to adopt it as a liveness probe; no probe is added by this change.
+Verify the minimal JSON, HTTP status, and no-store behavior in that separately
+authorized environment. Before merge, rollback uses an ordinary correction
+commit on the branch; after a future merge, use a revert PR for the squash
+commit. No DB schema/data or Azure configuration rollback is required by this
+code change.
 
 ## GitHub Actions
 

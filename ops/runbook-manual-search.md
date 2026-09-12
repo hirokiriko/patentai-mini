@@ -1,8 +1,23 @@
 # Runbook: Manual Search with J-PlatPat
 
 ## この Runbook の役割
+請求項抽出・検索式生成・先行文献スクリーニング・詳細比較のAI呼出しは、
+各試行の出力を8,192 tokensまでに制限する。この上限は当該4処理の全providerに
+適用され、再試行時も維持される。上限で出力が途切れた場合も既存のfallback／
+エラー処理を使い、fallbackを実AI成功と扱わない。入力量、モデル単価、再試行・
+実行回数による総費用は別途確認する。外部J-PlatPatの手動工程は維持する。
+
 J-PlatPat は無料で提供される特許情報検索サービスです。citeturn0search1turn2search11
 本 PoC ではここを**人間が操作する外部工程**として扱います。
+
+## Issue #86の今回限定検証
+
+`LOCAL_AUTONOMOUS_EXECUTION_V2`では、公開・架空TXTから作る新規案件で
+本サービスの実DB・実AI・実画面をLocal Codexが検証する。J-PlatPat検索の
+自動操作、顧客・実案件dataの受入れ、公報投入は対象外とする。この外部検索
+工程のユーザー操作を今回の完了条件に追加せず、本サービス内の検証成功を
+J-PlatPat調査完了と扱わない。秘密境界、回数・費用上限、対象限定cleanupと
+実測による完了判定は、`AGENTS.md`の今回限定規則とIssue #86本文に従う。
 
 ## 手順
 1. システムで生成された `broad / balanced / narrow` の検索式を確認する
