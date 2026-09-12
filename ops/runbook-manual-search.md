@@ -1,6 +1,12 @@
 # Runbook: Manual Search with J-PlatPat
 
 ## この Runbook の役割
+請求項抽出・検索式生成・先行文献スクリーニング・詳細比較のAI呼出しは、
+各試行の出力を8,192 tokensまでに制限する。この上限は当該4処理の全providerに
+適用され、再試行時も維持される。上限で出力が途切れた場合も既存のfallback／
+エラー処理を使い、fallbackを実AI成功と扱わない。入力量、モデル単価、再試行・
+実行回数による総費用は別途確認する。外部J-PlatPatの手動工程は維持する。
+
 J-PlatPat は無料で提供される特許情報検索サービスです。citeturn0search1turn2search11
 本 PoC ではここを**人間が操作する外部工程**として扱います。
 

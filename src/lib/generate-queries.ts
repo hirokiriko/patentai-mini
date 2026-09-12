@@ -323,6 +323,7 @@ export async function generateQueries(
           system: SYSTEM_PROMPT,
           prompt,
           maxRetries: 1,
+          maxOutputTokens: 8192,
           timeout: 35000,
         });
         return result.object;
