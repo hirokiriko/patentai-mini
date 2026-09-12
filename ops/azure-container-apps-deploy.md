@@ -84,7 +84,8 @@ Issue #86's recovery or current acceptance checks have passed.
 - `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and
   `AZURE_DOCUMENT_INTELLIGENCE_KEY` are required for scanned PDF and OCR/layout
   fallback.
-- `/api/health` has been verified with `database.ok=true`.
+- The earlier `/api/health` verification with `database.ok=true` predates the
+  Issue #84 contract below; it does not verify that change in Production.
 - Minimal AI SDK calls to deployments `patentai-gpt54` and
   `patentai-gpt54-mini` returned `OK`.
 - Local Docker is not available in the Codex workspace.
@@ -100,6 +101,46 @@ Issue #86's recovery or current acceptance checks have passed.
   such as `Azure Container Apps Contributor` on the app/resource group or an
   equivalent least-privilege custom role. Without this, image build/push can
   succeed while the deploy step fails at `az containerapp update`.
+
+## Health readiness contract (Issue #84)
+
+The implemented `GET /api/health` contract keeps the Node.js runtime and returns
+only the following JSON, with `Cache-Control: no-store` in both cases:
+
+- HTTP 200: `{"ok":true,"status":"ok","database":{"ok":true,"type":"postgres"}}`
+- HTTP 503: `{"ok":false,"status":"unavailable","database":{"ok":false,"type":"postgres"}}`
+
+The readiness check uses a dedicated `pg.Client` per request and only the fixed
+SQL `SELECT 1 AS ok`. It reads `DATABASE_URL` at request time, connects once,
+executes at most one query without retries, and ends the client after success or
+failure. A missing configuration creates no client. The connection settings are
+`connectionTimeoutMillis: 3000`, `statement_timeout: 3000`, and
+`query_timeout: 3000`; `statement_timeout` applies only to that client session.
+Success requires exactly one result row with `ok === 1` and successful cleanup.
+Missing configuration, connection/query errors, timeouts, invalid results,
+driver error events, and cleanup failures produce the same HTTP 503 response.
+
+The check does not read business tables, case counts, or migration state, cache
+DB results, or connect to the DB during build. It does not expose connection
+details, environment values, case data, or exceptions in responses or logs.
+Shared Drizzle connections and pool settings are unchanged.
+
+This code change is not deployed to Production. Issue #84 verification uses
+fake clients; real DB, real AI, UI flow, and Production behavior remain
+unverified for this change. Keep the Issue #79 automation pause in effect: a
+branch push or Draft PR does not authorize Draft removal, merge, a Production
+workflow dispatch, or resuming automated workers/verifiers. A future merge to
+`main` may trigger the existing Azure deployment workflow and requires the
+separate incident/deployment gate to be resolved first.
+
+At an approved future deployment, confirm the intended use of the Production
+probe and its handling of HTTP 503. This DB-dependent readiness response is not
+approval to adopt it as a liveness probe; no probe is added by this change.
+Verify the minimal JSON, HTTP status, and no-store behavior in that separately
+authorized environment. Before merge, rollback uses an ordinary correction
+commit on the branch; after a future merge, use a revert PR for the squash
+commit. No DB schema/data or Azure configuration rollback is required by this
+code change.
 
 ## GitHub Actions
 

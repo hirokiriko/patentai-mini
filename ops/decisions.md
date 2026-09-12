@@ -233,6 +233,19 @@
   - 同一内容の再取込や再実行でfindingを重複保存しない
   - scheduler、自動取得、外部通知、Production migration、Azure resource／secret／runtime設定は別承認とする
 
+## DR-0016: healthは情報を含まない固定SQLのreadiness応答とする
+
+- Date: 2026-09-08
+- Status: Accepted
+- Context:
+  - Issue #84: 全案件の読取と接続情報・例外の返却を廃止し、HTTPだけでもDB異常を判別できる契約が必要である
+- Decision:
+  - requestごとの`pg.Client`で固定`SELECT 1 AS ok`だけを実行し、接続・SQLを3000msで制限して成功・失敗とも終了処理する。共有DB接続・業務tableへ触れない
+  - 正常はHTTP 200、設定欠損・接続／SQL／timeout／結果不正・driver error event・終了失敗はHTTP 503とし、固定の最小JSONと`Cache-Control: no-store`だけを返す。接続情報・環境値・案件情報・例外を出力しない
+- Consequence:
+  - 製品コードの実装とProduction未反映を区別し、fake client検証を実DB・実AI・実画面の確認とみなさない
+  - Issue #79のpauseを維持し、将来反映時にProduction probeの用途と503の扱いを確認する。liveness採用、merge、deploy、Incident停止解除は今回の承認に含めない
+
 ## DR-0017: Issue #86だけに限定したLocal自律実行
 
 - Date: 2026-09-12
@@ -249,6 +262,10 @@
     条項整合と既存preflightの成立後に実行し、承認受領を実施済みと扱わない
   - 承認済みの限定例外は既存PUBLIC由来TEMPORARYの残存だけを許容する。
     直接付与、永続DDL、一時schema経由の権限昇格、共有ACL変更は許可しない
+  - OWNER承認済み`MANAGED_IDENTITY_PROVIDER_PREREQUISITE_V1`は、既存対象の
+    `Microsoft.ManagedIdentity`登録だけを既存権限で行う。付随するMicrosoft
+    provider用アプリ追加を含み、他namespace／権限拡大／network変更はしない。
+    元の消費時間を保ち、当該承認待ちだけ除外して残り時間で再開する
   - secretはLocal processのmemory、非表示pipe、必要時のowner-only一時領域
     だけで扱う。Cloudは本文で許可されたmetadataと公開可能な検証記録に限定し、
     Local-only source、diff、logを渡さない。公開証跡に値を含めない

@@ -46,6 +46,7 @@ export async function screenPriorArt(
       })),
     }),
     maxRetries: 2,
+    maxOutputTokens: 8192,
     timeout: 35000,
     ...(providerOptions ? { providerOptions } : {}),
   });
@@ -159,6 +160,7 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
       })),
     }),
     maxRetries: 2,
+    maxOutputTokens: 8192,
     timeout: 35000,
     ...(providerOptions ? { providerOptions } : {}),
   });
