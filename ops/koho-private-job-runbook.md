@@ -123,6 +123,21 @@ OWNER は 2026-09-12 に、従来の「削除反映まで含む worst-case 500 �
 500 円を超える残余リスクを承認した。新 head の CI 成功と開始前確認後、最大 1 回だけ作成する。
 これは 500 円の保証ではなく、元の worst-case 条件が証明されたとの記録には使わない。
 
+**2026-09-12 実行後追補:** 承認済み Phase 0 の最大 1 回は消費済みであり、再実行は未承認。
+専用 Network／DNS 5 resource の作成・読み戻し後、API `2025-07-01` の Environment PUT は
+`ManagedEnvironmentSubnetDelegationError`（ACA subnet の `Microsoft.App/environments` delegation 要求）で
+HTTP 400 拒否となった。`workloadProfiles: null`、保存ログなし、internal、非 delegated `/23` を
+明示しても、core CLI の `--enable-workload-profiles false` 相当だけでは今回 v1 作成を確認できなかった。
+再 PUT や delegation 追加はせず、専用 Network／DNS と Resource Group を削除し、追加残留 0 を確認した。
+初回費用は未確定で、元の 414 円 reserve を保持し、無料・0 円とは扱わない。
+
+現行の [CLI extension の明示例](https://learn.microsoft.com/en-us/cli/azure/containerapp/env?view=azure-cli-latest#az-containerapp-env-create)
+には `--environment-mode ConsumptionOnly` があり、[実装](https://github.com/Azure/azure-cli-extensions/blob/main/src/containerapp/azext_containerapp/containerapp_env_decorator.py)
+は `properties.environmentMode` を設定する。[client](https://github.com/Azure/azure-cli-extensions/blob/main/src/containerapp/azext_containerapp/_clients.py)
+の API は `2025-10-02-preview` である。この経路は未実行の修正候補で、今回の原因解消や v1 作成成功を
+保証しない。新しい明示承認、通算回数を保全した journal／controller、再計算を整えるまで、本節および
+後続の初回作成手順を再実行しない。full の 4,500 円 gate と全体 5,000 円上限は変更しない。
+
 対象は本 Issue 専用の一時 Resource Group、Japan East の VNet、delegation なし／`/23` 以上の
 ACA subnet、別の PostgreSQL delegated subnet、PostgreSQL 用 Private DNS zone 1 個／VNet link
 1 個（auto-registration なし）、必要最小 NSG、internal Consumption-only (v1) environment である。
