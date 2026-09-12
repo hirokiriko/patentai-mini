@@ -137,7 +137,7 @@ HTTP 400 拒否となった。`workloadProfiles: null`、保存ログなし、in
 の API は `2025-10-02-preview` である。
 
 **2026-09-12 追加承認:** OWNER はこの明示 mode 経路による **追加 1 回だけ、初回を含め通算最大 2 回**と、
-必要な公開記録更新を承認した。2 回目は Network／DNS 5 resource の作成・読み戻し成功後、raw REST PUT
+必要な公開記録更新を承認した。2 回目の計画は Network／DNS 5 resource の作成・読み戻し成功後、raw REST PUT
 で API `2025-10-02-preview`、`properties.environmentMode: "ConsumptionOnly"` を明示する。
 `workloadProfiles: null`、ログ destination／config の JSON null、internal、zoneRedundant=false、
 非 delegated ACA `/23` 以上は維持する。core の `--enable-workload-profiles false`／null だけへ戻さず、
@@ -151,11 +151,33 @@ controller は初回・2 回目の記録を合算し、既に通算 2 回なら 
 
 初回の未確定費 414 円 reserve と追加 1 回の 414 円を合わせて **828 円**を確保する。
 下記 414 円見積りと 500 円への接近による停止判断は各試行に適用し、2 回分の予算確保とは分ける。
-新しい 1 回分を内包し初回失敗分を含まない full 条件付き草稿 3,840 円へ、初回の 414 円だけを加えると
-4,254 円となる。3,840 円へ 828 円を加えると新しい 1 回分を二重計上する。いずれも full gate PASS ではなく、
-初回費用・共有費用・実 inventory／通信量・cleanup の再計算が必要である。実費判明時は reserve と実費の
+2 回目開始前には、その 1 回分を内包する full 条件付き草稿 3,840 円へ、初回の 414 円だけを加えた
+4,254 円を置いた。これは当時の計画値で、下記の 2 回目停止後の再開 gate に転用しない。
+費用・共有費用・実 inventory／通信量・cleanup の再計算が必要である。実費判明時は reserve と実費の
 重複を除き、未確定分や超過分を隠さない。full の **4,500 円 gate**と全体 **5,000 円上限**は維持する。
-新 head の CI、初回残留 0、開始前確認、追加承認と通算回数を守る controller の検証後だけ 2 回目を開始する。
+新 head の CI、初回残留 0、開始前確認、追加承認と通算回数を守る controller の検証後に 2 回目を開始した。
+
+**2026-09-12 2 回目の結果・現在の停止状態:** 07:02:12 UTC に開始し、Resource Group の作成要求を
+処理する段階で `LocalOperationFailed` により停止した。RG 作成の応答は記録されず、送信結果は不明である。
+Network／Environment の PUT には到達せず、Preview API の実効性は未検証のままである。
+cleanup 処理と独立した読み取り確認では専用 RG／Environment が GET 404、subscription inventory の
+開始前後の ID 集合も一致した。07:13 UTC 時点で追加 resource や既存対象の欠落は観測されていない。
+Activity Log の対象イベントは 0 件だが、反映遅延があるため未送信の証明にはしない。
+実行 journal の `cleanup_unknown` と不明な送信結果を保全し、cleanup 全体を PASS に書き換えない。
+
+**承認済み通算 2 回を消費済み、残る作成枠は 0 回。** 記録保存失敗を理由に回数を戻したり、作成要求を
+再送したりしない。初回・2 回目の費用は未確定で、Cost Management 読取も HTTP 429 のため、各 414 円、
+計 828 円を引き続き確保する。請求未反映や対象不在を 0 円と扱わない。
+将来さらに 1 回を内包する同じ full 草稿 3,840 円を使う場合、今回までの 828 円を別に置くと 4,668 円で、
+4,500 円開始 gate を超える。追加回数の承認だけでは full を開始できず、費用照合と計画再計算が必要である。
+
+Local では、保存完了前に memory 上の journal を更新する不具合と、HTTP error の `error:null` 等で元の
+HTTP status が失われる不具合を再現した。どちらも実際の停止原因と断定しない。元 controller／journal を
+保持したまま、保存成功後の state 反映、最大 2 秒の局所 I/O retry、安全な例外分類、HTTP status 保全を
+修正・検証した。Windows の実ファイルロックと owner 専用 ACL の確認、HTTP 異常系の offline 7 件は PASS。
+保存 helper は実行済 controller に組み込んでおらず、これらは再作成の許可や Azure 成功の証拠ではない。
+次は read-only の履歴・費用・残留照合を行い、一意に識別した対象が現れた場合だけ既承認の限定 cleanup を
+行う。新規作成は追加の明示承認と費用条件の解消まで禁止し、Issue は blocked、PR は Draft を維持する。
 
 対象は本 Issue 専用の一時 Resource Group、Japan East の VNet、delegation なし／`/23` 以上の
 ACA subnet、別の PostgreSQL delegated subnet、PostgreSQL 用 Private DNS zone 1 個／VNet link
@@ -1557,7 +1579,7 @@ head SHA: <public commit SHA>
 image exact-SHA一致: PASS / FAIL
 Phase 0承認済み条件付き414円見積り／残余リスク受容: 確認済み / 未確認
 Phase 0追加1回の承認記録／別journal／新規名: 確認済み / 未確認
-Phase 0通算実行回数（最大2、初回1を含む）: 1 / 2
+Phase 0通算実行回数（最大2、初回1を含む）: 2 / 2（残る作成枠0）
 Phase 0初回414円＋追加414円reserve／二重計上除外: PASS / FAIL / UNKNOWN
 Phase 0明示environmentMode=ConsumptionOnly／API2025-10-02-preview: 確認済み / 未確認
 Phase 0早期停止条件／metrics確認: PASS / FAIL / UNKNOWN / 未実行
