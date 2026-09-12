@@ -45,6 +45,22 @@ or individual account information into Issues, pull requests, commits, logs, or
 agent documents. Use classifications and PASS/FAIL results without reproducing
 the detected value.
 
+For Issue #86 only, follow the one-time Local autonomous execution exception in
+`AGENTS.md` and the latest `LOCAL_AUTONOMOUS_EXECUTION_V2` Issue body. Its
+approval covers only its stated phases and limits. Preserve the Local secret
+process boundary, metadata-only Cloud participation, sole Local writer,
+automation pause and measured completion gate. Do not request routine approvals
+already supplied there. This is not standing authorization for future tasks.
+
+Its OWNER-approved `DB_RUNTIME_CREDENTIAL_BOUNDARY_V1` addition permits the
+bounded application/management login separation described in `AGENTS.md`.
+The application must receive only required object privileges, never management
+role membership or ownership. Retain management LOGIN when rotating its password
+and verify separate safe storage of its replacement credential. Production
+execution follows formal Issue integration and the unchanged preflight gates.
+Only existing PUBLIC-derived TEMPORARY access may remain under the approved
+exception; do not grant it directly, permit escalation or change shared ACLs.
+
 ## Current stack
 
 - Next.js 16 / React 19 with App Router

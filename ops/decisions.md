@@ -245,3 +245,34 @@
 - Consequence:
   - 製品コードの実装とProduction未反映を区別し、fake client検証を実DB・実AI・実画面の確認とみなさない
   - Issue #79のpauseを維持し、将来反映時にProduction probeの用途と503の扱いを確認する。liveness採用、merge、deploy、Incident停止解除は今回の承認に含めない
+
+## DR-0017: Issue #86だけに限定したLocal自律実行
+
+- Date: 2026-09-12
+- Status: Accepted（今回限定の実行方針。実行完了を意味しない）
+- Extends: DR-0010、DR-0011。既存の一般承認条件を維持する
+- Decision:
+  - Issue #86最新本文の`LOCAL_AUTONOMOUS_EXECUTION_V2`に明記された復旧、
+    merge、deploy、実DB・実AI・実画面検証、限定cleanupをLocal単一writerが
+    自律実行する。通常工程の既承認操作をユーザーへ戻さない
+  - OWNER承認済み`DB_RUNTIME_CREDENTIAL_BOUNDARY_V1`は専用アプリLOGINへの
+    必要object権限の直接付与と、既存管理LOGINを維持したpassword交換・別系統の
+    安全保管に限定する。アプリへ管理者／所有者roleを継承させず、所有権移転、
+    共有／PUBLIC ACL変更、RLSやschema変更を行わない。正式Issue統合・関連DB
+    条項整合と既存preflightの成立後に実行し、承認受領を実施済みと扱わない
+  - 承認済みの限定例外は既存PUBLIC由来TEMPORARYの残存だけを許容する。
+    直接付与、永続DDL、一時schema経由の権限昇格、共有ACL変更は許可しない
+  - OWNER承認済み`MANAGED_IDENTITY_PROVIDER_PREREQUISITE_V1`は、既存対象の
+    `Microsoft.ManagedIdentity`登録だけを既存権限で行う。付随するMicrosoft
+    provider用アプリ追加を含み、他namespace／権限拡大／network変更はしない。
+    元の消費時間を保ち、当該承認待ちだけ除外して残り時間で再開する
+  - secretはLocal processのmemory、非表示pipe、必要時のowner-only一時領域
+    だけで扱う。Cloudは本文で許可されたmetadataと公開可能な検証記録に限定し、
+    Local-only source、diff、logを渡さない。公開証跡に値を含めない
+  - 費用・時間・回数上限、preflight、停止条件、automation pause、完了判定は
+    Issue本文に従う。migration、watch、公報投入、外部J-PlatPat自動化、
+    顧客data受入れは対象外とする
+- Consequence:
+  - 恒久的な一般権限は拡大しない。各工程の完了・未完了はIssue／PRに実測で
+    記録し、この判断から本番復旧や検証成功を推定しない
+  - 文書は同じ作業の必要修正PRで反映し、本番復旧前の待機条件にしない
