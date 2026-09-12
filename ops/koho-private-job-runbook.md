@@ -10,7 +10,7 @@ private staging PostgreSQL DB で公報取込の成立性を測定するため�
 
 ```text
 private Blob の 1 object
-  -> internal workload profiles environment 上の ingress なし／manual trigger の one-shot Job
+  -> internal Consumption-only (v1) environment 上の ingress なし／manual trigger の one-shot Job
   -> 127.0.0.1 だけで待ち受ける Next.js child
   -> POST /api/admin/koho-imports
   -> parseKohoPackage
@@ -95,12 +95,14 @@ package size を実質的に示す場合、公開記録では数値を伏せて�
   Container App の console や shell は開かない。
 - 本 Issue 専用 resource を既存 resource から一意に区別する naming／tag 計画と削除期限が
   ある。
-- dedicated VNet、2 つの delegated subnet、Private DNS／VNet link、必要最小 NSG、internal
-  Container Apps environment、private PostgreSQL の構成と必須通信を一意に確定できる。
+- dedicated VNet、delegation なしの ACA subnet、別の PostgreSQL delegated subnet、Private DNS／
+  VNet link、必要最小 NSG、internal Consumption-only (v1) environment の Phase 0 構成と必須通信を
+  一意に確定できる。private PostgreSQL／ACR／Blob の追加通信は full 開始前に確定する。
 - exact head の public-safe one-shot DB bootstrap と ACR repository-scoped push 経路が test
   済みで、credential の即時失効・削除手順まで確定している。
-- Phase 0 は第4.1節の 500 円／60 分条件、full provisioning は Phase 0 を含む第4.2節の
-  4,500 円条件を満たしている。full plan の実測 `R` は Phase 0 後に確定する。
+- Phase 0 は第4.1節の承認済み条件付き 414 円見積り、早期停止・削除条件を満たしている。
+  full provisioning は Phase 0 を含む第4.2節の 4,500 円条件を別途満たしている。
+  managed LB ごとの実測 rule 数と処理量は Phase 0 後に照合する。
 
 Azure 認証 session を利用できない場合、credential の作成・共有・再発行、権限変更、
 Azure CLI／extension／browser connector 等の install へ迂回しない。既存の承認済み経路
@@ -116,40 +118,80 @@ Azure resource 作成前の条件であり、承認済みの限定 code 修正�
 
 ### 4.1 Phase 0: network cost discovery
 
-Issue #75 本文は、managed Standard Load Balancer の課金対象 rule 数を確認するため、full
-provisioning 前の限定作成を承認している。Phase 0 単独の最大 60 分利用と即時削除までの
-worst-case が、税・為替・課金表示遅延・削除反映の余裕を含め **500 円以下**の場合だけ開始する。
-作成する resource に Issue 識別 tag と開始から 60 分以内の削除期限を付ける。
+OWNER は 2026-09-12 に、従来の「削除反映まで含む worst-case 500 円以下」の開始条件を、
+下記の **414 円の条件付き運用見積りと早期削除手順**へ変更すること、および Phase 0 が
+500 円を超える残余リスクを承認した。新 head の CI 成功と開始前確認後、最大 1 回だけ作成する。
+これは 500 円の保証ではなく、元の worst-case 条件が証明されたとの記録には使わない。
 
-対象は本 Issue 専用の一時 Resource Group、Japan East の VNet、Container Apps 用 subnet、
-PostgreSQL delegated subnet、PostgreSQL 用 Private DNS zone／VNet link、必要最小 NSG、
-internal／ingress なしの Container Apps environment、および必須の最小 monitoring resource
-だけである。built-in `Consumption` profile のみを使用する。この Phase では ACR token、image
-push、Blob、PostgreSQL server／database／user、Job、package upload を作成・実行しない。
+対象は本 Issue 専用の一時 Resource Group、Japan East の VNet、delegation なし／`/23` 以上の
+ACA subnet、別の PostgreSQL delegated subnet、PostgreSQL 用 Private DNS zone 1 個／VNet link
+1 個（auto-registration なし）、必要最小 NSG、internal Consumption-only (v1) environment である。
+App／Job は 0 件、外部 ingress なし、保存 log は `none` とし、Log Analytics／有料 monitoring
+destination を作らない。標準 metadata／metrics を Local から読む。ACR token、image push、
+Blob、PostgreSQL server／database／user、Job、package upload はこの Phase で作成・実行しない。
 
-環境作成直後に managed resource inventory、Standard Load Balancer 数、課金対象 rule 数 `R`、
-public IP、monitoring を metadata だけで確定し、第4.2節の full plan を現行価格で再計算する。
-Phase 0 の actual／未確定分を含め 4,500 円以下なら同じ専用 resource を再利用する。`R` または
-料金が不明、4,500 円超過、想定外 resource がある場合は開始から 60 分以内に target-only cleanup
-し、`codex:blocked` で停止する。作成後に `R` を測定できることを、Phase 0 自身の 500 円 gate の
-代用にはしない。費用不明は PASS と扱わない。
+[Managed resources](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks#managed-resources)
+に基づく固定課金対象は Standard Load Balancer 2 個（各 5 rule 以下）と egress Standard IPv4
+1 個である。2026-09-12 の Japan East／JPY／Consumption の公式 Retail Prices API 単価を使い、
+無料枠・割引を使わず次の条件付き見積りを置く。
 
-2026-09-12（JST）に [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)、
-[Container Apps managed resources](https://learn.microsoft.com/en-us/azure/container-apps/custom-virtual-networks#managed-resources)、
-[Load Balancer pricing](https://azure.microsoft.com/en-us/pricing/details/load-balancer/)、
+| 項目 | 見積りに置く量 | 税前円 |
+| --- | --- | ---: |
+| Standard LB | 2 台 × 2 課金時間 × 3.983 円 | 15.9320 |
+| Standard IPv4 | 1 個 × 2 課金時間 × 0.7966 円 | 1.5932 |
+| Private DNS zone | 2 課金日、月 79.66 円を 28 日で按分 | 5.6900 |
+| LB 処理量 | 2 台の合計 100 GB × 0.7966 円 | 79.6600 |
+| 有料転送 | 10 GB × 19.1184 円 | 191.1840 |
+| Private DNS query | 100 万件 × 63.728 円 | 63.7280 |
+| 小計 | | 357.7872 |
+| 税 10%、価格差・為替等 5%、1 円切上げ | | **414 円** |
+
+500 円との差は 86 円である。2 課金時間・100 GB・10 GB・100 万 query は公式保証や強制制限
+ではなく、OWNER が受容した見積り前提である。NSG は宛先を制限しても byte 数を制限しない。
+LB／IP の部分時間切上げと DNS の日単位課金を含めるが、管理通信量、metrics の欠損・遅延、
+削除完了時刻には保証がない。課金の完全な上限保証と、予算内に収める運用責任を区別する。
+全体 **5,000 円の絶対上限**、full 開始の **4,500 円 gate**は維持する。Phase 0 の超過分も
+全体台帳へ含め残り実行枠を減らし、本承認だけで full plan を PASS にしない。Azure の強制課金
+停止や削除時刻の保証がないため全体予算にも残余リスクはあるが、上限引上げや超過見込みの
+実行は承認されていない。
+
+停止・削除は次の順序で実施する。
+
+1. 対象 scope、読取・作成・限定削除権限、時計、対象の一意性を開始前に確認する。開始時刻を
+   `T0` とし、Issue tag と `T0 + 60 分` の削除期限を付ける。
+2. 作成直後に managed RG、LB 2 個／各 5 rule 以下、IP 1 個、monitoring なしを照合する。
+   不一致、料金不明、想定外 resource があれば直ちに親 Environment の削除を開始する。
+   managed child は直接改変・削除せず連動削除を追跡する。
+3. 利用可能になった標準 metrics を 1 分間隔で確認する。LB `ByteCount` は 2 台・両方向を合算し、
+   Private DNS は `QueryVolume` を使う。欠損を 0 にせず、作成完了後 5 分でも必要な値・転送量の
+   範囲を確認できなければ削除へ移る。請求表示を即時停止装置とみなさない。
+4. LB 処理 10 GB、有料転送 1 GB、DNS 10 万 query のいずれかを観測した時点で新規処理を停止し
+   削除を開始する。これは見積り前提の 10% の運用閾値であり、強制遮断ではない。転送量を独立に
+   分類できなければ観測 byte を高い単価側にも保守計上し、それでも判定不能なら停止する。
+5. full の料金・必要通信を `T0 + 20 分` までに確定できなければ削除を開始し、`T0 + 60 分` までの
+   削除確認を目標とする。削除開始後は full へ戻さず、blind 再作成しない。全 full gate が成立した
+   場合だけ同じ専用 resource を再利用する。
+6. 見積りが 500 円に近づく、想定超過、作成／削除滞留、正確な追跡不能の場合は新規作成を禁止し
+   target-only cleanup を続ける。5,000 円に達し得る場合も cleanup だけを行う。無関係 resource、
+   Production、subscription budget を変更しない。
+7. 削除遅延を 0 円にせず、残った対象、経過時間、未確定費を Local で追跡する。結果不明の対象を
+   残留 0 と報告せず `codex:blocked` とする。
+
+価格・監視の根拠は [Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices)、
+[LB pricing](https://azure.microsoft.com/en-us/pricing/details/load-balancer/)、
 [IP pricing](https://azure.microsoft.com/en-us/pricing/details/ip-addresses/)、
-[Private DNS pricing](https://azure.microsoft.com/en-us/pricing/details/dns/) を再確認した。
-workload profiles environment の managed rule 数の作成前上限と削除反映までの費用を含む
-500 円以内の根拠は未確定で、Phase 0 費用 gate は **UNKNOWN／未実行**である。単価の確認だけを
-PASS と扱わず、LB／IP の部分時間切上げ、DNS の日単位課金も次の見積りへ含める。
-[logging options](https://learn.microsoft.com/en-us/azure/container-apps/log-options) の
-`Don't save logs` を選ぶ構成では Log Analytics workspace は必須ではない。
+[DNS pricing](https://azure.microsoft.com/en-us/pricing/details/dns/)、
+[Bandwidth pricing](https://azure.microsoft.com/en-us/pricing/details/bandwidth/)、
+[logging options](https://learn.microsoft.com/en-us/azure/container-apps/log-options)、
+[LB metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-network-loadbalancers-metrics)、
+[Private DNS metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-network-privatednszones-metrics)、
+[Azure spending limit](https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/spending-limit) とする。
 
 ### 4.2 full provisioning 前の確定 envelope
 
 network 追補前の既報 **4,100 円**は再利用しない。full provisioning の直前に、次の全項目を含む
 worst-case を Portal の現行価格表示または公式 calculator で再計算し、開始 gate
-**4,500 円以下**を満たすことを確認する。固有 resource 名、課金 ID、単価明細は公開しない。
+**4,500 円以下**を満たすことを確認する。固有 resource 名、課金 ID、個別契約の単価明細は公開しない。
 
 費用台帳は Issue #81 本文の定義に合わせる。`A75` は Issue #75 の現在までの actual と請求反映待ち
 の合計で、将来費用を含めない。`U75` は現在存在する Issue #75 resource の今後の利用から cleanup
@@ -163,14 +205,14 @@ Phase 0 の現在までの actual／請求反映待ちは `A75`、現在存在�
 | 項目 | 見積り上限／構成 |
 | --- | --- |
 | region | Japan East |
-| Container Apps Job | workload profiles v2 environment の built-in `Consumption` profile のみ。2 vCPU／4 GiB、ephemeral 8 GiB。Dedicated／Flex profile は作成しない |
+| Container Apps Job | internal Consumption-only (v1) environment の consumption plan のみ。2 vCPU／4 GiB、ephemeral 8 GiB。workload profile は指定・作成しない |
 | package execution | calibration、JPA、JPB、許可され得る full package 再実行を最大 4 回、各最大 120 分 |
 | migration／observer | 必須 execution の compute／log／DB 利用を再計算後の envelope に織り込み、別枠で加算しない |
 | PostgreSQL | Burstable B2s 以下、storage 32 GB 固定、HA なし、上限を超え得る storage autogrow なし |
 | private Blob | 全 object 合計 10 GB 以下、保持 48 時間以下 |
 | ACR | 一意に照合した既存 ACR（本 Issue 専用 repository のみ）を使用。Issue 専用 repository／image は保持 3 日以下、image 合計 10 GB 以下。token は有効期限 24 時間以内、push／digest 照合直後に disable、token／scope map は不要になり次第削除。registry 自体は作成・削除しない |
-| private network | 専用 VNet、workload profiles environment subnet、PostgreSQL delegated subnet、必要最小 NSG、Private DNS zone／VNet link |
-| Container Apps managed network | internal workload profiles environment の Standard Load Balancer 1 個、egress 用 Standard static public IP 1 個、処理 data 往復合計 260 GB 以下、保持 72 時間以下。Phase 0 作成直後の inventory と課金対象 rule 数 `R` を full plan に反映する |
+| private network | 専用 VNet、delegation なし／`/23` 以上の ACA subnet、PostgreSQL delegated subnet、必要最小 NSG、Private DNS zone／VNet link |
+| Container Apps managed network | internal Consumption-only (v1) の Standard LB 2 個（各 5 rule 以下）、egress Standard static public IP 1 個、保持 72 時間以下。Phase 0 の inventory と各 LB の課金 rule 数、2 台・両方向の処理 byte、管理通信を full plan に反映する。旧 1 台／260 GB の値を流用しない |
 | identity／credential | Job pull 用 UAMI／`AcrPull`、repository-scoped token／scope map、object SAS、Job secret、role assignment |
 | bootstrap | one-shot bootstrap Job／execution、admin secret の短期保持、migration／observer を含む |
 | log／metric | ingestion／保持対象 1 GB 以下 |
@@ -221,10 +263,14 @@ page の Regional tier 単価 `first 5 rules = USD 0.025/hour`、`additional rul
 で再確認する。これらは過去の感応度であり、rule、保持時間、費用上限を広げる
 承認には使わない。
 
-full provisioning 直前に現行単価を再取得し、Phase 0 で確認した managed resource 数、課金対象
-`R`、共有費用台帳と残り全行程を織り込んで 4,500 円以下の場合だけ full gate を PASS とする。
+full provisioning 直前に現行単価を再取得し、Phase 0 で確認した managed resource 数、LB ごとの
+課金 rule 数、共有費用台帳と残り全行程を織り込んで 4,500 円以下の場合だけ full gate を PASS とする。
+v1 の 2 台の LB の処理 byte をそれぞれ計上し、image pull／Blob／管理通信／observer／cleanup の
+全経路と PG の利用を再計算する。同一転送が両 LB で処理される可能性を除外せず、根拠がなければ
+両台に保守計上する。旧 v2 の 3,866 円へ LB 1 台の固定費だけを加えて PASS にしてはならない。
 単価、managed resource 数、rule／処理量、support 回数／timeout が変わった場合は再計算し、
-料金または `R` を確定できない場合は full provisioning へ進まず Phase 0 の期限内に cleanup する。
+料金、各 LB の rule／処理量、または必要通信を確定できない場合は full provisioning へ進まず
+第4.1節の早期停止時刻・削除目標に従う。
 
 再計算した envelope には provisioning から削除反映までの compute／storage／backup、
 Container Apps Environment／Job、managed Load Balancer／egress public IP、VNet／subnet／NSG／Private DNS、UAMI／role assignment、
@@ -268,10 +314,10 @@ data plane／control plane resource はすべて本 Issue 専用に新規作成�
 - 一意に照合した既存 ACR の read-only identity 照合結果と、本 Issue 専用 repository／
   exact-SHA image tag／manifest
 - 本 Issue 専用 ACR repository-scoped token／scope map と 24 時間以内の credential
-- 専用 VNet、workload profiles environment subnet と PostgreSQL delegated subnet、および各 delegation
+- 専用 VNet、delegation なしの ACA subnet と PostgreSQL delegated subnet、およびその設定
 - 必要最小 NSG、PostgreSQL 用 Private DNS zone／VNet link
-- internal の専用 Container Apps Environment と専用 log／metric resource
-- Environment が自動作成する専用 managed Resource Group、Standard Load Balancer 1 個、
+- internal Consumption-only (v1) Environment と log／metric 設定（Phase 0 は保存先なし）
+- Environment が自動作成する専用 managed Resource Group、Standard Load Balancer 2 個（各 5 rule 以下）、
   egress 用 Standard static public IP 1 個
 - private access の専用 PostgreSQL server、database、application user
 - bootstrap／migration／observer／package 用 manual-trigger Job と各 execution
@@ -287,15 +333,17 @@ scope map、設定、identity は変更・削除しない。条件を満たす A
 ACR 作成へ切り替えず停止する。専用 resource の所有関係や対象の一意性を確認できない場合も
 provisioning／execution／削除を進めず、`codex:blocked` として人手確認へ渡す。
 
-Issue #77 完了、code／test／exact-head CI と Phase 0 の 500 円 gate を確認後、まず第4.1節の
-専用 Resource Group／network／internal environment／必須最小 monitoring だけを作成する。
-metadata inventory と `R` を確定し full plan の 4,500 円 gate が成立した後、Portal では
+Issue #77 完了、code／test／exact-head CI と第4.1節の承認済み運用見積り・停止手順を確認後、
+専用 Resource Group／network／internal v1 environment だけを作成する。Phase 0 は保存 log／
+有料 monitoring なしとする。metadata inventory と各 LB の rule／処理量を確定し、full の
+4,500 円 gate を判定する前に、Portal では
 一意に照合した既存 ACR の identity、permission mode、admin user の既存状態、既存対象と
 非干渉であることに加え、registry location が Japan East で geo-replica が 0、layer 配信先が
 `Storage.JapanEast` allowlist 内だけであることを read-only で再確認する。専用 data endpoint が
 有効な場合も、その宛先が既存 NSG allowlist だけで成立すると公式 metadata から確認する。admin
 credential は表示、copy、再生成、使用せず、admin user は disabled を維持する。専用 repository だけの
-scope map／token で exact-head image を push・digest 照合し、push credential を直後に失効する。
+scope map／token の発行、exact-head image push／digest 照合は full gate 成立後だけ行い、
+push credential を直後に失効する。
 Phase 0 の専用 Resource Group／network／environment を再利用し、UAMI／`AcrPull`、private
 PostgreSQL、Storage Account／private container、bootstrap Job を作る。bootstrap 完了後に
 admin secret／Job を除去してから、application
@@ -305,8 +353,8 @@ Container Apps environment 作成時に生じる managed Resource Group と配�
 Environment の非機密 Issue tag が伝播することを確認する。managed Load Balancer／public IP／
 managed Resource Group を直接変更・削除せず、Environment の削除による回収だけを行う。
 
-Phase 0 は開始から 60 分以内の削除期限を使う。full gate 成立後も Phase 0 での
-Container Apps Environment 作成開始時刻を inventory の基準時刻とし、そこから 72 時間後の
+Phase 0 は第4.1節の早期停止と開始から 60 分の削除目標を使い、遅延も追跡する。full gate 成立後も
+Phase 0 での Container Apps Environment 作成開始時刻を inventory の基準時刻とし、そこから 72 時間後の
 hard delete deadline と 60 時間後の cleanup checkpoint を記録する。60 時間時点で Environment、
 managed Resource Group、Load Balancer、public IP、VNet／subnet／NSG、Private DNS／VNet link、
 専用 log の削除完了見込みを確定できなければ、新しい resource／execution を増やさず cleanup へ
@@ -324,8 +372,8 @@ inventory へ親子関係、状態、費用見込みを追記し、次の操作�
 
 専用 VNet 内に用途を混在させない次の 2 subnet を作成する。
 
-- Azure Container Apps workload profiles environment 用 infrastructure subnet：`/27` 以上、
-  `Microsoft.App/environments` へ delegation
+- Azure Container Apps Consumption-only (v1) 用 infrastructure subnet：`/23` 以上、
+  `Microsoft.App/environments` を含め delegation なし
 - Azure Database for PostgreSQL Flexible Server 用 subnet：別 address range とし、
   `Microsoft.DBforPostgreSQL/flexibleServers` へ delegation
 
@@ -335,44 +383,50 @@ PostgreSQL 用 Private DNS zone と専用 VNet link を作成し、internal Cont
 を設定しない。PostgreSQL は作成時から private access だけを選び、public network access、
 public endpoint、public firewall rule を一時的にも使用しない。
 
-Container Apps Environment は legacy Consumption-only (v1) ではなく workload profiles (v2) とし、
-自動作成される built-in `Consumption` profile exactly 1 件だけを使用する。Dedicated、Flex、
-Consumption GPU その他の profile を追加せず、全 Job の workload profile を built-in
-`Consumption` に固定する。Environment 作成後と各 Job 作成前に workload profiles 一覧を確認し、
-`D*`、`E*`、`NC*`、GPU、`Flex`、または名称を問わず追加 profile が存在する場合は Job を作成せず
-target-only cleanup へ移る。Dedicated plan management／instance meter や Flex management meter は
-費用 envelope に含まれないため、該当 meter が表示される、または Job の profile を確認できない
-場合は費用 gate を `UNKNOWN` とする。
+Container Apps Environment は承認済みの internal Consumption-only (v1) とする。既定の v2 を
+作成せず、workload profile は指定・追加しない。Environment 作成後と各 Job 作成前に v1 と
+consumption plan であることを metadata で確認する。v2、Dedicated、Flex、GPU その他の profile
+が存在する、または環境種別・Job の consumption plan を確認できない場合は Job を作成せず
+target-only cleanup へ移る。Dedicated／Flex の management／instance meter は費用 envelope
+に含まれないため、該当 meter が表示された場合も費用 gate を `UNKNOWN` とする。
 
-NSG は Azure 公式の workload profiles environment／PostgreSQL private access 要件に基づき、
+NSG は Azure 公式の [Consumption-only environment 向け NSG](https://learn.microsoft.com/en-us/azure/container-apps/firewall-integration)
+と PostgreSQL private access 要件に基づき、
 次の通信のうち当該 phase に必要なものだけを custom rule で明示許可する。Phase 0 では system
-registry／その dependency、subnet 内通信、Azure DNS、Load Balancer health probe を許可し、
-UAMI／ACR／Storage／PostgreSQL 向け通信は各 resource を使用する full phase で追加する。
-Azure Monitor 向け通信は利用する場合だけ追加する。両 NSG の inbound／outbound には priority `4095` の
-terminal deny を必ず置き、既定の `AllowVNetInBound`、`AllowVnetOutBound`、
+registry／dependency、subnet 内通信、Azure DNS、LB health probe、AzureCloud 管理通信、
+EventHub 内部診断、NTP だけを許可する。Job 用 UAMI／ACR／Storage／PostgreSQL の専用 rule は
+full phase で追加する。AzureCloud TCP 443 は v1 の管理用要件であり、Job 用通信を Phase 0 で
+実行する許可ではない。EventHub は保存 log `none` でも v1 内部診断の要件として許可する。
+Azure Monitor 向け rule は full で利用すると確定した場合だけ追加する。両 NSG の inbound／outbound
+には priority `4095` の terminal deny を必ず置き、既定の `AllowVNetInBound`、`AllowVnetOutBound`、
 `AllowInternetOutBound` が表外通信を許可しないようにする。表外の任意宛先 HTTPS や任意 inbound
 は追加しない。
 
 | NSG／方向 | priority | action | source | destination | protocol／port | 用途 |
 | --- | ---: | --- | --- | --- | --- | --- |
-| Container Apps inbound | `100` | Allow | infrastructure subnet | 同じ subnet | Any | isolated environment 内部通信 |
+| Container Apps inbound | `100` | Allow | infrastructure subnet | 同じ subnet | TCP Any | Envoy 内部通信 |
 | Container Apps inbound | `110` | Allow | `AzureLoadBalancer` | infrastructure subnet | TCP `30000-32767` | platform health probe |
 | Container Apps inbound | `4095` | Deny | Any | Any | Any | default VNet／internet allow の遮断 |
 | Container Apps outbound | `100` | Allow | infrastructure subnet | 同じ subnet | Any | environment 内部通信 |
 | Container Apps outbound | `110` | Allow | infrastructure subnet | `MicrosoftContainerRegistry` | TCP `443` | system image |
 | Container Apps outbound | `120` | Allow | infrastructure subnet | `AzureFrontDoor.FirstParty` | TCP `443` | system registry dependency |
-| Container Apps outbound | `130` | Allow | infrastructure subnet | `AzureActiveDirectory` | TCP `443` | UAMI authentication |
-| Container Apps outbound | `140` | Allow | infrastructure subnet | `AzureMonitor` | TCP `443` | 専用 log／metric |
+| Container Apps outbound | `130` | Allow | infrastructure subnet | `AzureActiveDirectory` | TCP `443` | full: UAMI authentication |
+| Container Apps outbound | `140` | Allow | infrastructure subnet | `AzureMonitor` | TCP `443` | full: 必要時だけ専用 log／metric |
 | Container Apps outbound | `150` | Allow | infrastructure subnet | `168.63.129.16` | TCP／UDP `53` | Azure DNS |
-| Container Apps outbound | `160` | Allow | infrastructure subnet | `AzureContainerRegistry` | TCP `443` | 既存 ACR の本 Issue 専用 image pull |
-| Container Apps outbound | `170` | Allow | infrastructure subnet | `Storage.JapanEast` | TCP `443` | ACR layer／private Blob |
-| Container Apps outbound | `180` | Allow | infrastructure subnet | PostgreSQL subnet | TCP `5432` | staging DB |
+| Container Apps outbound | `160` | Allow | infrastructure subnet | `AzureContainerRegistry` | TCP `443` | full: 既存 ACR の本 Issue 専用 image pull |
+| Container Apps outbound | `170` | Allow | infrastructure subnet | `Storage.JapanEast` | TCP `443` | full: ACR layer／private Blob |
+| Container Apps outbound | `180` | Allow | infrastructure subnet | PostgreSQL subnet | TCP `5432` | full: staging DB |
+| Container Apps outbound | `190` | Allow | infrastructure subnet | `AzureCloud.JapanEast` | UDP `1194` | v1 node／control plane 管理通信 |
+| Container Apps outbound | `200` | Allow | infrastructure subnet | `AzureCloud.JapanEast` | TCP `9000` | v1 node／control plane 管理通信 |
+| Container Apps outbound | `210` | Allow | infrastructure subnet | `AzureCloud` | TCP `443` | v1 管理用 FQDN dependency |
+| Container Apps outbound | `220` | Allow | infrastructure subnet | `EventHub.JapanEast` | TCP `5671,5672` | v1 内部診断 |
+| Container Apps outbound | `230` | Allow | infrastructure subnet | Any | UDP `123` | NTP |
 | Container Apps outbound | `4095` | Deny | Any | Any | Any | default VNet／internet allow の遮断 |
-| PostgreSQL inbound | `100` | Allow | PostgreSQL subnet | 同じ subnet | TCP `5432` | database service 内部通信 |
-| PostgreSQL inbound | `110` | Allow | infrastructure subnet | PostgreSQL subnet | TCP `5432` | Job connection |
+| PostgreSQL inbound | `100` | Allow | PostgreSQL subnet | 同じ subnet | TCP `5432` | full: database service 内部通信 |
+| PostgreSQL inbound | `110` | Allow | infrastructure subnet | PostgreSQL subnet | TCP `5432` | full: Job connection |
 | PostgreSQL inbound | `4095` | Deny | Any | Any | Any | default VNet inbound allow の遮断 |
-| PostgreSQL outbound | `100` | Allow | PostgreSQL subnet | 同じ subnet | TCP `5432` | database service 内部通信 |
-| PostgreSQL outbound | `110` | Allow | PostgreSQL subnet | `Storage.JapanEast` | TCP `443` | WAL archival |
+| PostgreSQL outbound | `100` | Allow | PostgreSQL subnet | 同じ subnet | TCP `5432` | full: database service 内部通信 |
+| PostgreSQL outbound | `110` | Allow | PostgreSQL subnet | `Storage.JapanEast` | TCP `443` | full: WAL archival |
 | PostgreSQL outbound | `4095` | Deny | Any | Any | Any | default VNet／internet allow の遮断 |
 
 PostgreSQL server 作成時に自動追加される `Microsoft.Storage` service endpoint は削除しない。
@@ -380,8 +434,13 @@ private Blob は anonymous access を無効にし、Storage Account の network 
 infrastructure subnet に限定した `Microsoft.Storage` service endpoint と object read-only SAS
 の組合せにする。ACR は repository-scoped token と `AcrPull` を使用できる permission mode、
 Japan East location、geo-replica 0、layer 配信先が `Storage.JapanEast` allowlist 内だけであることを
-read-only 確認する。ACR admin user／credential は既存状態を変更せず、表示、copy、再生成、
-使用もしない。service tag、方向、port、source／destination をこの表へ限定できない、private
+read-only 確認する。ACR の [public REST／data endpoint と service tag の公式経路](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-firewall-rules#allow-access-by-service-tag)
+と、ACA NSG 文書の v1／v2 に共通する private endpoint 脚注の適用を照合する。v1 だけが不可能、
+または全ケースで private endpoint 必須とは断定しない。full 開始前に必要宛先・既存 ACR 設定・
+UAMI 対応を read-only で特定し、full gate 成立後、既承認の実行・費用枠内で pull を検証する。既存 ACR の SKU／
+network 変更や新規 private endpoint を追加しない。必要通信を一意に確定できなければ full へ
+進まず Phase 0 を cleanup する。ACR admin user は disabled を維持し、credential の表示、copy、
+再生成、使用をしない。service tag、方向、port、source／destination をこの表へ限定できない、private
 DNS で解決できない、または public PostgreSQL 経路が必要な場合は resource を作らず
 `codex:blocked` で停止する。Production network との peering、NAT Gateway、VPN、Bastion は
 追加しない。
@@ -1034,15 +1093,15 @@ document count 不一致は import/result failure とする。`sourceSha256` と
   VNet link、UAMI／role がすべて専用 Resource Group の inventory と一致し、既存 resource reference
   がない。ACR だけは一意に照合した既存 registry で、本 Issue 専用 repository
   以外の reference／変更がない。
-- Environment は internal で workload profiles infrastructure subnet に接続し、PostgreSQL は
-  別の delegated subnet にあり、private DNS で期待 host が private address へ解決される。
+- Environment は internal Consumption-only (v1) で delegation なしの `/23` 以上の ACA subnet に接続し、
+  PostgreSQL は別の delegated subnet にあり、private DNS で期待 host が private address へ解決される。
 - PostgreSQL の public network access／public firewall rule が 0 で、Production peering、NAT、
   VPN、Bastion がない。
 - image pull identity は本 Issue 専用 UAMI で、一意に照合した既存 ACR の `AcrPull` 以外の role がない。
 - ACR push token は既に失効しており、Job secret／environment に存在しない。
 - Job に ingress、schedule、event trigger がない。
-- Environment の workload profile は built-in `Consumption` exactly 1 件で、Dedicated／Flex／GPU
-  その他の profile が 0。各 Job もその `Consumption` profile に固定されている。
+- Environment と Job は v1 の consumption plan で、workload profile の指定・追加がない。
+  v2／Dedicated／Flex／GPU がなく、LB 2 個・各 5 rule 以下と IP 1 個が inventory に一致する。
 - parallelism 1、completion 1、retry 0、timeout が有限かつ 120 分以内である。
 - shape は 2 vCPU／4 GiB、ephemeral 8 GiB を超えない。
 - active execution が 0 で、別 package を同時実行しない。
@@ -1069,10 +1128,12 @@ document count 不一致は import/result failure とする。`sourceSha256` と
    `git diff --check`、情報安全 scan を完了する。
 3. 新しい head を push し、PR #76 の exact-head CI／Vercel が成功したことを確認する。benchmark
    完了までは Draft のままにする。
-4. 第4.1節の Phase 0 単独 500 円／60 分 gate 成立後、専用 Resource Group／VNet／subnet／
-   NSG／Private DNS／internal environment／必須最小 monitoring だけを作成する。直後の metadata
-   inventory と `R`、Phase 0 を含む費用台帳で full plan を再計算し、4,500 円 gate を確認する。
-   不成立なら 60 分以内に target-only cleanup して停止する。
+4. 第4.1節の承認済み 414 円運用見積り・開始前確認後、Phase 0 を最大 1 回作成する。対象は専用
+   Resource Group／VNet／subnet／NSG／Private DNS／internal v1 environment だけで、保存 log／
+   有料 monitoring はなしとする。直後の inventory、各 LB の rule／2 台分の処理 byte、Phase 0 と
+   共有費用台帳、full の必要通信から 4,500 円 gate を判定する。1 分間隔の metrics、5 分の欠損
+   判定、10% 閾値を守り、T0 + 20 分で full 未確定なら削除開始、T0 + 60 分までの削除確認を目指す。
+   削除開始後は full へ戻さず、遅延と未確定費を追跡する。
 5. 一意に照合した既存 ACR 内に、本 Issue 専用 repository だけに限定した
    token／scope map を用意し、exact-head image を build／push、digest 照合後に push credential
    を直ちに失効する。registry 本体は作成・変更しない。
@@ -1267,8 +1328,8 @@ Production の修復を独断で行わない。
 - JPA／JPB がそれぞれ 1 回で oracle どおり完了した。
 - subscription／auth／read-only audit と承認済み既存 ACR 利用部分以外は全 resource が専用新規で、
   既存／Production resource reference がない。既存 ACR 本体・既存 artifact・既存 identity は非変更である。
-- dedicated VNet、2 delegated subnet、必要最小 NSG、Private DNS／VNet link、internal
-  Container Apps environment、private PostgreSQL だけで network 経路が成立した。
+- dedicated VNet、delegation なしの ACA subnet、別の PostgreSQL delegated subnet、必要最小 NSG、
+  Private DNS／VNet link、internal Consumption-only (v1)、private PostgreSQL だけで network 経路が成立した。
 - bootstrap が専用 database／least-privilege application user 各 1 件だけを作成し、admin secret、
   bootstrap Job／execution が直後に残留 0 となった。
 - ACR push token は専用 repository／24 時間以内に限定され push／digest 照合直後に disable され、Job pull は専用
@@ -1287,10 +1348,11 @@ Production の修復を独断で行わない。
 
 - 120 分以内に完了しない、または必要見積りが 120 分を超える。
 - OOM、restart、ephemeral storage 不足、UNKNOWN result がある。
-- Phase 0 自身の 500 円／60 分 gate が成立しない、作成後の `R`／料金が不明、想定外 resource が
-  ある、または共有費用と Phase 0 を含む full plan の再計算が 4,500 円を超える。
-- built-in `Consumption` 以外の Dedicated／Flex／GPU profile がある、または Job profile を固定・
-  確認できない。
+- Phase 0 の承認済み見積りから外れる、第4.1節の metrics／時間／費用停止条件に達する、各 LB の
+  rule／料金が不明、想定外 resource がある、または共有費用と Phase 0 を含む full plan が
+  4,500 円を超える。
+- internal Consumption-only (v1) を確認できない、v2／Dedicated／Flex／GPU profile がある、
+  または Job の consumption plan を確認できない。
 - public PostgreSQL access／firewall、広い NSG、Production peering、NAT Gateway が必要になる。
 - 承認済み built-in DB hardening が成立せず、provider-managed database の必要 revoke が不能、
   または非 target 対象 database への application credential の実効権限が残る。
@@ -1310,7 +1372,8 @@ NO-GO 後に resource 増強、NAT、queue、checkpoint、Production activation 
 success、failure、timeout、signal、NO-GO のいずれでも実施する。削除前に inventory の ID、
 tag、作成時刻、親 resource を Local で再照合し、対象が本 Issue 専用であることを確認する。
 Phase 0 で停止する場合は、その Phase で作成した対象だけに適用し、未作成の Job／DB／Blob／
-credential の cleanup 手順は実行しない。Phase 0 開始から 60 分以内に削除反映を確認する。
+credential の cleanup 手順は実行しない。Phase 0 は第4.1節の閾値・時間で早期削除を開始し、
+T0 + 60 分までの削除確認を目標とする。遅延を隠さず、残留と追加費を追跡する。
 
 1. 新しい manual start を禁止し、active Job execution が 0 になるまで状態を確定する。
 2. runner／child／request／Blob stream が終了し、DB session／lock が 0 であることを確認する。
@@ -1397,7 +1460,8 @@ hardening failure は一意に確認した専用 server 全体を cleanup する
   Resource Group／Load Balancer／public IP の連動削除を確認してから専用 log を削除する。
 - database：bootstrap admin secret を除去し、専用 PostgreSQL server／DB／application user を
   private access の親 server ごと削除する。
-- network：Private DNS／VNet link、NSG、2 delegated subnet、専用 VNet を target-only で削除する。
+- network：Private DNS／VNet link、NSG、delegation なしの ACA subnet、PostgreSQL delegated subnet、
+  専用 VNet を target-only で削除する。
 - image：repository-scoped token／credential／scope map と、本 Issue 専用 exact-SHA image／
   manifest／repository だけを削除する。既存 ACR 本体と既存 artifact は変更しない。
 - identity：専用 UAMI と `AcrPull` を含む本 Issue 専用 role assignment を削除する。
@@ -1432,8 +1496,8 @@ code の exact head に対して、未実行・pending・skipped を PASS にせ
 - secret、認証付き URL、Local path、顧客情報、個別公報値、実 package の repository 混入 scan
 - exact-head image build／container smoke と image tag／ACR digest、Local 検証記録の対応確認
 - push token の repository scope／24 時間以内 expiry／push 直後 disable と Job UAMI／`AcrPull` の確認
-- dedicated VNet、subnet delegation、NSG、Private DNS／VNet link、internal environment、private
-  PostgreSQL の public access 0 確認
+- dedicated VNet、ACA subnet の delegation なし、PG subnet の delegation、NSG、Private DNS／
+  VNet link、internal v1 environment、private PostgreSQL の public access 0 確認
 - 専用 Resource Group、Storage Account／object、既存 ACR 内の本 Issue 専用 repository／image、Container Apps
   Environment／log／Job、PostgreSQL server／DB／user、VNet／subnet／NSG／Private DNS、
   UAMI、credential／role、ACR token／scope map、execution の残留 0
@@ -1449,8 +1513,12 @@ Local path、package size／hash、個別公報値で置換してはならない
 baseline SHA: <public commit SHA>
 head SHA: <public commit SHA>
 image exact-SHA一致: PASS / FAIL
-Phase 0単独worst-case 500円以下／60分以内: PASS / FAIL / UNKNOWN
-Phase 0実測inventory／R／料金: PASS / FAIL / UNKNOWN / 未実行
+Phase 0承認済み条件付き414円見積り／残余リスク受容: 確認済み / 未確認
+Phase 0実行回数（最大1）: 0 / 1
+Phase 0早期停止条件／metrics確認: PASS / FAIL / UNKNOWN / 未実行
+Phase 0実測inventory（LB2・各5rule以下／IP1・monitoringなし）: PASS / FAIL / UNKNOWN / 未実行
+Phase 0実費・未確定費・削除遅延の台帳計上: PASS / FAIL / UNKNOWN / 未実行
+Phase 0削除確認目標（T0+60分）: 達成 / 遅延追跡中 / full gate成立で継続 / 未実行
 Phase 0と共有費用台帳込みfull worst-case: 4,500円以下 / 4,500円超過 / UNKNOWN
 full開始時費用gate: PASS / FAIL / UNKNOWN
 絶対上限5,000円: PASS / FAIL
