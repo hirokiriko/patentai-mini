@@ -87,7 +87,7 @@ function exactRoleState(
   return {
     ...emptyTargetState(postgresMajor),
     target_role_count: "1",
-    target_role_can_login: true,
+    target_role_can_login: false,
     target_role_is_superuser: false,
     target_role_can_create_database: false,
     target_role_can_create_role: false,
@@ -140,6 +140,20 @@ function exactSchemaState(): Array<Record<string, unknown>> {
       unexpected_schema_count: "0",
     },
   ];
+}
+
+function databaseAccessState(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    database_count: "3",
+    target_database_count: "1",
+    non_target_database_count: "2",
+    public_access_revoked: true,
+    non_target_connect_denied: true,
+    non_target_temporary_denied: true,
+    ...overrides,
+  };
 }
 
 function preflightState(
@@ -297,12 +311,20 @@ function baseResponses(
       rows: [exactDatabaseState(false)],
     },
     "issue75-bootstrap-database-revoke-public": { rows: [] },
+    "issue75-bootstrap-database-harden-public": { rows: [] },
+    "issue75-bootstrap-database-access-state": {
+      rows: [databaseAccessState()],
+    },
     "issue75-bootstrap-database-grant-target": { rows: [] },
     "issue75-bootstrap-database-privilege-reconcile": {
       rows: [exactDatabaseState(true)],
     },
     "issue75-bootstrap-final-state": {
       rows: [exactDatabaseState(true)],
+    },
+    "issue75-bootstrap-role-enable-login": { rows: [] },
+    "issue75-bootstrap-enabled-state": {
+      rows: [{ ...exactDatabaseState(true), target_role_can_login: true }],
     },
     "issue75-bootstrap-cleanup-role": { rows: [] },
     "issue75-bootstrap-cleanup-state": { rows: [emptyTargetState()] },
@@ -698,6 +720,7 @@ describe("database bootstrap creation", () => {
     const roleCreate = client.query.mock.calls.find(
       ([request]) => request.name === "issue75-bootstrap-role-create",
     )?.[0];
+    expect(roleCreate?.text).toContain("WITH NOLOGIN PASSWORD");
     expect(roleCreate?.text).toContain("NOSUPERUSER NOCREATEDB NOCREATEROLE");
     expect(roleCreate?.text).toContain(
       "NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT",
@@ -753,6 +776,31 @@ describe("database bootstrap creation", () => {
     expect(applicationClient.query.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
       client.query.mock.invocationCallOrder[finalStateIndex],
     );
+    const hardenIndex = client.query.mock.calls.findIndex(
+      ([request]) => request.name === "issue75-bootstrap-database-harden-public",
+    );
+    const hardening = client.query.mock.calls[hardenIndex][0];
+    expect(hardening.text).toContain("WHERE datallowconn AND NOT datistemplate");
+    expect(hardening.text).toContain(
+      "REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC",
+    );
+    expect(hardening.text).not.toMatch(/datname\s*(?:<>|!~|=)/);
+    const enableIndex = client.query.mock.calls.findIndex(
+      ([request]) => request.name === "issue75-bootstrap-role-enable-login",
+    );
+    const accessChecks = client.query.mock.calls.flatMap(([request], index) =>
+      request.name === "issue75-bootstrap-database-access-state" ? [index] : [],
+    );
+    expect(accessChecks).toHaveLength(2);
+    expect(hardenIndex).toBeLessThan(accessChecks[0]);
+    expect(finalStateIndex).toBeLessThan(accessChecks[1]);
+    expect(accessChecks[1]).toBeLessThan(enableIndex);
+    expect(client.query.mock.calls[enableIndex][0].text).toBe(
+      "ALTER ROLE issue75_app LOGIN",
+    );
+    expect(client.query.mock.invocationCallOrder[enableIndex]).toBeLessThan(
+      applicationClient.connect.mock.invocationCallOrder[0],
+    );
     const schemaRevoke = schemaClient.query.mock.calls.find(
       ([request]) =>
         request.name === "issue75-bootstrap-schema-revoke-public",
@@ -775,6 +823,81 @@ describe("database bootstrap creation", () => {
     expect(serializedQueryPayloads.includes(ADMIN_URL)).toBe(false);
     expect(JSON.stringify(outcome)).not.toContain(ADMIN_SECRET);
     expect(JSON.stringify(outcome)).not.toContain(TARGET_SECRET);
+  });
+
+  it("stops before role activation when a managed database rejects hardening", async () => {
+    const { client, createTargetClient, outcome } = await bootstrap(baseResponses({
+      "issue75-bootstrap-database-harden-public": postgresError("42501"),
+    }));
+    expect(outcome.exitCode).toBe(DB_BOOTSTRAP_EXIT_CODES.create);
+    expect(outcome.log.reason).toBe("database_access_hardening_failed");
+    expect(client.query.mock.calls.some(([request]) =>
+      request.name === "issue75-bootstrap-role-enable-login",
+    )).toBe(false);
+    expect(createTargetClient).not.toHaveBeenCalled();
+    expect(JSON.stringify(outcome)).not.toContain(RAW_ERROR_SECRET);
+  });
+
+  it.each([
+    { public_access_revoked: false },
+    { non_target_connect_denied: false },
+    { non_target_temporary_denied: false },
+    { non_target_connect_denied: null },
+    { non_target_temporary_denied: undefined },
+    { non_target_database_count: "0" },
+    { database_count: "4" },
+    { target_database_count: "0" },
+  ])("refuses incomplete or permissive non-target catalog evidence: %j", async (override) => {
+    const { client, createTargetClient, outcome } = await bootstrap(baseResponses({
+      "issue75-bootstrap-database-access-state": {
+        rows: [databaseAccessState(override)],
+      },
+    }));
+    expect(outcome.exitCode).toBe(DB_BOOTSTRAP_EXIT_CODES.verify);
+    expect(outcome.log.reason).toBe("database_access_not_isolated");
+    expect(client.query.mock.calls.some(([request]) =>
+      request.name === "issue75-bootstrap-role-enable-login",
+    )).toBe(false);
+    expect(createTargetClient).not.toHaveBeenCalled();
+  });
+
+  it("rechecks non-target access after the target grant and before LOGIN", async () => {
+    let accessChecks = 0;
+    const { client, createTargetClient, outcome } = await bootstrap(baseResponses({
+      "issue75-bootstrap-database-access-state": () => ({
+        rows: [databaseAccessState({
+          non_target_connect_denied: ++accessChecks === 1,
+        })],
+      }),
+    }));
+    expect(accessChecks).toBe(2);
+    expect(outcome.exitCode).toBe(DB_BOOTSTRAP_EXIT_CODES.verify);
+    expect(client.query.mock.calls.some(([request]) =>
+      request.name === "issue75-bootstrap-database-grant-target",
+    )).toBe(true);
+    expect(client.query.mock.calls.some(([request]) =>
+      request.name === "issue75-bootstrap-role-enable-login",
+    )).toBe(false);
+    expect(createTargetClient).not.toHaveBeenCalled();
+  });
+
+  it("bounds a pending hardening query without enabling the role", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = bootstrap(baseResponses({
+        "issue75-bootstrap-database-harden-public": () => neverResolves(),
+      }));
+      await vi.advanceTimersByTimeAsync(30_001);
+      const { client, createTargetClient, outcome } = await pending;
+      expect(outcome.exitCode).toBe(DB_BOOTSTRAP_EXIT_CODES.create);
+      expect(outcome.log.reason).toBe("database_access_hardening_timed_out");
+      expect(client.query.mock.calls.some(([request]) =>
+        request.name === "issue75-bootstrap-role-enable-login",
+      )).toBe(false);
+      expect(createTargetClient).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not print secrets or raw errors when role creation fails", async () => {
@@ -1994,6 +2117,49 @@ for (const postgresMajor of ["15", "16"]) {
           CREATE DATABASE issue75_probe_database
             WITH TEMPLATE = template0 ENCODING = 'UTF8'
         `);
+        await rootClient.query(
+          "ALTER DATABASE postgres OWNER TO issue75_probe_admin",
+        );
+        await rootClient.query("CREATE DATABASE azure_maintenance");
+        const hardeningRequest = capturedBootstrap.client.query.mock.calls.find(
+          ([request]) => request.name === "issue75-bootstrap-database-harden-public",
+        )?.[0];
+        const accessRequest = capturedBootstrap.client.query.mock.calls.find(
+          ([request]) => request.name === "issue75-bootstrap-database-access-state",
+        )?.[0];
+        if (hardeningRequest === undefined || accessRequest === undefined) {
+          throw new Error("database hardening queries were not captured");
+        }
+        const readAccess = () => adminClient!.query({
+          text: accessRequest.text,
+          values: ["issue75_probe_database", "issue75_probe_app"],
+        });
+        expect((await readAccess()).rows[0]).toMatchObject({
+          database_count: "3",
+          public_access_revoked: false,
+          non_target_connect_denied: false,
+          non_target_temporary_denied: false,
+        });
+        // A provider-owned database may reject REVOKE or leave it ineffective.
+        // Neither outcome establishes the required catalog boundary.
+        await adminClient.query(hardeningRequest.text).catch((error: unknown) => {
+          expect(error).toMatchObject({ code: "42501" });
+        });
+        expect((await readAccess()).rows[0]).toMatchObject({
+          public_access_revoked: false,
+          non_target_connect_denied: false,
+          non_target_temporary_denied: false,
+        });
+        expect((await adminClient.query(
+          "SELECT rolcanlogin FROM pg_catalog.pg_roles WHERE rolname = 'issue75_probe_app'",
+        )).rows).toEqual([{ rolcanlogin: false }]);
+
+        // The fixture owner now makes this database eligible for successful setup.
+        await rootClient.query(
+          "ALTER DATABASE azure_maintenance OWNER TO issue75_probe_admin",
+        );
+        await adminClient.query(hardeningRequest.text);
+        expect((await readAccess()).rows[0]).toEqual(databaseAccessState());
         await adminClient.query(
           "REVOKE ALL PRIVILEGES ON DATABASE issue75_probe_database FROM PUBLIC",
         );
@@ -2069,8 +2235,11 @@ for (const postgresMajor of ["15", "16"]) {
           target_database_target_has_temporary: false,
           target_role_parent_membership_count: "0",
           target_role_other_member_count: "0",
+          target_role_can_login: false,
           ...expectedCreatorEdge,
         });
+        expect((await readAccess()).rows[0]).toEqual(databaseAccessState());
+        await adminClient.query("ALTER ROLE issue75_probe_app LOGIN");
 
         applicationClient = new pg.Client({
           host: "127.0.0.1",

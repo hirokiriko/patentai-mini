@@ -574,6 +574,62 @@ const SQL = Object.freeze({
          AND admin_role.rolname = current_user)
         AS target_role_other_member_count
   `,
+  hardenDatabasePublicAccess: `
+    DO $issue75_database_access$
+    DECLARE
+      database_state record;
+    BEGIN
+      FOR database_state IN
+        SELECT datname
+        FROM pg_catalog.pg_database
+        WHERE datallowconn AND NOT datistemplate
+        ORDER BY datname
+      LOOP
+        EXECUTE format(
+          'REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC',
+          database_state.datname
+        );
+      END LOOP;
+    END
+    $issue75_database_access$
+  `,
+  databaseAccessState: `
+    WITH database_access AS (
+      SELECT
+        database_state.datname,
+        has_database_privilege(
+          $2, database_state.oid, 'CONNECT'
+        ) AS target_has_connect,
+        has_database_privilege(
+          $2, database_state.oid, 'TEMPORARY'
+        ) AS target_has_temporary,
+        NOT EXISTS (
+          SELECT 1
+          FROM pg_catalog.aclexplode(COALESCE(
+            database_state.datacl,
+            pg_catalog.acldefault('d', database_state.datdba)
+          )) AS database_acl
+          WHERE database_acl.grantee = 0
+            AND database_acl.privilege_type IN ('CONNECT', 'TEMPORARY')
+        ) AS public_access_revoked
+      FROM pg_catalog.pg_database AS database_state
+      WHERE database_state.datallowconn AND NOT database_state.datistemplate
+    )
+    SELECT
+      COUNT(*)::bigint::text AS database_count,
+      COUNT(*) FILTER (WHERE datname = $1)::bigint::text
+        AS target_database_count,
+      COUNT(*) FILTER (WHERE datname <> $1)::bigint::text
+        AS non_target_database_count,
+      bool_and(public_access_revoked) AS public_access_revoked,
+      bool_and(COALESCE(target_has_connect = false, false))
+        FILTER (WHERE datname <> $1)
+        AS non_target_connect_denied,
+      bool_and(COALESCE(target_has_temporary = false, false))
+        FILTER (WHERE datname <> $1)
+        AS non_target_temporary_denied
+    FROM database_access
+  `,
   applicationIdentity: `
     SELECT
       current_database()::text AS database_name,
@@ -762,7 +818,7 @@ const SQL = Object.freeze({
       END IF;
 
       EXECUTE format(
-        'CREATE ROLE %I WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT %s',
+        'CREATE ROLE %I WITH NOLOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT %s',
         target_user,
         target_verifier,
         ${ROLE_CONNECTION_LIMIT}
@@ -1029,7 +1085,7 @@ function isEmptyTargetState(state) {
   return state.databaseCount === 0 && state.roleCount === 0;
 }
 
-function isExactRole(state) {
+function isExactRole(state, canLogin = false) {
   const hasExpectedCreatorMembership =
     state.serverVersionNum >= 150000 && state.serverVersionNum < 160000
       ? state.createroleSelfGrant === null &&
@@ -1046,7 +1102,7 @@ function isExactRole(state) {
         state.roleCreatorSetOption === false;
   return (
     state.roleCount === 1 &&
-    state.roleCanLogin === true &&
+    state.roleCanLogin === canLogin &&
     state.roleIsSuperuser === false &&
     state.roleCanCreateDatabase === false &&
     state.roleCanCreateRole === false &&
@@ -1075,9 +1131,9 @@ function isExactDatabaseCore(state, config) {
   );
 }
 
-function isExactFinalState(state, config) {
+function isExactFinalState(state, config, canLogin = false) {
   return (
-    isExactRole(state) &&
+    isExactRole(state, canLogin) &&
     isExactDatabaseCore(state, config) &&
     state.databasePublicPrivilegesRevoked === true &&
     state.databaseTargetPrivilegeCount === "2" &&
@@ -1728,6 +1784,31 @@ function dropRoleSql(config) {
   return `DROP ROLE ${config.targetUser}`;
 }
 
+async function verifyDatabaseAccess(client, config) {
+  const row = oneRow(await safeQuery(
+    client,
+    "issue75-bootstrap-database-access-state",
+    SQL.databaseAccessState,
+    [config.targetDatabaseName, config.targetUser],
+    "verify",
+    "database_access_unconfirmed",
+    "database_access_timed_out",
+  ));
+  if (
+    typeof row?.database_count !== "string" ||
+    !/^[1-9]\d*$/.test(row.database_count) ||
+    row?.target_database_count !== "1" ||
+    typeof row?.non_target_database_count !== "string" ||
+    !/^[1-9]\d*$/.test(row.non_target_database_count) ||
+    BigInt(row.database_count) !== BigInt(row.non_target_database_count) + 1n ||
+    row?.public_access_revoked !== true ||
+    row?.non_target_connect_denied !== true ||
+    row?.non_target_temporary_denied !== true
+  ) {
+    throw failure("verify", "database_access_not_isolated");
+  }
+}
+
 async function rollbackRoleCreation(client, config, progress) {
   progress.cleanupAttempted = true;
   try {
@@ -2028,6 +2109,17 @@ export async function runDatabaseBootstrap(options = {}) {
     progress.roleCreatedConfirmed = true;
     progress.databaseCreatedConfirmed = true;
 
+    await safeQuery(
+      client,
+      "issue75-bootstrap-database-harden-public",
+      SQL.hardenDatabasePublicAccess,
+      [],
+      "create",
+      "database_access_hardening_failed",
+      "database_access_hardening_timed_out",
+    );
+    await verifyDatabaseAccess(client, config);
+
     const databasePrivilegesAlreadyExact = isExactFinalState(
       stateBeforePrivileges,
       config,
@@ -2118,6 +2210,24 @@ export async function runDatabaseBootstrap(options = {}) {
 
     progress.roleCreatedConfirmed = true;
     progress.databaseCreatedConfirmed = true;
+    await verifyDatabaseAccess(client, config);
+    await safeQuery(
+      client,
+      "issue75-bootstrap-role-enable-login",
+      `ALTER ROLE ${config.targetUser} LOGIN`,
+      [],
+      "create",
+      "role_enable_failed",
+      "role_enable_timed_out",
+    );
+    const enabledState = await stateQuery(
+      client,
+      "issue75-bootstrap-enabled-state",
+      config,
+    );
+    if (!isExactFinalState(enabledState, config, true)) {
+      throw failure("verify", "role_enable_unconfirmed");
+    }
     await verifyApplicationAccess(config, dependencies, progress);
     result = "confirmed";
   } catch (error) {
