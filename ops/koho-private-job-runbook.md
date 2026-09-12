@@ -120,10 +120,10 @@ Azure resource 作成前の条件であり、承認済みの限定 code 修正�
 
 OWNER は 2026-09-12 に、従来の「削除反映まで含む worst-case 500 円以下」の開始条件を、
 下記の **414 円の条件付き運用見積りと早期削除手順**へ変更すること、および Phase 0 が
-500 円を超える残余リスクを承認した。新 head の CI 成功と開始前確認後、最大 1 回だけ作成する。
+500 円を超える残余リスクを承認した。初回は新 head の CI 成功と開始前確認後、最大 1 回だけとした。
 これは 500 円の保証ではなく、元の worst-case 条件が証明されたとの記録には使わない。
 
-**2026-09-12 実行後追補:** 承認済み Phase 0 の最大 1 回は消費済みであり、再実行は未承認。
+**2026-09-12 初回の経緯:** 当初承認された Phase 0 の最大 1 回は消費済みで、この停止時点では再実行は未承認だった。
 専用 Network／DNS 5 resource の作成・読み戻し後、API `2025-07-01` の Environment PUT は
 `ManagedEnvironmentSubnetDelegationError`（ACA subnet の `Microsoft.App/environments` delegation 要求）で
 HTTP 400 拒否となった。`workloadProfiles: null`、保存ログなし、internal、非 delegated `/23` を
@@ -134,9 +134,28 @@ HTTP 400 拒否となった。`workloadProfiles: null`、保存ログなし、in
 現行の [CLI extension の明示例](https://learn.microsoft.com/en-us/cli/azure/containerapp/env?view=azure-cli-latest#az-containerapp-env-create)
 には `--environment-mode ConsumptionOnly` があり、[実装](https://github.com/Azure/azure-cli-extensions/blob/main/src/containerapp/azext_containerapp/containerapp_env_decorator.py)
 は `properties.environmentMode` を設定する。[client](https://github.com/Azure/azure-cli-extensions/blob/main/src/containerapp/azext_containerapp/_clients.py)
-の API は `2025-10-02-preview` である。この経路は未実行の修正候補で、今回の原因解消や v1 作成成功を
-保証しない。新しい明示承認、通算回数を保全した journal／controller、再計算を整えるまで、本節および
-後続の初回作成手順を再実行しない。full の 4,500 円 gate と全体 5,000 円上限は変更しない。
+の API は `2025-10-02-preview` である。
+
+**2026-09-12 追加承認:** OWNER はこの明示 mode 経路による **追加 1 回だけ、初回を含め通算最大 2 回**と、
+必要な公開記録更新を承認した。2 回目は Network／DNS 5 resource の作成・読み戻し成功後、raw REST PUT
+で API `2025-10-02-preview`、`properties.environmentMode: "ConsumptionOnly"` を明示する。
+`workloadProfiles: null`、ログ destination／config の JSON null、internal、zoneRedundant=false、
+非 delegated ACA `/23` 以上は維持する。core の `--enable-workload-profiles false`／null だけへ戻さず、
+ARM の null 省略にも依存しない。この Preview 指定の実効性、初回原因の解消、v1 作成成功は未確認で、
+同じ拒否や別の失敗が再発し得る。作成後は実効 mode と managed inventory の両方で v1 を確認する。
+
+初回 journal と削除確認を保全し、追加承認記録に紐づく **2 回目専用の別 journal と新規 resource 名**を使う。
+controller は初回・2 回目の記録を合算し、既に通算 2 回なら create を拒否する。2 回目を開始する前に
+試行を記録し、中断や不明結果を理由に回数を戻さない。Environment PUT は 1 送信だけとし、エラー・timeout
+でも再送しない。3 回目は未承認であり、API 切替や delegation 追加で暗黙に再試行しない。
+
+初回の未確定費 414 円 reserve と追加 1 回の 414 円を合わせて **828 円**を確保する。
+下記 414 円見積りと 500 円への接近による停止判断は各試行に適用し、2 回分の予算確保とは分ける。
+新しい 1 回分を内包し初回失敗分を含まない full 条件付き草稿 3,840 円へ、初回の 414 円だけを加えると
+4,254 円となる。3,840 円へ 828 円を加えると新しい 1 回分を二重計上する。いずれも full gate PASS ではなく、
+初回費用・共有費用・実 inventory／通信量・cleanup の再計算が必要である。実費判明時は reserve と実費の
+重複を除き、未確定分や超過分を隠さない。full の **4,500 円 gate**と全体 **5,000 円上限**は維持する。
+新 head の CI、初回残留 0、開始前確認、追加承認と通算回数を守る controller の検証後だけ 2 回目を開始する。
 
 対象は本 Issue 専用の一時 Resource Group、Japan East の VNet、delegation なし／`/23` 以上の
 ACA subnet、別の PostgreSQL delegated subnet、PostgreSQL 用 Private DNS zone 1 個／VNet link
@@ -172,14 +191,19 @@ LB／IP の部分時間切上げと DNS の日単位課金を含めるが、管�
 
 停止・削除は次の順序で実施する。
 
-1. 対象 scope、読取・作成・限定削除権限、時計、対象の一意性を開始前に確認する。開始時刻を
-   `T0` とし、Issue tag と `T0 + 60 分` の削除期限を付ける。
+1. 対象 scope、読取・作成・限定削除権限、時計、対象の一意性、承認済み通算回数を開始前に確認する。
+   各試行の最初の作成直前を `T0` とし、Issue tag、試行番号、`T0 + 60 分` の削除期限を付ける。
+   2 回目は初回の名前や journal を再利用せず、Network／DNS から Environment まで同じ `T0` を維持する。
 2. 作成直後に managed RG、LB 2 個／各 5 rule 以下、IP 1 個、monitoring なしを照合する。
    不一致、料金不明、想定外 resource があれば直ちに親 Environment の削除を開始する。
    managed child は直接改変・削除せず連動削除を追跡する。
-3. 利用可能になった標準 metrics を 1 分間隔で確認する。LB `ByteCount` は 2 台・両方向を合算し、
-   Private DNS は `QueryVolume` を使う。欠損を 0 にせず、作成完了後 5 分でも必要な値・転送量の
-   範囲を確認できなければ削除へ移る。請求表示を即時停止装置とみなさない。
+3. Network／DNS 完了直後から Private DNS の `QueryVolume` を監視し、managed RG 内で LB を発見した
+   時点から provisioning 中も標準 metrics を 1 分間隔で確認する。LB `ByteCount` は 2 台・両方向を
+   合算する。両 LB を初めて発見した時点から必要 metrics の連続 UNKNOWN を計時し、完全な値を取得した
+   場合だけ時計をリセットする。再欠測時は新たに計時する。**連続 UNKNOWN 開始から 5 分**と
+   **Environment 作成完了から 5 分**の早い期限までに値・転送範囲を確認できなければ削除へ移る。
+   null、空 series、不明 dimension、1 分を超える gap は UNKNOWN とし、欠損を 0 にしない。
+   請求表示を即時停止装置とみなさない。2 回目もこの監視・早期停止条件を緩めない。
 4. LB 処理 10 GB、有料転送 1 GB、DNS 10 万 query のいずれかを観測した時点で新規処理を停止し
    削除を開始する。これは見積り前提の 10% の運用閾値であり、強制遮断ではない。転送量を独立に
    分類できなければ観測 byte を高い単価側にも保守計上し、それでも判定不能なら停止する。
@@ -1143,11 +1167,14 @@ document count 不一致は import/result failure とする。`sourceSha256` と
    `git diff --check`、情報安全 scan を完了する。
 3. 新しい head を push し、PR #76 の exact-head CI／Vercel が成功したことを確認する。benchmark
    完了までは Draft のままにする。
-4. 第4.1節の承認済み 414 円運用見積り・開始前確認後、Phase 0 を最大 1 回作成する。対象は専用
+4. 第4.1節の追加承認、初回・2 回目各 414 円 reserve、通算回数・開始前確認後、Phase 0 の残る
+   追加 1 回だけを実行する（初回を含め最大 2 回）。API `2025-10-02-preview` と `environmentMode=ConsumptionOnly`
+   を raw REST PUT に明示し、別 journal と新規 resource 名を使う。対象は専用
    Resource Group／VNet／subnet／NSG／Private DNS／internal v1 environment だけで、保存 log／
    有料 monitoring はなしとする。直後の inventory、各 LB の rule／2 台分の処理 byte、Phase 0 と
-   共有費用台帳、full の必要通信から 4,500 円 gate を判定する。1 分間隔の metrics、5 分の欠損
-   判定、10% 閾値を守り、T0 + 20 分で full 未確定なら削除開始、T0 + 60 分までの削除確認を目指す。
+   共有費用台帳、full の必要通信から 4,500 円 gate を判定する。provisioning 中からの 1 分間隔の metrics、
+   第4.1節の早い方の 5 分欠損期限、10% 閾値を守り、T0 + 20 分で full 未確定なら削除開始、
+   T0 + 60 分までの削除確認を目指す。
    削除開始後は full へ戻さず、遅延と未確定費を追跡する。
 5. 一意に照合した既存 ACR 内に、本 Issue 専用 repository だけに限定した
    token／scope map を用意し、exact-head image を build／push、digest 照合後に push credential
@@ -1529,7 +1556,10 @@ baseline SHA: <public commit SHA>
 head SHA: <public commit SHA>
 image exact-SHA一致: PASS / FAIL
 Phase 0承認済み条件付き414円見積り／残余リスク受容: 確認済み / 未確認
-Phase 0実行回数（最大1）: 0 / 1
+Phase 0追加1回の承認記録／別journal／新規名: 確認済み / 未確認
+Phase 0通算実行回数（最大2、初回1を含む）: 1 / 2
+Phase 0初回414円＋追加414円reserve／二重計上除外: PASS / FAIL / UNKNOWN
+Phase 0明示environmentMode=ConsumptionOnly／API2025-10-02-preview: 確認済み / 未確認
 Phase 0早期停止条件／metrics確認: PASS / FAIL / UNKNOWN / 未実行
 Phase 0実測inventory（LB2・各5rule以下／IP1・monitoringなし）: PASS / FAIL / UNKNOWN / 未実行
 Phase 0実費・未確定費・削除遅延の台帳計上: PASS / FAIL / UNKNOWN / 未実行
