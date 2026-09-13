@@ -5,8 +5,14 @@
 Issue #89 の `MVP_OPERATION_FINISH_V1` は OWNER 承認済みであり、同じ Local root が唯一の writer として実行する。
 過去の記録を保ったまま、費用は #75/#81 の既発生・未確定分と本番有効化・検証・回収を含む税込合計
 10,000 円、開始 gate は 9,000 円とする。過去 #75 の reserve 828 円と共有・未包含の暫定予備 1,500 円を維持する。
-Phase 0 は過去 2 回を消費済みのまま追加最大 2 回、通算最大 4 回。第 4 回は第 3 回の原因特定・修正、
-現在状態・回収・費用・残予算の確認後だけとする。旧 unknown と元 journal を変更せず、旧 PASS を新条件へ流用しない。
+当初の追加最大 2 回（通算 4 回）は消費済み。第 3・4 回は依存 provider の未登録による Environment PUT 拒否で停止し、
+期限内に専用資源を回収した。2026-09-13 の OWNER によるエラー解消・続行承認を、修正後の追加確認 1 回
+（通算第 5 回）に限定して引き継ぐ。第 6 回以降は含まない。旧 controller と全 journal を保存し、
+新しい承認・原因修正・回収証跡・費用見積りを専用 entrypoint に束縛する。
+第 3・4 回の新しい構成・存続時間の証跡により、両回の予備 828 円を 332 円へ更新し、第 5 回の 414 円を追加する。
+一括工程の保守見込みは税込 8,743 円（8,825 − 828 ＋ 332 ＋ 414）。両回の DNS zone を各 1 か月分と
+問い合わせ 100 万件分の予備で評価したもので、問い合わせ実測値・請求実額ではない。
+未知の管理通信等は既存共有予備 1,500 円に残す。旧 unknown と元 journal を変更せず、旧 PASS を新条件へ流用しない。
 以下の旧 4,500/5,000 円と残枠 0 の記述は当時の履歴であり、現在の費用・試行枠はこの追補と #89 が優先する。
 各試行・Job・保持時間、回収、通信・秘密・権限の条件は下記の限定例外以外維持する。
 #89 自身の automation-pause は同 Issue が明示承認した Local/CI/merge を止めず、他 Incident の停止条件は維持する。
@@ -112,6 +118,11 @@ package size を実質的に示す場合、公開記録では数値を伏せて�
 - 同目的の Open Issue、branch、PR、別 worker がない。
 - Azure Portal の既存正規認証 session が利用でき、正しい tenant／subscription を
   read-only で識別できる。
+- VNet 統合の前提として、同じ subscription の `Microsoft.App` と `Microsoft.ContainerService` が
+  両方とも `Registered` であることを作成直前に GET で確認する。Consumption-only でも必要である
+  （[Azure 公式 VNet 手順](https://learn.microsoft.com/en-us/azure/container-apps/vnet-custom)）。
+  不足時は試行 marker と専用 resource の作成前に停止する。登録修復は承認された namespace に限定し、
+  実際の register/action 権限を確認する。他 provider の一括登録や認証・権限チェックの迂回はしない。
 - Issue #74 で使用した read-only Production 監査経路が利用できる。ただし Production
   Container App の console や shell は開かない。
 - 本 Issue 専用 resource を既存 resource から一意に区別する naming／tag 計画と削除期限が
