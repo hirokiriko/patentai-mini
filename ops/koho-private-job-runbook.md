@@ -1,5 +1,26 @@
 # private staging one-shot 公報取込 Job Runbook
 
+## 現在の一括実行承認（2026-09-13）
+
+Issue #89 の `MVP_OPERATION_FINISH_V1` は OWNER 承認済みであり、同じ Local root が唯一の writer として実行する。
+過去の記録を保ったまま、費用は #75/#81 の既発生・未確定分と本番有効化・検証・回収を含む税込合計
+10,000 円、開始 gate は 9,000 円とする。過去 #75 の reserve 828 円と共有・未包含の暫定予備 1,500 円を維持する。
+Phase 0 は過去 2 回を消費済みのまま追加最大 2 回、通算最大 4 回。第 4 回は第 3 回の原因特定・修正、
+現在状態・回収・費用・残予算の確認後だけとする。旧 unknown と元 journal を変更せず、旧 PASS を新条件へ流用しない。
+以下の旧 4,500/5,000 円と残枠 0 の記述は当時の履歴であり、現在の費用・試行枠はこの追補と #89 が優先する。
+各試行・Job・保持時間、回収、通信・秘密・権限の条件は下記の限定例外以外維持する。
+#89 自身の automation-pause は同 Issue が明示承認した Local/CI/merge を止めず、他 Incident の停止条件は維持する。
+#75 の staging から Production を変更しない分離を保ち、受入・回収後の本番工程は #89 に所属する。
+
+OWNER は `STAGING_LOCAL_TRANSFER_V1` も承認した。新設する本 Issue 専用 Storage Account 1 個だけに、
+確認した Local 送信元の単一 public IPv4 を、calibration/JPA/JPB の upload/download・size/SHA-256 照合中だけ
+最大 120 分許可する。個別 IP 形式とし、範囲や別 IP へ自動で拡張しない。`defaultAction=Deny`、`bypass=None`、
+専用 subnet rule、HTTPS/TLS、匿名禁止を維持する。追加前に撤去期限を記録し、成功・失敗・timeout 時に直ちに撤去する。
+中断からの再開時は撤去を最優先する。rule 削除の read-back と Local からの新しい認証済み接続の拒否を確認してから
+package Job を開始する。Local 転送認証は Job へ渡さず、Job は object 限定 read-only SAS のままとする。
+同じ NAT 配下の client も network 許可範囲に含まれ得ること、IP rule に自動失効がないこと、撤去反映の遅延は受容済み。
+費用・試行枠・保持時間は増やさず、既存環境を変更しない。
+
 ## 1. 目的と適用範囲
 
 本書は、公開 JPA／JPB package を private Blob から ingress のない手動起動
@@ -493,7 +514,8 @@ Azure Monitor 向け rule は full で利用すると確定した場合だけ追
 PostgreSQL server 作成時に自動追加される `Microsoft.Storage` service endpoint は削除しない。
 private Blob は anonymous access を無効にし、Storage Account の network access を専用
 infrastructure subnet に限定した `Microsoft.Storage` service endpoint と object read-only SAS
-の組合せにする。ACR は repository-scoped token と `AcrPull` を使用できる permission mode、
+の組合せにする。Local の転送・検算中だけは冒頭の承認済み `STAGING_LOCAL_TRANSFER_V1` を適用し、
+単一 IP の撤去と新接続拒否を確認してから Job へ進む。ACR は repository-scoped token と `AcrPull` を使用できる permission mode、
 Japan East location、geo-replica 0、layer 配信先が `Storage.JapanEast` allowlist 内だけであることを
 read-only 確認する。ACR の [public REST／data endpoint と service tag の公式経路](https://learn.microsoft.com/en-us/azure/container-registry/container-registry-firewall-rules#allow-access-by-service-tag)
 と、ACA NSG 文書の v1／v2 に共通する private endpoint 脚注の適用を照合する。v1 だけが不可能、
