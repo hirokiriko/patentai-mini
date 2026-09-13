@@ -2,7 +2,7 @@ import { AiOperationStopped, isAiOperationStopped, withAiOperationBudget } from 
 import { generateObject } from "ai";
 import { z } from "zod";
 import { getErrorMessage, runWithAiRetries } from "./ai-resilience";
-import { getFastModel } from "./ai-model";
+import { aiProviderRetries, getFastModel } from "./ai-model";
 import {
   findCompanyNameHints,
   mergeCompanyNameHints,
@@ -324,13 +324,13 @@ async function generateQueriesWithinBudget(
           schema: searchQuerySetSchema,
           system: SYSTEM_PROMPT,
           prompt,
-          maxRetries: 1,
+          maxRetries: aiProviderRetries(1),
           maxOutputTokens: 8192,
           abortSignal,
         });
         return result.object;
       },
-      { attempts: 2 }
+      { attempts: aiProviderRetries(1) + 1 }
     );
   } catch (error) {
     if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();

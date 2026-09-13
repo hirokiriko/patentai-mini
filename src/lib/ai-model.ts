@@ -60,6 +60,10 @@ export function isGoogleProvider(): boolean {
   return getProvider() === "google";
 }
 
+export function aiProviderRetries(previous: number): number {
+  return getProvider() === "azure" ? 0 : previous;
+}
+
 export function getGoogleThinkingProviderOptions() {
   if (!isGoogleProvider()) return undefined;
   return {

@@ -30,6 +30,8 @@ export class AiOperationBudget {
   }
   wrapFetch(role: Role, transport: typeof fetch = globalThis.fetch): typeof fetch {
     return async (url, init) => {
+      let estimatedInputTokens = 0;
+      let maximumOutputTokens = 0;
       try {
         if (this.stopped || this.consumed[role] >= this.maximum[role] || init?.signal?.aborted ||
             typeof init?.body !== "string" || init.method !== "POST") throw new AiOperationStopped();
@@ -43,8 +45,9 @@ export class AiOperationBudget {
             !Number.isInteger(body.max_output_tokens) || body.max_output_tokens < 1 || body.max_output_tokens > 8192 ||
             body.tools?.length || body.previous_response_id || body.conversation) throw new AiOperationStopped();
         // Bound the complete serialized text/schema/system input conservatively.
-        // Byte-level BPE cannot have more text tokens than UTF-8 bytes. Reserve
-        // another 8192 for framing; images, tools and external context are refused.
+        // UTF-8 bytes plus 8192 framing tokens is an engineering estimate,
+        // not proof of the model's actual token count. Reconcile returned usage.
+        // Images, tools and external context are refused.
         for (const message of body.input) {
           if (!message || Object.keys(message).some(k => !["role", "content"].includes(k)) ||
               !["system", "developer", "user", "assistant"].includes(message.role) ||
@@ -55,14 +58,42 @@ export class AiOperationBudget {
         }
         if (body.text?.format?.type !== "json_schema" || !body.text.format.schema ||
             typeof body.text.format.schema !== "object") throw new AiOperationStopped();
-        if (Buffer.byteLength(init.body, "utf8") + 8192 > (role === "normal" ? 150_000 : 50_000)) throw new AiOperationStopped();
+        estimatedInputTokens = Buffer.byteLength(init.body, "utf8") + 8192;
+        maximumOutputTokens = body.max_output_tokens;
+        if (estimatedInputTokens > (role === "normal" ? 150_000 : 50_000)) throw new AiOperationStopped();
       } catch { this.stopped = true; throw new AiOperationStopped(); }
       // Consume before transport and retain it on failure, timeout or missing usage.
+      // The Local operator reserves every possible send's maximum model context
+      // cost durably before each acceptance request; these receipts settle it.
       this.consumed[role]++;
-      try { return await transport(url, { ...init, redirect: "error" }); }
-      catch (error) {
-        if (init?.signal?.aborted || isAiOperationStopped(error)) { this.stopped = true; throw new AiOperationStopped(); }
-        throw error;
+      const signal = AbortSignal.any([AbortSignal.timeout(35_000), ...(init?.signal ? [init.signal] : [])]);
+      let abort: (() => void) | undefined;
+      const aborted = new Promise<never>((_, reject) => {
+        abort = () => reject(new AiOperationStopped());
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      });
+      try {
+        const response = await Promise.race([transport(url, { ...init, signal, redirect: "error" }), aborted]);
+        if (!response.ok) throw new AiOperationStopped();
+        const result = await Promise.race([response.clone().json(), aborted]);
+        const usage = result?.usage;
+        if (!usage || !Number.isSafeInteger(usage.input_tokens) || usage.input_tokens < 0 ||
+            !Number.isSafeInteger(usage.output_tokens) || usage.output_tokens < 0 ||
+            usage.input_tokens > estimatedInputTokens ||
+            usage.input_tokens > (role === "normal" ? 150_000 : 50_000) ||
+            usage.output_tokens > maximumOutputTokens || signal.aborted) throw new AiOperationStopped();
+        console.info("ai_operation_usage", JSON.stringify({ role, attempt: this.consumed[role],
+          estimatedInputTokens, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens,
+          status: "reconciled" }));
+        return response;
+      } catch {
+        this.stopped = true;
+        console.info("ai_operation_usage", JSON.stringify({ role, attempt: this.consumed[role],
+          estimatedInputTokens, status: "reservation_retained" }));
+        throw new AiOperationStopped();
+      } finally {
+        if (abort) signal.removeEventListener("abort", abort);
       }
     };
   }

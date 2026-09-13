@@ -360,6 +360,18 @@ confirmation. Production writes/deploy remain gated by the Issue's connectivity,
 cost and residual conditions. Do not return already-authorized routine work to
 OWNER. This is not general authorization for other Issues or customer data.
 
+Issue #89's OWNER-approved `PRODUCTION_FINISH_V2` adds only its existing-route
+and single-source-IPv4 temporary DB firewall exception (existing public access,
+maximum six hours, exact-rule removal/read-back). Never enable public access or
+create infrastructure. Preserve the fifth attempt's managed tracking UNKNOWN
+as accepted residual under the Issue's danger and budget conditions; this does
+not excuse any new temporary object with unconfirmed cleanup. AI inputs use a
+complete-payload conservative estimate, maximum-context cost reservations and
+post-send usage reconciliation. Missing/excess usage or timeout stops further
+sends and fails watch without advancing its cursor. Reuse completed unchanged
+Local validation, continue the approved merge/deploy/production/UI phases, and
+record real acceptance separately from the unresolved historical benchmark.
+
 Each implementation Issue must state the purpose, editable scope, prohibited
 scope, required work, acceptance criteria, out-of-scope items, required tests,
 Production/deploy impact, rollback, execution route, start and completion state

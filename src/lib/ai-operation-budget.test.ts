@@ -14,9 +14,9 @@ const request = (changes = {}) => ({ method: "POST", body: JSON.stringify({
 describe("actual provider send budgets", () => {
   it.each(["normal", "fast"] as const)("refuses the next %s send without transport and retains unknown spend", async role => {
     const budget = new AiOperationBudget({ normal: 12, fast: 8 });
-    const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error("fictional transport failure"));
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ usage: { input_tokens: 20, output_tokens: 10 } }));
     const guarded = budget.wrapFetch(role, transport), maximum = role === "normal" ? 12 : 8;
-    for (let n = 0; n < maximum; n++) await expect(guarded(url, request())).rejects.toThrow("fictional transport failure");
+    for (let n = 0; n < maximum; n++) await guarded(url, request());
     await expect(guarded(url, request())).rejects.toBeInstanceOf(AiOperationStopped);
     expect(transport).toHaveBeenCalledTimes(maximum); expect(budget.used[role]).toBe(maximum);
   });
@@ -40,7 +40,7 @@ describe("actual provider send budgets", () => {
       schema: z.object({ ok: z.boolean() }), prompt: "fictional", maxOutputTokens: 8192,
       maxRetries: 1, abortSignal: AbortSignal.timeout(10_000) }), { attempts: 2, delayMs: 0 }).catch(e => e);
     expect(isAiOperationStopped(error)).toBe(true);
-    expect(transport).toHaveBeenCalledTimes(2); expect(budget.used.fast).toBe(2);
+    expect(transport).toHaveBeenCalledTimes(1); expect(budget.used.fast).toBe(1);
   });
   it("passes a real installed Azure SDK plain-text structured request", async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
@@ -63,7 +63,7 @@ describe("actual provider send budgets", () => {
   it("copies limits and exposes consumption as an immutable snapshot", async () => {
     const maximum = { normal: 1, fast: 0 }, budget = new AiOperationBudget(maximum);
     maximum.normal = 12;
-    const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}"));
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ usage: { input_tokens: 20, output_tokens: 10 } }));
     const guarded = budget.wrapFetch("normal", transport);
     const before = budget.used;
     await guarded(url, request());
@@ -77,5 +77,24 @@ describe("actual provider send budgets", () => {
     expect(error).toBeInstanceOf(AiOperationStopped);
     expect(error.message).toBe("ai_operation_stopped");
     expect(error.cause).toBeUndefined(); expect(error.errors).toBeUndefined();
+  });
+  it.each([undefined, {}, { input_tokens: -1, output_tokens: 10 },
+    { input_tokens: 1.5, output_tokens: 10 }, { input_tokens: 20, output_tokens: -1 },
+    { input_tokens: 20, output_tokens: 8193 }, { input_tokens: 9000, output_tokens: 10 },
+    { input_tokens: 150001, output_tokens: 10 }])("retains unknown reservation and stops both roles on invalid usage", async usage => {
+    const budget = new AiOperationBudget({ normal: 3, fast: 3 });
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ usage }));
+    await expect(budget.wrapFetch("normal", transport)(url, request())).rejects.toBeInstanceOf(AiOperationStopped);
+    await expect(budget.wrapFetch("fast", transport)(url, request())).rejects.toBeInstanceOf(AiOperationStopped);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(budget.used).toEqual({ normal: 1, fast: 0 });
+  });
+  it("does not retain private transport errors or retry an unknown send", async () => {
+    const budget = new AiOperationBudget({ normal: 3, fast: 0 });
+    const transport = vi.fn<typeof fetch>().mockRejectedValue(new Error("fictional-private-body"));
+    const guarded = budget.wrapFetch("normal", transport);
+    await expect(guarded(url, request())).rejects.toThrow("ai_operation_stopped");
+    await expect(guarded(url, request())).rejects.toThrow("ai_operation_stopped");
+    expect(transport).toHaveBeenCalledTimes(1); expect(budget.used.normal).toBe(1);
   });
 });

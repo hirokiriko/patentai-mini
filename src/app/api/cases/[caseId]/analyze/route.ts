@@ -8,6 +8,7 @@ import {
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { parseJsonOrNull } from "@/lib/safe-json";
+import { isAiOperationStopped } from "@/lib/ai-operation-budget";
 
 export const maxDuration = 60;
 
@@ -172,7 +173,10 @@ export async function POST(
       results: count,
     });
   } catch (err) {
-    console.error("[analyze] analysis failed:", err);
+    if (isAiOperationStopped(err)) {
+      return NextResponse.json({ error: "ai_operation_stopped" }, { status: 503 });
+    }
+    console.error("[analyze] analysis failed");
     const fallbackRows = fallbackAnalysisRows(caseIdNum, extracted, priorArts);
     const count = await comparisonResultRepo.replaceByCaseId(
       caseIdNum,

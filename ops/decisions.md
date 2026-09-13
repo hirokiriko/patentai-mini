@@ -1,5 +1,25 @@
 # Decisions
 
+## Issue #89: PRODUCTION_FINISH_V2
+
+- Date: 2026-09-14
+- Status: OWNER approved; individual production acceptance requires evidence.
+- Reuse existing management routes. If necessary, permit one source IPv4 on the
+  existing public DB, for at most six hours, with exact-rule removal/read-back.
+  No new infrastructure, broad allowance or public-access enablement.
+- Preserve historical fifth-attempt managed tracking UNKNOWN as accepted
+  residual under the Issue's explicit danger/reserve conditions. Current
+  temporary-object cleanup must be independently confirmed.
+- Replace unverified exact pre-send token counting with the complete payload's
+  UTF-8 byte estimate plus framing margin, maximum-context cost reservation,
+  and post-send usage reconciliation. Azure retries are zero. Missing/excess
+  usage, communication failure and timeout stop sends; watch cannot persist
+  fallback success or advance its cursor for these failures.
+- Preserve normal12/fast8 cumulative sends, 8192 output, the JPY9000 start gate
+  and JPY10000 ceiling. Completed unchanged Local input validation is reusable.
+  Production corpus, AI, browser and new cleanup each require actual evidence.
+- Procedure and cost sources: `ops/koho-local-import.md`.
+
 ## Issue #89: LOCAL_IMPORT_FIRST_V1
 
 - Date: 2026-09-13
