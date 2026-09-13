@@ -1,3 +1,4 @@
+import { isAiOperationStopped } from "../ai-operation-budget";
 import type { ComparisonResult } from "../analyze-overlap";
 import {
   extractedClaimsSchema,
@@ -506,7 +507,8 @@ export async function runPatentWatch(
           if (!Array.isArray(analysis)) throw new Error("invalid analysis");
           findings = buildAiFindings(extracted, selected, analysis);
         }
-      } catch {
+      } catch (error) {
+        if (isAiOperationStopped(error)) throw error;
         findings = buildFallbackFindings(extracted, candidates);
         analyzedCount = findings.length;
         analysisMode = "fallback";

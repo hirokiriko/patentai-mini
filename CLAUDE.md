@@ -17,6 +17,13 @@ patentability, validity, infringement, or rejection outcomes.
 
 ## Canonical workflow
 
+Issue #89's OWNER-approved `LOCAL_IMPORT_FIRST_V1` permits its bounded Local
+implementation, isolated real-DB validation and conditional production phases.
+Use its latest Issue body and the matching AGENTS.md exception. Issue #75 / PR
+#76's Azure benchmark remains incomplete and deferred; no sixth construction
+or budget increase is authorized. Continue safe Local work while external
+production gates remain unresolved. Do not infer production success from docs.
+
 - Read the latest `AGENTS.md` before making changes.
 - GitHub Issues are the source of truth for tasks, scope, acceptance criteria,
   progress, validation, and handoff.

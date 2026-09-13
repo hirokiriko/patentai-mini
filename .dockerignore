@@ -5,6 +5,8 @@
 .claude
 .tools
 node_modules
+_imports
+.koho-ops
 .pnpm-store
 vendor
 out

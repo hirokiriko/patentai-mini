@@ -1,7 +1,15 @@
 import { generateObject } from "ai";
+import { withAiOperationBudget } from "./ai-operation-budget";
 import { z } from "zod";
 import { getGoogleThinkingProviderOptions, getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
+
+export function screenPriorArt(...args: Parameters<typeof screenPriorArtWithinBudget>) {
+  return withAiOperationBudget({ normal: 3, fast: 0 }, () => screenPriorArtWithinBudget(...args));
+}
+export function analyzeOverlap(...args: Parameters<typeof analyzeOverlapWithinBudget>) {
+  return withAiOperationBudget({ normal: 3, fast: 0 }, () => analyzeOverlapWithinBudget(...args));
+}
 
 // --- Step 1: スクリーニング ---
 
@@ -19,7 +27,7 @@ interface PriorArtSummary {
   abstract: string | null;
 }
 
-export async function screenPriorArt(
+async function screenPriorArtWithinBudget(
   extracted: ExtractedClaims,
   priorArts: PriorArtSummary[]
 ): Promise<{ relevantDocIds: number[]; reasoning: string }> {
@@ -47,7 +55,7 @@ export async function screenPriorArt(
     }),
     maxRetries: 2,
     maxOutputTokens: 8192,
-    timeout: 35000,
+    abortSignal: AbortSignal.timeout(35_000),
     ...(providerOptions ? { providerOptions } : {}),
   });
 
@@ -109,7 +117,7 @@ interface PriorArtDetail {
   claimsText: string | null;
 }
 
-export async function analyzeOverlap(
+async function analyzeOverlapWithinBudget(
   extracted: ExtractedClaims,
   priorArts: PriorArtDetail[]
 ): Promise<ComparisonResult[]> {
@@ -161,7 +169,7 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
     }),
     maxRetries: 2,
     maxOutputTokens: 8192,
-    timeout: 35000,
+    abortSignal: AbortSignal.timeout(35_000),
     ...(providerOptions ? { providerOptions } : {}),
   });
 

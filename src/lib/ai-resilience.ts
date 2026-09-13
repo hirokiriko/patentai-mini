@@ -1,3 +1,4 @@
+import { AiOperationStopped, isAiOperationStopped } from "./ai-operation-budget";
 type RetryOptions = {
   attempts?: number;
   delayMs?: number;
@@ -25,9 +26,10 @@ export async function runWithAiRetries<T>(
     try {
       return await operation();
     } catch (error) {
+      if (isAiOperationStopped(error)) throw new AiOperationStopped();
       lastError = error;
       console.warn(
-        `[${label}] attempt ${attempt}/${attempts} failed: ${getErrorMessage(error)}`
+        `[${label}] attempt ${attempt}/${attempts} failed`
       );
       if (attempt < attempts) {
         await sleep(delayMs * attempt);

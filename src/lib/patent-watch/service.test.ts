@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AiOperationStopped } from "../ai-operation-budget";
 
 import type { ExtractedClaims } from "../extract-claims";
 import { createPatentWatchSourceKey } from "./domain";
@@ -162,6 +163,22 @@ function successfulAnalysis(priorDocId: number) {
 }
 
 describe("patent watch run service", () => {
+  it.each(["screening", "detail", "timeout"])("fails %s budget/timeout without fallback or cursor success", async stage => {
+    const repository = new FakeRunRepository(start(), batch([source(10)]));
+    const stop = stage === "timeout" ? new DOMException("fictional", "TimeoutError") : new AiOperationStopped();
+    const screen = vi.fn(async () => { if (stage !== "detail") throw stop; return { relevantDocIds: [10], reasoning: "fictional" }; });
+    const analyze = vi.fn(async () => { throw stop; });
+    await expect(runPatentWatch(7, { repository, screenPriorArt: screen, analyzeOverlap: analyze })).rejects.toThrow();
+    expect(repository.success).toHaveLength(0); expect(repository.failure).toHaveLength(1);
+  });
+  it("makes no AI sends when a completed cursor has no new import", async () => {
+    const current = start();
+    const repository = new FakeRunRepository(start({ baseCursor: current.upperCursor }), batch([source(10)]));
+    const screen = vi.fn(), analyze = vi.fn();
+    await runPatentWatch(7, { repository, screenPriorArt: screen, analyzeOverlap: analyze });
+    expect(screen).not.toHaveBeenCalled(); expect(analyze).not.toHaveBeenCalled();
+    expect(repository.success[0].findings).toHaveLength(0);
+  });
   it("uses the fixed upper cursor and initial monitoring date", async () => {
     const inScope = source(10);
     const beforeMonitoring = source(11, { publicationDate: "20960228" });

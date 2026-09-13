@@ -348,6 +348,18 @@ belong in this work's scoped PR and are not an additional recovery gate.
 
 ### Self-contained Issues and GitHub Handoff
 
+For Issue #89 only, OWNER-approved `LOCAL_IMPORT_FIRST_V1` replaces Azure
+staging validation with isolated Local PostgreSQL 16 and the same two public
+packages. Issue #75 / PR #76 remain incomplete and deferred; their benchmark or
+merge is not an Issue #89 prerequisite. No sixth Azure construction or budget
+increase is authorized. Follow Issue #89's JPY10,000 ceiling, JPY9,000 start
+gate, immutable history, exact-code validation, independent Local review and
+conditional merge/deploy requirements. Root is the sole writer; reviewers are
+read-only. Safe Local implementation/testing continues during residual/cost
+confirmation. Production writes/deploy remain gated by the Issue's connectivity,
+cost and residual conditions. Do not return already-authorized routine work to
+OWNER. This is not general authorization for other Issues or customer data.
+
 Each implementation Issue must state the purpose, editable scope, prohibited
 scope, required work, acceptance criteria, out-of-scope items, required tests,
 Production/deploy impact, rollback, execution route, start and completion state

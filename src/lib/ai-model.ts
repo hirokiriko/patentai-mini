@@ -1,3 +1,4 @@
+import { boundedAzureFetch } from "./ai-operation-budget";
 import { createAzure } from "@ai-sdk/azure";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
@@ -35,9 +36,10 @@ function readAzureEndpoint() {
   );
 }
 
-function getAzureProvider() {
+function getAzureProvider(role: "normal" | "fast") {
   return createAzure({
     ...readAzureEndpoint(),
+    fetch: boundedAzureFetch(role),
     apiKey: readRequiredEnv("AZURE_API_KEY"),
     apiVersion: readRequiredEnv("AZURE_OPENAI_API_VERSION"),
   });
@@ -84,7 +86,7 @@ export function getModel() {
     case "openai":
       return openai(model ?? "gpt-4o");
     case "azure":
-      return getAzureProvider()(getAzureDeploymentName());
+      return getAzureProvider("normal")(getAzureDeploymentName());
     default:
       throw new Error(`Unknown AI_PROVIDER: ${provider}`);
   }
@@ -104,7 +106,7 @@ export function getFastModel() {
     case "openai":
       return openai("gpt-4o-mini");
     case "azure":
-      return getAzureProvider()(getAzureFastDeploymentName());
+      return getAzureProvider("fast")(getAzureFastDeploymentName());
     default:
       throw new Error(`Unknown AI_PROVIDER: ${provider}`);
   }

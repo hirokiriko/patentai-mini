@@ -1,5 +1,20 @@
 # Decisions
 
+## Issue #89: LOCAL_IMPORT_FIRST_V1
+
+- Date: 2026-09-13
+- Status: Accepted by OWNER; production acceptance remains pending.
+- Decision: Stop new Azure staging construction. Validate the same 1,628 public
+  documents on an isolated Local PostgreSQL 16 using a dedicated administrator
+  import entrypoint and shared parser/transaction. Keep Issue #75 / PR #76's
+  Azure benchmark incomplete and deferred, outside Issue #89 prerequisites.
+- Preserve the JPY10,000 total ceiling, JPY9,000 start gate, historical failures
+  and unknowns; do not create a sixth Azure environment or expand the budget.
+  Continue safe Local work during cost/residual confirmation. Production still
+  requires the approved existing TLS connection, cost and residual gates.
+- Details and verification: `ops/koho-local-import.md`. This decision does not
+  authorize general customer-data acceptance or automatic acquisition/watch.
+
 > このファイルは恒久的な設計判断の正本です。現在状態は最新のAccepted判断とdefault branchを照合してください。
 > 過去判断と現行実装が矛盾する場合は削除せず、後続判断で明示的にsupersedeします。
 

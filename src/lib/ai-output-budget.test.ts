@@ -72,6 +72,8 @@ function assertBudget(deployment: string, calls: number) {
     expect(body.max_output_tokens).toBe(8192);
     expect(body.text.format.type).toBe("json_schema");
     expect(body.text.format.schema.type).toBe("object");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
   }
 }
 
