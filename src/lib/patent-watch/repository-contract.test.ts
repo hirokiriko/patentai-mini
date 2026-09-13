@@ -131,9 +131,9 @@ describe("PatentWatchRepository public contract", () => {
 
   it("serializes import persistence with upper capture and assigns a monotonic cursor", async () => {
     const repository = await source(REPOSITORY_URL);
-    const savePlanStart = repository.indexOf("async savePlan");
+    const savePlanStart = repository.indexOf("export async function saveKohoImportPlan");
     const savePlanEnd = repository.indexOf(
-      "async findRunBySource",
+      "export const kohoImportRepo",
       savePlanStart,
     );
     const savePlan = repository.slice(savePlanStart, savePlanEnd);

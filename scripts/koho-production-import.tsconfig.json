@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS", "moduleResolution": "Node", "noEmit": false,
+    "incremental": false, "outDir": "../.koho-ops", "rootDir": "..",
+    "jsx": "react-jsx"
+  },
+  "include": ["koho-production-import.ts"],
+  "exclude": ["../node_modules", "../.koho-ops"]
+}

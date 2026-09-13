@@ -43,6 +43,8 @@ next-env.d.ts
 
 # project data
 data/
+/_imports/
+/.koho-ops/
 
 # local config
 .claude/accounts.local.json

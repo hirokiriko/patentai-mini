@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractClaims, type ExtractedClaims } from "./extract-claims";
 import { generateQueries, type SearchQuerySet } from "./generate-queries";
 import { analyzeOverlap, screenPriorArt } from "./analyze-overlap";
@@ -8,15 +8,17 @@ const transport = vi.hoisted(() => ({ fetch: vi.fn<typeof fetch>() }));
 // Exercise the installed Azure provider and AI SDK without network or credentials.
 vi.mock("./ai-model", async () => {
   const { createAzure } = await import("@ai-sdk/azure");
-  const azure = createAzure({
+  const { boundedAzureFetch } = await import("./ai-operation-budget");
+  const azure = (role: "normal" | "fast") => createAzure({
     baseURL: "https://example.invalid/openai",
     apiKey: "test-only",
     apiVersion: "v1",
-    fetch: transport.fetch,
+    fetch: boundedAzureFetch(role),
   });
   return {
-    getFastModel: () => azure("test-fast"),
-    getModel: () => azure("test-normal"),
+    getFastModel: () => azure("fast")("test-fast"),
+    getModel: () => azure("normal")("test-normal"),
+    aiProviderRetries: () => 0,
     getGoogleThinkingProviderOptions: () => undefined,
   };
 });
@@ -72,11 +74,14 @@ function assertBudget(deployment: string, calls: number) {
     expect(body.max_output_tokens).toBe(8192);
     expect(body.text.format.type).toBe("json_schema");
     expect(body.text.format.schema.type).toBe("object");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
   }
 }
 
 describe("AI output budget reaches the Azure request", () => {
-  beforeEach(() => transport.fetch.mockReset());
+  beforeEach(() => { transport.fetch.mockReset(); vi.stubGlobal("fetch", transport.fetch); });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("bounds extraction and returns the AI result rather than fallback", async () => {
     transport.fetch.mockResolvedValueOnce(respond(extracted));
@@ -102,11 +107,11 @@ describe("AI output budget reaches the Azure request", () => {
     assertBudget("test-normal", 1);
   });
 
-  it("retains the same bound on an SDK retry", async () => {
+  it("stops without SDK or outer retry after unknown billed usage", async () => {
     transport.fetch
       .mockResolvedValueOnce(Response.json({ error: { message: "Test rate limit", type: "rate_limit_error" } }, { status: 429, headers: { "retry-after": "0" } }))
       .mockResolvedValueOnce(respond(screening));
-    expect(await screenPriorArt(extracted, [priorArt])).toEqual(screening);
-    assertBudget("test-normal", 2);
+    await expect(screenPriorArt(extracted, [priorArt])).rejects.toThrow("ai_operation_stopped");
+    assertBudget("test-normal", 1);
   });
 });

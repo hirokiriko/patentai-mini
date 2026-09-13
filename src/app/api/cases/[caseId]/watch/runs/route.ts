@@ -1,3 +1,4 @@
+import { withAiOperationBudget } from "@/lib/ai-operation-budget";
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import { createPatentWatchRunHandlers } from "@/lib/patent-watch/api";
 import { runPatentWatch } from "@/lib/patent-watch/service";
@@ -10,11 +11,11 @@ export const maxDuration = 120;
 
 const handlers = createPatentWatchRunHandlers({
   executeRun: (caseId) =>
-    runPatentWatch(caseId, {
+    withAiOperationBudget({ normal: 6, fast: 0 }, () => runPatentWatch(caseId, {
       repository: patentWatchRepo,
       screenPriorArt,
       analyzeOverlap,
-    }),
+    })),
 });
 
 export const POST = handlers.POST;

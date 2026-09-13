@@ -906,14 +906,42 @@ export const comparisonResultRepo: ComparisonResultRepository = {
   },
 };
 
-export const kohoImportRepo: KohoImportRepository = {
-  async savePlan(plan) {
+/** Shared persistence; the Local administrator entrypoint requests immutable reuse. */
+export async function saveKohoImportPlan(
+  database: typeof db,
+  plan: Parameters<KohoImportRepository["savePlan"]>[0],
+  reuseExisting = false,
+) {
     const validatedPlan = validatedPlanSnapshot(plan);
 
-    return db.transaction(async (tx) => {
+    return database.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${KOHO_IMPORT_WATCH_CURSOR_LOCK_ID}::bigint)`,
       );
+      if (reuseExisting) {
+        const [existing] = await tx.select().from(kohoImportRuns).where(and(
+          eq(kohoImportRuns.packageType, validatedPlan.packageType),
+          eq(kohoImportRuns.sourceSha256, validatedPlan.sourceSha256),
+        ));
+        if (existing) {
+          const rows = await tx.select().from(kohoImportDocuments)
+            .where(eq(kohoImportDocuments.importId, existing.importId))
+            .orderBy(asc(kohoImportDocuments.normalizedEntryPath));
+          const { importId: _id, createdAt: _created, updatedAt: _updated, ...run } = existing;
+          void _id; void _created; void _updated;
+          const documents = rows.map(({ documentId, importId, ...document }) => {
+            void documentId; void importId; return document;
+          });
+          const stored = createKohoImportPlanSnapshot({ ...run, documents });
+          // Canonical contracts include every document field, not just counts.
+          const canonical = (value: typeof validatedPlan) => JSON.stringify({ ...value,
+            documents: [...value.documents].sort((a, b) => a.normalizedEntryPath < b.normalizedEntryPath ? -1 : a.normalizedEntryPath > b.normalizedEntryPath ? 1 : 0) });
+          if (canonical(stored) !== canonical(validatedPlan)) {
+            throw new Error("koho_existing_import_mismatch");
+          }
+          return { run: toKohoImportRun(existing), savedDocumentCount: rows.length };
+        }
+      }
       const [latestCursor] = await tx
         .select({ updatedAt: kohoImportRuns.updatedAt })
         .from(kohoImportRuns)
@@ -991,11 +1019,19 @@ export const kohoImportRepo: KohoImportRepository = {
         savedDocumentCount = inserted.length;
       }
 
+      if (savedDocumentCount !== validatedPlan.documentCount) {
+        throw new Error("koho_saved_document_count_mismatch");
+      }
       return {
         run: toKohoImportRun(runRow),
         savedDocumentCount,
       };
     });
+}
+
+export const kohoImportRepo: KohoImportRepository = {
+  async savePlan(plan) {
+    return saveKohoImportPlan(db, plan);
   },
 
   async findRunBySource(packageType, sourceSha256) {

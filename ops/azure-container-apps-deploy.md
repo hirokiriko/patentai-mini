@@ -1,5 +1,16 @@
 # Azure Container Apps Deploy Notes
 
+Issue #89's `LOCAL_IMPORT_FIRST_V1` uses isolated Local validation before its
+bounded existing-production import and manual-watch acceptance. Issue #75 / PR
+#76's Azure benchmark remains deferred. Follow `ops/koho-local-import.md` and
+the latest Issue body; a successful build or Local import does not satisfy the
+production connection, residual, cost, migration, AI or browser gates.
+
+The OWNER-approved `PRODUCTION_FINISH_V2` supplement permits the Issue's
+limited existing-production connection and residual-risk handling. Follow its
+single-IPv4/six-hour removal requirement and post-usage AI cost reconciliation;
+do not create new Azure infrastructure or widen general deployment permissions.
+
 This repository is prepared to build the Next.js container image and deploy it
 to Azure Container Apps through GitHub Actions.
 

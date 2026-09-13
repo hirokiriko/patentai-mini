@@ -1,7 +1,8 @@
+import { AiOperationStopped, isAiOperationStopped, withAiOperationBudget } from "./ai-operation-budget";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { getErrorMessage, runWithAiRetries } from "./ai-resilience";
-import { getFastModel } from "./ai-model";
+import { aiProviderRetries, getFastModel } from "./ai-model";
 import {
   findCompanyNameHints,
   mergeCompanyNameHints,
@@ -307,12 +308,13 @@ function buildFallbackQueries(extracted: ExtractedClaims): SearchQuerySet {
   };
 }
 
-export async function generateQueries(
+async function generateQueriesWithinBudget(
   extracted: ExtractedClaims
 ): Promise<SearchQuerySet> {
   const prompt = compactExtractedForQueries(extracted);
 
   let object: SearchQuerySet;
+  const abortSignal = AbortSignal.timeout(35_000);
   try {
     object = await runWithAiRetries(
       "generate-queries",
@@ -322,15 +324,16 @@ export async function generateQueries(
           schema: searchQuerySetSchema,
           system: SYSTEM_PROMPT,
           prompt,
-          maxRetries: 1,
+          maxRetries: aiProviderRetries(1),
           maxOutputTokens: 8192,
-          timeout: 35000,
+          abortSignal,
         });
         return result.object;
       },
-      { attempts: 2 }
+      { attempts: aiProviderRetries(1) + 1 }
     );
   } catch (error) {
+    if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();
     console.warn(
       `[generate-queries] using fallback queries after AI failure: ${getErrorMessage(error)}`
     );
@@ -378,4 +381,8 @@ export async function generateQueries(
       ].slice(0, 5),
     },
   };
+}
+
+export function generateQueries(extracted: ExtractedClaims): Promise<SearchQuerySet> {
+  return withAiOperationBudget({ normal: 0, fast: 4 }, () => generateQueriesWithinBudget(extracted));
 }

@@ -11,6 +11,8 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    ".koho-ops/**",
+    "_imports/**",
     "next-env.d.ts",
     // postinstall がコピーする pdfjs-dist の本体・assets。サードパーティのバンドル済み
     // コードなので lint の対象から外す（本番 Lambda 同梱のため repo に置いている）。

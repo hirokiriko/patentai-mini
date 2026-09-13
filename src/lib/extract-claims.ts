@@ -1,7 +1,8 @@
+import { AiOperationStopped, isAiOperationStopped, withAiOperationBudget } from "./ai-operation-budget";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { getErrorMessage, runWithAiRetries } from "./ai-resilience";
-import { getFastModel } from "./ai-model";
+import { aiProviderRetries, getFastModel } from "./ai-model";
 
 const claimElementSchema = z.object({
   type: z.enum(["component", "action", "constraint", "io", "effect"]),
@@ -203,12 +204,13 @@ function buildFallbackExtractedClaims(parsedText: string): ExtractedClaims {
   };
 }
 
-export async function extractClaims(
+async function extractClaimsWithinBudget(
   parsedText: string
 ): Promise<ExtractedClaims> {
   const trimmed = trimPatentText(parsedText);
 
   // 抽出は高速モデルを使用（重い推論モデルは同期リクエストで遅くなりやすいため）
+  const abortSignal = AbortSignal.timeout(35_000);
   try {
     return await runWithAiRetries(
       "extract-claims",
@@ -218,9 +220,9 @@ export async function extractClaims(
           schema: extractedClaimsSchema,
           system: SYSTEM_PROMPT,
           prompt: trimmed,
-          maxRetries: 1,
+          maxRetries: aiProviderRetries(1),
           maxOutputTokens: 8192,
-          timeout: 35000,
+          abortSignal,
         });
 
         if (object.claims.length === 0) {
@@ -232,12 +234,17 @@ export async function extractClaims(
 
         return object;
       },
-      { attempts: 2 }
+      { attempts: aiProviderRetries(1) + 1 }
     );
   } catch (error) {
+    if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();
     console.warn(
       `[extract-claims] using fallback parser after AI failure: ${getErrorMessage(error)}`
     );
     return buildFallbackExtractedClaims(trimmed);
   }
+}
+
+export function extractClaims(parsedText: string): Promise<ExtractedClaims> {
+  return withAiOperationBudget({ normal: 0, fast: 4 }, () => extractClaimsWithinBudget(parsedText));
 }
