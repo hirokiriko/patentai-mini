@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type WatchSettingView = {
   watchId: number;
@@ -72,10 +72,12 @@ export type PatentWatchFetch = (
 export async function fetchPatentWatchStatus(
   caseId: number,
   fetchImpl: PatentWatchFetch = fetch,
+  signal?: AbortSignal,
 ): Promise<Response> {
   return fetchImpl(`/api/cases/${caseId}/watch`, {
     method: "GET",
     cache: "no-store",
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -99,12 +101,88 @@ export function isPatentWatchUnavailable(
   );
 }
 
-const EMPTY_SUMMARY: WatchSummary = {
-  setting: null,
-  latestRun: null,
-  unreviewedFindingCount: 0,
-  runs: [],
-  findings: [],
+export type WatchAttempt = {
+  kind: "completed" | "fallback" | "blocked" | "stopped" | "failed" | "unknown";
+  message: string;
+};
+
+const ERROR_CODES = new Set([
+  "watch_disabled", "watch_not_configured", "watch_claims_not_ready",
+  "watch_run_in_progress", "invalid_watch_setting", "invalid_watch_run_request",
+  "case_not_found", "watch_corpus_unavailable", "watch_unavailable",
+  "watch_ai_stopped", "watch_analysis_failed", "watch_internal_error",
+]);
+
+function errorCode(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const value = body as { code?: unknown; error?: unknown };
+  const nested = value.error && typeof value.error === "object"
+    ? (value.error as { code?: unknown }).code : value.error;
+  const code = value.code ?? nested;
+  return typeof code === "string" && ERROR_CODES.has(code) ? code : null;
+}
+
+// The deadline covers both headers and body. Never retry a write automatically.
+async function watchResponse(
+  request: (signal: AbortSignal) => Promise<Response>,
+  timeoutMs: number,
+): Promise<{ response: Response; body: unknown }> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      (async () => {
+        const response = await request(controller.signal);
+        const body: unknown = await response.json().catch(() => null);
+        return { response, body };
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("watch_request_unconfirmed"));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isWatchSummary(value: unknown): value is WatchSummary {
+  if (!value || typeof value !== "object") return false;
+  const data = value as WatchSummary;
+  return (data.setting === null || (typeof data.setting === "object" &&
+    data.setting !== undefined && typeof data.setting.enabled === "boolean" &&
+    typeof data.setting.monitoringFromDate === "string")) &&
+    (data.latestRun === null || isRun(data.latestRun)) &&
+    Number.isSafeInteger(data.unreviewedFindingCount) && data.unreviewedFindingCount >= 0 &&
+    Array.isArray(data.runs) && data.runs.every(isRun) && Array.isArray(data.findings);
+}
+
+function isRun(value: unknown): value is WatchRunView {
+  if (!value || typeof value !== "object") return false;
+  const run = value as WatchRunView;
+  return Number.isSafeInteger(run.runId) && run.runId > 0 &&
+    ["running", "failed", "completed"].includes(run.status) &&
+    [run.scannedDocumentCount, run.prefilteredCount, run.analyzedCount,
+      run.newFindingCount, run.fallbackFindingCount].every(n => Number.isSafeInteger(n) && n >= 0) &&
+    ["none", "ai", "fallback"].includes(run.analysisMode);
+}
+
+function attemptLabel(kind: WatchAttempt["kind"]): string {
+  switch (kind) {
+    case "completed": return "今回の実行：監視完了";
+    case "fallback": return "今回の実行：監視完了（fallback・人による確認が必要）";
+    case "blocked": return "今回の実行：前提条件を確認してください";
+    case "stopped": return "今回の実行：AI保護停止";
+    case "failed": return "今回の実行：サーバーで処理失敗";
+    case "unknown": return "今回の実行：結果不明";
+  }
+}
+
+const UNKNOWN_ATTEMPT: WatchAttempt = {
+  kind: "unknown",
+  message: "応答を確認できず、今回の実行結果は不明です。保存済み履歴を確認してください。再読み込みは監視を再実行しません。結果不明のまま再実行せず、判断できない場合は管理者にお問い合わせください。",
 };
 
 function toDateInput(value: string): string {
@@ -161,26 +239,6 @@ function loadedState(latestRun: WatchRunView | null): PatentWatchLoadState {
   return "ready";
 }
 
-async function readErrorCode(response: Response): Promise<string | null> {
-  try {
-    const body = (await response.json()) as {
-      error?: { code?: unknown } | string;
-      code?: unknown;
-    };
-    if (typeof body.code === "string") return body.code;
-    if (
-      typeof body.error === "object" &&
-      body.error !== null &&
-      typeof body.error.code === "string"
-    ) {
-      return body.error.code;
-    }
-    return typeof body.error === "string" ? body.error : null;
-  } catch {
-    return null;
-  }
-}
-
 function safeErrorMessage(code: string | null): string {
   switch (code) {
     case "watch_disabled":
@@ -196,32 +254,42 @@ function safeErrorMessage(code: string | null): string {
     case "watch_corpus_unavailable":
     case "watch_unavailable":
       return "この環境ではウォッチング機能がまだ利用可能になっていません。";
+    case "case_not_found":
+      return "対象の案件を確認できません。案件一覧から確認してください。";
+    case "invalid_watch_run_request":
+      return "実行要求を受け付けられませんでした。画面を再読み込みしてください。";
+    case "watch_ai_stopped":
+      return "AI処理を保護条件により停止しました。時間・入力・利用量の確認などにより停止する場合があります。保存済み履歴を確認し、続く場合は管理者にお問い合わせください。";
     default:
-      return "ウォッチング処理を完了できませんでした。時間をおいて再試行してください。";
+      return "サーバーで処理を完了できませんでした。保存済み履歴を確認し、続く場合は管理者にお問い合わせください。";
   }
 }
 
 export function PatentWatchSection({ caseId }: { caseId: number }) {
-  const [summary, setSummary] = useState<WatchSummary>(EMPTY_SUMMARY);
+  const [summary, setSummary] = useState<WatchSummary | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [monitoringFromDate, setMonitoringFromDate] = useState("");
   const [state, setState] = useState<PatentWatchLoadState>("loading");
   const [message, setMessage] = useState<string | null>(null);
 
+  const [attempt, setAttempt] = useState<WatchAttempt | null>(null);
+  const [snapshotFailed, setSnapshotFailed] = useState(false);
+  const requestBusy = useRef(false);
+
   const loadWatch = useCallback(async (preserveMessage = false) => {
     setState("loading");
     if (!preserveMessage) setMessage(null);
     try {
-      const response = await fetchPatentWatchStatus(caseId);
-      if (response.status === 503) {
-        setState("unavailable");
+      const { response, body } = await watchResponse(
+        signal => fetchPatentWatchStatus(caseId, fetch, signal), 15_000,
+      );
+      if (!response.ok || !isWatchSummary(body)) {
+        setSnapshotFailed(true);
+        setState(isPatentWatchUnavailable(response.status, errorCode(body)) ? "unavailable" : "failed");
         return;
       }
-      if (!response.ok) {
-        setState("failed");
-        return;
-      }
-      const data = (await response.json()) as WatchSummary;
+      const data = body;
+      setSnapshotFailed(false);
       setSummary(data);
       if (data.setting) {
         setEnabled(data.setting.enabled);
@@ -229,7 +297,8 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
       }
       setState(loadedState(data.latestRun));
     } catch {
-      setState("unavailable");
+      setSnapshotFailed(true);
+      setState("failed");
     }
   }, [caseId]);
 
@@ -244,77 +313,93 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
   }, [loadWatch]);
 
   async function saveSetting() {
+    if (requestBusy.current) return;
+    requestBusy.current = true;
     setMessage(null);
     try {
-      const response = await fetch(`/api/cases/${caseId}/watch`, {
-        method: "PUT",
+      const { response, body } = await watchResponse(signal => fetch(`/api/cases/${caseId}/watch`, {
+        method: "PUT", signal,
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          enabled,
-          monitoringFromDate: toApiDate(monitoringFromDate),
-        }),
-      });
+        body: JSON.stringify({ enabled, monitoringFromDate: toApiDate(monitoringFromDate) }),
+      }), 15_000);
       if (!response.ok) {
-        const code = await readErrorCode(response);
-        if (isPatentWatchUnavailable(response.status, code)) {
-          setState("unavailable");
-        }
+        const code = errorCode(body);
+        if (isPatentWatchUnavailable(response.status, code)) setState("unavailable");
         setMessage(safeErrorMessage(code));
         return;
       }
       setMessage("監視設定を保存しました。");
       await loadWatch(true);
     } catch {
-      setMessage(safeErrorMessage(null));
+      setMessage("設定保存の応答を確認できません。保存済み情報を再読み込みしてください。");
+    } finally {
+      requestBusy.current = false;
     }
   }
 
   async function startRun() {
+    if (requestBusy.current || attempt?.kind === "unknown" || state === "loading" || !summary?.setting?.enabled) return;
+    requestBusy.current = true;
     setState("starting");
     setMessage(null);
+    setAttempt(null);
     try {
-      const response = await fetch(`/api/cases/${caseId}/watch/runs`, {
-        method: "POST",
-      });
+      const { response, body } = await watchResponse(signal => fetch(`/api/cases/${caseId}/watch/runs`, {
+        method: "POST", signal,
+      }), 125_000);
       if (!response.ok) {
-        const code = await readErrorCode(response);
-        const errorState = patentWatchRunErrorState(response.status, code);
-        setState(errorState);
-        setMessage(safeErrorMessage(code));
-        if (errorState === "running") await loadWatch(true);
-        return;
+        const code = errorCode(body);
+        const kind = code === "watch_ai_stopped" ? "stopped"
+          : code && !["watch_analysis_failed", "watch_internal_error"].includes(code) ? "blocked" : "failed";
+        setAttempt(code ? { kind, message: safeErrorMessage(code) } : UNKNOWN_ATTEMPT);
+      } else if (isRun(body) && body.status === "completed") {
+        setAttempt({
+          kind: body.analysisMode === "fallback" || body.fallbackFindingCount > 0 ? "fallback" : "completed",
+          message: `今回の新着候補は${body.newFindingCount}件です。人による確認が必要です。`,
+        });
+      } else {
+        setAttempt(UNKNOWN_ATTEMPT);
       }
-      setMessage("監視を完了しました。");
-      await loadWatch(true);
     } catch {
-      setState("failed");
-      setMessage(safeErrorMessage(null));
+      setAttempt(UNKNOWN_ATTEMPT);
+    } finally {
+      // Even an ambiguous POST can have persisted a failed/running/completed row.
+      // GET refreshes saved data, but never establishes this attempt's success.
+      await loadWatch(true);
+      requestBusy.current = false;
     }
   }
 
+  async function reloadWatch() {
+    if (requestBusy.current) return;
+    requestBusy.current = true;
+    try { await loadWatch(true); }
+    finally { requestBusy.current = false; }
+  }
+
   async function updateReview(finding: WatchFindingView) {
-    const reviewStatus =
-      finding.reviewStatus === "reviewed" ? "unreviewed" : "reviewed";
+    if (requestBusy.current) return;
+    requestBusy.current = true;
+    const reviewStatus = finding.reviewStatus === "reviewed" ? "unreviewed" : "reviewed";
     try {
-      const response = await fetch(
-        `/api/cases/${caseId}/watch/findings/${finding.findingId}`,
-        {
-          method: "PATCH",
+      const { response, body } = await watchResponse(signal => fetch(
+        `/api/cases/${caseId}/watch/findings/${finding.findingId}`, {
+          method: "PATCH", signal,
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ reviewStatus }),
         },
-      );
+      ), 15_000);
       if (!response.ok) {
-        const code = await readErrorCode(response);
-        if (isPatentWatchUnavailable(response.status, code)) {
-          setState("unavailable");
-        }
+        const code = errorCode(body);
+        if (isPatentWatchUnavailable(response.status, code)) setState("unavailable");
         setMessage(safeErrorMessage(code));
         return;
       }
       await loadWatch();
     } catch {
-      setMessage(safeErrorMessage(null));
+      setMessage("確認状態の更新応答を確認できません。保存済み情報を再読み込みしてください。");
+    } finally {
+      requestBusy.current = false;
     }
   }
 
@@ -326,6 +411,9 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
       monitoringFromDate={monitoringFromDate}
       state={state}
       message={message}
+      attempt={attempt}
+      snapshotFailed={snapshotFailed}
+      onReload={() => void reloadWatch()}
       onEnabledChange={setEnabled}
       onMonitoringFromDateChange={setMonitoringFromDate}
       onSaveSetting={() => void saveSetting()}
@@ -337,11 +425,14 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
 
 export type PatentWatchSectionViewProps = {
   caseId: number;
-  summary: WatchSummary;
+  summary: WatchSummary | null;
   enabled: boolean;
   monitoringFromDate: string;
   state: PatentWatchLoadState;
   message: string | null;
+  attempt?: WatchAttempt | null;
+  snapshotFailed?: boolean;
+  onReload?: () => void;
   onEnabledChange: (enabled: boolean) => void;
   onMonitoringFromDateChange: (date: string) => void;
   onSaveSetting: () => void;
@@ -356,17 +447,20 @@ export function PatentWatchSectionView({
   monitoringFromDate,
   state,
   message,
+  attempt = null,
+  snapshotFailed = false,
+  onReload,
   onEnabledChange,
   onMonitoringFromDateChange,
   onSaveSetting,
   onStartRun,
   onUpdateReview,
 }: PatentWatchSectionViewProps) {
-  const latestRun = summary.latestRun;
+  const latestRun = summary?.latestRun ?? null;
   const unavailable = state === "unavailable";
   const busy =
     state === "loading" || state === "starting" || state === "running";
-  const runButtonBusy = state === "loading" || state === "starting";
+  const runButtonBusy = state === "loading" || state === "starting" || attempt?.kind === "unknown";
 
   return (
     <section className="mt-6 rounded-xl border-2 border-indigo-200 bg-indigo-50/40 px-6 py-5">
@@ -381,22 +475,31 @@ export function PatentWatchSectionView({
           </p>
         </div>
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-center">
-          <div className="text-xs font-medium text-amber-800">未確認候補</div>
+          <div className="text-xs font-medium text-amber-800">取得済みの未確認候補</div>
           <div className="text-2xl font-bold text-amber-900">
-            {summary.unreviewedFindingCount}
+            {summary ? summary.unreviewedFindingCount : "未取得"}
           </div>
         </div>
       </div>
 
-      {unavailable ? (
-        <p className="mt-4 rounded-lg border border-gray-300 bg-white px-4 py-3 text-sm text-gray-700">
-          この環境ではウォッチング機能がまだ利用可能になっていません
-        </p>
-      ) : (
-        <p className="mt-4 text-sm font-medium text-indigo-800" role="status">
-          {statusMessage(state, latestRun)}
-        </p>
+      {attempt && (
+        <div className="mt-4 rounded-lg border border-amber-300 bg-white px-4 py-3" role="status">
+          <p className="font-semibold">{attemptLabel(attempt.kind)}</p>
+          <p className="mt-1 text-sm">{attempt.message}</p>
+        </div>
       )}
+      {state === "starting" && <p className="mt-3" role="status">今回の実行：監視実行中</p>}
+      <div className="mt-4 text-sm text-gray-700">
+        <p>保存済み情報：{state === "loading" ? "読み込み中" : snapshotFailed
+          ? "最新情報は未取得です。最後に取得できた情報を表示しています。"
+          : "取得済み（今回の操作結果とは別です）"}</p>
+        {unavailable && <p>この環境ではウォッチング機能がまだ利用可能になっていません</p>}
+        {summary && <p>保存済みの最新実行：{statusMessage(loadedState(latestRun), latestRun)}</p>}
+        <button type="button" onClick={onReload} disabled={state === "loading" || state === "starting"}
+          className="mt-2 rounded border border-gray-300 bg-white px-3 py-2 disabled:opacity-50">
+          保存済み情報を再読み込み
+        </button>
+      </div>
 
       <div className="mt-4 grid gap-3 rounded-lg border border-indigo-100 bg-white p-4 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
         <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
@@ -431,7 +534,7 @@ export function PatentWatchSectionView({
         <button
           type="button"
           onClick={onStartRun}
-          disabled={unavailable || runButtonBusy || !summary.setting?.enabled}
+          disabled={unavailable || runButtonBusy || !summary?.setting?.enabled}
           className="rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
         >
           今すぐ監視
@@ -447,7 +550,7 @@ export function PatentWatchSectionView({
       {latestRun && (
         <div className="mt-4 rounded-lg border border-indigo-100 bg-white p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="font-semibold">最新の監視実行</h3>
+            <h3 className="font-semibold">保存済みの最新実行</h3>
             <span className="text-sm text-gray-600">
               {dateTimeLabel(latestRun.completedAt ?? latestRun.startedAt)}
             </span>
@@ -457,19 +560,22 @@ export function PatentWatchSectionView({
               </span>
             )}
           </div>
+          {latestRun.status === "failed" && <p className="mt-2 text-sm">{safeErrorMessage(ERROR_CODES.has(latestRun.errorCode ?? "") ? latestRun.errorCode : null)}</p>}
           <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-4">
             <div><dt className="text-gray-500">対象公報</dt><dd className="font-semibold">{latestRun.scannedDocumentCount}件</dd></div>
             <div><dt className="text-gray-500">事前絞り込み</dt><dd className="font-semibold">{latestRun.prefilteredCount}件</dd></div>
             <div><dt className="text-gray-500">分析</dt><dd className="font-semibold">{latestRun.analyzedCount}件</dd></div>
-            <div><dt className="text-gray-500">新着候補</dt><dd className="font-semibold">{latestRun.newFindingCount}件</dd></div>
+            <div><dt className="text-gray-500">新着候補</dt><dd className="font-semibold">{latestRun.status === "completed" ? `${latestRun.newFindingCount}件` : "未確定"}</dd></div>
           </dl>
         </div>
       )}
 
       <div className="mt-4 space-y-3">
         <h3 className="font-semibold">新着確認候補</h3>
-        {summary.findings.length === 0 ? (
-          <p className="text-sm text-gray-600">表示する確認候補はありません。</p>
+        {!summary ? (
+          <p className="text-sm text-gray-600">保存済みの確認候補は未取得です。</p>
+        ) : summary.findings.length === 0 ? (
+          <p className="text-sm text-gray-600">取得済みの保存情報に表示する確認候補はありません。今回の実行が正常0件だったことを示すものではありません。</p>
         ) : (
           summary.findings.map((finding) => (
             <article key={finding.findingId} className="rounded-lg border border-gray-200 bg-white p-4">
@@ -504,6 +610,8 @@ export function PatentWatchSectionView({
 
       <div className="mt-5">
         <h3 className="font-semibold">過去の監視実行</h3>
+        {!summary && <p className="mt-2 text-sm">保存済み履歴は未取得です。</p>}
+        {summary && summary.runs.length === 0 && <p className="mt-2 text-sm">取得済みの保存情報に履歴はありません。</p>}
         <div className="mt-2 overflow-x-auto">
           <table className="min-w-full border-collapse text-sm">
             <thead>
@@ -516,12 +624,12 @@ export function PatentWatchSectionView({
               </tr>
             </thead>
             <tbody>
-              {summary.runs.slice(0, 20).map((run) => (
+              {summary?.runs.slice(0, 20).map((run) => (
                 <tr key={run.runId} className="border-b border-gray-100">
                   <td className="px-2 py-2">{dateTimeLabel(run.completedAt ?? run.startedAt)}</td>
-                  <td className="px-2 py-2">{run.status}</td>
+                  <td className="px-2 py-2">{run.status === "completed" ? "完了" : run.status === "failed" ? "失敗" : "実行中"}</td>
                   <td className="px-2 py-2">{run.scannedDocumentCount}件</td>
-                  <td className="px-2 py-2">{run.newFindingCount}件</td>
+                  <td className="px-2 py-2">{run.status === "completed" ? `${run.newFindingCount}件` : "未確定"}</td>
                   <td className="px-2 py-2">
                     {unavailable ? (
                       <span className="text-gray-500">利用不可</span>

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { AiOperationStopped } from "../ai-operation-budget";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ComparisonResult } from "../analyze-overlap";
 import {
@@ -433,6 +434,30 @@ function dependencies(
 }
 
 describe("patent watch stateful workflow", () => {
+  it("keeps saved findings and cursor on AI stop, then retries without duplicates", async () => {
+    const repository = new StatefulTransactionalWatchRepository();
+    const first = cursor("2096-03-01T00:00:00.000Z", 1);
+    const second = cursor("2096-03-02T00:00:00.000Z", 2);
+    repository.addImport(first, [corpusDocument(101, "JP2096-000101A", "a".repeat(64))]);
+    await runPatentWatch(CASE_ID, dependencies(repository));
+    const saved = repository.findings();
+    repository.addImport(second, [corpusDocument(102, "JP2096-000102A", "b".repeat(64))]);
+    const failure = dependencies(repository);
+    failure.analyzeOverlap = vi.fn(async () => { throw new AiOperationStopped(); });
+    await expect(runPatentWatch(CASE_ID, failure)).rejects.toMatchObject({ code: "watch_ai_stopped" });
+    expect(repository.cursor()).toEqual(first);
+    expect(repository.findings()).toEqual(saved);
+    expect(repository.runs().at(-1)).toMatchObject({ status: "failed", errorCode: "watch_ai_stopped", newFindingCount: 0, fallbackFindingCount: 0 });
+    const retry = await runPatentWatch(CASE_ID, dependencies(repository));
+    expect(retry.newFindingCount).toBe(1);
+    expect(repository.cursor()).toEqual(second);
+    const screened: number[][] = [];
+    await runPatentWatch(CASE_ID, dependencies(repository, screened));
+    expect(screened).toEqual([]);
+    expect(repository.findings()).toHaveLength(2);
+    expect(repository.findings()[0]).toEqual(saved[0]);
+  });
+
   it("keeps the run-start monitoring date when PUT changes the setting before document read", async () => {
     const repository = new StatefulTransactionalWatchRepository();
     const firstCursor = cursor("2096-03-01T00:00:00.000Z", 1);

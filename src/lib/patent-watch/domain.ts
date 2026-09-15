@@ -164,6 +164,7 @@ const STABLE_ERROR_CODES = new Set<PatentWatchErrorCode>([
   "watch_corpus_unavailable",
   "watch_unavailable",
   "watch_analysis_failed",
+  "watch_ai_stopped",
   "watch_internal_error",
 ]);
 

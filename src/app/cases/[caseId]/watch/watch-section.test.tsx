@@ -236,7 +236,7 @@ describe("patent watch UI contract", () => {
     expect(source).toContain("method: \"POST\"");
     expect(source).toContain("method: \"PUT\"");
     expect(source).toContain("method: \"PATCH\"");
-    expect(source).toContain("fetchPatentWatchStatus(caseId)");
+    expect(source).toContain("fetchPatentWatchStatus(caseId, fetch, signal)");
     expect(source).not.toContain("/koho-corpus");
     const effectStart = source.indexOf("useEffect(() => {");
     const effectEnd = source.indexOf("}, [loadWatch]);", effectStart);
@@ -313,20 +313,6 @@ describe("patent watch UI contract", () => {
     }
     expect(pageSource).not.toContain('from "@/lib/patent-watch/service"');
     expect(pageSource).not.toContain('from "@/lib/koho-corpus"');
-  });
-
-  it("preserves action messages while refreshing status", async () => {
-    const source = await readFile(SECTION_SOURCE_URL, "utf8");
-
-    expect(source).toMatch(
-      /setMessage\("監視設定を保存しました。"\);\s*await loadWatch\(true\)/u,
-    );
-    expect(source).toMatch(
-      /setMessage\("監視を完了しました。"\);\s*await loadWatch\(true\)/u,
-    );
-    expect(source).toMatch(
-      /if \(errorState === "running"\) await loadWatch\(true\)/u,
-    );
   });
 
   it("disables stale review and export actions while unavailable", async () => {

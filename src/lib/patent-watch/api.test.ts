@@ -213,6 +213,16 @@ async function jsonBody(response: Response) {
 }
 
 describe("patent watch GET/PUT handlers", () => {
+  it("projects the stable AI stop in persisted failed history", async () => {
+    const repository = new FakePatentWatchRepository();
+    repository.runsResult = [run({ status: "failed", errorCode: "watch_ai_stopped" })];
+    const { GET } = createPatentWatchHandlers({ repository });
+    const response = await GET(watchRequest(), caseContext());
+    expect(response.status).toBe(200);
+    const body = await jsonBody(response);
+    expect(body.latestRun).toMatchObject({ status: "failed", errorCode: "watch_ai_stopped" });
+  });
+
   it("returns bounded public status, history, and findings only", async () => {
     const repository = new FakePatentWatchRepository();
     repository.findingsResult = [
@@ -495,9 +505,10 @@ describe("patent watch POST run handler", () => {
     ["watch_claims_not_ready", 409],
     ["watch_run_in_progress", 409],
     ["watch_corpus_unavailable", 503],
+    ["watch_ai_stopped", 500],
   ] as const)("maps run error %s", async (code, status) => {
     const executeRun = vi.fn(async () => {
-      throw new PatentWatchDomainError(code);
+      throw Object.assign(new PatentWatchDomainError(code), { cause: new Error("FICTIONAL_SECRET_ERROR"), body: "FICTIONAL_SECRET_BODY", headers: { authorization: "FICTIONAL_SECRET_HEADER" } });
     });
     const { POST } = createPatentWatchRunHandlers({ executeRun });
 
