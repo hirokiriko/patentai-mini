@@ -1,4 +1,6 @@
 import { db } from "../db";
+import { PERIOD_RUN_LIMIT, PERIOD_FINDING_LIMIT, PeriodReportLimitError, periodBounds, periodCaseId } from "../lib/patent-watch/period";
+import type { PeriodSnapshot } from "../lib/patent-watch/period-report";
 import {
   cases,
   draftPatents,
@@ -1073,6 +1075,52 @@ export const kohoImportRepo: KohoImportRepository = {
 };
 
 export const patentWatchRepo: PatentWatchRepository = {
+  async readPeriodSnapshot(caseId, period) {
+    if (periodCaseId(String(caseId)) === null) throw new Error("invalid case");
+    const bounds = periodBounds(period);
+    // All statements share one read-only MVCC snapshot; never recover running rows.
+    return db.transaction(async (tx): Promise<PeriodSnapshot | null> => {
+      await tx.execute(sql`set local statement_timeout = '5s'`);
+      await tx.execute(sql`set local lock_timeout = '3s'`);
+      await tx.execute(sql`set local idle_in_transaction_session_timeout = '5s'`);
+      const [context] = await tx.select({
+        caseId: cases.caseId, watchId: caseWatchSettings.watchId,
+        createdAt: sql<string>`transaction_timestamp()::text`,
+      }).from(cases).leftJoin(caseWatchSettings, eq(caseWatchSettings.caseId, cases.caseId))
+        .where(eq(cases.caseId, caseId)).limit(1);
+      if (!context) return null;
+      const predicate = and(
+        eq(caseWatchSettings.caseId, caseId),
+        gte(caseWatchRuns.startedAt, bounds.fromInclusive),
+        lt(caseWatchRuns.startedAt, bounds.toExclusive),
+      );
+      const runs = await tx.select({
+        runId: caseWatchRuns.runId, watchId: caseWatchRuns.watchId,
+        status: caseWatchRuns.status, startedAt: caseWatchRuns.startedAt, completedAt: caseWatchRuns.completedAt,
+        newFindingCount: caseWatchRuns.newFindingCount, fallbackFindingCount: caseWatchRuns.fallbackFindingCount,
+      }).from(caseWatchRuns).innerJoin(caseWatchSettings, eq(caseWatchSettings.watchId, caseWatchRuns.watchId))
+        .where(predicate).orderBy(asc(caseWatchRuns.startedAt), asc(caseWatchRuns.runId)).limit(PERIOD_RUN_LIMIT + 1);
+      if (runs.length > PERIOD_RUN_LIMIT) throw new PeriodReportLimitError();
+      const findings = await tx.select({
+        findingId: caseWatchFindings.findingId, watchId: caseWatchFindings.watchId,
+        firstRunId: caseWatchFindings.firstRunId, firstSeenAt: caseWatchFindings.firstSeenAt,
+        publicationNumber: caseWatchFindings.publicationNumber, publicationDate: caseWatchFindings.publicationDate,
+        inventionTitle: caseWatchFindings.inventionTitle,
+        lexicalScore: caseWatchFindings.lexicalScore, elementScore: caseWatchFindings.elementScore,
+        semanticScore: caseWatchFindings.semanticScore, structuralScore: caseWatchFindings.structuralScore,
+        riskLabel: caseWatchFindings.riskLabel, analysisMode: caseWatchFindings.analysisMode,
+        reviewStatus: caseWatchFindings.reviewStatus, analysisJson: caseWatchFindings.analysisJson,
+      }).from(caseWatchFindings).innerJoin(caseWatchRuns, and(
+        eq(caseWatchRuns.runId, caseWatchFindings.firstRunId), eq(caseWatchRuns.watchId, caseWatchFindings.watchId),
+      )).innerJoin(caseWatchSettings, eq(caseWatchSettings.watchId, caseWatchRuns.watchId))
+        .where(and(predicate, eq(caseWatchRuns.status, "completed")))
+        .orderBy(asc(caseWatchFindings.firstSeenAt), asc(caseWatchFindings.findingId)).limit(PERIOD_FINDING_LIMIT + 1);
+      if (findings.length > PERIOD_FINDING_LIMIT) throw new PeriodReportLimitError();
+      // Enum/row consistency and safe display projection are checked before rendering.
+      return { ...context, runs, findings } as PeriodSnapshot;
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  },
+
   async getSetting(caseId) {
     try {
       assertPatentWatchId(caseId, "case_not_found");

@@ -467,6 +467,7 @@ export function PatentWatchSectionView({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold">出願後ウォッチング</h2>
+          <a href={`/cases/${caseId}/watch/period-report`} className="mt-2 inline-block text-sm text-indigo-700 underline">期間レポート（週次・月次）</a>
           <p className="mt-1 text-sm text-gray-600">
             取り込み済み公報から、新たな重なり候補を明示操作で確認します。
           </p>

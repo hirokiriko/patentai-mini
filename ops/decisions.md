@@ -321,3 +321,11 @@
   - 恒久的な一般権限は拡大しない。各工程の完了・未完了はIssue／PRに実測で
     記録し、この判断から本番復旧や検証成功を推定しない
   - 文書は同じ作業の必要修正PRで反映し、本番復旧前の待機条件にしない
+
+## 2026-09-15: Issue #97 — 保存済み監視結果の期間レポート
+
+- Decision: 期間は監視実行開始日のAsia/Tokyo暦で定義する。前週・前月・任意の最大31日を明示操作で集計し、公報発行期間や取得網羅範囲と区別する。
+- Read contract: case境界と正確なtimestamp predicateをDBで確保し、read-only / repeatable read snapshotで全対象runと、対象completed runで初検出したfindingを取得する。同番号の別findingを統合せず、過去の初検出を再計上しない。200run/4,000finding超過は上限+1で全体拒否する。有限timeout、整合性検証、safe projectionを置き、設定/cursor/run/findingは更新しない。
+- Display: 保存済み候補から集計し、実行記録なし・完了0件・不完全・取得不能・上限超過を区別する。確認状態は作成時点。法的判断や専門家所見へ読み替えず、原文確認と網羅性の限界を印刷にも残す。PDFはbrowser印刷、所見は印刷物/既存CSVへの外部追記とする。
+- Product stages: 段階Aは手動取得による定期レポート試用を先行し、段階Bで取得・定期実行・通知を自動化する。リアルタイムは別需要。Issue #89の限定受入は維持し、#93の原障害、期間分の取得/正規取込、自己案件除外、実AI/実DBの試用、専門家評価、実顧客受入は本変更の完了と区別する。
+- Impact/rollback: schema/migration/権限、依存、AI、既存API/CSV契約、secret/env、Azure resourceを変更しない。revert PRと通常deployで戻し、保存済みデータを削除・初期化しない。

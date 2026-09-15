@@ -145,3 +145,21 @@ browser印刷ではnavigationとbuttonをprint CSSで除く。アプリ内でPDF
 初期実装はcodeとmigration artifactを追加し、Production DBへの適用を別承認とした。後続のIssue #89で公開・完全架空データ限定の本番受入を実施済み。Issue #93はwatchの最小修正だけを行い、DB migrationや本番watch再実行を含まない。watch tableがない環境ではAPIをstable 503にし、案件pageは利用不可sectionとして継続表示する。Productionでの有効化、corpus投入、scheduler、secret／環境変数、Azure resource変更は別承認とする。
 
 Issue #93のrollbackは同修正のrevert PRと通常deployで行う。既存DB、公報、cursor、秘密、Issue #89の正常状態は巻き戻さない。
+
+## 11. Issue #97: 保存済み監視結果の期間レポート
+
+案件の「出願後ウォッチング」→「期間レポート（週次・月次）」で、前週（月曜〜日曜）、前月、または任意の開始日・終了日を選び、「期間レポートを表示」を押す。前週・前月はAsia/Tokyoの暦で求める。watch無効化中でも保存済み結果は閲覧できる。
+
+新規URLは `/cases/[caseId]/watch/period-report?from=YYYY-MM-DD&to=YYYY-MM-DD`。実在するexact日付、開始日<=終了日、両端を含む最大31日だけを受理する。重複・余分・欠損queryは固定案内で拒否し、queryなしは選択画面だけとする。初期案件表示・入力変更・リンクprefetchで集計しない。新規導線は自動prefetchのない通常のリンクとGET formを使う。
+
+期間は**監視実行開始日（日本時間）**である。from当日JST 00:00以上、to翌日JST 00:00未満のstartedAtをDB timestampの精度で比較する。公報の発行期間・出願期間・全公報の網羅期間ではなく、週次取得した結果を月次で整理する用途にも使える。期間をまたいで完了した実行も開始日に所属する。
+
+専用repository読取はcase境界をDB queryへ含め、read-only / repeatable read transactionで実行と候補を同じsnapshotから取得する。候補は対象のcompleted runをfirstRunIdに持つ保存済みfindingのみ。過去期間の初検出を再計上せず、同一公開番号でも本文変更による別findingは保持する。既存20run/100finding一覧を流用しない。最大200run・4,000findingを各上限+1で検出し、超過時は全体を表示せず期間短縮を案内する。DB statement timeout 5秒、lock timeout 3秒、idle transaction timeout 5秒、レポート応答待ち20秒で有限にする。応答待ち打切りだけではDB query取消の実証とはしない。設定・cursor・run・findingを更新せず、running回収・AI・取込を行わない。
+
+案件はnumeric IDだけで示し、期間・作成日時JST・完了/失敗/実行中件数・保存findingから求めた新規候補数・確認状態・AI/fallback内訳・対象runを表示する。件数矛盾や不正row、DB失敗/timeoutは取得不能とし、0件へ補完しない。確認状態はレポート作成時点の保存状態であり履歴や専門家の所見ではない。失敗/実行中は不完全警告を見出しと印刷に残し、実行記録なし・完了runの新規候補0・取得不能・上限超過を区別する。
+
+候補は既存文字上限とサニタイズを再利用する。原文は公開番号からJ-PlatPat等で人が確認する。対象は各実行時の取り込み済み公報であり、全公開公報の取得完了・全件AI精読・自己案件除外・「他社」判定を保証しない。risk labelはAI比較の参考で、法的判断や対応義務、専門家の確定所見ではない。長い候補は印刷時にページ間分割を許可し、期間・状態・件数・注意文・候補を残す。PDFはbrowserの印刷保存を使う。所見は印刷物や既存単一run CSVへ外部追記できる。期間CSV・所見editor・メール配信は追加しない。
+
+段階Aは運営者の手動取得による定期レポート試用、段階Bは取得・定期実行・通知の自動化とする。リアルタイムは別需要である。本変更の受入は期間レポートの実装までで、手動公報の期間分取得・正規取込運用、Issue #93の原障害、実AI/実DBの全体試用、専門家の品質評価、実顧客受入は別残件。Issue #89の公開・完全架空データ限定受入は維持する。
+
+本変更はDB列/table/migration/権限、AI、既存API/CSV URL、secret/env、Azure resourceを変更しない。rollbackは本変更のrevert PR→既存通常deployとし、保存済み公報・候補・設定を削除/初期化しない。
