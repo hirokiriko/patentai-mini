@@ -1,5 +1,15 @@
 # Decisions
 
+## Issue #93: 手動ウォッチの実行結果と保存済み情報
+
+- Date: 2026-09-15
+- Status: Accepted within Issue #93.
+- 今回のPOST結果と保存済み履歴を別表示する。応答喪失は結果不明であり、status GET成功や過去のcompleted履歴を今回の成功根拠にしない。
+- POST後のstatus GETは1回かつ有限時間。明示的な再読み込みもGETだけで、polling・POST自動retry・並行送信を追加しない。
+- AI保護停止は固定code `watch_ai_stopped`へ分類し、fallbackや正常0件へ変換しない。保護条件・cursor・保存transactionの契約は変更しない。
+- 原報告の原因未特定と、架空fixtureで再現した表示不備の修正・Local確認を分ける。本番watch検証を今回の通常deploy成功から推定しない。
+- #89の限定本番受入を保持する。顧客利用は未承認。現在の手動機能と#94の週次自動監視という製品目標を区別する。
+
 ## Issue #89: PRODUCTION_FINISH_V2
 
 - Date: 2026-09-14

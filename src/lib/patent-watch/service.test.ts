@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AiOperationStopped } from "../ai-operation-budget";
+import { AiOperationBudget, AiOperationStopped } from "../ai-operation-budget";
 
 import type { ExtractedClaims } from "../extract-claims";
 import { createPatentWatchSourceKey } from "./domain";
@@ -163,12 +163,59 @@ function successfulAnalysis(priorDocId: number) {
 }
 
 describe("patent watch run service", () => {
+  it.each(["input_limit", "usage_missing", "timeout", "body_timeout"])("fails closed through the real budget for %s", async scenario => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("FICTIONAL_SECRET", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const budget = new AiOperationBudget({ normal: 3, fast: 3 });
+    let late!: (response: Response) => void;
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (scenario === "timeout") return new Promise(resolve => { late = resolve; });
+      if (scenario === "body_timeout") return {
+        ok: true, clone: () => ({ json: () => new Promise(() => {}) }),
+      } as unknown as Response;
+      return Response.json({ message: "FICTIONAL_SECRET" }, { headers: { authorization: "FICTIONAL_SECRET" } });
+    });
+    const request = { method: "POST", body: JSON.stringify({
+      model: "fictional", input: [{ role: "user", content: scenario === "input_limit" ? "文".repeat(50_000) : "fictional" }],
+      max_output_tokens: 8192, text: { format: { type: "json_schema", schema: { type: "object" } } },
+    }) };
+    const repository = new FakeRunRepository(start(), batch([source(10)]));
+    const screen = vi.fn(async () => {
+      await budget.wrapFetch("fast", transport)("https://example.invalid/responses", request);
+      return { relevantDocIds: [10], reasoning: "fictional" };
+    });
+    const analyze = vi.fn(async () => [successfulAnalysis(10)]);
+    try {
+      const stopped = runPatentWatch(7, { repository, screenPriorArt: screen, analyzeOverlap: analyze }).catch(error => error);
+      await vi.advanceTimersByTimeAsync(35_000);
+      const error = await stopped;
+      expect(error).toMatchObject({ code: "watch_ai_stopped" });
+      expect(repository.success).toEqual([]);
+      expect(repository.failure).toEqual([{ caseId: 7, runId: 13, errorCode: "watch_ai_stopped" }]);
+      expect(analyze).not.toHaveBeenCalled();
+      if (late) late(Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
+      for (const role of ["normal", "fast"] as const) {
+        await expect(budget.wrapFetch(role, transport)("https://example.invalid/responses", request)).rejects.toBeInstanceOf(AiOperationStopped);
+      }
+      expect(transport).toHaveBeenCalledTimes(scenario === "input_limit" ? 0 : 1);
+      expect(JSON.stringify(info.mock.calls)).not.toContain("FICTIONAL_SECRET");
+      expect(JSON.stringify(error)).not.toContain("FICTIONAL_SECRET");
+    } finally { vi.restoreAllMocks(); vi.useRealTimers(); }
+  });
+
   it.each(["screening", "detail", "timeout"])("fails %s budget/timeout without fallback or cursor success", async stage => {
     const repository = new FakeRunRepository(start(), batch([source(10)]));
     const stop = stage === "timeout" ? new DOMException("fictional", "TimeoutError") : new AiOperationStopped();
     const screen = vi.fn(async () => { if (stage !== "detail") throw stop; return { relevantDocIds: [10], reasoning: "fictional" }; });
     const analyze = vi.fn(async () => { throw stop; });
-    await expect(runPatentWatch(7, { repository, screenPriorArt: screen, analyzeOverlap: analyze })).rejects.toThrow();
+    await expect(runPatentWatch(7, { repository, screenPriorArt: screen, analyzeOverlap: analyze })).rejects.toMatchObject({ code: "watch_ai_stopped" });
+    expect(analyze).toHaveBeenCalledTimes(stage === "detail" ? 1 : 0);
+    expect(repository.failure[0]).toEqual({ caseId: 7, runId: 13, errorCode: "watch_ai_stopped" });
     expect(repository.success).toHaveLength(0); expect(repository.failure).toHaveLength(1);
   });
   it("makes no AI sends when a completed cursor has no new import", async () => {

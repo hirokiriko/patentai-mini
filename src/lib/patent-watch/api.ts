@@ -310,6 +310,7 @@ function errorResponse(error: unknown): Response {
     case "watch_unavailable":
       return jsonResponse({ error: code }, 503);
     case "watch_analysis_failed":
+    case "watch_ai_stopped":
     case "watch_internal_error":
       return jsonResponse({ error: code }, 500);
   }

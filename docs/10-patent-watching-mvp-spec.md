@@ -6,6 +6,8 @@
 
 本MVPはwatch設定、差分run、finding、確認状態、CSV、browser印刷用HTMLを提供する。J-PlatPat自動操作、remote download、scheduler、queue、外部通知、公報PDF添付、PDF binary生成、Production migration、Production corpus投入、Azure resource／secret／runtime設定は対象外である。
 
+現在は取り込み済み公報だけを対象とする手動実行機能である。Issue #89で公開・完全架空データに限定した本番受入は完了済みだが、顧客データの受入・実案件提供は未承認である。週次の自動取得・比較、候補がある場合だけのメール通知、専門家が所見を付けられるレポートという製品目標はIssue #94で扱う。本MVPの手動機能だけで製品全体の完成とはしない。
+
 ## 2. 設定とcursor
 
 案件ごとに最大1件のwatch settingを持つ。
@@ -14,7 +16,7 @@
 - `monitoringFromDate`: Gregorian calendar上の実在日を表すexact `YYYYMMDD`
 - `cursorRunUpdatedAt`、`cursorImportId`: 両方nullまたは両方non-null
 
-初回有効化ではcursorを先取りしない。監視開始日を変更しても既存findingを削除しない。
+初回有効化ではcursorを先取りしない。監視開始日を変更しても既存findingを削除しない。初回は公開日条件、以後は取込差分を対象とし、開始日の変更だけでは過去分を再走査しない。
 
 cursorは`koho_import_runs.updated_at ASC, import_id ASC`のtupleである。timestamp比較はPostgresのmicrosecond精度を保つ。run開始時の単一repository transactionでcaseとsettingを検証し、5分以内に開始された同watchのrunning runがないことを確認し、監視開始日、現在のcursorを`baseCursor`、現在存在する最大tupleを`upperCursor`としてrunning rowへ固定する。5分を超えて残っているrunning runは、120秒の同期route budgetを超えて中断されたrunとして同transaction内で`failed`／`watch_internal_error`へ回収し、cursorを変更しない。その後に新しいrunを開始できる。run開始後にsettingの監視開始日が変更されても、実行中runの対象範囲は開始時snapshotから変えない。
 
@@ -61,9 +63,11 @@ prefilter結果が0件ならAIを呼ばない。1〜100件を既存`screenPriorA
 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
 ```
 
-screeningまたは詳細分析が例外終了した場合は、prefilter上位最大20件へ決定的token overlap fallbackを適用する。入力集合にないAI返却IDは無視し、正常な空結果をAI失敗とみなさない。fallbackは`analysisMode=fallback`、risk label `Unknown`、lexical scoreにprefilter score、他3 scoreに0を保存し、説明を次の固定文言にする。
+screeningまたは詳細分析が通常の例外終了をした場合は、prefilter上位最大20件へ決定的token overlap fallbackを適用する。入力集合にないAI返却IDは無視し、正常な空結果をAI失敗とみなさない。fallbackは`analysisMode=fallback`、risk label `Unknown`、lexical scoreにprefilter score、他3 scoreに0を保存し、説明を次の固定文言にする。
 
 > AI分析が利用できなかったため、語彙重なりによる確認候補です。人による確認が必要です
+
+時間超過・入力上限・usage未確認等によるAI保護停止は通常fallbackと区別し、`watch_ai_stopped`でfailedへ送る。保護停止時は追加送信・部分finding保存・cursor更新を行わない。失敗finalize自体が利用不可の場合も保存成功と断定しない。既存の時間・回数・入力/出力・usage照合の条件は維持する。
 
 fallbackをAI成功として扱わない。AI／fallbackとも「拒絶される」「登録できない」「新規性がない」等の法的結論を生成・保存・表示しない。AI出力に、実際に分析へ渡したdraft claimまたはsource claimの全文が反復された場合は、finding保存前に除去または公開安全な固定文言へ置換する。
 
@@ -120,13 +124,15 @@ exact body `{ "reviewStatus": "reviewed" | "unreviewed" }`だけを受理する�
 
 指定runで初めて保存されたfindingをUTF-8 CSVで返す。列は公開番号、公開日、kind、発明名称、risk label、4 score、一致候補、差分候補、説明、分析mode、確認状態だけとする。comma、quote、改行をRFC 4180形式でescapeし、先頭の`=`, `+`, `-`, `@`およびcontrol prefixはformulaとして評価されないよう無害化する。
 
-共通stable error codeは`invalid_watch_setting`、`invalid_watch_review_status`、`invalid_watch_run_request`、`case_not_found`、`watch_not_configured`、`watch_disabled`、`watch_claims_not_ready`、`watch_run_in_progress`、`watch_run_not_found`、`watch_finding_not_found`、`watch_corpus_unavailable`、`watch_unavailable`、`watch_analysis_failed`、`watch_internal_error`とする。`invalid_watch_review_status`はPATCH exact body、`invalid_watch_run_request`はPOST runの非0-byte bodyの入力不正へ400で使用する。response messageへ入力本文、請求項、公報本文、DB／AI error、path、hash、secretを含めない。
+共通stable error codeは`invalid_watch_setting`、`invalid_watch_review_status`、`invalid_watch_run_request`、`case_not_found`、`watch_not_configured`、`watch_disabled`、`watch_claims_not_ready`、`watch_run_in_progress`、`watch_run_not_found`、`watch_finding_not_found`、`watch_corpus_unavailable`、`watch_unavailable`、`watch_analysis_failed`、`watch_ai_stopped`、`watch_internal_error`とする。`invalid_watch_review_status`はPATCH exact body、`invalid_watch_run_request`はPOST runの非0-byte bodyの入力不正へ400で使用する。response messageへ入力本文、請求項、公報本文、DB／AI error、path、hash、secretを含めない。
 
 ## 9. UIとreport
 
 案件詳細に既存Step番号を変えない独立section「出願後ウォッチング」を追加する。初期client renderではrequestを発生させず、mount後はstatus-only GETだけを行う。run POST、setting PUT、review PATCHはユーザーの明示操作だけで行い、corpus検索を自動実行しない。
 
 sectionはloading、running、completed、failed、unavailable、fallbackを区別し、設定、最新run、未確認件数、finding、review操作、過去run最大20件、report／CSV導線を表示する。storage未準備時も案件page全体を壊さず、section内に利用不可を表示する。
+
+Issue #93では今回の実行結果（完了、fallback、前提不足、AI保護停止、サーバー失敗、結果不明）と最後に取得できた保存済みrun/findingsを別表示する。POST失敗・非JSON・通信断後もstatus GETを1回だけ行う（応答本文を含め15秒で打切り）。POSTは120秒のサーバー予算を超える125秒で応答確認を打切り、結果不明とする。GET成功だけでは不明POSTを成功へ変更しない。結果不明の同じ画面では監視の再送を止め、GET再読み込みを残す。GET失敗時は最新情報を未取得とし、既存結果・確認状態は保持する。明示的な「保存済み情報を再読み込み」はGETだけで、pollingやPOST自動retryを行わない。failed/runningの新着件数は未確定と表示し、正常0件と区別する。
 
 専用report pageは非識別のnumeric案件ID、run日時、対象公報数、新着候補数、fallback有無、findingと4 score、一致候補、差分候補、説明、次の免責を含む。任意入力の案件名は顧客情報を含み得るためHTMLへ表示しない。
 
@@ -136,6 +142,6 @@ browser印刷ではnavigationとbuttonをprint CSSで除く。アプリ内でPDF
 
 ## 10. Productionとrollback
 
-codeとmigration artifactを追加するが、本IssueではProduction DBへmigrationを適用しない。watch tableがない環境ではAPIをstable 503にし、案件pageは利用不可sectionとして継続表示する。Productionでの有効化、corpus投入、scheduler、secret／環境変数、Azure resource変更は別承認とする。
+初期実装はcodeとmigration artifactを追加し、Production DBへの適用を別承認とした。後続のIssue #89で公開・完全架空データ限定の本番受入を実施済み。Issue #93はwatchの最小修正だけを行い、DB migrationや本番watch再実行を含まない。watch tableがない環境ではAPIをstable 503にし、案件pageは利用不可sectionとして継続表示する。Productionでの有効化、corpus投入、scheduler、secret／環境変数、Azure resource変更は別承認とする。
 
-rollbackは本変更のsquash commitをrevertしてschema／migration artifact、watch repository／domain／API／UI／report／test／docsを戻す。本IssueでProduction migrationを適用しないためProduction data rollbackは行わない。
+Issue #93のrollbackは同修正のrevert PRと通常deployで行う。既存DB、公報、cursor、秘密、Issue #89の正常状態は巻き戻さない。

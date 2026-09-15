@@ -508,7 +508,9 @@ export async function runPatentWatch(
           findings = buildAiFindings(extracted, selected, analysis);
         }
       } catch (error) {
-        if (isAiOperationStopped(error)) throw error;
+        if (isAiOperationStopped(error)) {
+          throw new PatentWatchDomainError("watch_ai_stopped");
+        }
         findings = buildFallbackFindings(extracted, candidates);
         analyzedCount = findings.length;
         analysisMode = "fallback";
