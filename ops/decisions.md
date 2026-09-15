@@ -329,3 +329,10 @@
 - Display: 保存済み候補から集計し、実行記録なし・完了0件・不完全・取得不能・上限超過を区別する。確認状態は作成時点。法的判断や専門家所見へ読み替えず、原文確認と網羅性の限界を印刷にも残す。PDFはbrowser印刷、所見は印刷物/既存CSVへの外部追記とする。
 - Product stages: 段階Aは手動取得による定期レポート試用を先行し、段階Bで取得・定期実行・通知を自動化する。リアルタイムは別需要。Issue #89の限定受入は維持し、#93の原障害、期間分の取得/正規取込、自己案件除外、実AI/実DBの試用、専門家評価、実顧客受入は本変更の完了と区別する。
 - Impact/rollback: schema/migration/権限、依存、AI、既存API/CSV契約、secret/env、Azure resourceを変更しない。revert PRと通常deployで戻し、保存済みデータを削除・初期化しない。
+
+## 2026-09-16: Issue #99 — 明示入力の公報previewと分離Local取込
+
+- Decision: 新CLIはprivate stdinの明示リストから既定previewを行い、専用loopback PG16だけにapplyする。旧本番scriptの固定号・件数・承認範囲は維持する。
+- Safety: 原本を保持して排他的作業コピーを解析し、容量・内容を再確認する。出力は入力順、公開安全な分類・件数・公開日だけ。公開日範囲は入力の範囲で、期間の全量取得や特許の重複排除を保証しない。
+- Persistence: 既存parser/plan/保存を再利用する。immutable保存はINSERT/SELECTだけで動かし、既存全項目の一致時はrowとwatch cursorを不変にする。部分commitは保持、COMMIT/通信/子processの結果不明は自動再送せず整合確認へ回す。
+- Scope: 最小権限LOGINと完全架空fixtureによる実DB検証を専用一時containerへ限定する。新schema/migration/依存/AI/watch集計/HTTP設定は変更しない。本番定期投入の認可、実データ取得・期間確認、自己案件除外、実AI/専門家評価は別の残作業とし、rollbackはコードのrevert PRとする。

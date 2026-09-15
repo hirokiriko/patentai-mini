@@ -941,7 +941,8 @@ export async function saveKohoImportPlan(
           if (canonical(stored) !== canonical(validatedPlan)) {
             throw new Error("koho_existing_import_mismatch");
           }
-          return { run: toKohoImportRun(existing), savedDocumentCount: rows.length };
+          return { run: toKohoImportRun(existing), savedDocumentCount: rows.length,
+            disposition: "reused" as const };
         }
       }
       const [latestCursor] = await tx
@@ -956,7 +957,7 @@ export async function saveKohoImportPlan(
         ? sql<string>`greatest(clock_timestamp(), ${latestCursor.updatedAt}::timestamptz + interval '1 microsecond')`
         : sql<string>`clock_timestamp()`;
 
-      const [runRow] = await tx
+      const insertion = tx
         .insert(kohoImportRuns)
         .values({
           packageType: validatedPlan.packageType,
@@ -968,8 +969,10 @@ export async function saveKohoImportPlan(
           countsJson: validatedPlan.countsJson,
           issuesJson: validatedPlan.issuesJson,
           updatedAt: nextUpdatedAt,
-        })
-        .onConflictDoUpdate({
+        });
+      // Immutable import needs only INSERT/SELECT. An unexpected conflict must
+      // fail closed instead of replacing an existing package or its documents.
+      const [runRow] = await (reuseExisting ? insertion : insertion.onConflictDoUpdate({
           target: [kohoImportRuns.packageType, kohoImportRuns.sourceSha256],
           set: {
             packageStatus: validatedPlan.packageStatus,
@@ -980,16 +983,17 @@ export async function saveKohoImportPlan(
             issuesJson: validatedPlan.issuesJson,
             updatedAt: nextUpdatedAt,
           },
-        })
+        }))
         .returning();
 
       if (!runRow) {
         throw new Error("Koho import run upsert returned no row");
       }
 
-      await tx
-        .delete(kohoImportDocuments)
-        .where(eq(kohoImportDocuments.importId, runRow.importId));
+      if (!reuseExisting) {
+        await tx.delete(kohoImportDocuments)
+          .where(eq(kohoImportDocuments.importId, runRow.importId));
+      }
 
       let savedDocumentCount = 0;
       if (validatedPlan.documents.length > 0) {
@@ -1027,6 +1031,7 @@ export async function saveKohoImportPlan(
       return {
         run: toKohoImportRun(runRow),
         savedDocumentCount,
+        ...(reuseExisting ? { disposition: "inserted" as const } : {}),
       };
     });
 }
