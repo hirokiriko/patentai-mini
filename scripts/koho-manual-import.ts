@@ -8,7 +8,7 @@ import { buildKohoImportPlan } from "../src/lib/koho-import/builder";
 import { buildKohoManualImportLimits } from "../src/lib/koho-import/manual-api";
 import { MANUAL_DEADLINE_MS, MANUAL_INPUT_BYTES, parseManualConfiguration, requireManual,
   type ManualConfiguration } from "../src/lib/koho-import/manual-cli-config";
-import { copyManualSource, inspectManualSource, verifyManualSnapshot } from "../src/lib/koho-import/manual-cli-source";
+import { copyManualSource, inspectManualDirectory, inspectManualSource, verifyManualSnapshot } from "../src/lib/koho-import/manual-cli-source";
 import { summarizeManualPackage, type ManualFileResult } from "../src/lib/koho-import/manual-cli-summary";
 
 type WorkerInput = { config: ManualConfiguration; index: number; size: number; directory: string };
@@ -133,6 +133,7 @@ export async function runManualBatch(value: unknown, options: { deadlineMs?: num
     try {
       requireManual(performance.now() < deadline && !options.signal?.aborted);
       const parent = resolve(tmpdir());
+      await until(inspectManualDirectory(parent), deadline);
       stagingUnconfirmed = true;
       directory = await until<string>(mkdtemp(join(parent, "koho-manual-")).then(async created => {
         // A late filesystem completion still owns its exact directory and must clean it.

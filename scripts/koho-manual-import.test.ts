@@ -158,6 +158,15 @@ describe("compiled manual CLI", () => {
     expect(result.stderr).toBe(""); expect(result.stdout).not.toContain(secret);
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "stopped", cleanup: "required", exitCode: 2 });
   });
+  it("rejects a network temporary directory before creating any snapshot", async () => {
+    const guard = join(directory, "temp-guard.cjs"), marker = join(directory, "temp-create-attempt");
+    await writeFile(guard, `const fs=require('node:fs'),p=require('node:fs/promises');p.mkdtemp=async()=>{fs.writeFileSync(${JSON.stringify(marker)},'hit');throw Error('${secret}');};`);
+    const temp = process.platform === "win32" ? "\\\\fictional.invalid\\private" : "//fictional.invalid/private";
+    const result = await executeNode(["--require", guard, entry], config(), { TEMP: temp, TMP: temp, TMPDIR: temp });
+    expect(result.code).toBe(2); expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain(secret);
+    expect((await readdir(directory)).includes("temp-create-attempt")).toBe(false);
+  });
 });
 
 describe("exclusive bounded source snapshot", () => {

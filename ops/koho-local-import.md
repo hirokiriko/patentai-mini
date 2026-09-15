@@ -21,7 +21,8 @@ Supply one UTF-8 JSON object through a private pipe, then close stdin. Interacti
 TTY input is refused. Input is limited to 262,144 bytes and ten seconds. Do not
 pass configuration in arguments, environment variables, shell history or public
 logs. Do not load an application `.env`. Keep inputs and the OS temporary
-directory private to the operator; on Windows confirm the directory ACL (file
+directory local and private to the operator; UNC and linked temporary directories
+are rejected before snapshot creation. On Windows confirm the directory ACL (file
 mode `0600` alone does not set a restrictive Windows ACL).
 
 Exact schema (unknown keys are refused):

@@ -4,15 +4,19 @@ import { lstat, open, type FileHandle } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { requireLocalPath, requireManual } from "./manual-cli-config";
 
-// Refuse directory links as well as a linked leaf, before opening the input.
-export async function inspectManualSource(path: string, limit: number) {
+// Apply the same local-directory boundary to inputs and the snapshot destination.
+export async function inspectManualDirectory(path: string) {
   requireLocalPath(path);
-  let parent = dirname(resolve(path));
+  let parent = resolve(path);
   while (true) {
     const entry = await lstat(parent);
     requireManual(entry.isDirectory() && !entry.isSymbolicLink());
     const next = dirname(parent); if (next === parent) break; parent = next;
   }
+}
+export async function inspectManualSource(path: string, limit: number) {
+  requireLocalPath(path);
+  await inspectManualDirectory(dirname(resolve(path)));
   const stat = await lstat(path);
   requireManual(stat.isFile() && !stat.isSymbolicLink() && stat.size > 0 && stat.size <= limit);
   return stat;
