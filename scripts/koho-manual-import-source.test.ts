@@ -2,12 +2,18 @@ import { mkdtemp, writeFile, appendFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, it, vi } from "vitest";
-import { copyManualSource } from "../src/lib/koho-import/manual-cli-source";
+import { copyManualSource, inspectManualDirectory } from "../src/lib/koho-import/manual-cli-source";
 
 const fault = vi.hoisted(() => ({ mode: "", source: "", hit: false }));
 vi.mock("node:fs/promises", async importOriginal => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
+  return { ...fs, lstat: async (...args: Parameters<typeof fs.lstat>) => {
+    if (fault.mode === "ancestor") {
+      if (args[0] === fault.source) return { isDirectory: () => true, isSymbolicLink: () => true };
+      if (String(args[0]).startsWith(fault.source)) { fault.hit = true; throw Error("FICTIONAL_EXTERNAL_FS_GUARD"); }
+    }
+    return fs.lstat(...args);
+  }, open: async (...args: Parameters<typeof fs.open>) => {
     const handle = await fs.open(...args);
     if (args[0] === fault.source) {
       const read = handle.read.bind(handle);
@@ -20,6 +26,11 @@ vi.mock("node:fs/promises", async importOriginal => {
     }
     return handle;
   } };
+});
+it("rejects an ancestor link before making any filesystem call to its child", async () => {
+  fault.mode = "ancestor"; fault.source = join(tmpdir(), "koho-manual-fictional-link");
+  await expect(inspectManualDirectory(join(fault.source, "child"))).rejects.toThrow("manual_import_stopped");
+  expect(fault.hit).toBe(false);
 });
 beforeEach(() => { fault.hit = false; });
 it.each(["short", "growth"])("rejects %s during copy without changing other inputs or accepting a partial snapshot", async mode => {

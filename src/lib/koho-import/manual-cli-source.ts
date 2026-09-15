@@ -8,10 +8,15 @@ import { requireLocalPath, requireManual } from "./manual-cli-config";
 export async function inspectManualDirectory(path: string) {
   requireLocalPath(path);
   let parent = resolve(path);
+  const ancestors: string[] = [];
   while (true) {
-    const entry = await lstat(parent);
-    requireManual(entry.isDirectory() && !entry.isSymbolicLink());
+    ancestors.push(parent);
     const next = dirname(parent); if (next === parent) break; parent = next;
+  }
+  // Inspect a link itself before resolving any child through it (including UNC targets).
+  for (const ancestor of ancestors.reverse()) {
+    const entry = await lstat(ancestor);
+    requireManual(entry.isDirectory() && !entry.isSymbolicLink());
   }
 }
 export async function inspectManualSource(path: string, limit: number) {
