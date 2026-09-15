@@ -1,4 +1,142 @@
-# Local public-corpus import — Issue #89
+# Local public-corpus import
+
+## Manual preview and isolated Local apply — Issue #99
+
+`scripts/koho-manual-import.ts` accepts newly acquired JPA/JPB issues without
+fixed filenames or document counts. It reuses the package parser and immutable
+repository save. This entrypoint is restricted to a dedicated Local PostgreSQL
+16 test DB; it does **not** authorize production import. The Issue #89 script
+and its approval, issue-number and expected-count restrictions remain intact.
+
+### Private input and commands
+
+Use the existing lockfile (`pnpm install --frozen-lockfile` when needed), then:
+
+```sh
+pnpm exec tsc -p scripts/koho-manual-import.tsconfig.json
+node .koho-ops/manual/scripts/koho-manual-import.js
+```
+
+Supply one UTF-8 JSON object through a private pipe, then close stdin. Interactive
+TTY input is refused. Input is limited to 262,144 bytes and ten seconds. Do not
+pass configuration in arguments, environment variables, shell history or public
+logs. Do not load an application `.env`. Keep inputs and the OS temporary
+directory private to the operator; on Windows confirm the directory ACL (file
+mode `0600` alone does not set a restrictive Windows ACL).
+
+Exact schema (unknown keys are refused):
+
+| Field | Type / validation |
+| --- | --- |
+| `mode` | Optional `preview` (default) or explicit `apply` |
+| `files` | Array of 1–64 `{ "packageType": "JPA" \| "JPB", "path": string }` |
+| `files[].path` | Explicit absolute local regular-file path, at most 32,768 characters; no UNC, symlink or linked parent directory |
+| `maxFileBytes` | Required positive integer, at most 8 GiB; applies to every input file |
+| `maxTotalBytes` | Required positive integer, at most 8 GiB; sum of all listed file sizes |
+| `allowReviewRequired` | Optional boolean, default false; operator acknowledgement for this exact supplied list |
+| `connection` | Apply only: exactly `{ host, port, database, user, password }` |
+| `expectedTarget` | Apply only: exactly `{ host, port, database, user }`, independently supplied and equal to connection fields |
+
+Preview refuses both connection objects. Apply host must be exactly `127.0.0.1`
+or `::1`, port an integer 1–65535, database `koho_manual_import_test_` plus an
+alphanumeric suffix (total at most 63 characters). User is a nonempty string of
+at most 63 characters; password at most 8,192. No string may contain NUL. Other
+connection options, connection strings and remote targets are refused before
+connection. No saved/default DB connection or target discovery is used.
+
+1. Preserve original downloads. Identify their actual format; bibliographic TSV,
+   PAJ or unknown XML is not a body-publication ZIP. Do not rename another issue
+   to satisfy an old filename restriction.
+2. Run preview with explicit files and byte ceilings. Inspect package status,
+   document review counts and the generalized package/XML issue counts. Preview
+   uses no DB driver, connection or external network and saves nothing.
+3. For Local apply, separately supply the dedicated target and least-privilege
+   login. Require PG16, matching `current_database` / `current_user`, no recovery,
+   management flags, role membership, DDL/ownership or unrelated data privileges.
+   The login needs only CONNECT to this DB, USAGE on public, SELECT/INSERT on
+   `koho_import_runs` / `koho_import_documents`, and USAGE on their two serial
+   sequences. Revoke default PUBLIC database permissions in this isolated DB
+   before granting the dedicated login. Never change a shared or production DB.
+4. Set `allowReviewRequired: true` only after reviewing the generalized findings
+   for the supplied list. The CLI repeats parsing and byte checks during apply.
+   This flag preserves review status and is not a confidentiality or production
+   authorization. A separate preview and apply have no cross-process content
+   binding; no unchanged-input guarantee is claimed between those invocations.
+5. Each input is copied exclusively to a unique operation-owned directory, with
+   size and hash checks before/after parsing and an original-content recheck.
+   The parser retains ZIP/XML/CSV and cumulative expansion limits. Files run
+   sequentially in supervised child processes, under a batch-wide 120-minute
+   processing budget, followed by bounded process/temporary-file cleanup waits
+   of at most five seconds each. Unconfirmed OS filesystem cleanup is reported
+   as required; a filesystem request cannot itself be cancelled by Node.
+   Connection/statement/lock waits are 30/120/30 seconds.
+
+### Output and recovery
+
+Stdout is one public-safe JSON result; stderr does not carry raw worker/DB/parser
+errors. Input correspondence is by one-based `ordinal`, never filename/path.
+The summary contains only package/parse classifications, body/review/amendment/
+attachment counts, generalized issue counts and publication dates.
+`nestedSt26Count` retains the existing nested XML candidate count; nested content
+is not treated as a body publication or newly asserted to be verified ST.26.
+
+Publication date minimum/maximum and daily counts describe **only this input**.
+They do not prove a complete week/month or consecutive-day coverage.
+`savedRecordCount` counts newly committed records, not distinct patents across
+ZIPs. `reused` retains every stored row and microsecond watch-cursor timestamp.
+Unknown existing mismatches stop without overwrite.
+
+| Per-input outcome | Meaning |
+| --- | --- |
+| `preview_not_saved` | Parser preview completed; nothing saved, including review packages |
+| `inserted` | New package transaction acknowledged |
+| `reused` | Existing source identity and all plan fields matched; no row/cursor changes |
+| `review_not_saved` | Explicit review acknowledgement missing; nothing saved |
+| `failed_before_save` | No committed save: admission/parser/target failure or acknowledged rollback |
+| `save_outcome_unknown` | Save may have committed; reconciliation required, automatic resend zero |
+| `not_processed` | Later input was not attempted |
+
+`includesReviewRequired: true` means **要確認を含む保存** for inserted/reused
+packages. Failed packages and review packages containing no confirmed bodies
+are refused, including unsupported-only or inconsistent-index zero-body input.
+
+Exit codes: `0` completed preview/apply; `1` invalid private input; `2` stopped
+batch or cleanup requiring attention; `3` unknown save outcome. Earlier committed
+packages remain after a later failure; there is no whole-batch rollback.
+On a transport error, unacknowledged COMMIT, timeout or interrupted apply child,
+do not resend blindly. A new explicit invocation may reuse only an existing
+identity whose full immutable plan matches. Never clear the corpus, watch runs,
+findings or cursor as recovery. `cleanup: required` needs removal of only this
+operation's remaining temporary objects; preserve original files and other work.
+
+### Verification and production boundary
+
+```sh
+pnpm exec vitest run scripts/koho-manual-import.test.ts scripts/koho-manual-import-transport.test.ts
+pnpm exec vitest run scripts/koho-manual-import-local.test.ts
+pnpm test
+pnpm lint
+pnpm type-check
+pnpm build
+git diff --check
+```
+
+The Local test suite is opt-in with `KOHO_MANUAL_LOCAL_DB_TEST=1` set only in its
+process environment. It creates one uniquely named `postgres:16` container bound
+to loopback, generates ephemeral credentials in memory, applies only existing
+Drizzle migrations, runs compiled-CLI real saves and reconciliation, then removes
+its own container/volumes/fixtures. Docker must already be running and the image
+available. No saved Docker/DB credentials are read. Without opt-in the seven
+Local cases are SKIP, separately from the pre-existing seven Issue #89 DB SKIPs.
+Transport-loss tests are fakes, not claims of induced real network failures.
+
+UI/browser/PDF/real AI/real-publication acquisition and production import are not
+tested or enabled here. New schema, migration, dependency, HTTP endpoint and
+runtime settings are unchanged. A scoped revert PR rolls back code only.
+Future production use needs a separate approval for target, authentication,
+cost and cleanup; do not call the legacy script to bypass the Local restriction.
+
+## Bounded acceptance import — Issue #89
 
 `LOCAL_IMPORT_FIRST_V1` authorizes the bounded workflow in Issue #89. The Azure
 benchmark in Issue #75 / PR #76 is deferred, not passed. This entrypoint creates

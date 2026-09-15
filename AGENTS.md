@@ -463,6 +463,11 @@ confirmed. Never report an unexecuted check as successful.
 
 ## 14. Manual Koho Import Runtime Safety
 
+`scripts/koho-manual-import.ts` is preview-first and permits apply only to an
+explicit isolated loopback PostgreSQL 16 test database. It does not broaden
+Issue #89 approval or authorize production import, runtime changes, or the
+public HTTP endpoint. See `ops/koho-local-import.md` for its private-input schema.
+
 The manual administrator import route uses these configuration names:
 
 - `KOHO_IMPORT_ADMIN_TOKEN`
