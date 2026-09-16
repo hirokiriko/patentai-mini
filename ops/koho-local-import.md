@@ -272,7 +272,7 @@ Sources: [Microsoft model limits](https://learn.microsoft.com/en-us/azure/foundr
 
 `WATCH_REPORT_LOCAL_DB_TEST=1 pnpm exec vitest run scripts/watch-report-local.test.tsx` を明示実行する。既存Dockerと公開postgres:16 imageを使い、新規loopback専用DBだけへ既存migrationを適用する。保存済み.envは読み込まず、製品DATABASE_URLやPGHOST/PGSERVICEが設定されたprocessは開始前に拒否する。資格情報はランダム生成し、CLIへprivate stdin、Dockerへ必要なchild envだけで渡す。import/watch/reportは別LOGINで、reportはSELECTだけ。元ZIP、cursor、確認状態、失敗履歴を検証し、外部AIは呼ばない。
 
-通常suiteではこの5件をSKIPし、専用実行を別記する。既存の通常14 SKIPや#99受入を成功へ読み替えない。previewは親と解析workerの接続0回を測定する。実repository/service/handler/pageを使い、DB moduleだけを専用実PGへ差し替える。AI応答は既存service DIで固定し、製品のmock endpoint/env switchは追加しない。境界・上限・不正rowは別のnegative-control案件へ直接配置する。
+通常suiteではこの5件をSKIPし、専用実行を別記する。既存の通常14 SKIPや#99受入を成功へ読み替えない。previewは親と解析workerの接続0回を測定する。実repository/service/handler/pageを使い、DB moduleだけを専用実PGへ差し替える。AI応答は既存service DIで固定し、製品のmock endpoint/env switchは追加しない。境界・上限は別のnegative-control案件へ直接配置し、不正analysis JSONは架空候補の元値を保存して試験後に復元する。
 
 追加で`WATCH_REPORT_BROWSER=1`を指定すると、最後のtestが30分以内のloopback確認用serverを保持する。`.koho-ops/issue101/browser.json`のURLを開く。案件の確認状態変更・再読込・監視、候補あり/正常0/失敗/実行中/失敗混在/未実行の出力を確認する。監視sectionと期間viewのclient操作は本物のcomponent、単一runは本物PageのSSRで、印刷ボタンへのevent接続だけは薄いharnessである。期間queryは重複も保持して本物Pageへ渡し、同じ取得結果を描画する。
 
