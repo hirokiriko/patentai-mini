@@ -10,6 +10,7 @@ import {
 } from "@/lib/patent-watch/domain";
 import type { CaseWatchFinding } from "@/lib/patent-watch/types";
 import { PrintButton } from "./print-button";
+import { BibliographyLink } from "../../bibliography-link";
 
 export const dynamic = "force-dynamic";
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
@@ -70,11 +71,11 @@ function scoreLabel(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-function FindingReport({ finding }: { finding: CaseWatchFinding }) {
+function FindingReport({ caseId, finding }: { caseId: number; finding: CaseWatchFinding }) {
   const analysis = parseAnalysis(finding.analysisJson);
 
   return (
-    <article className="break-inside-avoid rounded-lg border border-gray-300 p-4">
+    <article id={`finding-${finding.findingId}`} className="break-inside-avoid rounded-lg border border-gray-300 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono font-semibold">
           {boundedPatentWatchPublicText(finding.publicationNumber, 100)}
@@ -131,6 +132,7 @@ function FindingReport({ finding }: { finding: CaseWatchFinding }) {
       <p className="mt-2 text-xs text-gray-500">
         確認状態: {finding.reviewStatus === "reviewed" ? "確認済み" : "未確認"}
       </p>
+      <BibliographyLink caseId={caseId} findingId={finding.findingId} />
     </article>
   );
 }
@@ -227,7 +229,7 @@ export default async function PatentWatchReportPage({
             <h2 className="text-xl font-bold">確認候補</h2>
             {report.findings.length > 0 ? (
               report.findings.map((finding) => (
-                <FindingReport key={finding.findingId} finding={finding} />
+                <FindingReport key={finding.findingId} caseId={caseId} finding={finding} />
               ))
             ) : (
               <p className="text-sm text-gray-600">このrunで追加された確認候補はありません。</p>

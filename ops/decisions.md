@@ -344,3 +344,10 @@
 - Fix: `watch_ai_stopped`のrepository許可漏れを実DBで再現し修正する。保護guard/cursor/identity/migrationは不変。#93原障害の原因や本番復旧へ推定を広げない。
 - Evidence: browser headless印刷で実PDFを保存し、別rendererの全ページ目視と抽出textを照合する。OS印刷ダイアログ、実AI精度、専門家受入とは区別する。完成見本PDFと短い操作メモは追跡外Localへ残す。
 - Impact/rollback: 製品依存/schema/既存migration/Production DB/Azure resource/secret/env変更なし。通常コードdeployと、本変更のrevert PRによるrollbackのみ。実公報の適用条件・期間、本番継続取込、自己案件除外、実AI/専門家評価は親#94の別残件。
+
+## 2026-09-16: Issue #103 — 保存候補の出願人・書誌確認
+
+- Decision: 明示クリックでのみ参照公報の限定書誌を取得し、番号・kind・content由来identityの照合後に名称だけのDTOを表示する。異なる版や別公報で補完しない。
+- Safety: case境界をquery内に固定し、read-only repeatable-readと既存有限待機を使う。出願人JSON 64KiB/100件/名称500文字を超える場合や不正shape/秘密除去時には原文確認へ回す。raw JSON、住所、内部ID/hashを画面payloadへ渡さない。
+- UX: 候補・単一run・期間reportからprefetchなしの導線を置く。番号copyの成否を区別し、同一findingの比較説明へ戻る。既存印刷CSSと公式検索入口を再利用する。
+- Impact/rollback: 新schema/migration、既存data、AI、CSV、cursor、依存、secret/env、Azure設定は変更しない。revert PRと通常deployで戻す。自社/他社自動判定、自己案件除外、最新権利者/権利有効性、実AI/専門家受入、事務所試用GOは本機能の完了条件ではない。

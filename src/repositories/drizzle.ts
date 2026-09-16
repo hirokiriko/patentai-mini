@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { APPLICANTS_JSON_BYTES, projectFindingBibliography } from "../lib/patent-watch/bibliography";
 import { PERIOD_RUN_LIMIT, PERIOD_FINDING_LIMIT, PeriodReportLimitError, periodBounds, periodCaseId } from "../lib/patent-watch/period";
 import type { PeriodSnapshot } from "../lib/patent-watch/period-report";
 import {
@@ -1082,6 +1083,34 @@ export const kohoImportRepo: KohoImportRepository = {
 };
 
 export const patentWatchRepo: PatentWatchRepository = {
+  async readFindingBibliography(caseId, findingId) {
+    if (periodCaseId(String(caseId)) === null || periodCaseId(String(findingId)) === null) return null;
+    return db.transaction(async tx => {
+      await tx.execute(sql`set local statement_timeout = '5s'`);
+      await tx.execute(sql`set local lock_timeout = '3s'`);
+      await tx.execute(sql`set local idle_in_transaction_session_timeout = '5s'`);
+      // One joined read, scoped by both IDs. Never search for another publication version.
+      const [row] = await tx.select({
+        finding: { findingId: caseWatchFindings.findingId, firstRunId: caseWatchFindings.firstRunId,
+          publicationNumber: caseWatchFindings.publicationNumber, kind: caseWatchFindings.kind,
+          packageType: caseWatchFindings.packageType, sourceKey: caseWatchFindings.sourceKey },
+        document: { documentId: kohoImportDocuments.documentId, publicationNumber: kohoImportDocuments.publicationNumber,
+          kind: kohoImportDocuments.kind, packageType: kohoImportRuns.packageType, contentSha256: kohoImportDocuments.contentSha256,
+          parseStatus: kohoImportDocuments.parseStatus, publicationDate: kohoImportDocuments.publicationDate,
+          inventionTitle: kohoImportDocuments.inventionTitle, applicationNumber: kohoImportDocuments.applicationNumber,
+          registrationNumber: kohoImportDocuments.registrationNumber, registrationDate: kohoImportDocuments.registrationDate,
+          applicantsJson: sql<string | null>`case when octet_length(${kohoImportDocuments.applicantsJson}) <= ${APPLICANTS_JSON_BYTES} then ${kohoImportDocuments.applicantsJson} else null end` },
+      }).from(cases)
+        .innerJoin(caseWatchSettings, eq(caseWatchSettings.caseId, cases.caseId))
+        .innerJoin(caseWatchFindings, eq(caseWatchFindings.watchId, caseWatchSettings.watchId))
+        .innerJoin(caseWatchRuns, and(eq(caseWatchRuns.runId, caseWatchFindings.firstRunId), eq(caseWatchRuns.watchId, caseWatchSettings.watchId)))
+        .leftJoin(kohoImportDocuments, eq(kohoImportDocuments.documentId, caseWatchFindings.corpusDocumentId))
+        .leftJoin(kohoImportRuns, eq(kohoImportRuns.importId, kohoImportDocuments.importId))
+        .where(and(eq(cases.caseId, caseId), eq(caseWatchFindings.findingId, findingId))).limit(1);
+      return row ? projectFindingBibliography(row) : null;
+    }, { isolationLevel: "repeatable read", accessMode: "read only" });
+  },
+
   async readPeriodSnapshot(caseId, period) {
     if (periodCaseId(String(caseId)) === null) throw new Error("invalid case");
     const bounds = periodBounds(period);

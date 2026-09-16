@@ -171,3 +171,11 @@ Issue #93のrollbackは同修正のrevert PRと通常deployで行う。既存DB�
 CSVはcompletedだけを出力する。未完了はHTTP409とJSON `{"error":"watch_report_not_completed"}`、attachmentなし。画面のCSVリンクも完了runだけに表示する。完了CSVのURL/query/列順/BOM/CRLF/数式無害化と不存在・他案件runの404は維持する。report/CSVのGETは監視・AI・import・確認状態変更・cursor更新・古いrunning回収を起動しない。
 
 実DB結合で、既存`watch_ai_stopped`がrepository許可一覧に欠けて失敗保存を拒否する不具合を再現し、許可一覧を整合した。AI保護条件やcursor仕様は変更しない。この制御された架空試験はIssue #93の原requestの原因証明ではない。
+
+### 候補の出願人・書誌確認（Issue #103）
+
+候補一覧・単一run・期間レポートの「出願人・書誌を確認」から `/cases/[caseId]/watch/findings/[findingId]` を開く。通常のリンクを使い、prefetchや候補ごとの追加読取は行わない。公開番号・種別・発行日・名称、出願番号、登録番号/日、出願人名を表示し、番号は明示操作でコピーできる。同じfindingの単一run内アンカーへ戻って比較説明・確認状態を確認する。
+
+取得はcase→watch→findingの所属とその参照公報1件に限定したread-only snapshot。番号・kind・内容由来のsource identityが一致しなければ書誌全体を未確認にする。出願人は既存serializerのshapeを検証し、JSON 64KiB、100件、各名称500文字を上限として記載順の名称だけを投影する。超過・不正・redaction時は省略名を表示せず原文確認を案内し、null/未記載と区別する。SQL timeoutと応答待ち上限は期間レポートと同じ有限設定を使う。
+
+印刷には書誌・出典状態・注意文を残す。取り込み済み公報の記載であり、最新権利者や審査経過、自社/他社の判定、自己案件除外、法的結論ではない。公式J-PlatPat入口と番号から人が原文を確認する。既存CSV・case snapshot・schema・AI・cursor・確認状態は変更しない。本番機能受入や実案件提供許可は未確認のまま維持する。

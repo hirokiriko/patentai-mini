@@ -2,6 +2,7 @@ import type { PeriodFindingView, PeriodReportResult } from "@/lib/patent-watch/p
 import { PERIOD_QUERY_MESSAGE, periodDateTimeLabel, type WatchPeriod } from "@/lib/patent-watch/period";
 import { PrintButton } from "../runs/[runId]/print-button";
 import { PeriodSelector } from "./period-selector";
+import { BibliographyLink } from "../bibliography-link";
 
 export const PERIOD_REPORT_PRINT_CSS = `
   .period-report { overflow-wrap: anywhere; }
@@ -16,7 +17,7 @@ export const PERIOD_REPORT_PRINT_CSS = `
 `;
 const statusLabel = { completed: "完了", failed: "失敗", running: "実行中" };
 const scoreLabel = (score: number) => `${Math.round(score * 100)}%`;
-function Finding({ finding }: { finding: PeriodFindingView }) {
+function Finding({ caseId, finding }: { caseId: number; finding: PeriodFindingView }) {
   return <article className="rounded-lg border border-gray-300 p-4" data-finding-id={finding.findingId}>
     <h3 className="text-lg font-semibold">{finding.publicationNumber} · {finding.inventionTitle}</h3>
     <p className="mt-2 text-sm">公開日: {finding.publicationDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1/$2/$3")} ／ 初回検出: {periodDateTimeLabel(finding.firstSeenAt)}</p>
@@ -30,6 +31,7 @@ function Finding({ finding }: { finding: PeriodFindingView }) {
     <h4 className="mt-3 font-semibold">差分候補</h4>
     <ul className="list-disc pl-5 text-sm">{finding.unmatchedElements.length ? finding.unmatchedElements.map((text, index) => <li key={index}>{text}</li>) : <li>明示された候補はありません</li>}</ul>
     <p className="mt-3 whitespace-pre-wrap text-sm leading-6">{finding.explanation}</p>
+    <BibliographyLink caseId={caseId} findingId={finding.findingId} />
   </article>;
 }
 
@@ -69,7 +71,7 @@ export function PeriodReportView({ caseId, period, invalidQuery = false, result 
         {!report.runs.length ? <p>実行記録なし：この期間に開始した保存済みの監視実行はありません。公報の取得状況や比較結果は判断できません。</p>
           : !report.summary.completed ? <p>完了した実行がありません。新規候補の有無は未確定です。</p>
           : !report.findings.length ? <p>完了した実行の新規候補は0件です。過去に初検出済みの候補は再計上していません。</p> : null}
-        {report.findings.map(finding => <Finding key={finding.findingId} finding={finding} />)}
+        {report.findings.map(finding => <Finding key={finding.findingId} caseId={caseId} finding={finding} />)}
       </section>
       <section className="my-6">
         <h2 className="text-xl font-bold">対象の監視実行</h2>
