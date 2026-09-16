@@ -163,3 +163,11 @@ Issue #93のrollbackは同修正のrevert PRと通常deployで行う。既存DB�
 段階Aは運営者の手動取得による定期レポート試用、段階Bは取得・定期実行・通知の自動化とする。リアルタイムは別需要である。本変更の受入は期間レポートの実装までで、手動公報の期間分取得・正規取込運用、Issue #93の原障害、実AI/実DBの全体試用、専門家の品質評価、実顧客受入は別残件。Issue #89の公開・完全架空データ限定受入は維持する。
 
 本変更はDB列/table/migration/権限、AI、既存API/CSV URL、secret/env、Azure resourceを変更しない。rollbackは本変更のrevert PR→既存通常deployとし、保存済み公報・候補・設定を削除/初期化しない。
+
+### 単一runの未完了・取得不能（Issue #101）
+
+単一runにも完了／失敗／実行中を明示し、日本時間（Asia/Tokyo）で日時を表示する。失敗・実行中は「結果は未確定」と印刷にも残し、完了サマリーや正常0件の文言を出さない。完了結果は保存件数、取得行、所属run/watch、重複、時刻、fallback数、分析JSONを検証し、100件超過は101行目も取得して全体を拒否する。取得不能・不整合を正常0件や全件出力として扱わない。
+
+CSVはcompletedだけを出力する。未完了はHTTP409とJSON `{"error":"watch_report_not_completed"}`、attachmentなし。画面のCSVリンクも完了runだけに表示する。完了CSVのURL/query/列順/BOM/CRLF/数式無害化と不存在・他案件runの404は維持する。report/CSVのGETは監視・AI・import・確認状態変更・cursor更新・古いrunning回収を起動しない。
+
+実DB結合で、既存`watch_ai_stopped`がrepository許可一覧に欠けて失敗保存を拒否する不具合を再現し、許可一覧を整合した。AI保護条件やcursor仕様は変更しない。この制御された架空試験はIssue #93の原requestの原因証明ではない。

@@ -91,6 +91,11 @@ function renderWatchState(
 }
 
 describe("patent watch UI contract", () => {
+  it.each(["completed", "failed", "running"] as const)("offers CSV only for completed history (%s)", status => {
+    const html = renderWatchState("ready", run(status));
+    expect(html.includes("CSVをダウンロード")).toBe(status === "completed");
+    expect(html).toContain("レポートを表示");
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { caseRepo, patentWatchRepo } from "@/repositories";
+import { readPatentWatchRunReport } from "@/lib/patent-watch/api";
+import { periodDateTimeLabel } from "@/lib/patent-watch/period";
 import {
   boundedPatentWatchPublicText,
   sanitizePatentWatchAnalysis,
@@ -55,14 +57,7 @@ function parseAnalysis(value: string): AnalysisView {
 }
 
 function dateTimeLabel(value: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? "—"
-    : new Intl.DateTimeFormat("ja-JP", {
-        dateStyle: "long",
-        timeStyle: "short",
-      }).format(date);
+  return value === null ? "—" : periodDateTimeLabel(value);
 }
 
 function publicationDateLabel(value: string): string {
@@ -168,16 +163,7 @@ export default async function PatentWatchReportPage({
 
   if (!unavailable) {
     try {
-      const run = await patentWatchRepo.getRun(caseId, runId);
-      if (run) {
-        report = {
-          run,
-          findings: await patentWatchRepo.listFindings(caseId, {
-            runId,
-            limit: 100,
-          }),
-        };
-      }
+      report = await readPatentWatchRunReport(patentWatchRepo, caseId, runId);
     } catch {
       unavailable = true;
     }
@@ -188,11 +174,14 @@ export default async function PatentWatchReportPage({
   return (
     <main className="mx-auto max-w-4xl px-6 py-8">
       <style>{`
+        main { overflow-wrap: anywhere; }
         @media print {
           nav, button, .print-hidden { display: none !important; }
           body { background: white !important; color: black !important; }
           main { max-width: none !important; padding: 0 !important; }
-          article { break-inside: avoid; }
+          article { break-inside: auto; overflow: visible; }
+          h2, h3, h4 { break-after: avoid; }
+          p, li { orphans: 3; widows: 3; }
         }
       `}</style>
       <div className="print-hidden mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -214,14 +203,20 @@ export default async function PatentWatchReportPage({
 
       {unavailable || !report ? (
         <p className="mt-6 rounded border border-gray-300 px-4 py-3">
-          この環境ではウォッチング機能がまだ利用可能になっていません
+          データ取得不能：監視レポートを取得できませんでした。候補0件とは判断できません。
         </p>
       ) : (
         <>
           <section className="mt-6 rounded-lg border border-gray-300 p-4">
+            <h2 className="text-lg font-semibold">実行状態: {report.run.status === "completed" ? "完了" : report.run.status === "failed" ? "失敗" : "実行中"}</h2>
+            <p className="mt-2 text-sm">開始日時（日本時間）: {dateTimeLabel(report.run.startedAt)}</p>
+            {report.run.status !== "completed" && <p className="mt-3 rounded border-2 border-amber-500 p-3 font-bold">監視は完了していません。結果は未確定です。新規候補の有無を判断できません。</p>}
+          </section>
+          {report.run.status === "completed" && <>
+          <section className="mt-6 rounded-lg border border-gray-300 p-4">
             <h2 className="text-lg font-semibold">監視実行サマリー</h2>
             <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-4">
-              <div><dt className="text-gray-500">run日時</dt><dd>{dateTimeLabel(report.run.completedAt ?? report.run.startedAt)}</dd></div>
+              <div><dt className="text-gray-500">完了日時（日本時間）</dt><dd>{dateTimeLabel(report.run.completedAt)}</dd></div>
               <div><dt className="text-gray-500">対象公報数</dt><dd>{report.run.scannedDocumentCount}件</dd></div>
               <div><dt className="text-gray-500">新着候補数</dt><dd>{report.run.newFindingCount}件</dd></div>
               <div><dt className="text-gray-500">fallback</dt><dd>{report.run.fallbackFindingCount > 0 ? `あり（${report.run.fallbackFindingCount}件）` : "なし"}</dd></div>
@@ -238,6 +233,8 @@ export default async function PatentWatchReportPage({
               <p className="text-sm text-gray-600">このrunで追加された確認候補はありません。</p>
             )}
           </section>
+          </>}
+          <p className="mt-6 text-sm">対象は実行時の取り込み済み公報です。全公開公報の取得完了や全件のAI精読は保証しません。人による原文確認が必要です。</p>
         </>
       )}
     </main>

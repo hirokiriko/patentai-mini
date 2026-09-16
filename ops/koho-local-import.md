@@ -267,3 +267,15 @@ not a guarantee for future customer spending or a mathematical input-token cap.
 Sources: [Microsoft model limits](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure?pivots=azure-openai#gpt-54),
 [normal pricing](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-5-4-in-microsoft-foundry/4499785),
 [mini pricing](https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-openai%E2%80%99s-gpt-5-4-mini-and-gpt-5-4-nano-for-low-latency-ai/4500569).
+
+### Issue #101: 完全架空データのwatch/report結合試験
+
+`WATCH_REPORT_LOCAL_DB_TEST=1 pnpm exec vitest run scripts/watch-report-local.test.tsx` を明示実行する。既存Dockerと公開postgres:16 imageを使い、新規loopback専用DBだけへ既存migrationを適用する。保存済み.envは読み込まず、製品DATABASE_URLやPGHOST/PGSERVICEが設定されたprocessは開始前に拒否する。資格情報はランダム生成し、CLIへprivate stdin、Dockerへ必要なchild envだけで渡す。import/watch/reportは別LOGINで、reportはSELECTだけ。元ZIP、cursor、確認状態、失敗履歴を検証し、外部AIは呼ばない。
+
+通常suiteではこの5件をSKIPし、専用実行を別記する。既存の通常14 SKIPや#99受入を成功へ読み替えない。previewは親と解析workerの接続0回を測定する。実repository/service/handler/pageを使い、DB moduleだけを専用実PGへ差し替える。AI応答は既存service DIで固定し、製品のmock endpoint/env switchは追加しない。境界・上限・不正rowは別のnegative-control案件へ直接配置する。
+
+追加で`WATCH_REPORT_BROWSER=1`を指定すると、最後のtestが30分以内のloopback確認用serverを保持する。`.koho-ops/issue101/browser.json`のURLを開く。案件の確認状態変更・再読込・監視、候補あり/正常0/失敗/実行中/失敗混在/未実行の出力を確認する。監視sectionと期間viewのclient操作は本物のcomponent、単一runは本物PageのSSRで、印刷ボタンへのevent接続だけは薄いharnessである。期間queryは重複も保持して本物Pageへ渡し、同じ取得結果を描画する。
+
+browser印刷で長い日本語の期間PDFと失敗警告PDFを実保存し、別rendererの全ページ表示と抽出textで件数・期間・警告を照合する。headless印刷とOS印刷ダイアログを区別し、実AI精度/専門家受入の証明にしない。完了時はbrowser.jsonに書かれた今回専用`finishFile`を同じdirectoryに作成する。server/接続/今回のownership labelに一致するcontainerとvolumeを回収し、不存在を確認する。応答不明のcreateを再送しない。生成したDB内LOGINもcontainerとともに回収する。完成PDFと短い操作メモだけをGit追跡外Localへ残し、中間画像/fixture/専用profile/確認tabを回収する。
+
+本試験は本番取込・追加Azure操作を許可しない。次の実案件工程には、実公報の形式・対象期間・適用条件、本番継続取込の対象/上限/権限/停止条件と回収範囲、#93の原障害・実AI確認、自社/他社識別と自己案件除外、専門家評価の承認・受入条件が別途必要となる。
