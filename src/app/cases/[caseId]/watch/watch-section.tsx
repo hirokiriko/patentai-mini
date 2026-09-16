@@ -1,4 +1,5 @@
 "use client";
+import { BibliographyLink } from "./bibliography-link";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -598,6 +599,7 @@ export function PatentWatchSectionView({
                 <span>構造 {percent(finding.structuralScore)}</span>
               </div>
               <p className="mt-2 text-sm text-gray-700">{finding.explanation}</p>
+              <BibliographyLink caseId={caseId} findingId={finding.findingId} />
               <button
                 type="button"
                 onClick={() => onUpdateReview(finding)}

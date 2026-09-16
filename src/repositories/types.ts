@@ -3,6 +3,7 @@ import type {
   KohoImportPlan,
 } from "@/lib/koho-import";
 import type { PeriodReportRepository } from "@/lib/patent-watch/period-report";
+import type { BibliographyRepository } from "@/lib/patent-watch/bibliography";
 import type {
   KohoCorpusAttachResult,
   KohoCorpusSearchSummary,
@@ -236,7 +237,7 @@ export interface KohoCorpusRepository {
   ): Promise<KohoCorpusAttachResult>;
 }
 
-export interface PatentWatchRepository extends PatentWatchRunRepository, PeriodReportRepository {
+export interface PatentWatchRepository extends PatentWatchRunRepository, PeriodReportRepository, BibliographyRepository {
   getSetting(caseId: number): Promise<CaseWatchSetting | null>;
   upsertSetting(
     caseId: number,
