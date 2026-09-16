@@ -108,7 +108,7 @@ export type WatchAttempt = {
 
 const ERROR_CODES = new Set([
   "watch_disabled", "watch_not_configured", "watch_claims_not_ready",
-  "watch_run_in_progress", "invalid_watch_setting", "invalid_watch_run_request",
+  "watch_run_in_progress", "watch_report_not_completed", "invalid_watch_setting", "invalid_watch_run_request",
   "case_not_found", "watch_corpus_unavailable", "watch_unavailable",
   "watch_ai_stopped", "watch_analysis_failed", "watch_internal_error",
 ]);
@@ -249,6 +249,8 @@ function safeErrorMessage(code: string | null): string {
       return "監視には抽出済みの請求項が必要です。";
     case "watch_run_in_progress":
       return "別の監視実行が進行中です。完了後に再読み込みしてください。";
+    case "watch_report_not_completed":
+      return "監視が完了していないためCSVを出力できません。結果は未確定です。";
     case "invalid_watch_setting":
       return "監視設定を確認してください。";
     case "watch_corpus_unavailable":
@@ -637,7 +639,7 @@ export function PatentWatchSectionView({
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         <a className="text-indigo-700 underline" href={`/cases/${caseId}/watch/runs/${run.runId}`}>レポートを表示</a>
-                        <a className="text-indigo-700 underline" href={`/api/cases/${caseId}/watch/report.csv?runId=${run.runId}`}>CSVをダウンロード</a>
+                        {run.status === "completed" && <a className="text-indigo-700 underline" href={`/api/cases/${caseId}/watch/report.csv?runId=${run.runId}`}>CSVをダウンロード</a>}
                       </div>
                     )}
                   </td>

@@ -623,6 +623,53 @@ describe("patent watch CSV handler", () => {
     );
   }
 
+  it.each(["failed", "running"] as const)("refuses %s CSV without reading findings", async status => {
+    const repository = new FakePatentWatchRepository();
+    repository.runResult = run({ status, completedAt: status === "running" ? null : run().completedAt, newFindingCount: 0 });
+    repository.findingsResult = [];
+    const response = await createPatentWatchCsvHandlers({ repository }).GET(csvRequest(), caseContext());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "watch_report_not_completed" });
+    expect(response.headers.has("content-disposition")).toBe(false);
+    expect(repository.listFindingsCalls).toEqual([]);
+  });
+
+  it.each([
+    ["missing rows", run(), []],
+    ["count cap", run({ newFindingCount: 101 }), [finding()]],
+    ["wrong run", run(), [finding({ firstRunId: 22 })]],
+    ["wrong watch", run(), [finding({ watchId: 12 })]],
+    ["invalid analysis", run(), [finding({ analysisJson: "FICTIONAL_PRIVATE_SENTINEL" })]],
+    ["invalid score", run(), [finding({ lexicalScore: 2 })]],
+    ["duplicate rows", run({ newFindingCount: 2 }), [finding(), finding()]],
+    ["fallback count", run({ fallbackFindingCount: 1 }), [finding()]],
+    ["no completion", run({ completedAt: null }), [finding()]],
+  ] as const)("fails closed for %s", async (_name, selectedRun, findings) => {
+    const repository = new FakePatentWatchRepository();
+    repository.runResult = selectedRun;
+    repository.findingsResult = [...findings];
+    const response = await createPatentWatchCsvHandlers({ repository }).GET(csvRequest(), caseContext());
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "watch_unavailable" });
+    expect(response.headers.has("content-disposition")).toBe(false);
+  });
+
+  it("retains completed zero header-only CSV", async () => {
+    const repository = new FakePatentWatchRepository();
+    repository.runResult = run({ newFindingCount: 0 }); repository.findingsResult = [];
+    const response = await createPatentWatchCsvHandlers({ repository }).GET(csvRequest(), caseContext());
+    expect(response.status).toBe(200);
+    expect((await response.text()).split("\r\n")).toHaveLength(2);
+  });
+
+  it.each([100, 101])("checks the sentinel beyond 100 rows (%i)", async count => {
+    const repository = new FakePatentWatchRepository();
+    repository.runResult = run({ newFindingCount: 100 });
+    repository.findingsResult = Array.from({ length: count }, (_, index) => finding({ findingId: index + 1 }));
+    const response = await createPatentWatchCsvHandlers({ repository }).GET(csvRequest(), caseContext());
+    expect(response.status).toBe(count === 100 ? 200 : 503);
+  });
+
   it("checks run ownership and returns only the exact safe CSV", async () => {
     const repository = new FakePatentWatchRepository();
     repository.findingsResult = [finding()];
@@ -639,7 +686,7 @@ describe("patent watch CSV handler", () => {
     );
     expect(repository.getRunCalls).toEqual([{ caseId: 7, runId: 21 }]);
     expect(repository.listFindingsCalls).toEqual([
-      { caseId: 7, options: { runId: 21, limit: 100 } },
+      { caseId: 7, options: { runId: 21, limit: 101 } },
     ]);
     expect(Array.from(bytes.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
     expect(csv).toContain("公開番号,公開日,kind,発明名称");

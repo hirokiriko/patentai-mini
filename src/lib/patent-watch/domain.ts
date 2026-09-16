@@ -159,6 +159,7 @@ const STABLE_ERROR_CODES = new Set<PatentWatchErrorCode>([
   "watch_disabled",
   "watch_claims_not_ready",
   "watch_run_in_progress",
+  "watch_report_not_completed",
   "watch_run_not_found",
   "watch_finding_not_found",
   "watch_corpus_unavailable",

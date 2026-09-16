@@ -1,6 +1,7 @@
 import { buildPatentWatchReportCsv } from "./csv";
 import {
   boundedPatentWatchPublicText,
+  comparePatentWatchTimestamps,
   PatentWatchDomainError,
   isPatentWatchErrorCode,
   isValidPatentWatchTimestamp,
@@ -305,6 +306,7 @@ function errorResponse(error: unknown): Response {
     case "watch_disabled":
     case "watch_claims_not_ready":
     case "watch_run_in_progress":
+    case "watch_report_not_completed":
       return jsonResponse({ error: code }, 409);
     case "watch_corpus_unavailable":
     case "watch_unavailable":
@@ -478,6 +480,36 @@ export function createPatentWatchFindingHandlers(dependencies: {
   };
 }
 
+/** Completed runs are immutable; validate every row before releasing a report. */
+export async function readPatentWatchRunReport(
+  repository: Pick<PatentWatchApiRepository, "getRun" | "listFindings">,
+  caseId: number,
+  runId: number,
+) {
+  const run = await repository.getRun(caseId, runId);
+  if (run === null) return null;
+  projectRun(run, { runId });
+  if ((run.status === "running") !== (run.completedAt === null) ||
+      (run.completedAt !== null && comparePatentWatchTimestamps(run.completedAt, run.startedAt) < 0)) unavailable();
+  if (run.status !== "completed") return { run, findings: [] as CaseWatchFinding[] };
+  if (run.newFindingCount > FINDING_LIST_LIMIT) unavailable();
+  // One extra row detects truncation even if the saved count itself is corrupt.
+  const findings = await repository.listFindings(caseId, { runId, limit: FINDING_LIST_LIMIT + 1 });
+  if (!Array.isArray(findings) || findings.length > FINDING_LIST_LIMIT || findings.length !== run.newFindingCount) unavailable();
+  const ids = new Set<number>();
+  let fallbackCount = 0;
+  for (const finding of findings) {
+    projectFinding(finding, run.watchId);
+    if (finding.firstRunId !== runId || ids.has(finding.findingId) ||
+        comparePatentWatchTimestamps(finding.firstSeenAt, run.startedAt) < 0 ||
+        comparePatentWatchTimestamps(finding.firstSeenAt, run.completedAt!) > 0) unavailable();
+    ids.add(finding.findingId);
+    if (finding.analysisMode === "fallback") fallbackCount++;
+  }
+  if (fallbackCount !== run.fallbackFindingCount) unavailable();
+  return { run, findings };
+}
+
 export function createPatentWatchCsvHandlers(dependencies: {
   repository: PatentWatchApiRepository;
 }) {
@@ -490,19 +522,14 @@ export function createPatentWatchCsvHandlers(dependencies: {
         const { caseId: caseIdText } = await context.params;
         const caseId = parseCaseId(caseIdText);
         const runId = parseRunId(new URL(request.url).searchParams);
-        const rawRun = await dependencies.repository.getRun(caseId, runId);
-        if (rawRun === null) {
+        const report = await readPatentWatchRunReport(dependencies.repository, caseId, runId);
+        if (report === null) {
           throw new PatentWatchDomainError("watch_run_not_found");
         }
-        projectRun(rawRun, { runId });
-        const findings = await dependencies.repository.listFindings(caseId, {
-          runId,
-          limit: FINDING_LIST_LIMIT,
-        });
-        if (!Array.isArray(findings) || findings.length > FINDING_LIST_LIMIT) {
-          unavailable();
+        if (report.run.status !== "completed") {
+          throw new PatentWatchDomainError("watch_report_not_completed");
         }
-        const csv = buildPatentWatchReportCsv(findings);
+        const csv = buildPatentWatchReportCsv(report.findings);
         return new Response(csv, {
           status: 200,
           headers: {

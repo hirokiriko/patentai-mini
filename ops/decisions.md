@@ -336,3 +336,11 @@
 - Safety: 原本を保持して排他的作業コピーを解析し、容量・内容を再確認する。出力は入力順、公開安全な分類・件数・公開日だけ。公開日範囲は入力の範囲で、期間の全量取得や特許の重複排除を保証しない。
 - Persistence: 既存parser/plan/保存を再利用する。immutable保存はINSERT/SELECTだけで動かし、既存全項目の一致時はrowとwatch cursorを不変にする。部分commitは保持、COMMIT/通信/子processの結果不明は自動再送せず整合確認へ回す。
 - Scope: 最小権限LOGINと完全架空fixtureによる実DB検証を専用一時containerへ限定する。新schema/migration/依存/AI/watch集計/HTTP設定は変更しない。本番定期投入の認可、実データ取得・期間確認、自己案件除外、実AI/専門家評価は別の残作業とし、rollbackはコードのrevert PRとする。
+
+## 2026-09-16: Issue #101 — 監視出力の完了判定とLocal実DB結合
+
+- Decision: 単一runの画面・印刷・CSVは同じ読取検証を使う。未完了を正常0件にせず、CSVは409、件数/row不整合や100件超過は全体を拒否する。表示日時はAsia/Tokyo。
+- Integration: #99のコンパイル済みCLIと本物のwatch service/repository/handler/pageを、専用PG16と固定架空AI応答で接続する。DB moduleだけを実PG接続へ置き換え、repositoryはfakeにしない。境界・上限は別のnegative-control案件へ配置し、不正analysis JSONの試験は架空候補の元値を保存して試験後に復元する。
+- Fix: `watch_ai_stopped`のrepository許可漏れを実DBで再現し修正する。保護guard/cursor/identity/migrationは不変。#93原障害の原因や本番復旧へ推定を広げない。
+- Evidence: browser headless印刷で実PDFを保存し、別rendererの全ページ目視と抽出textを照合する。OS印刷ダイアログ、実AI精度、専門家受入とは区別する。完成見本PDFと短い操作メモは追跡外Localへ残す。
+- Impact/rollback: 製品依存/schema/既存migration/Production DB/Azure resource/secret/env変更なし。通常コードdeployと、本変更のrevert PRによるrollbackのみ。実公報の適用条件・期間、本番継続取込、自己案件除外、実AI/専門家評価は親#94の別残件。

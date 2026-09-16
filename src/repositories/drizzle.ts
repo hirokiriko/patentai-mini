@@ -322,11 +322,13 @@ const PATENT_WATCH_ERROR_CODES = new Set<PatentWatchErrorCode>([
   "watch_disabled",
   "watch_claims_not_ready",
   "watch_run_in_progress",
+  "watch_report_not_completed",
   "watch_run_not_found",
   "watch_finding_not_found",
   "watch_corpus_unavailable",
   "watch_unavailable",
   "watch_analysis_failed",
+  "watch_ai_stopped",
   "watch_internal_error",
 ]);
 const PATENT_WATCH_LIST_LIMIT_MAX = 100;
@@ -1710,7 +1712,9 @@ export const patentWatchRepo: PatentWatchRepository = {
   async listFindings(caseId, options) {
     try {
       assertPatentWatchId(caseId, "case_not_found");
-      const limit = normalizePatentWatchListLimit(options.limit);
+      // Single-run reports need a sentinel row to reject incomplete exports.
+      const limit = options.runId !== undefined && options.limit === 101
+        ? 101 : normalizePatentWatchListLimit(options.limit);
       if (options.runId !== undefined) {
         assertPatentWatchId(options.runId, "watch_run_not_found");
       }
