@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { withAiOperationBudget } from "./ai-operation-budget";
+import { aiOperationDeadline, withAiOperationBudget } from "./ai-operation-budget";
 import { z } from "zod";
 import { aiProviderRetries, getGoogleThinkingProviderOptions, getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
@@ -55,7 +55,7 @@ async function screenPriorArtWithinBudget(
     }),
     maxRetries: aiProviderRetries(2),
     maxOutputTokens: 8192,
-    abortSignal: AbortSignal.timeout(35_000),
+    abortSignal: aiOperationDeadline(35_000),
     ...(providerOptions ? { providerOptions } : {}),
   });
 
@@ -169,7 +169,7 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
     }),
     maxRetries: aiProviderRetries(2),
     maxOutputTokens: 8192,
-    abortSignal: AbortSignal.timeout(35_000),
+    abortSignal: aiOperationDeadline(35_000),
     ...(providerOptions ? { providerOptions } : {}),
   });
 

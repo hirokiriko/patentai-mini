@@ -3,6 +3,7 @@ import { AiOperationBudget, AiOperationStopped } from "../ai-operation-budget";
 
 import type { ExtractedClaims } from "../extract-claims";
 import { createPatentWatchSourceKey } from "./domain";
+import { createPatentWatchRunHandlers } from "./api";
 import {
   PATENT_WATCH_FALLBACK_EXPLANATION,
   runPatentWatch,
@@ -163,6 +164,35 @@ function successfulAnalysis(priorDocId: number) {
 }
 
 describe("patent watch run service", () => {
+  it.each(["screening", "detail"] as const)("keeps the %s input refusal through failure finalization and the HTTP response", async stage => {
+    const repository = new FakeRunRepository(start(), batch([source(10)]));
+    const transport = vi.fn<typeof fetch>();
+    const stop = () => new AiOperationBudget({ normal: 6, fast: 0 }).wrapFetch("normal", transport)(
+      "https://example.invalid/responses", { method: "POST", body: JSON.stringify({
+        model: "fictional", input: [{ role: "user", content: "文".repeat(50_000) }],
+        max_output_tokens: 8192, text: { format: { type: "json_schema", schema: { type: "object" } } },
+      }) });
+    const handler = createPatentWatchRunHandlers({ executeRun: caseId => runPatentWatch(caseId, {
+      repository,
+      screenPriorArt: async () => {
+        if (stage === "screening") await stop();
+        return { relevantDocIds: [10], reasoning: "fictional" };
+      },
+      analyzeOverlap: async () => { await stop(); return []; },
+    }) });
+    const response = await handler.POST(new Request("https://example.invalid/api/cases/7/watch/runs", {
+      method: "POST", headers: { "X-Patent-Watch-Diagnostic-Id": "FICTIONAL-UNTRUSTED-ID" },
+    }), { params: Promise.resolve({ caseId: "7" }) });
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: "watch_ai_stopped", diagnostic: { stage, reason: "input_limit" } });
+    expect(body.diagnostic.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(response.headers.get("X-Patent-Watch-Diagnostic-Id")).toBe(body.diagnostic.id);
+    expect(repository.success).toEqual([]);
+    expect(repository.failure).toEqual([{ caseId: 7, runId: 13, errorCode: "watch_ai_stopped" }]);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
   it.each(["input_limit", "usage_missing", "timeout", "body_timeout"])("fails closed through the real budget for %s", async scenario => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {

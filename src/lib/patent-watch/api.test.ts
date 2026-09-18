@@ -515,7 +515,11 @@ describe("patent watch POST run handler", () => {
     const response = await POST(watchRequest("POST"), caseContext());
 
     expect(response.status).toBe(status);
-    expect(await jsonBody(response)).toEqual({ error: code });
+    const body = await jsonBody(response);
+    const id = response.headers.get("X-Patent-Watch-Diagnostic-Id");
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body).toEqual(code === "watch_ai_stopped"
+      ? { error: code, diagnostic: { id, stage: "unknown", reason: "unknown" } } : { error: code });
   });
 });
 

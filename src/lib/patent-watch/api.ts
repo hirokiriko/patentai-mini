@@ -1,4 +1,5 @@
 import { buildPatentWatchReportCsv } from "./csv";
+import { currentPatentWatchDiagnostic, withPatentWatchDiagnostic } from "./diagnostic-context";
 import {
   boundedPatentWatchPublicText,
   comparePatentWatchTimestamps,
@@ -432,15 +433,19 @@ export function createPatentWatchRunHandlers(
       request: Request,
       context: PatentWatchRouteContext,
     ): Promise<Response> {
-      try {
-        const { caseId: caseIdText } = await context.params;
-        const caseId = parseCaseId(caseIdText);
-        await assertEmptyRunRequestBody(request);
-        const completedRun = await dependencies.executeRun(caseId);
-        return jsonResponse(projectRun(completedRun));
-      } catch (error) {
-        return errorResponse(error);
-      }
+      return withPatentWatchDiagnostic(async () => {
+        try {
+          const { caseId: caseIdText } = await context.params;
+          const caseId = parseCaseId(caseIdText);
+          await assertEmptyRunRequestBody(request);
+          const completedRun = await dependencies.executeRun(caseId);
+          return { response: jsonResponse(projectRun(completedRun)), code: "completed" };
+        } catch (error) {
+          const code = stablePatentWatchErrorCode(error);
+          const diagnostic = code === "watch_ai_stopped" ? currentPatentWatchDiagnostic() : null;
+          return { code, response: diagnostic ? jsonResponse({ error: code, diagnostic }, 500) : errorResponse(error) };
+        }
+      });
     },
   };
 }

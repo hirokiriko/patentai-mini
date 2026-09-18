@@ -126,11 +126,21 @@ exact body `{ "reviewStatus": "reviewed" | "unreviewed" }`だけを受理する�
 
 共通stable error codeは`invalid_watch_setting`、`invalid_watch_review_status`、`invalid_watch_run_request`、`case_not_found`、`watch_not_configured`、`watch_disabled`、`watch_claims_not_ready`、`watch_run_in_progress`、`watch_run_not_found`、`watch_finding_not_found`、`watch_corpus_unavailable`、`watch_unavailable`、`watch_analysis_failed`、`watch_ai_stopped`、`watch_internal_error`とする。`invalid_watch_review_status`はPATCH exact body、`invalid_watch_run_request`はPOST runの非0-byte bodyの入力不正へ400で使用する。response messageへ入力本文、請求項、公報本文、DB／AI error、path、hash、secretを含めない。
 
+### HTTP実行ごとの停止診断（Issue #109）
+
+watch POSTの入口で暗号学的乱数UUID v4を生成し、当該POSTの応答header `X-Patent-Watch-Diagnostic-Id` に設定する。外部のheaderや案件/run/入力からIDを作らず、認証・冪等性・診断検索には使わない。成功bodyと既存GET/CSV/レポートは変更しない。`watch_ai_stopped` の500 bodyだけ任意の `diagnostic: { id, stage, reason }` を加え、idをheaderと一致させる。生成不能時は診断を省略し、元の業務結果を保つ。
+
+stageは呼出境界で確定した `screening | detail | unknown`。reasonは `request_rejected | input_limit | request_limit | timeout | aborted | upstream_http_error | transport_error | invalid_response | usage_missing | usage_invalid | usage_limit | unknown` の固定値。実際の期限signalを確認した場合だけtimeoutとし、例外名だけでは期限到達と断定しない。実行内で最初の停止を保持し、SDKによる包み直し・後着abort・失敗finalizeで上書きしない。nested budgetの累計、35秒/120秒、送信・入力・usage上限、fallback/cursor/保存仕様は維持する。
+
+watch context中の `ai_operation_usage` は `diagnosticId/stage/reason` を追加する。非watchの既存数値ログは同じ形式。終端の `patent_watch_diagnostic` は最大1行、ID・既存結果code・固定stage/reasonのみとし、本文・token詳細・例外・provider情報を増やさない。実行/段階の終了後callbackは診断を更新せず追加送信しない。ログ・診断の失敗は業務結果を変更しない。プロセス停止や応答喪失後の記録保証、過去実行の原因確定、実請求額の証明ではない。
+
 ## 9. UIとreport
 
 案件詳細に既存Step番号を変えない独立section「出願後ウォッチング」を追加する。初期client renderではrequestを発生させず、mount後はstatus-only GETだけを行う。run POST、setting PUT、review PATCHはユーザーの明示操作だけで行い、corpus検索を自動実行しない。
 
 sectionはloading、running、completed、failed、unavailable、fallbackを区別し、設定、最新run、未確認件数、finding、review操作、過去run最大20件、report／CSV導線を表示する。storage未準備時も案件page全体を壊さず、section内に利用不可を表示する。
+
+今回POSTの保護停止では、exactな診断shape・UUID v4・固定enum・header一致を検証後、停止段階・固定日本語分類・照合用番号を表示する。不正/欠損時は従来の固定説明だけ。診断を保存済みrunへ付けず、GETから復元せず、ブラウザ再読込で失われる。画面内の保存済み情報GET再読込は今回POSTの説明を保持するが、そのGETを診断の根拠にしない。非JSON/通信断は実行結果・診断情報とも不明で、自動POST再送・polling・localStorage保存をしない。
 
 Issue #93では今回の実行結果（完了、fallback、前提不足、AI保護停止、サーバー失敗、結果不明）と最後に取得できた保存済みrun/findingsを別表示する。POST失敗・非JSON・通信断後もstatus GETを1回だけ行う（応答本文を含め15秒で打切り）。POSTは120秒のサーバー予算を超える125秒で応答確認を打切り、結果不明とする。GET成功だけでは不明POSTを成功へ変更しない。結果不明の同じ画面では監視の再送を止め、GET再読み込みを残す。GET失敗時は最新情報を未取得とし、既存結果・確認状態は保持する。明示的な「保存済み情報を再読み込み」はGETだけで、pollingやPOST自動retryを行わない。failed/runningの新着件数は未確定と表示し、正常0件と区別する。
 
