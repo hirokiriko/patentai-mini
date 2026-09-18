@@ -137,6 +137,43 @@ runtime settings are unchanged. A scoped revert PR rolls back code only.
 Future production use needs a separate approval for target, authentication,
 cost and cleanup; do not call the legacy script to bypass the Local restriction.
 
+### 実公報の手動更新手順 — Issue #106
+
+1. **取得対象を選ぶ。** [公報発行サイトの公式操作ガイド（2026年3月、第2.00版）](https://www.gazette.jpo.go.jp/ci-content-pub/guide/operation_guide_jp.pdf)
+   に従い、公開公報（特許）のJPAを優先し、必要なら登録公報（特許）のJPBを選ぶ。
+   [特許情報標準データ](https://www.jpo.go.jp/system/laws/sesaku/data/keikajoho/index.html)の書誌・経過TSVや
+   [PAJの英文抄録](https://www.jpo.go.jp/toppage/dictionary/alphabet_p.html)は本文XMLの代用にしない。
+   取得経路の利用条件を確認し、公報原文や出願人一覧を公開作業記録へ転載しない。
+2. **発行日と取得日を分ける。** 公報は原則毎開庁日に発行され、ZIP名の年＋一連番号は
+   発行号を表す。docs/06の従来の「週次」という呼称や末尾番号を1週間分の根拠にしない。
+   種別・年月の提供元一覧（必要なら公報発行表CSV）と前回の取得記録を照合し、対象期間の
+   未取得号、遅れて掲載された号、差し替えを確認する。掲載日は確認できた場合だけ記録する。
+3. **原本を保管してコピーを使う。** 複数選択の外側ZIPには複数の発行号ZIPが含まれ得る。
+   外側ZIP名だけで形式や対象期間を決めず、内部のJPA/JPBごとに索引CSV・XMLを確認する。
+   Git追跡外の保護領域へ排他的にコピーし、リンク先・容量・内容同一性を確認する。
+   同一bytesの別名を新号に数えない。各作業の承認上限とCLIの上限を守る。
+4. **previewを読む。** 上記のprivate stdinで現行CLIを実行し、種別、本文／要確認／補正／
+   添付件数、未対応／失敗／未処理、公開日別件数を記録する。要確認の分類と必要最小の
+   XMLを確認してから、その入力一覧にだけ`allowReviewRequired`を明示する。
+   0件・未取得・未処理・失敗を「監視した結果の候補0件」に置き換えない。
+5. **許可された隔離Local DBで保存を照合する。** CLIのLocal限定条件と最小権限を保ち、
+   保存件数・status・公開日集計と限定した元XMLの請求項／要約／書誌を確認する。
+   `inserted`は新規保存、`reused`は既存の全保存項目が一致した再利用である。
+   検証として明示再applyする場合は整合確認後の1回だけとし、件数・`updated_at`不変を確認する。
+   `save_outcome_unknown`では停止して読取照合し、自動再送しない。要確認は保存後も保持する。
+6. **取得と報告の頻度を分ける。** 当面は週次取得・月次報告を手順案とする。公式ガイドでは
+   公報発行サイトの発行後2年以上の公報は取得不可とされるが、実際の期間別一覧と欠落の照合は
+   別途必要である。月次取得へ変える前に、使う提供経路で1か月分を取得できることを確認する。
+   この保持条件を[登録型バルクサービス](https://www.jpo.go.jp/system/laws/sesaku/data/download.html)へ流用しない。
+   入力の公開日min/maxや保存件数は期間網羅の証明ではない。現在の期間レポートは
+   **監視実行開始日JST**で選択するため、公報公開日の期間指定と混同しない。
+
+Localチェック表は「種別・発行号／発行日／掲載日（不明なら未確認）／取得日／
+preview・保存・再利用状態／要確認等の件数／確認済み範囲／欠落・次回対応」で足りる。
+提供元一覧と取得物の欠落照合には、対象種別・期間の発行号一覧と各号の取得記録が必要。
+原本と過去成果物は残し、今回のDB・LOGIN・作業コピー・中間物だけを回収する。
+この手順は本番継続投入、watch実行、実AI送信、自動取得・通知の承認ではない。
+
 ## Bounded acceptance import — Issue #89
 
 `LOCAL_IMPORT_FIRST_V1` authorizes the bounded workflow in Issue #89. The Azure
