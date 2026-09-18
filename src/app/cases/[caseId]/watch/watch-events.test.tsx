@@ -77,6 +77,50 @@ describe("watch component events and mock transport", () => {
     for (const method of ["error", "warn", "log", "info"] as const) expect(console[method]).not.toHaveBeenCalled();
     hooks.cleanups.forEach(cleanup => cleanup()); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
+  const diagnostic = { id: "d01e5145-dc6c-4ca3-839b-62bb20b32e84", stage: "detail", reason: "input_limit" };
+  const stopped = (value: unknown = diagnostic, header = diagnostic.id) => Response.json(
+    { error: "watch_ai_stopped", diagnostic: value, message: SECRET },
+    { status: 500, headers: { "X-Patent-Watch-Diagnostic-Id": header } },
+  );
+  it("shows only this POST's validated diagnostic beside its fixed explanation", async () => {
+    const old = summaryFixture(runFixture("completed"));
+    const previousId = "22222222-2222-4222-8222-222222222222";
+    const mock = transport(async () => stopped(), async () => response({ ...old, diagnostic: { ...diagnostic, id: previousId } }));
+    render(); await settle(); click("今すぐ監視"); await settle();
+    expect(html()).toContain("停止段階：詳細分析");
+    expect(html()).toContain("停止分類：入力上限");
+    expect(html().split(diagnostic.id)).toHaveLength(2);
+    expect(html()).not.toContain(previousId);
+    expect(html()).toContain("保存済みの最新実行：監視完了");
+    expect(html().slice(html().indexOf("<table"))).not.toContain(diagnostic.id);
+    expect(methods(mock)).toEqual(["GET", "POST", "GET"]);
+    // A fresh mounted page has no diagnostic; GET cannot restore one.
+    hooks.cleanups.forEach(cleanup => cleanup()); hooks.cells = []; hooks.cleanups = [];
+    render(); await settle();
+    expect(html()).not.toContain(diagnostic.id);
+    expect(methods(mock)).toEqual(["GET", "POST", "GET", "GET"]);
+  });
+  it.each([
+    null, [], {}, { ...diagnostic, id: undefined }, { ...diagnostic, stage: undefined },
+    { ...diagnostic, reason: undefined }, { ...diagnostic, id: 1 },
+    { ...diagnostic, id: "d01e5145-dc6c-1ca3-839b-62bb20b32e84" },
+    { ...diagnostic, id: "d01e5145-dc6c-4ca3-139b-62bb20b32e84" },
+    { ...diagnostic, id: `<script>${SECRET}</script>` },
+    { ...diagnostic, stage: SECRET }, { ...diagnostic, reason: SECRET },
+    { ...diagnostic, extra: SECRET },
+  ])("discards an invalid diagnostic and keeps the legacy stop explanation %#", async value => {
+    const mock = transport(async () => stopped(value));
+    render(); await settle(); click("今すぐ監視"); await settle();
+    expect(html()).toContain("今回の実行：AI保護停止");
+    expect(html()).not.toContain("照合用番号");
+    expect(methods(mock)).toEqual(["GET", "POST", "GET"]);
+  });
+  it("ignores a diagnostic with a mismatched response header", async () => {
+    transport(async () => stopped(diagnostic, SECRET));
+    render(); await settle(); click("今すぐ監視"); await settle();
+    expect(html()).toContain("今回の実行：AI保護停止");
+    expect(html()).not.toContain("照合用番号");
+  });
   it.each([
     [1, "ai", 0, "今回の実行：監視完了"], [0, "none", 0, "今回の新着候補は0件"],
     [1, "fallback", 1, "今回の実行：監視完了（fallback"],

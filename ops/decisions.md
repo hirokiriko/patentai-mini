@@ -351,3 +351,10 @@
 - Safety: case境界をquery内に固定し、read-only repeatable-readと既存有限待機を使う。出願人JSON 64KiB/100件/名称500文字を超える場合や不正shape/秘密除去時には原文確認へ回す。raw JSON、住所、内部ID/hashを画面payloadへ渡さない。
 - UX: 候補・単一run・期間reportからprefetchなしの導線を置く。番号copyの成否を区別し、同一findingの比較説明へ戻る。既存印刷CSSと公式検索入口を再利用する。
 - Impact/rollback: 新schema/migration、既存data、AI、CSV、cursor、依存、secret/env、Azure設定は変更しない。revert PRと通常deployで戻す。自社/他社自動判定、自己案件除外、最新権利者/権利有効性、実AI/専門家受入、事務所試用GOは本機能の完了条件ではない。
+
+## 2026-09-18: Issue #109 — 実行単位の固定停止診断
+
+- Decision: watch POSTごとにserver randomUUIDを生成し、応答headerと任意の保護停止DTO、固定ログを同じIDで対応させる。IDは案件/入力由来にせず、検索APIやDB診断履歴を作らない。
+- Classification: screening/detailの直接の呼出境界と、guardが最初に検出した固定理由だけを実行単位で保持する。例外本文・provider情報を読まず、期限signalの事実とcaller abortを区別する。診断失敗は元の結果を変えない。
+- UX: 今回POSTの検証済み診断だけを固定日本語で表示し、保存済み履歴と区別する。診断なし・不正・結果不明の従来挙動を維持し、GETで補完・永続化しない。
+- Impact/rollback: 保護上限・timeout・retry・モデル・repository保存・DB/schema・依存・CI/deploy設定は不変。追加実AIや本番操作の承認を含めず、過去の保護停止原因は未確定のまま。revert PRと通常deployで戻す。

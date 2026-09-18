@@ -316,3 +316,11 @@ Sources: [Microsoft model limits](https://learn.microsoft.com/en-us/azure/foundr
 browser印刷で長い日本語の期間PDFと失敗警告PDFを実保存し、別rendererの全ページ表示と抽出textで件数・期間・警告を照合する。headless印刷とOS印刷ダイアログを区別し、実AI精度/専門家受入の証明にしない。完了時はbrowser.jsonに書かれた今回専用`finishFile`を同じdirectoryに作成する。server/接続/今回のownership labelに一致するcontainerとvolumeを回収し、不存在を確認する。応答不明のcreateを再送しない。生成したDB内LOGINもcontainerとともに回収する。完成PDFと短い操作メモだけをGit追跡外Localへ残し、中間画像/fixture/専用profile/確認tabを回収する。
 
 本試験は本番取込・追加Azure操作を許可しない。次の実案件工程には、実公報の形式・対象期間・適用条件、本番継続取込の対象/上限/権限/停止条件と回収範囲、#93の原障害・実AI確認、自社/他社識別と自己案件除外、専門家評価の承認・受入条件が別途必要となる。
+
+### Issue #109: 監視POSTの固定停止診断
+
+新たに許可された監視を実行したときだけ、同じPOST応答の `X-Patent-Watch-Diagnostic-Id` と、`watch_ai_stopped` bodyの任意 `diagnostic.id/stage/reason` を確認する。画面には検証済みの停止段階・固定分類・照合用番号を示す。診断なしや通信断は未確認のまま保持し、番号を過去runへ付け直さない。保存済み情報のGET再読込は監視を再実行しない。
+
+同じIDの固定ログは対応材料であり、完全な履歴・送信完了・実請求額の証明ではない。ログ照会は別途許可された対象と範囲だけで行う。本実装を理由に案件作成/有料再送/旧ログ探索を開始せず、既存の予約・消費回数をリセットしない。過去のIDなしログから原因を逆算しない。
+
+Local回帰は `pnpm test src/lib/ai-operation-budget-diagnostic.test.ts src/lib/patent-watch/diagnostic-sdk.test.ts src/lib/patent-watch/diagnostic-context.test.ts`。現行SDK→guardまで実装を使い、transport末端とrepositoryだけ完全架空に置換する。実.env/AI/DB/Azureは不要。loopback専用の既存watch browser fixtureにはdiagnostic-screening/detail/invalid/get-onlyを用意し、今回表示・保存済み履歴・ブラウザ再読込・GET 2/POST 1を確認する。

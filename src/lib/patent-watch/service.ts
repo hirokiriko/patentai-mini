@@ -1,4 +1,5 @@
-import { isAiOperationStopped } from "../ai-operation-budget";
+import { aiOperationStopReason, isAiOperationStopped } from "../ai-operation-budget";
+import { recordPatentWatchStop, withPatentWatchStage } from "./diagnostic-context";
 import type { ComparisonResult } from "../analyze-overlap";
 import {
   extractedClaimsSchema,
@@ -37,6 +38,16 @@ const MAX_ANALYSIS_CANDIDATES = 20;
 const ABSTRACT_PREVIEW_LENGTH = 300;
 const SAFE_AI_EXPLANATION =
   "重なり候補を整理した結果です。人による確認が必要です";
+
+function diagnosticStage<T>(stage: "screening" | "detail", operation: () => Promise<T>): Promise<T> {
+  return withPatentWatchStage(stage, async () => {
+    try { return await operation(); } catch (error) {
+      const reason = aiOperationStopReason(error);
+      if (reason !== null) recordPatentWatchStop(reason);
+      throw error;
+    }
+  });
+}
 
 export const PATENT_WATCH_FALLBACK_EXPLANATION =
   "AI分析が利用できなかったため、語彙重なりによる確認候補です。人による確認が必要です";
@@ -492,18 +503,18 @@ export async function runPatentWatch(
 
     if (candidates.length > 0) {
       try {
-        const screening = await dependencies.screenPriorArt(
+        const screening = await diagnosticStage("screening", () => dependencies.screenPriorArt(
           extracted,
           screeningSummaries(candidates),
-        );
+        ));
         const selected = selectScreenedCandidates(candidates, screening);
         analysisMode = "ai";
         analyzedCount = selected.length;
         if (selected.length > 0) {
-          const analysis = await dependencies.analyzeOverlap(
+          const analysis = await diagnosticStage("detail", () => dependencies.analyzeOverlap(
             extracted,
             analysisDetails(selected),
-          );
+          ));
           if (!Array.isArray(analysis)) throw new Error("invalid analysis");
           findings = buildAiFindings(extracted, selected, analysis);
         }

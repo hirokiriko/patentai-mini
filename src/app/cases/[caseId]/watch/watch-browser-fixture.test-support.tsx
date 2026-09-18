@@ -5,9 +5,10 @@ import { PatentWatchSection } from "./watch-section";
 import { findingFixture, runFixture, summaryFixture } from "./watch-fixtures.test-support";
 
 // Loopback-only visual QA entry. Never imported by an application page.
-const scenarios = ["normal", "zero", "fallback", "precondition", "ai-stop", "http500", "non-json", "reject", "saved-completed", "saved-running", "saved-failed", "get-failed"];
+const scenarios = ["diagnostic-screening", "diagnostic-detail", "diagnostic-invalid", "diagnostic-get-only", "normal", "zero", "fallback", "precondition", "ai-stop", "http500", "non-json", "reject", "saved-completed", "saved-running", "saved-failed", "get-failed"];
 const scenario = new URLSearchParams(location.search).get("scenario") ?? "reject";
 const SECRET = "FICTIONAL_SECRET_BROWSER_SENTINEL";
+const diagnostic = { id: "d01e5145-dc6c-4ca3-839b-62bb20b32e84", stage: "detail", reason: "input_limit" };
 let saved = summaryFixture(runFixture());
 saved.unreviewedFindingCount = 4;
 saved.findings = [findingFixture()];
@@ -20,8 +21,14 @@ window.fetch = async (_input, init) => {
   document.getElementById("counts")!.textContent = `GET ${gets} / POST ${posts} / 実AI 0 / 実DB 0`;
   if (init?.method === "GET") {
     if (scenario === "get-failed" && gets === 2) throw new Error(SECRET);
-    return json(saved);
+    return json(scenario === "diagnostic-get-only" ? { ...saved, diagnostic } : saved);
   }
+  if (scenario.startsWith("diagnostic-")) return Response.json({ error: "watch_ai_stopped",
+    diagnostic: scenario === "diagnostic-get-only" ? undefined : {
+      ...diagnostic, stage: scenario === "diagnostic-screening" ? "screening" : "detail",
+      ...(scenario === "diagnostic-invalid" ? { extra: SECRET } : {}),
+    }, message: SECRET,
+  }, { status: 500, headers: { "X-Patent-Watch-Diagnostic-Id": diagnostic.id } });
   const run = runFixture("completed", { runId: 22 });
   if (scenario === "normal" || scenario === "zero" || scenario === "fallback") {
     if (scenario === "zero") run.newFindingCount = 0;

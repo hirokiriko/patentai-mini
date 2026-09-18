@@ -2,6 +2,10 @@
 import { BibliographyLink } from "./bibliography-link";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  PATENT_WATCH_DIAGNOSTIC_HEADER, PATENT_WATCH_REASON_LABELS, PATENT_WATCH_STAGE_LABELS,
+  parsePatentWatchDiagnostic, type PatentWatchDiagnostic,
+} from "../../../../lib/patent-watch/diagnostic";
 
 export type WatchSettingView = {
   watchId: number;
@@ -105,6 +109,7 @@ export function isPatentWatchUnavailable(
 export type WatchAttempt = {
   kind: "completed" | "fallback" | "blocked" | "stopped" | "failed" | "unknown";
   message: string;
+  diagnostic?: PatentWatchDiagnostic;
 };
 
 const ERROR_CODES = new Set([
@@ -183,7 +188,7 @@ function attemptLabel(kind: WatchAttempt["kind"]): string {
 
 const UNKNOWN_ATTEMPT: WatchAttempt = {
   kind: "unknown",
-  message: "応答を確認できず、今回の実行結果は不明です。保存済み履歴を確認してください。再読み込みは監視を再実行しません。結果不明のまま再実行せず、判断できない場合は管理者にお問い合わせください。",
+  message: "応答を確認できず、今回の実行結果・診断情報は不明です。保存済み履歴を確認してください。再読み込みは監視を再実行しません。結果不明のまま再実行せず、判断できない場合は管理者にお問い合わせください。",
 };
 
 function toDateInput(value: string): string {
@@ -354,7 +359,11 @@ export function PatentWatchSection({ caseId }: { caseId: number }) {
         const code = errorCode(body);
         const kind = code === "watch_ai_stopped" ? "stopped"
           : code && !["watch_analysis_failed", "watch_internal_error"].includes(code) ? "blocked" : "failed";
-        setAttempt(code ? { kind, message: safeErrorMessage(code) } : UNKNOWN_ATTEMPT);
+        const diagnostic = code === "watch_ai_stopped"
+          ? parsePatentWatchDiagnostic((body as { diagnostic?: unknown }).diagnostic) : null;
+        setAttempt(code ? { kind, message: safeErrorMessage(code),
+          ...(diagnostic && response.headers.get(PATENT_WATCH_DIAGNOSTIC_HEADER) === diagnostic.id ? { diagnostic } : {}),
+        } : UNKNOWN_ATTEMPT);
       } else if (isRun(body) && body.status === "completed") {
         setAttempt({
           kind: body.analysisMode === "fallback" || body.fallbackFindingCount > 0 ? "fallback" : "completed",
@@ -490,6 +499,11 @@ export function PatentWatchSectionView({
         <div className="mt-4 rounded-lg border border-amber-300 bg-white px-4 py-3" role="status">
           <p className="font-semibold">{attemptLabel(attempt.kind)}</p>
           <p className="mt-1 text-sm">{attempt.message}</p>
+          {attempt.diagnostic && <div className="mt-2 text-sm">
+            <p>停止段階：{PATENT_WATCH_STAGE_LABELS[attempt.diagnostic.stage]}</p>
+            <p>停止分類：{PATENT_WATCH_REASON_LABELS[attempt.diagnostic.reason]}</p>
+            <p className="break-all">照合用番号：{attempt.diagnostic.id}</p>
+          </div>}
         </div>
       )}
       {state === "starting" && <p className="mt-3" role="status">今回の実行：監視実行中</p>}
