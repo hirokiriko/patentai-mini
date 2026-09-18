@@ -69,6 +69,8 @@ export class AiOperationBudget {
     const boundDiagnostic = capturePatentWatchDiagnostic();
     return async (url, init) => {
       const diagnostic = boundDiagnostic ?? capturePatentWatchDiagnostic();
+      // Expired callbacks cannot send or poison a still-active shared budget.
+      if (diagnostic && !diagnostic.active()) throw new AiOperationStopped("unknown");
       const stop = (reason: PatentWatchStopReason): AiOperationStopped => {
         this.stopped ??= new AiOperationStopped(reason);
         diagnostic?.stop(this.stopped.reason);
@@ -80,7 +82,6 @@ export class AiOperationBudget {
       let maximumOutputTokens = 0;
       try {
         if (this.stopped) throw this.stopped;
-        if (diagnostic && !diagnostic.active()) throw stop("unknown");
         if (this.consumed[role] >= this.maximum[role]) throw stop("request_limit");
         if (init?.signal?.aborted) throw stop(callerReason());
         if (typeof init?.body !== "string" || init.method !== "POST") throw stop("request_rejected");

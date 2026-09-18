@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPatentWatchRunHandlers } from "./api";
 import { PatentWatchDomainError } from "./domain";
-import { AiOperationBudget } from "../ai-operation-budget";
+import { AiOperationBudget, boundedAzureFetch, withAiOperationBudget } from "../ai-operation-budget";
 import { currentPatentWatchDiagnostic, withPatentWatchDiagnostic, withPatentWatchStage } from "./diagnostic-context";
 import { parsePatentWatchDiagnostic } from "./diagnostic";
 
@@ -46,5 +46,29 @@ describe("optional watch diagnostic context", () => {
     expect(parsePatentWatchDiagnostic(Object.defineProperty({ ...data }, "id", { get: getter }))).toBeNull();
     expect(parsePatentWatchDiagnostic({ ...data, [Symbol("hidden")]: "FICTIONAL_SECRET" })).toBeNull();
     expect(getter).not.toHaveBeenCalled();
+  });
+  it("does not let an expired stage poison the shared budget of a live detail stage", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
+    vi.stubGlobal("fetch", transport);
+    const input = { method: "POST", body: JSON.stringify({ model: "fictional", input: [],
+      max_output_tokens: 8192, text: { format: { type: "json_schema", schema: {} } } }) };
+    const url = "https://example.invalid/responses";
+    let late!: () => Promise<Response>;
+    try {
+      await withPatentWatchDiagnostic(async () => withAiOperationBudget({ normal: 2, fast: 0 }, async () => {
+        await withPatentWatchStage("screening", async () => {
+          const guard = boundedAzureFetch("normal"); late = () => guard(url, input);
+          await guard(url, input);
+        });
+        await withPatentWatchStage("detail", async () => {
+          await expect(late()).rejects.toMatchObject({ reason: "unknown" });
+          await expect(boundedAzureFetch("normal")(url, input)).resolves.toBeInstanceOf(Response);
+          expect(currentPatentWatchDiagnostic()).toMatchObject({ reason: "unknown", stage: "unknown" });
+        });
+        return { response: new Response(), code: "completed" };
+      }));
+      expect(transport).toHaveBeenCalledTimes(2);
+    } finally { vi.unstubAllGlobals(); }
   });
 });

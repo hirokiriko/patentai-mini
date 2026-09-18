@@ -108,7 +108,7 @@ describe("fixed guard reasons and execution lifetime", () => {
     }));
     expect(await first.json()).toMatchObject({ reason: "request_limit" });
     const second = await observe(async () => {
-      await expect(late()).rejects.toMatchObject({ reason: "request_limit" });
+      await expect(late()).rejects.toMatchObject({ reason: "unknown" });
       expect(currentPatentWatchDiagnostic()).toMatchObject({ stage: "unknown", reason: "unknown" });
     });
     expect(await second.json()).toMatchObject({ reason: "unknown" });
