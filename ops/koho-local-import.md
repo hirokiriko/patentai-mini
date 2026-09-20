@@ -324,3 +324,17 @@ browser印刷で長い日本語の期間PDFと失敗警告PDFを実保存し、�
 同じIDの固定ログは対応材料であり、完全な履歴・送信完了・実請求額の証明ではない。ログ照会は別途許可された対象と範囲だけで行う。本実装を理由に案件作成/有料再送/旧ログ探索を開始せず、既存の予約・消費回数をリセットしない。過去のIDなしログから原因を逆算しない。
 
 Local回帰は `pnpm test src/lib/ai-operation-budget-diagnostic.test.ts src/lib/patent-watch/diagnostic-sdk.test.ts src/lib/patent-watch/diagnostic-context.test.ts`。現行SDK→guardまで実装を使い、transport末端とrepositoryだけ完全架空に置換する。実.env/AI/DB/Azureは不要。loopback専用の既存watch browser fixtureにはdiagnostic-screening/detail/invalid/get-onlyを用意し、今回表示・保存済み履歴・ブラウザ再読込・GET 2/POST 1を確認する。
+
+### Issue #116: 公報発行表の期間別確認一覧
+
+`src/lib/koho-distribution-table` の `parseDistributionTable({ bytes, packageType, from?, to? })` は、呼出し側が渡したJPA/JPB発行表CSVの確認用関数である。ネットワーク、ファイル出力、DB、CLI実行を持たず、既存の取込CLI/APIには未接続。公式metadataの取得や本番取込を開始する操作ではない。
+
+profile `jpo-2026-09-21` は、#115で観測した種別別11列headerと列順を固定する。入力最大1MiB、data最大10000論理CSVレコード、field最大16384 Unicodeコードポイント。UTF-8をstrict decodeし、先頭BOMあり/なし、LF/CRLF、正しく引用したcomma/quote/改行を受ける。引用符外の単独CRはエラー、引用符内のCRは元値として保持する。header/列数/日付/数字桁数/可否/同一snapshot内の号キー重複を検証し、未知の形式は修復・推測しない。headerはerror位置のrow 0、data ordinalは1起算で、引用符内の物理改行はordinalを増やさない。
+
+番号・号の先頭0とraw値を保持する。JPAの番号範囲が空でも日件数は非0の場合があり、空を0に置き換えない。片側範囲欠損・範囲逆転、JPBの飛び番/回復内重複、発行日の逆順は警告として元値/元順を保持する。番号範囲の差や飛び番の加減を日件数との一致条件にしない。JPBの登録日は公報発行日と別に保持する。
+
+期間指定は両端inclusiveの公報発行日で行い、可/不可の全対象行を返す。`sourceRowCount` / `observedDateRange` はsnapshot全体、`counts` は指定対象、`warnings` は期間外も含む元表の警告と期間警告。0行は `no_rows_in_snapshot` であり、正常0候補や未発行を意味しない。0bytesは `missing_header`、正しいheaderだけなら成功・範囲null・`no_observed_dates`。常に `coverageProven:false` / `acquisitionState:unknown` / `importState:unknown` を返す。
+
+成功値のraw field・notes・`sourceSha256` はprivate callerの参照用であり、API/画面/log/GitHubへそのまま送らない。hashは入力bytesの同一性であり配布元署名ではない。失敗は固定codeと任意の行/列だけを返し、native parser例外を公開しない。入力はbytesだけで、発行表行と実取得物・receiptの対応を確認する機能は別工程。
+
+Local回帰は `pnpm test src/lib/koho-distribution-table/index.test.ts`。fixtureは完全架空で、実CSVや実hashを追跡しない。本moduleは取得可否表示から実取得・DB反映・訂正版を含む網羅を認定せず、既存CLI/DB/watch動作を変更しない。[JPO操作ガイド](https://www.gazette.jpo.go.jp/ci-content-pub/guide/operation_guide_jp.pdf)の発行表取得/ZIP命名と、今回snapshotの観測profileを区別する。
