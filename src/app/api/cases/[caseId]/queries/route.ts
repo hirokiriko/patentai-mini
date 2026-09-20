@@ -3,6 +3,7 @@ import { caseRepo, draftPatentRepo, searchQuerySetRepo } from "@/repositories";
 import { generateQueries } from "@/lib/generate-queries";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { parseJsonOrNull } from "@/lib/safe-json";
+import { latestDraft } from "@/lib/current-draft";
 
 export const maxDuration = 60;
 
@@ -28,7 +29,7 @@ export async function POST(
   }
 
   const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
-  const draft = drafts.find((d) => d.extractedClaimsJson);
+  const draft = latestDraft(drafts, "main");
   if (!draft?.extractedClaimsJson) {
     return NextResponse.json(
       { error: "請求項の抽出が完了していません" },

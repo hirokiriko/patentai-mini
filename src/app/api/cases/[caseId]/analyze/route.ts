@@ -8,6 +8,7 @@ import {
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { parseJsonOrNull } from "@/lib/safe-json";
+import { latestDraft } from "@/lib/current-draft";
 import { isAiOperationStopped } from "@/lib/ai-operation-budget";
 
 export const maxDuration = 60;
@@ -98,7 +99,7 @@ export async function POST(
   }
 
   const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
-  const draft = drafts.find((d) => d.extractedClaimsJson);
+  const draft = latestDraft(drafts, "main");
   if (!draft?.extractedClaimsJson) {
     return NextResponse.json(
       { error: "請求項の抽出が完了していません" },

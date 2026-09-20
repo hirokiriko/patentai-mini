@@ -150,6 +150,12 @@ Issue #93では今回の実行結果（完了、fallback、前提不足、AI保�
 
 browser印刷ではnavigationとbuttonをprint CSSで除く。アプリ内でPDF binaryを生成、保存、送信しない。
 
+### 現在の比較資料（Issue #117）
+
+案件画面・検索式生成・通常比較は、watchと同じく読取時点で最大draftIdのmainを使う。最新mainが未抽出なら古い抽出済み資料やbase/additionへ戻らず、抽出を案内する。画面の「現在の比較・ウォッチ対象」と対象資料の表示を確認してから明示実行する。統合は最新base/additionを読み、最新mainを更新して抽出を未済へ戻す。過去の資料は削除しない。
+
+これは出願時/登録時の版管理や、過去の実送信記録ではない。保存済み検索式・比較・watch結果を現在のmainへ結び付け直さず、自動再分析・cursorリセットをしない。base/addition差替え後の統合結果の鮮度も自動判定しない。実行中の資料差替えへの追従・排他は追加せず、手動試用では対象資料を固定し、番号・請求項版・対応runを別途確認する。
+
 ## 10. Productionとrollback
 
 初期実装はcodeとmigration artifactを追加し、Production DBへの適用を別承認とした。後続のIssue #89で公開・完全架空データ限定の本番受入を実施済み。Issue #93はwatchの最小修正だけを行い、DB migrationや本番watch再実行を含まない。watch tableがない環境ではAPIをstable 503にし、案件pageは利用不可sectionとして継続表示する。Productionでの有効化、corpus投入、scheduler、secret／環境変数、Azure resource変更は別承認とする。
