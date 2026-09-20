@@ -324,3 +324,30 @@ browser印刷で長い日本語の期間PDFと失敗警告PDFを実保存し、�
 同じIDの固定ログは対応材料であり、完全な履歴・送信完了・実請求額の証明ではない。ログ照会は別途許可された対象と範囲だけで行う。本実装を理由に案件作成/有料再送/旧ログ探索を開始せず、既存の予約・消費回数をリセットしない。過去のIDなしログから原因を逆算しない。
 
 Local回帰は `pnpm test src/lib/ai-operation-budget-diagnostic.test.ts src/lib/patent-watch/diagnostic-sdk.test.ts src/lib/patent-watch/diagnostic-context.test.ts`。現行SDK→guardまで実装を使い、transport末端とrepositoryだけ完全架空に置換する。実.env/AI/DB/Azureは不要。loopback専用の既存watch browser fixtureにはdiagnostic-screening/detail/invalid/get-onlyを用意し、今回表示・保存済み履歴・ブラウザ再読込・GET 2/POST 1を確認する。
+
+### Issue #114: 手動CLIの非公開実行記録
+
+private stdinへ任意の `receipt: { path: absoluteLocalPath, privateDirectoryConfirmed: true }` を加えると、処理した入力bytesと結果をUTF-8 JSONLで記録する。省略時のstdout・exit codeは従来どおり。指定時だけstdoutに `receiptStatus: complete | incomplete` が加わる。receiptのpath・実行ID・hashはstdoutへ出さない。stdinや資格情報を端末の履歴・argvへ貼らない。
+
+操作者が既存の専用保護directoryを選ぶ。Git管理・クラウド同期・共有対象から外し、他の利用者が読めない権限を確認する。POSIXは実行uid所有でgroup/other権限なしの親が必要。Windowsでは0600でACLを保証できないため、`privateDirectoryConfirmed` は操作者がACLを確認した宣言であり、CLIによる機械的検査ではない。CLIはdirectory作成・ACL変更をしない。既存file、リンク親、UNC/相対path、入力fileと同じpathは使えない。Windowsの出力はdriveから始まる完全なpathとし、NTFS代替stream、device名、末尾dot/spaceの別名を拒否する。原本を移動・改名する必要はない。
+
+receiptは新規fileを排他的に作り、1record最大16KiB、全体最大1MiB。全recordにschemaVersion=1、operationId（ランダムUUID）、sequence（1始まり連番）、type、observedAt（Local時計のUTC ISO）を含む。
+
+| type | 記録する内容 |
+| --- | --- |
+| batch_started | mode、fileCount、filesのordinal/packageType |
+| input_verified | ordinal/packageType、実測byteLength/sha256。解析後にsnapshotと原本の双方を再hashできた場合だけ |
+| file_finished | 全ordinalを順に各1回。outcome、保存件数、要確認の有無、cleanup。入力確認済みの場合だけ固定summary（一般化件数・入力公報の公開日min/max、日別配列なし） |
+| batch_finished | 全ordinal終了後のstatus、cleanup、inserted分だけのsavedRecordCount |
+
+親がinput_verifiedを全量write+syncして成功ACKを返すまで、workerはDB driverのロード・保存へ進まない。解析がfailed判定でも両再hashが完了したbytesは確認済みになり得る。例外や再hash未完了の場合はbindingを補完せず、未処理の入力を後からhashしない。未確認summaryを0件で補造しない。
+
+`receiptStatus=complete` はwrite/sync/close成功応答を受けた意味で、DB保存成功や期間網羅の意味ではない。要確認で保存拒否・保存不明でも、記録を完了できる。逆にDBのinserted/reusedが確認できた後で記録だけ失敗することもある。その場合は保存結果を保持し、receipt incomplete・後続未処理として停止する。保存不明はexit3を優先し、それ以外の記録不全はexit2。snapshot cleanup不明は別途requiredのまま残す。
+
+終了行があっても、その直後のsync/close応答失敗や中断でstdoutがincompleteになり得る。fileの終了行だけから実行成功を逆算しない。途中までのreceiptは自動修復・削除・追記せず保存する。操作者が保存結果を確認して再実行する場合は新しいpath・新しい操作とし、既存の同一bytes再利用規則を使う。自動retryはしない。
+
+receiptには接続先を保存しないため、保存先DBや現在のDB状態の証明にはならない。正規配布一覧、取得日時、発行号や改訂、期間全体の網羅も示さない。接続資格情報、入力path/filename、原文、XML member、出願人、案件情報は記録対象外。receiptやhashはIssue/PR、ログ、CI artifactへ掲載しない。後日の照合reader、自動取得、production importerへの接続は別工程。
+
+回帰は `pnpm test scripts/koho-manual-import-receipt.test.ts scripts/koho-manual-import.test.ts scripts/koho-manual-import-source.test.ts scripts/koho-manual-import-transport.test.ts`。完全架空のcompiled CLIを使い、保存前の記録失敗、短いwrite、保存成功後の記録不全、sync/close失敗、中断後の遅いACK抑止、公開結果への私的field混入防止を検証する。DB stubの成功は実DB受入に数えない。
+
+`KOHO_MANUAL_LOCAL_DB_TEST=1 pnpm test scripts/koho-manual-import-local.test.ts --testTimeout 60000` の既存隔離PG16試験は8件。新しい一時loopback containerだけへ既存migrationを適用し、実commit後のreceipt失敗、後続未処理、新pathでのreused/inserted、再実行のDB不変を追加確認する。通常CIでのSKIPを成功にしない。入力とreceiptはfixtureのものだけを回収し、運用receipt・本番DBを削除しない。
