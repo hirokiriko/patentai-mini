@@ -30,6 +30,17 @@ beforeEach(() => {
   seam.getRun.mockResolvedValue({ ...run }); seam.listFindings.mockResolvedValue([{ ...finding }]);
 });
 describe("single run report states", () => {
+  it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("limits the scope notice to actual AI findings: %j", async ({ modes }) => {
+    seam.getRun.mockResolvedValue({ ...run, newFindingCount: modes.length,
+      fallbackFindingCount: modes.filter(mode => mode === "fallback").length });
+    seam.listFindings.mockResolvedValue(modes.map((analysisMode, index) => ({ ...finding, findingId: 31 + index, analysisMode })));
+    const html = await render();
+    expect(html.includes('aria-label="AI比較の範囲"')).toBe(modes.includes("ai"));
+    if (modes.includes("ai")) {
+      expect(html).toContain("明細書全文や請求項の残りは比較範囲に含みません");
+      expect(html).toContain("fallback候補はAI詳細比較の結果ではありません");
+    }
+  });
   it.each(["failed", "running"] as const)("prints %s as incomplete without zero results", async status => {
     seam.getRun.mockResolvedValue({ ...run, status, completedAt: status === "running" ? null : run.completedAt, newFindingCount: 0 });
     seam.listFindings.mockResolvedValue([]);

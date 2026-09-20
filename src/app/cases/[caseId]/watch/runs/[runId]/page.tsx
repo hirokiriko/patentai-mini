@@ -11,6 +11,7 @@ import {
 import type { CaseWatchFinding } from "@/lib/patent-watch/types";
 import { PrintButton } from "./print-button";
 import { BibliographyLink } from "../../bibliography-link";
+import { ComparisonScopeNotice } from "../../comparison-scope-notice";
 
 export const dynamic = "force-dynamic";
 const POSTGRES_INTEGER_MAX = 2_147_483_647;
@@ -227,6 +228,7 @@ export default async function PatentWatchReportPage({
 
           <section className="mt-6 space-y-4">
             <h2 className="text-xl font-bold">確認候補</h2>
+            <ComparisonScopeNotice hasAiFindings={report.findings.some(finding => finding.analysisMode === "ai")} />
             {report.findings.length > 0 ? (
               report.findings.map((finding) => (
                 <FindingReport key={finding.findingId} caseId={caseId} finding={finding} />

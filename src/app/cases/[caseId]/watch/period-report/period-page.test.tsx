@@ -13,6 +13,18 @@ vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND
 const render = (snapshot = periodFixture()) => renderToStaticMarkup(<PeriodReportView caseId={7} period={fixturePeriod} result={{ kind: "ready", report: buildPeriodReport(7, fixturePeriod, snapshot) }} />);
 beforeEach(() => { vi.clearAllMocks(); seam.read.mockResolvedValue(periodFixture()); });
 describe("period server page and print view", () => {
+  it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("prints a scope notice only when there are AI findings: %j", ({ modes }) => {
+    const snapshot = periodFixture(1, modes.length);
+    snapshot.findings.forEach((finding, index) => { finding.analysisMode = modes[index]; });
+    snapshot.runs[0].fallbackFindingCount = modes.filter(mode => mode === "fallback").length;
+    const html = render(snapshot);
+    expect(html.includes('aria-label="AI比較の範囲"')).toBe(modes.includes("ai"));
+    if (modes.includes("ai")) {
+      expect(html).toContain("先頭最大2,000文字");
+      expect(html).toContain("公報全体に記載がないという意味ではありません");
+      expect(html).toContain("fallback候補はAI詳細比較の結果ではありません");
+    }
+  });
   it.each([{}, { from: "bad", to: "bad" }, { from: ["2096-03-01", "2096-03-01"], to: "2096-03-31" }, { from: "2096-03-01", to: "2096-03-31", secret: SECRET_SENTINEL }])("performs no aggregate read for empty/invalid query", async query => {
     const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ caseId: "7" }), searchParams: Promise.resolve(query) }));
     expect(seam.read).not.toHaveBeenCalled(); expect(seam.write).not.toHaveBeenCalled();

@@ -150,6 +150,8 @@ Issue #93では今回の実行結果（完了、fallback、前提不足、AI保�
 
 browser印刷ではnavigationとbuttonをprint CSSで除く。アプリ内でPDF binaryを生成、保存、送信しない。
 
+Issue #112では、watch一覧・単一run・期間レポートに表示する保存候補に`analysisMode=ai`がある場合だけ「AI比較の範囲」を画面と印刷へ表示する。現行の詳細比較は自案の独立請求項（抽出済み独立請求項が0件なら全請求項）、公報の要約、請求項テキストの先頭最大2,000文字を使い、明細書全文とそれを超える請求項を含まない。差分候補は入力範囲の一致未確認であり、公報全体の不存在を意味しない。Lowでも原文確認を要する。注記は現行方式の説明であり、過去の各結果の実送信文字数・切断有無を記録したものではない。fallbackのみ・候補0件では表示せず、混在時はai候補への説明と明示する。AI本文・分類・保存値・CSVは変えない。
+
 ## 10. Productionとrollback
 
 初期実装はcodeとmigration artifactを追加し、Production DBへの適用を別承認とした。後続のIssue #89で公開・完全架空データ限定の本番受入を実施済み。Issue #93はwatchの最小修正だけを行い、DB migrationや本番watch再実行を含まない。watch tableがない環境ではAPIをstable 503にし、案件pageは利用不可sectionとして継続表示する。Productionでの有効化、corpus投入、scheduler、secret／環境変数、Azure resource変更は別承認とする。
