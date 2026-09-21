@@ -758,11 +758,13 @@ export const draftPatentRepo: DraftPatentRepository = {
     return { ...row, kind: row.kind as DraftKind };
   },
   async upsertMain(data) {
-    // 統合済みメインドラフトを 1 件に保つ。既存があれば更新、なければ作成。
+    // 最新のメインドラフトを更新し、過去のアップロードは保持する。
     const existing = await db
       .select()
       .from(draftPatents)
-      .where(and(eq(draftPatents.caseId, data.caseId), eq(draftPatents.kind, "main")));
+      .where(and(eq(draftPatents.caseId, data.caseId), eq(draftPatents.kind, "main")))
+      .orderBy(desc(draftPatents.draftId))
+      .limit(1);
     if (existing.length > 0) {
       const [row] = await db
         .update(draftPatents)

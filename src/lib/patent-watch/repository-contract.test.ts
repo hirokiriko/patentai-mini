@@ -102,6 +102,22 @@ describe("PatentWatchRepository public contract", () => {
     );
   });
 
+  it("selects the latest main for the case, matching current-draft selection", async () => {
+    const repository = await source(REPOSITORY_URL);
+    const startRun = methodBlock(repository, "startRun", "findDocumentsForRun");
+    const draftStart = startRun.indexOf("const [draftRow]");
+    const draftEnd = startRun.indexOf("if (!draftRow", draftStart);
+    expect(draftStart).toBeGreaterThanOrEqual(0);
+    expect(draftEnd).toBeGreaterThan(draftStart);
+    const selection = startRun.slice(draftStart, draftEnd);
+    expect(selection).toContain("eq(draftPatents.caseId, caseId)");
+    expect(selection).toContain('eq(draftPatents.kind, "main")');
+    expect(selection).toContain(".orderBy(desc(draftPatents.draftId))");
+    expect(selection).toContain(".limit(1)");
+    expect(selection).not.toContain("isNotNull");
+    expect(selection).not.toContain("ne(draftPatents.extractedClaimsJson");
+  });
+
   it("recovers stale running runs without advancing the cursor", async () => {
     const repository = await source(REPOSITORY_URL);
     const startRun = methodBlock(repository, "startRun", "findDocumentsForRun");

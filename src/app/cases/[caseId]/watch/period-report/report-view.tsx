@@ -3,6 +3,7 @@ import { PERIOD_QUERY_MESSAGE, periodDateTimeLabel, type WatchPeriod } from "@/l
 import { PrintButton } from "../runs/[runId]/print-button";
 import { PeriodSelector } from "./period-selector";
 import { BibliographyLink } from "../bibliography-link";
+import { ComparisonScopeNotice } from "../comparison-scope-notice";
 
 export const PERIOD_REPORT_PRINT_CSS = `
   .period-report { overflow-wrap: anywhere; }
@@ -68,6 +69,7 @@ export function PeriodReportView({ caseId, period, invalidQuery = false, result 
       </section>
       <section className="my-6 space-y-4">
         <h2 className="text-xl font-bold">確認候補</h2>
+        <ComparisonScopeNotice hasAiFindings={report.findings.some(finding => finding.analysisMode === "ai")} />
         {!report.runs.length ? <p>実行記録なし：この期間に開始した保存済みの監視実行はありません。公報の取得状況や比較結果は判断できません。</p>
           : !report.summary.completed ? <p>完了した実行がありません。新規候補の有無は未確定です。</p>
           : !report.findings.length ? <p>完了した実行の新規候補は0件です。過去に初検出済みの候補は再計上していません。</p> : null}

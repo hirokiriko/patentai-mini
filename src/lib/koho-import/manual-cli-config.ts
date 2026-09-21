@@ -1,4 +1,4 @@
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 export const MANUAL_MAX_BYTES = 8 * 1024 ** 3;
 export const MANUAL_DEADLINE_MS = 120 * 60_000;
@@ -13,6 +13,7 @@ export interface ManualConfiguration {
   allowReviewRequired: boolean;
   connection?: ManualConnection;
   expectedTarget?: ManualTarget;
+  receipt?: { path: string; privateDirectoryConfirmed: true };
 }
 
 export class ManualImportError extends Error {
@@ -40,7 +41,7 @@ function bytes(value: unknown) {
 }
 export function parseManualConfiguration(value: unknown): ManualConfiguration {
   const x = record(value);
-  keys(x, ["files", "maxFileBytes", "maxTotalBytes"], ["mode", "allowReviewRequired", "connection", "expectedTarget"]);
+  keys(x, ["files", "maxFileBytes", "maxTotalBytes"], ["mode", "allowReviewRequired", "connection", "expectedTarget", "receipt"]);
   requireManual(x.mode === undefined || x.mode === "preview" || x.mode === "apply");
   requireManual(x.allowReviewRequired === undefined || typeof x.allowReviewRequired === "boolean");
   bytes(x.maxFileBytes); bytes(x.maxTotalBytes);
@@ -54,6 +55,19 @@ export function parseManualConfiguration(value: unknown): ManualConfiguration {
   const mode = x.mode ?? "preview";
   const config: ManualConfiguration = { mode, files, maxFileBytes: x.maxFileBytes as number,
     maxTotalBytes: x.maxTotalBytes as number, allowReviewRequired: x.allowReviewRequired === true };
+  if (x.receipt !== undefined) {
+    const receipt = record(x.receipt); keys(receipt, ["path", "privateDirectoryConfirmed"]);
+    requireLocalPath(receipt.path); requireManual(receipt.privateDirectoryConfirmed === true);
+    if (process.platform === "win32") {
+      // A receipt must be a new file, never an NTFS alternate stream or device alias.
+      requireManual(/^[a-z]:[\\/]/i.test(receipt.path) && !receipt.path.slice(2).includes(":"));
+      requireManual(receipt.path.slice(3).split(/[\\/]/).every(part => part === "." || part === ".." ||
+        (!/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))));
+    }
+    const normalized = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
+    requireManual(files.every(file => normalized(file.path) !== normalized(receipt.path as string)));
+    config.receipt = { path: receipt.path, privateDirectoryConfirmed: true };
+  }
   if (mode === "preview") {
     // A preview never needs to load a driver or examine any database setting.
     requireManual(x.connection === undefined && x.expectedTarget === undefined);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
 import { integrateClaims } from "@/lib/integrate-claims";
+import { latestDraft } from "@/lib/current-draft";
 
 export const maxDuration = 60;
 
@@ -23,8 +24,8 @@ export async function POST(
   }
 
   const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
-  const base = drafts.find((d) => d.kind === "base");
-  const addition = drafts.find((d) => d.kind === "addition");
+  const base = latestDraft(drafts, "base");
+  const addition = latestDraft(drafts, "addition");
 
   if (!base?.parsedText) {
     return NextResponse.json(
