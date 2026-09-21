@@ -10,6 +10,14 @@ export type ManualCleanup = "complete" | "required";
 export const MANUAL_RECEIPT_BYTES = 1024 * 1024;
 export const MANUAL_RECEIPT_RECORD_BYTES = 16 * 1024;
 
+export async function inspectManualPrivateDirectory(parent: string) {
+  await inspectManualDirectory(parent);
+  if (process.platform !== "win32") {
+    const stat = await lstat(parent);
+    requireManual(typeof process.getuid === "function" && stat.uid === process.getuid() && (stat.mode & 0o077) === 0);
+  }
+}
+
 /** Parent-only writer. A footer describes structure; stdout also reports sync/close acknowledgement. */
 export class ManualReceipt {
   private handle?: FileHandle;
@@ -64,11 +72,7 @@ export class ManualReceipt {
     await this.perform(async () => {
       requireManual(this.config.receipt);
       const path = this.config.receipt.path, parent = dirname(path);
-      await inspectManualDirectory(parent); this.guard();
-      if (process.platform !== "win32") {
-        const stat = await lstat(parent);
-        requireManual(typeof process.getuid === "function" && stat.uid === process.getuid() && (stat.mode & 0o077) === 0);
-      }
+      await inspectManualPrivateDirectory(parent); this.guard();
       this.guard();
       const handle = await open(path, "wx", 0o600);
       // If open finishes after the caller timed out, retain the empty file and close only our handle.

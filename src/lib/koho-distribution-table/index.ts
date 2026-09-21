@@ -22,7 +22,7 @@ function fail(code: DistributionErrorCode, row?: number, column?: number): never
   throw new DistributionAbort({ code, ...(row === undefined ? {} : { row }), ...(column === undefined ? {} : { column }) });
 }
 
-function validCompactDate(value: string): boolean {
+export function validCompactDate(value: string): boolean {
   if (!/^[0-9]{8}$/.test(value)) return false;
   const year = Number(value.slice(0, 4)), month = Number(value.slice(4, 6)), day = Number(value.slice(6, 8));
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);

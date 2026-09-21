@@ -358,3 +358,10 @@
 - Classification: screening/detailの直接の呼出境界と、guardが最初に検出した固定理由だけを実行単位で保持する。例外本文・provider情報を読まず、期限signalの事実とcaller abortを区別する。診断失敗は元の結果を変えない。
 - UX: 今回POSTの検証済み診断だけを固定日本語で表示し、保存済み履歴と区別する。診断なし・不正・結果不明の従来挙動を維持し、GETで補完・永続化しない。
 - Impact/rollback: 保護上限・timeout・retry・モデル・repository保存・DB/schema・依存・CI/deploy設定は不変。追加実AIや本番操作の承認を含めず、過去の保護停止原因は未確定のまま。revert PRと通常deployで戻す。
+
+## 2026-09-21: Issue #121 — 発行表・実bytes・Local取込記録の定例確認
+
+- Decision: 読取専用の単一CLIで既存の発行表parser、公報parser/plan、snapshot処理、v1 receiptを接続し、日本語の不足/要確認/次操作をprivate Markdownへ出す。新管理画面・取得・汎用自動化基盤は作らない。
+- Evidence: 発行表の観測行を基準とし、日付一致候補と号の確認を分ける。coverageProvenは常にfalse。receiptの構造完備、終了ACK、記録上の保存、現在DB、本番反映は別判定。v1の欠落情報を成功flagで補わず、先行成功と後続unknown/cleanupを保持する。
+- Validation: 完全架空のcompiled CLIと専用PG16で不足を含む2巡を通し、同bytesのreused、新号のinserted、既存row/更新時刻不変を測る。通常CIのDB SKIPは実測へ読み替えない。
+- Impact/rollback: schema/migration内容・保存ロジック・通常manual CLI契約/Local制限・receipt writer形式・AI/watch/UI/API・依存・CI/deploy設定は維持。通常deployはコード配備だけで、本番継続取込の承認ではない。revert PRと通常deployで戻し、運用原本/receipt/確認票を削除しない。本番取込の別Issue案は未承認のまま親#94へ引き継ぐ。

@@ -2,13 +2,15 @@ import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { manualFixture } from "./koho-manual-import-fixtures";
 import type { ManualConfiguration } from "../src/lib/koho-import/manual-cli-config";
+import { protectUpdateTestDirectory, updateTable } from "./koho-update-check-fixtures";
+import { inspectManualPrivateDirectory } from "../src/lib/koho-import/manual-cli-receipt";
 
 // Opt-in creates exactly one new, disposable container/database. No saved credentials.
 // Without opt-in these tests remain SKIP; CI does not establish Local DB acceptance.
@@ -54,6 +56,7 @@ describe.skipIf(process.env.KOHO_MANUAL_LOCAL_DB_TEST !== "1")("manual CLI isola
     let phase = "compile";
     try {
       directory = await mkdtemp(join(tmpdir(), "koho-manual-db-tests-"));
+      await protectUpdateTestDirectory(directory);
       const suffix = randomBytes(8).toString("hex"), password = randomBytes(24).toString("hex");
       container = `koho-manual-test-${suffix}`;
       const database = `koho_manual_import_test_${suffix}`;
@@ -188,4 +191,70 @@ describe.skipIf(process.env.KOHO_MANUAL_LOCAL_DB_TEST !== "1")("manual CLI isola
     expect(await snapshot()).toBe(before);
     expect(await Promise.all(selected.map(async file => digest(await readFile(file.path))))).toEqual(hashes);
   });
+  it("proves two regular update cycles with the compiled checker and real repository", async () => {
+    const built = await command(process.execPath, [resolve("node_modules/typescript/bin/tsc"), "-p", "scripts/koho-update-check.tsconfig.json"], "", {}, 60_000);
+    expect(built.code === 0).toBe(true);
+    const preserved: string[] = [];
+    const source = async (name: string, bytes: string | Uint8Array) => {
+      const path = join(directory, name); await writeFile(path, bytes); preserved.push(path); return path;
+    };
+    const first = { packageType: "JPA" as const, path: await source("第一号.zip", manualFixture("JPA", 1,
+      { issue: "FICTIONAL-UPDATE-FIRST", publicationDate: "2099-03-11", review: true, amendment: true })) };
+    const added = { packageType: "JPA" as const, path: await source("第二号.zip", manualFixture("JPA", 1,
+      { issue: "FICTIONAL-UPDATE-SECOND", publicationDate: "2099-03-18" })) };
+    const other = { packageType: "JPB" as const, path: await source("期間外.zip", manualFixture("JPB", 1,
+      { issue: "FICTIONAL-UPDATE-OUTSIDE", publicationDate: "2099-04-01" })) };
+    const table = await source("発行表.csv", updateTable("JPA"));
+    const firstBytes = await readFile(first.path), addedBytes = await readFile(added.path);
+    const digest = createHash("sha256").update(firstBytes).digest("hex");
+    const receiptPaths: string[] = [];
+    let checkNumber = 0;
+    const check = async (selected = [first, other]) => {
+      const path = join(directory, `check-${++checkNumber}.md`); preserved.push(path);
+      const result = await command(process.execPath, [resolve(".koho-ops/update-check/scripts/koho-update-check.js")], JSON.stringify({
+        period: { from: "2099-03-11", to: "2099-03-25" }, distributionTables: [{ packageType: "JPA", path: table }],
+        packages: selected, receipts: receiptPaths.map(path => ({ path })), maxFileBytes: 2_000_000, maxTotalBytes: 6_000_000,
+        output: { path, privateDirectoryConfirmed: true },
+      }));
+      expect(result.code).toBe(0); expect(result.stderr).toBe("");
+      expect(!result.output.includes(directory) && !result.output.includes(digest) && !result.output.includes(connection.password)).toBe(true);
+      return { result: JSON.parse(result.output), markdown: await readFile(path, "utf8") };
+    };
+    const importWithReceipt = async (name: string, selected: typeof files, preview = false) => {
+      const path = join(directory, name); receiptPaths.push(path); preserved.push(path);
+      const input = preview ? { files: selected, maxFileBytes: 2_000_000, maxTotalBytes: 6_000_000 } : config(selected, true);
+      const result = await command(process.execPath, [resolve(".koho-ops/manual/scripts/koho-manual-import.js")],
+        JSON.stringify({ ...input, receipt: { path, privateDirectoryConfirmed: true } }));
+      expect(result.code).toBe(0); expect(result.stderr).toBe("");
+      expect(!result.output.includes(connection.password) && !result.output.includes(directory)).toBe(true);
+      const value = JSON.parse(result.output); expect(value.receiptStatus).toBe("complete");
+      // Keep the same-process exit/stdout evidence separate; v1 checker must not claim it binds an ACK.
+      await source(name + ".exit.json", JSON.stringify({ exitCode: result.code, stdout: value }));
+      return value;
+    };
+    const missing = await check(); expect(missing.result.counts).toMatchObject({ targetRows: 3, missingFiles: 2, unavailableRows: 1, unmatchedPackages: 1 });
+    const beforePreview = await snapshot();
+    expect((await importWithReceipt("preview.jsonl", [first], true)).results[0].outcome).toBe("preview_not_saved");
+    expect(await snapshot()).toBe(beforePreview);
+    expect((await importWithReceipt("first.jsonl", [first])).results[0]).toMatchObject({ outcome: "inserted", includesReviewRequired: true });
+    const firstCheck = await check(); expect(firstCheck.result.counts.recordedInserted).toBe(1);
+    expect(firstCheck.markdown).toContain("保存時の要確認 あり"); expect(firstCheck.markdown).toContain("補正 1");
+    const oldRows = async () => JSON.stringify(await sql(`select row_to_json(r)::text as run,
+      (select json_agg(d order by document_id)::text from public.koho_import_documents d where d.import_id=r.import_id) as docs
+      from public.koho_import_runs r where source_sha256=$1`, [digest]));
+    const firstState = await oldRows();
+    const alias = { packageType: "JPA" as const, path: await source("同一bytes別名.zip", firstBytes) };
+    const second = await importWithReceipt("second.jsonl", [alias, added]);
+    expect(second.results.map((x: { outcome: string }) => x.outcome)).toEqual(["reused", "inserted"]);
+    expect(await oldRows()).toBe(firstState);
+    const last = await check([alias, added, other]);
+    expect(last.result.counts).toMatchObject({ missingFiles: 1, unavailableRows: 1, recordedInserted: 2, recordedReused: 1, recordedPreviews: 1, unmatchedPackages: 1 });
+    expect(last.markdown).toContain("要確認本文 1"); expect(last.markdown).toContain("終了ACK未確認"); expect(last.markdown).toContain("現在の本番DB状態: 未確認");
+    expect((await readFile(first.path)).equals(firstBytes) && (await readFile(added.path)).equals(addedBytes)).toBe(true);
+    const evidence = process.env.KOHO_UPDATE_EVIDENCE_DIR;
+    if (evidence) {
+      await inspectManualPrivateDirectory(evidence);
+      for (const path of preserved) await writeFile(join(evidence, basename(path)), await readFile(path), { flag: "wx", mode: 0o600 });
+    }
+  }, 90_000);
 });

@@ -36,6 +36,15 @@ function text(value: unknown, max = 1024): value is string {
 export function requireLocalPath(value: unknown): asserts value is string {
   requireManual(text(value, 32768) && isAbsolute(value) && !/^[\\/]{2}/.test(value));
 }
+/** Reuse the receipt's device/alternate-stream boundary for checker files. */
+export function requireManualFilePath(value: unknown): asserts value is string {
+  requireLocalPath(value);
+  if (process.platform === "win32") {
+    requireManual(/^[a-z]:[\\/]/i.test(value) && !value.slice(2).includes(":"));
+    requireManual(value.slice(3).split(/[\\/]/).every(part => part === "." || part === ".." ||
+      (!/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))));
+  }
+}
 function bytes(value: unknown) {
   requireManual(Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= MANUAL_MAX_BYTES);
 }
@@ -58,12 +67,7 @@ export function parseManualConfiguration(value: unknown): ManualConfiguration {
   if (x.receipt !== undefined) {
     const receipt = record(x.receipt); keys(receipt, ["path", "privateDirectoryConfirmed"]);
     requireLocalPath(receipt.path); requireManual(receipt.privateDirectoryConfirmed === true);
-    if (process.platform === "win32") {
-      // A receipt must be a new file, never an NTFS alternate stream or device alias.
-      requireManual(/^[a-z]:[\\/]/i.test(receipt.path) && !receipt.path.slice(2).includes(":"));
-      requireManual(receipt.path.slice(3).split(/[\\/]/).every(part => part === "." || part === ".." ||
-        (!/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))));
-    }
+    requireManualFilePath(receipt.path);
     const normalized = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
     requireManual(files.every(file => normalized(file.path) !== normalized(receipt.path as string)));
     config.receipt = { path: receipt.path, privateDirectoryConfirmed: true };
