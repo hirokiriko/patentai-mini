@@ -1,0 +1,6 @@
+{
+  "extends": "./koho-manual-import.tsconfig.json",
+  "compilerOptions": { "outDir": "../.koho-ops/update-check" },
+  "include": ["koho-update-check.ts"],
+  "exclude": ["../node_modules", "../.koho-ops"]
+}

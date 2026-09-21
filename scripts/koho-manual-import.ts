@@ -66,7 +66,7 @@ export function manualChildEnvironment() {
   return env;
 }
 
-async function until<T>(operation: Promise<T>, deadline: number): Promise<T> {
+export async function until<T>(operation: Promise<T>, deadline: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([operation, new Promise<never>((_resolve, reject) => {

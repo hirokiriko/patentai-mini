@@ -365,3 +365,50 @@ receiptには接続先を保存しないため、保存先DBや現在のDB状態
 回帰は `pnpm test scripts/koho-manual-import-receipt.test.ts scripts/koho-manual-import.test.ts scripts/koho-manual-import-source.test.ts scripts/koho-manual-import-transport.test.ts`。完全架空のcompiled CLIを使い、保存前の記録失敗、短いwrite、保存成功後の記録不全、sync/close失敗、中断後の遅いACK抑止、公開結果への私的field混入防止を検証する。DB stubの成功は実DB受入に数えない。
 
 `KOHO_MANUAL_LOCAL_DB_TEST=1 pnpm test scripts/koho-manual-import-local.test.ts --testTimeout 60000` の既存隔離PG16試験は8件。新しい一時loopback containerだけへ既存migrationを適用し、実commit後のreceipt失敗、後続未処理、新pathでのreused/inserted、再実行のDB不変を追加確認する。通常CIでのSKIPを成功にしない。入力とreceiptはfixtureのものだけを回収し、運用receipt・本番DBを削除しない。
+
+### Issue #121: 定例更新チェックの単一入口
+
+`scripts/koho-update-check.ts` は発行表・明示ZIP・任意receiptを読み、日本語Markdown確認票1件と公開安全な集計JSON1件を出す。取得・DB接続・import apply・AI・watch・外部通信は行わない。既存parser/plan、排他的copy・前後hash・原本再照合を再利用する。以下のコンパイル後、private stdinからJSONを渡す。実入力をargvやshell履歴へ貼らない。
+
+```text
+pnpm exec tsc -p scripts/koho-update-check.tsconfig.json
+node .koho-ops/update-check/scripts/koho-update-check.js
+```
+
+入力の契約（pathはCodexが特定してprivate pipe内で作成する）:
+
+| field | 内容 |
+| --- | --- |
+| period | `{from,to}`。実在するYYYY-MM-DD、両端inclusive、from<=to |
+| distributionTables | `[{packageType,path}]`。JPA/JPB各最大1、0〜2件 |
+| packages | `[{packageType,path}]`。JPA/JPB、0〜64件 |
+| receipts | 省略可、`[{path}]`、0〜64件。終了成功flagの注入は不可 |
+| maxFileBytes / maxTotalBytes | ZIPの明示容量上限。各/合計とも正整数、最大8GiB |
+| output | `{path,privateDirectoryConfirmed:true}`。専用保護directory内の新規Markdown file |
+
+未知key・型・種別・不正日付を拒否する。入力256KiB/受信10秒、CSV各1MiB、receipt各1MiB/record16KiB、既存ZIP展開/解析制限を維持し、逐次処理は120分以内。期限/中断時はworkerを終了し、最大5秒の終了待機と最大5秒の回収待機を使う。出力は既存fileを上書きせず、入力リンク・UNC・危険なWindows aliasを拒否する。POSIXは所有uidとgroup/other権限なしを確認し、Windowsは既存receipt同様、操作者によるACL確認を宣言する。Codexは今回専用directoryだけの権限を設定・read-backできる。CLIは既存directoryやACLを変更しない。
+
+exit0は対象snapshotのチェック処理完了、exit1は入力/config不正、exit2は読取/解析/出力が不完全。業務上の不足や未確認は`attentionRequired`と集計に残る。部分receiptや読めない資料があっても、可能な範囲で他資料の結果を確認票へ残す。出力失敗/期限時のfileは不完全として保持し、新しいpathで再チェックする。stderrに例外を出さず、stdoutにはpath/hash/原文/号別実データを出さない。
+
+発行表の選択行は取得可/不可とも残す。片方の表なし、対象0行、観測範囲外、parser警告、ZIP不足を別表示する。外側filename/mtimeから号を確定せず、ABSTRACTの種別・日付とdocument_listを照合する。日付一致は候補であり、opaqueな号/issueControlValueを年通号/総通号へ推測変換しない。日件数とsection本文XML候補数を並記するが、比較単位未確認のまま公式配布物の完全性を認定しない。本文（うち要確認）・補正・添付・未処理は別単位。同一bytes別名・同日別bytesも残し、競合を自動採用しない。
+
+receiptは現行v1の順序/operationId/sequence/ordinal/種別/件数/実測hash/byteLength/outcomeを検証し、有効prefixの記録を保持する。現在検査した実bytesと一致する記録だけを結ぶ。先行成功と後続unknown、不一致、要確認、cleanupを同時表示し、新しい時刻だけで上書きしない。`inserted/reused`は記録上のLocal保存。v1にはDB識別子がなく、footerにもsync/close成功ACKは含まれないため、本checkerは終了ACKと現在の本番DB状態を常に未確認とする。既存stdoutはoperationIdを含まず、別runの成功flagで補完できない。操作者は同じ実行の終了code/stdoutをreceiptとともに保持し、別途照合する。構造完備だけで再送を判断しない。
+
+運用の一本道:
+
+1. Codexが対象期間とJPA/JPBを確認し、操作者が正規サイトから公報発行表と各号ZIPを取得する。
+2. 保存済みと伝えられたら、Codexが指定ダウンロード領域だけを文脈・名前・拡張子・更新日時から限定検索する。原本を移動/削除/改名/上書きせずcopyする。配置不明時は追跡外`_imports/`を使い、同名は日時/連番で区別。複数候補を特定できない場合だけ確認を求める。
+3. receipt・終了記録・チェック結果はGit/クラウド同期外の専用保護領域へ置く。個人pathや接続情報はGitHubへ書かない。Codexがprivate入力を作り、checkerを起動する。端末全体の探索はしない。
+4. 確認票に従い不足を正規取得し、提供不可・号/内容・競合・要確認を処理する。結果不明やcleanup未完了は整合確認を先にし、自動再送しない。
+5. 既存手動CLIでpreviewし、明示的に許可された保存先だけで取込む。通常CLIは隔離Local PG16限定。本番へ向けるflagや旧#89承認の再利用はしない。
+6. 同じ実行のreceiptと終了記録を保持して再チェックし、別工程の監視・期間報告へ引き継ぐ。Localのチェック完了は本番更新、全期間監視、専門家評価、商用提供の完了ではない。
+
+完全架空の回帰は`pnpm test scripts/koho-update-check.test.ts`。実DB2巡は既存の専用PG16 harnessを再利用して次を明示実行する。
+
+```text
+KOHO_MANUAL_LOCAL_DB_TEST=1 pnpm test scripts/koho-manual-import-local.test.ts -t "proves two regular update cycles" --testTimeout 60000
+```
+
+新規loopback container1個・新規の試験資格情報だけで既存migrationと最小権限LOGINを準備する。第1巡の不足→preview/DB不変→要確認承認/inserted→checker、第2巡の同bytes/reused＋不足号/inserted→旧row/更新時刻不変→checkerを通す。不明/破損はfile fixtureで確認し、実DB障害注入は行わない。`KOHO_UPDATE_EVIDENCE_DIR`を指定すると、事前保護済みdirectoryの新規fileへ架空原本・receipt・終了記録・確認票を保持する。試験container/volume/LOGIN/作業copyは回収する。通常suiteのopt-in SKIPとこの実測は別に記録する。
+
+本番継続取込の次工程案は#121/親#94に未承認として残す。通常deployはコードの配備のみ。本番write・Azure管理情報取得・secret/env/設定変更・実公報再取得・有料実験を本Issueで追加しない。rollbackはrevert PRと通常deployで行い、原本・運用receipt・チェック結果・本番公報を自動削除しない。
