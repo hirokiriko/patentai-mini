@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { findingFixture } from "./watch-fixtures.test-support";
 
 import {
   fetchPatentWatchStatus,
@@ -72,11 +73,12 @@ function summary(latestRun: WatchRunView | null): WatchSummary {
 function renderWatchState(
   state: PatentWatchLoadState,
   latestRun: WatchRunView | null,
+  findings: WatchSummary["findings"] = [],
 ): string {
   return renderToStaticMarkup(
     createElement(PatentWatchSectionView, {
       caseId: 7,
-      summary: summary(latestRun),
+      summary: { ...summary(latestRun), findings },
       enabled: true,
       monitoringFromDate: "2096-03-01",
       state,
@@ -91,6 +93,17 @@ function renderWatchState(
 }
 
 describe("patent watch UI contract", () => {
+  it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("explains the input scope only for saved AI candidates: %j", ({ modes }) => {
+    const findings = modes.map((analysisMode, index) => ({ ...findingFixture(), findingId: index + 1, analysisMode }));
+    const html = renderWatchState("ready", run("completed"), findings);
+    expect(html.includes('aria-label="AI比較の範囲"')).toBe(modes.includes("ai"));
+    if (modes.includes("ai")) {
+      expect(html).toContain("先頭最大2,000文字");
+      expect(html).toContain("公報全体に記載がないという意味ではありません");
+      expect(html).toContain("Lowでも原文を確認");
+      expect(html).toContain("実際の入力文字数や切断の有無を示す記録ではありません");
+    }
+  });
   it.each(["completed", "failed", "running"] as const)("offers CSV only for completed history (%s)", status => {
     const html = renderWatchState("ready", run(status));
     expect(html.includes("CSVをダウンロード")).toBe(status === "completed");
