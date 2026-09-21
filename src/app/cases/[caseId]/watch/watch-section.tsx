@@ -1,5 +1,6 @@
 "use client";
 import { BibliographyLink } from "./bibliography-link";
+import { ComparisonScopeNotice } from "./comparison-scope-notice";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -590,6 +591,7 @@ export function PatentWatchSectionView({
 
       <div className="mt-4 space-y-3">
         <h3 className="font-semibold">新着確認候補</h3>
+        <ComparisonScopeNotice hasAiFindings={summary?.findings.some(finding => finding.analysisMode === "ai") ?? false} />
         {!summary ? (
           <p className="text-sm text-gray-600">保存済みの確認候補は未取得です。</p>
         ) : summary.findings.length === 0 ? (
