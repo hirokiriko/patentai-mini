@@ -375,3 +375,12 @@
 - Evidence: DB COMMITの既知結果、private記録の永続化ACK、実Job終了、現在DB照合は独立した証拠とする。確定不能保存を自動再送せず、既知成功を後続の記録/cleanup失敗で消さない。実AI2巡・候補あり・書誌/原文・確認状態・CSV/全ページPDFを同じ架空案件で実測し、Local/CI/配備だけで完了としない。
 - Boundary/rollback: client切断後のクラウド継続と物理PC停止は別。専門家本人の評価、実顧客受入、顧客分離、期間網羅は別に残す。rollbackはJob停止、revert PR/通常deploy、今回対象の権限/設定復元まで。全表削除や追加serverを伴うPITRは含めない。成功公報/原本/記録と次回用のprivate Job/container/最小権限は保持し、一時IP等は回収、実行中Job0で終了する。次回の有料実行は今回承認から自動開始しない。
 - Procedure: `ops/koho-cloud-import.md`。本判断は#121の未承認案から#123の限定承認へ進んだことだけを記録し、一般の本番権限や実測済み範囲を拡大しない。
+
+## 2026-09-22: Issue #125 — 固定境界の詳細観測と監視フローの仕上げ
+
+- Decision: `WATCH_COMPLETION_BATCH_V2` に従い、Azure watch detailの既存POST/transport/clone JSON/usage境界で数値と固定phaseだけを観測する。旧診断3項目を保持し、同じ保護停止500へ任意の兄弟fieldを追加。最初の停止snapshotを凍結し、後段SDK読取停止の一意な観測も維持する。複数attemptの帰属が曖昧なら省略する。
+- Invariants: モデル/provider/prompt/入力集合/独立請求項/候補数/8192出力/retry0/35秒/route120秒/UI125秒/guard/cursor/CSV14列/期間JST31日を変更しない。追加I/O、timer、phaseログ、診断DB、endpointは作らない。
+- Evidence: 実SDK＋架空transportで100件screening/20件detail、日本語上限側入力、応答前/本文待ちの34,999/35,000ms、HTTP/JSON/usage、後段SDK中断、first-stop/並行/時計・logger障害を検証する。fake応答の速さを本番改善と扱わず、現時点で本番遅延の根本原因や期限等の変更根拠は未確定。
+- Flow: 既存PG16 helper/既存migration/実repositoryと、完全架空TXT・公報2回更新・実SDKの外部transport/Blob stubを接続したopt-in通し試験を用意する。125専用空DBだけに試験権限を与え、保存済みimageの存在確認・pull禁止・loopback bindを使う。DB不達/SKIPと実測成功を区別し、独立した架空view/PDF確認で代替しない。
+- Delivery gate: rootのみ編集、補助はLocal read-only。独立レビュー、現head必須CI、実DB/browser/PDF、費用/停止条件のいずれか未達ならDraft/Open/blockedを維持する。#123へ有限回数・未知送信/費用予約・受入順序・回収までの一括案を残し、通常工程を小分けのOWNER再承認にしない。
+- Impact/rollback: schema/migration内容、依存/lock、CI/deploy設定、Production DB/Azure/secret/envは変更しない。追加実AI/本番案件/Job0。rollbackはrevert PRと通常deploy、今回のLocal一時物のみ回収。#123/#94は自動Closeしない。

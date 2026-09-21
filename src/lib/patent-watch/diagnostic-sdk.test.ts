@@ -87,7 +87,7 @@ describe("watch route through the installed SDK and guarded fake transport", () 
   });
   afterEach(() => {
     for (const method of ["info", "warn", "error", "log"] as const) expect(JSON.stringify(vi.mocked(console[method]).mock.calls)).not.toContain(SECRET);
-    vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+    vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers();
   });
   it("keeps 100 screening / 20 detail inputs and one nested cumulative budget", async () => {
     const store = fixture();
@@ -210,5 +210,129 @@ describe("watch route through the installed SDK and guarded fake transport", () 
     expect(await response.json()).toMatchObject({ error: "watch_ai_stopped", diagnostic: { stage: "screening", reason: "timeout" } });
     expect(transport).toHaveBeenCalledTimes(1);
     expect(events("ai_operation_usage").map(event => event.reason)).toEqual(["timeout"]);
+  });
+
+  it.each(["awaiting_response", "reading_response"] as const)("freezes detail %s at the real deadline and ignores late completion", async phase => {
+    vi.stubEnv("AI_PROVIDER", "azure");
+    const store = fixture(); vi.useFakeTimers();
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("fictional", "TimeoutError")), ms);
+      return controller.signal;
+    });
+    let late!: (value: never) => void;
+    const payloads: string[] = [];
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      payloads.push(String(init?.body));
+      if (payloads.length === 1) return aiResponse(screen);
+      now = 110;
+      if (phase === "awaiting_response") return new Promise(resolve => { late = resolve; });
+      return { ok: true, clone: () => ({ json: () => new Promise(resolve => { late = resolve; }) }) } as Response;
+    });
+    vi.stubGlobal("fetch", transport);
+    let finished = false;
+    const pending = post().then(result => { finished = true; return result; });
+    await vi.advanceTimersByTimeAsync(0); expect(payloads).toHaveLength(2);
+    now = 35_099; await vi.advanceTimersByTimeAsync(34_999); expect(finished).toBe(false);
+    now = 35_100; await vi.advanceTimersByTimeAsync(1);
+    const response = await pending, body = await response.json();
+    expect(body.diagnostic).toEqual({ id: response.headers.get("X-Patent-Watch-Diagnostic-Id"), stage: "detail", reason: "timeout" });
+    expect(body.diagnosticObservation).toEqual({ id: body.diagnostic.id, stage: "detail", phase,
+      candidateCount: 20, independentClaimCount: 1, requestBytes: Buffer.byteLength(payloads[1], "utf8"),
+      attempt: 2, stageElapsedMs: 35000, requestElapsedMs: 35000, phaseElapsedMs: phase === "reading_response" ? 34990 : 35000 });
+    expect(Buffer.byteLength(payloads[1], "utf8")).toBeGreaterThan(payloads[1].length);
+    expect(events("ai_operation_usage")[1].estimatedInputTokens).toBe(body.diagnosticObservation.requestBytes + 8192);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(store.runs.get(7)?.status).toBe("failed"); expect(store.cursor()).toBeNull(); expect(store.successes).toEqual([]);
+    expect(events("ai_operation_usage")[1].status).toBe("reservation_retained");
+    const logs = JSON.stringify(events("patent_watch_diagnostic"));
+    now += 1000; late((phase === "awaiting_response" ? aiResponse(detail) : { usage: { input_tokens: 10, output_tokens: 10 } }) as never);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(transport).toHaveBeenCalledTimes(2); expect(store.successes).toEqual([]);
+    expect(JSON.stringify(events("patent_watch_diagnostic"))).toBe(logs);
+    expect(JSON.stringify(body)).not.toContain(SECRET);
+  });
+
+  it.each([
+    ["http", "upstream_http_error", "validating_response"],
+    ["json", "invalid_response", "reading_response"],
+    ["missing", "usage_missing", "validating_response"],
+    ["invalid", "usage_invalid", "validating_response"],
+    ["limit", "usage_limit", "validating_response"],
+  ])("observes the actual detail checkpoint for %s without changing the first stop", async (failure, reason, phase) => {
+    vi.stubEnv("AI_PROVIDER", "azure");
+    const store = fixture(100, true); let sends = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (++sends === 1) return aiResponse(screen);
+      if (failure === "http") return new Response(SECRET, { status: 503 });
+      if (failure === "json") return new Response("<html>" + SECRET);
+      return aiResponse(detail, failure === "missing" ? null : { input_tokens: failure === "invalid" ? -1 : 999999, output_tokens: 1 });
+    }));
+    const response = await post(), body = await response.json();
+    expect(body.diagnostic).toMatchObject({ stage: "detail", reason });
+    expect(body.diagnosticObservation).toMatchObject({ id: body.diagnostic.id, stage: "detail", phase, candidateCount: 20, independentClaimCount: 1, attempt: 2 });
+    expect(store.failures).toHaveLength(1); expect(store.successes).toEqual([]); expect(store.cursor()).toBeNull();
+    expect(sends).toBe(2); expect(JSON.stringify(body)).not.toContain(SECRET);
+  });
+
+  it("does not add observation to a successful Azure detail or manufacture it for screening", async () => {
+    vi.stubEnv("AI_PROVIDER", "azure"); fixture();
+    let sends = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async () => aiResponse(++sends === 1 ? screen : detail)));
+    const successful = await post(); expect(successful.status).toBe(200);
+    expect(await successful.json()).not.toHaveProperty("diagnosticObservation");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(new Error(SECRET)));
+    const failed = await post(8); expect(await failed.json()).not.toHaveProperty("diagnosticObservation");
+  });
+  it("retains the guard completion checkpoint if the SDK original response read aborts", async () => {
+    vi.stubEnv("AI_PROVIDER", "azure"); const store = fixture(); let sends = 0;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (++sends === 1) return aiResponse(screen);
+      const response = aiResponse(detail);
+      response.text = async () => { throw new DOMException(SECRET, "AbortError"); };
+      return response;
+    }));
+    const response = await post(), body = await response.json();
+    expect(response.status).toBe(500);
+    expect(body.diagnostic).toMatchObject({ stage: "detail", reason: "aborted" });
+    expect(body.diagnosticObservation).toMatchObject({ phase: "response_validated", attempt: 2, candidateCount: 20 });
+    expect(store.successes).toEqual([]); expect(store.cursor()).toBeNull(); expect(sends).toBe(2);
+  });
+  it("assembles upper-size Japanese detail inputs once without altering the guard or selection", async () => {
+    vi.stubEnv("AI_PROVIDER", "azure"); const store = fixture();
+    const read = store.repository.findDocumentsForRun;
+    store.repository.findDocumentsForRun = async (...args) => {
+      const batch = await read(...args);
+      batch.documents.forEach(doc => { doc.claimsText = "架".repeat(2200); }); return batch;
+    };
+    const payloads: string[] = [];
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      payloads.push(String(init?.body)); return aiResponse(payloads.length === 1 ? screen : detail);
+    }));
+    expect((await post()).status).toBe(200);
+    const input = JSON.parse(JSON.parse(payloads[1]).input[1].content[0].text);
+    expect(input.priorArts).toHaveLength(20);
+    expect(input.priorArts.every((doc: { claimsText: string }) => doc.claimsText.length === 2000)).toBe(true);
+    expect(Buffer.byteLength(payloads[1], "utf8")).toBeGreaterThan(120000);
+    expect(Buffer.byteLength(payloads[1], "utf8") + 8192).toBeLessThanOrEqual(150000);
+    expect(payloads).toHaveLength(2); expect(store.successes).toHaveLength(1);
+  });
+  it.each(["awaiting_response", "reading_response"])("retains the earlier outer detail deadline in %s", async phase => {
+    vi.stubEnv("AI_PROVIDER", "azure"); fixture(); vi.useFakeTimers();
+    let deadlines = 0, sends = 0;
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("fictional", "TimeoutError")), ++deadlines === 3 ? ms - 1 : ms);
+      return controller.signal;
+    });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (++sends === 1) return aiResponse(screen);
+      return phase === "awaiting_response" ? new Promise(() => {}) : { ok: true, clone: () => ({ json: () => new Promise(() => {}) }) } as Response;
+    }));
+    const pending = post(); await vi.advanceTimersByTimeAsync(34999);
+    expect(await (await pending).json()).toMatchObject({ diagnostic: { stage: "detail", reason: "timeout" }, diagnosticObservation: { phase, attempt: 2 } });
+    expect(sends).toBe(2);
   });
 });

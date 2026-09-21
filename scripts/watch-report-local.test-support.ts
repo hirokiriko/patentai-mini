@@ -22,7 +22,7 @@ export async function isolatedCommand(file: string, args: string[], input = "", 
     child.stdin.on("error", () => undefined); child.stdin.end(input);
   });
 }
-export async function isolatedPg16(issue: 101 | 103 = 101) {
+export async function isolatedPg16(issue: 101 | 103 | 125 = 101) {
   if (process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1" || process.env.DATABASE_URL || process.env.PGHOST || process.env.PGSERVICE) {
     throw Error("isolated_database_opt_in_required");
   }
@@ -51,9 +51,13 @@ export async function isolatedPg16(issue: 101 | 103 = 101) {
   let phase = "container_create";
   try {
     await mkdir(join(directory, "docker-config"));
+    if (issue === 125) {
+      phase = "existing_runtime_preflight";
+      if ((await docker(["image", "inspect", "postgres:16", "--format", "{{.Id}}"])).code !== 0) throw Error();
+    }
     createAttempted = true;
     const created = await docker(["create", "--name", container, "--label", `patentai.issue=${issue}`, "--label", `patentai.owner=${suffix}`,
-      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", "postgres:16"],
+      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...(issue === 125 ? ["--pull", "never"] : []), "postgres:16"],
     { POSTGRES_PASSWORD: password, POSTGRES_DB: database });
     if (created.code !== 0) throw Error();
     phase = "container_start";
@@ -101,7 +105,8 @@ export async function isolatedPg16(issue: 101 | 103 = 101) {
     await sql(`GRANT SELECT, INSERT, UPDATE(review_status) ON case_watch_findings TO ${watcher.user}`);
     await sql(`GRANT USAGE ON SEQUENCE cases_case_id_seq, draft_patents_draft_id_seq, case_watch_settings_watch_id_seq, case_watch_runs_run_id_seq, case_watch_findings_finding_id_seq TO ${watcher.user}`);
     await sql(`GRANT SELECT ON cases, case_watch_settings, case_watch_runs, case_watch_findings TO ${reader.user}`);
-    if (issue === 103) await sql(`GRANT SELECT ON koho_import_runs, koho_import_documents TO ${reader.user}`);
+    if (issue === 103 || issue === 125) await sql(`GRANT SELECT ON koho_import_runs, koho_import_documents TO ${reader.user}`);
+    if (issue === 125) await sql(`GRANT SELECT, DELETE ON cases, draft_patents, prior_art_documents, search_query_sets, comparison_results TO ${watcher.user}`);
     const watchClient = await connect(watcher.user, watcher.secret), reportClient = await connect(reader.user, reader.secret);
     const connection: NonNullable<ManualConfiguration["connection"]> = { host: base.host, port: base.port, database, user: importer.user, password: importer.secret };
     return { directory, admin, sql, watchClient, reportClient, connection, cleanup };
