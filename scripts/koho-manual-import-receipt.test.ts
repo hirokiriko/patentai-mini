@@ -261,23 +261,36 @@ describe("receipt failure boundaries", () => {
       results: [{ outcome: "inserted" }] });
     expect((await records(f.receipt)).at(-1)).toMatchObject({ cleanup: "required", status: "stopped" });
   });
-  it("rejects late sync completion after abort without sending a successful ACK", async () => {
+  it.each(["abort", "deadline", "disconnect"] as const)("rejects late sync completion after %s without sending a successful ACK", async interruption => {
     const receipt = next("abort.jsonl"), guard = next("abort.cjs"), driver = next("abort-driver.cjs"), marker = next("late-ack-or-db");
+    const stageParent = next("staging"); await mkdir(stageParent, { mode: 0o700 });
     await writeFile(guard, `const fs=require('node:fs'),p=require('node:fs/promises'),Module=require('node:module'),load=Module._load;
       Module._load=function(id,...args){if(id.includes('manual-cli-db'))fs.writeFileSync(${JSON.stringify(marker)},'db');return load.call(this,id,...args);};
       const open=p.open;p.open=async function(path,...args){const h=await open.call(this,path,...args);if(path!==${JSON.stringify(receipt)})return h;
         let phase;const write=h.write.bind(h),sync=h.sync.bind(h);h.write=async function(...a){phase=JSON.parse(a[0].toString()).type;return write(...a);};
-        h.sync=async()=>{await sync();if(phase==='input_verified'){global.receiptAbort.abort();await new Promise(r=>setTimeout(r,150));}};return h;};
+        h.sync=async()=>{await sync();if(phase==='input_verified'){
+          if(${JSON.stringify(interruption)}==='abort')global.receiptAbort.abort();
+          if(${JSON.stringify(interruption)}==='disconnect')global.receiptChild.disconnect();
+          await new Promise(r=>setTimeout(r,${interruption === "deadline" ? 3500 : 150}));}};return h;};
       const cp=require('node:child_process'),fork=cp.fork;cp.fork=function(file,args,options){const child=fork(file,args,{...options,execArgv:['--require',__filename]});
+        global.receiptChild=child;
         const send=child.send.bind(child);child.send=(event,...rest)=>{if(event.type==='binding_ack'&&event.accepted)fs.writeFileSync(${JSON.stringify(marker)},'ack');return send(event,...rest);};return child;};`);
-    await writeFile(driver, `global.receiptAbort=new AbortController();require(${JSON.stringify(guard)});
-      let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const result=await require(${JSON.stringify(entry)}).runManualBatch(JSON.parse(s),{signal:global.receiptAbort.signal});
+    await writeFile(driver, `require('node:os').tmpdir=()=>${JSON.stringify(stageParent)};global.receiptAbort=new AbortController();require(${JSON.stringify(guard)});
+      let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',async()=>{const result=await require(${JSON.stringify(entry)}).runManualBatch(JSON.parse(s),${interruption === "deadline" ? "{deadlineMs:3000}" : interruption === "abort" ? "{signal:global.receiptAbort.signal}" : "{}"});
         process.stdout.write(JSON.stringify(result));process.exitCode=result.exitCode;});`);
     const input = config(receipt, true); input.files.push(input.files[0]);
     const started = performance.now(), result = await run([driver], input);
     expect(performance.now() - started).toBeLessThan(10_000); expect(result.stderr).toBe("");
-    expect(JSON.parse(result.stdout)).toMatchObject({ receiptStatus: "incomplete", results: [{ outcome: "save_outcome_unknown" }, { outcome: "not_processed" }] });
+    expect(result.code).toBe(3);
+    expect(result.stdout).not.toContain(secret);
+    const output = JSON.parse(result.stdout);
+    expect(output).toMatchObject({ status: "reconciliation_required", receiptStatus: "incomplete", savedRecordCount: 0, results: [{ outcome: "save_outcome_unknown" }, { outcome: "not_processed" }] });
+    const remaining = await readdir(stageParent);
+    expect(output.cleanup).toBe(remaining.length === 0 ? "complete" : "required");
+    // A disconnected worker may not confirm teardown. Keep that axis conservative;
+    // fixture-owned leftovers are removed only by the independent afterAll cleanup.
     expect(await readFile(marker).then(() => true, () => false)).toBe(false);
-    expect((await records(receipt)).some(x => x.type === "batch_finished")).toBe(false);
-  });
+    const data = await records(receipt);
+    expect(data.map(x => x.type)).toEqual(["batch_started", "input_verified"]);
+  }, 15_000);
 });
