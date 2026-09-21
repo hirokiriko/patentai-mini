@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -151,5 +151,41 @@ describe.skipIf(process.env.KOHO_MANUAL_LOCAL_DB_TEST !== "1")("manual CLI isola
     try { expect((await run([files[0]])).results[0].outcome).toBe("failed_before_save"); expect(await snapshot() === before).toBe(true); }
     finally { await sql(`REVOKE UPDATE(claims_text) ON public.koho_import_documents FROM ${connection.user}`); }
     expect((await Promise.all(files.map(f => readFile(f.path)))).every((b, i) => b.equals(initialBytes[i]))).toBe(true);
+  });
+  it("records real inserts/reuse and preserves a committed insert after receipt failure", async () => {
+    const first = join(directory, "receipt-first.zip"), second = join(directory, "receipt-second.zip");
+    await writeFile(first, manualFixture("JPA", 1, { issue: "FICTIONAL-RECEIPT-FIRST" }));
+    await writeFile(second, manualFixture("JPB", 1, { issue: "FICTIONAL-RECEIPT-SECOND" }));
+    const selected = [{ packageType: "JPA" as const, path: first }, { packageType: "JPB" as const, path: second }];
+    const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+    const hashes = await Promise.all(selected.map(async file => digest(await readFile(file.path))));
+    const entry = resolve(".koho-ops/manual/scripts/koho-manual-import.js");
+    const failedReceipt = join(directory, "receipt-incomplete.jsonl"), guard = join(directory, "receipt-failure.cjs");
+    await writeFile(guard, `const p=require('node:fs/promises'),open=p.open;
+      p.open=async function(path,...args){const h=await open.call(this,path,...args);if(path===${JSON.stringify(failedReceipt)}){
+        const write=h.write.bind(h);h.write=async function(...a){if(JSON.parse(a[0].toString()).type==='file_finished')throw Error('FICTIONAL_PRIVATE_SENTINEL');return write(...a);};}return h;};`);
+    const withReceipt = (path: string, selectedFiles = selected) => ({ ...config(selectedFiles), receipt: { path, privateDirectoryConfirmed: true } });
+    const failed = await command(process.execPath, ["--require", guard, entry], JSON.stringify(withReceipt(failedReceipt)));
+    expect(failed.stderr === "" && !failed.output.includes(connection.password) && !failed.output.includes(directory)).toBe(true);
+    const failure = JSON.parse(failed.output);
+    expect(failure).toMatchObject({ exitCode: 2, receiptStatus: "incomplete", savedRecordCount: 1,
+      results: [{ outcome: "inserted", savedDocumentCount: 1 }, { outcome: "not_processed" }] });
+    expect((await sql("select count(*)::int as n from public.koho_import_runs where source_sha256=$1", [hashes[0]]))[0].n).toBe(1);
+    expect((await sql("select count(*)::int as n from public.koho_import_runs where source_sha256=$1", [hashes[1]]))[0].n).toBe(0);
+    const successReceipt = join(directory, "receipt-retry.jsonl");
+    const resumed = await command(process.execPath, [entry], JSON.stringify(withReceipt(successReceipt)));
+    expect(resumed.code).toBe(0); expect(resumed.stderr).toBe("");
+    expect(JSON.parse(resumed.output)).toMatchObject({ receiptStatus: "complete", savedRecordCount: 1,
+      results: [{ outcome: "reused", savedDocumentCount: 1 }, { outcome: "inserted", savedDocumentCount: 1 }] });
+    const data = (await readFile(successReceipt, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(data.filter(x => x.type === "input_verified").map(x => x.sha256)).toEqual(hashes);
+    expect(data.filter(x => x.type === "file_finished").map(x => x.outcome)).toEqual(["reused", "inserted"]);
+    expect(data.at(-1)).toMatchObject({ type: "batch_finished", savedRecordCount: 1 });
+    const before = await snapshot(), reuseReceipt = join(directory, "receipt-reused.jsonl");
+    const reused = await command(process.execPath, [entry], JSON.stringify(withReceipt(reuseReceipt)));
+    expect(JSON.parse(reused.output)).toMatchObject({ receiptStatus: "complete", savedRecordCount: 0,
+      results: [{ outcome: "reused" }, { outcome: "reused" }] });
+    expect(await snapshot()).toBe(before);
+    expect(await Promise.all(selected.map(async file => digest(await readFile(file.path))))).toEqual(hashes);
   });
 });
