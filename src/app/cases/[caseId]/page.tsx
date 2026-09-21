@@ -31,6 +31,7 @@ import {
   isOriginalFileBlobName,
 } from "@/lib/original-file-metadata";
 import { parseJsonOrNull } from "@/lib/safe-json";
+import { latestDraft } from "@/lib/current-draft";
 import { buildPatentKeywordAssist } from "@/lib/patent-keyword-assist";
 import {
   buildClaimDraftCheck,
@@ -133,12 +134,12 @@ export default async function CaseDetailPage({
   const isBaseMode = row.baseApplicationMode;
 
   // kind 別に分類。kind="main" は通常モードの特許案、または統合後の特許案。
-  const baseDraft = drafts.find((d) => d.kind === "base");
-  const additionDraft = drafts.find((d) => d.kind === "addition");
-  const mainDraft = drafts.find((d) => d.kind === "main");
+  const baseDraft = latestDraft(drafts, "base");
+  const additionDraft = latestDraft(drafts, "addition");
+  const mainDraft = latestDraft(drafts, "main");
 
-  // 通常モードでは main draft（または kind 未設定の旧データ）を主として使う
-  const primaryDraft = mainDraft ?? drafts[0];
+  // watchと同じ最新mainを使い、別kindや古い抽出済み資料へ戻らない。
+  const primaryDraft = mainDraft;
   const extracted: ExtractedClaims | null = primaryDraft?.extractedClaimsJson
     ? parseJsonOrNull<ExtractedClaims>(
         primaryDraft.extractedClaimsJson,
@@ -222,7 +223,7 @@ export default async function CaseDetailPage({
   // 「Step 1 完了」の意味:
   //  通常モード: ドラフトがあり parsedText が抽出済み
   //  ベース出願モード: ベース + 新規事項の両方アップロード済みかつ統合済み (main draft あり)
-  const hasDraft = isBaseMode ? hasIntegrated : drafts.length > 0;
+  const hasDraft = isBaseMode ? hasIntegrated : !!mainDraft;
   const hasParsedText = isBaseMode ? hasIntegrated : !!primaryDraft?.parsedText;
   const hasExtracted = !!extracted;
   const hasQueries = !!latestQuerySet;
@@ -325,6 +326,14 @@ export default async function CaseDetailPage({
           {isBaseMode ? "1. ベース出願 + 新規事項のアップロードと統合" : "1. 特許案アップロード"}
         </h2>
 
+        <div className="mt-3 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-950" data-current-draft>
+          <p className="font-medium">現在の比較・ウォッチ対象: {mainDraft
+            ? getOriginalFileDisplayName(mainDraft.sourceFilePath ?? "（ファイル名不明）")
+            : "未登録"}</p>
+          <p className="mt-1">新たな検索式生成・比較・ウォッチには、最新の対象資料を使います。未抽出の場合は、その資料の請求項を抽出してください。</p>
+          <p className="mt-1">保存済み結果と現在の資料の対応は未確認です。以前の結果を現在の資料による結果として扱わないでください。</p>
+        </div>
+
         {!isBaseMode && (
           <>
             <div className="mt-4">
@@ -340,6 +349,7 @@ export default async function CaseDetailPage({
                   >
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-green-600 text-lg">✓</span>
+                      {d.draftId === mainDraft?.draftId && <span className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-900">現在の対象資料</span>}
                       <span className="font-medium">
                         {d.sourceFilePath
                           ? getOriginalFileDisplayName(d.sourceFilePath)
@@ -476,6 +486,7 @@ export default async function CaseDetailPage({
               <p className="text-sm text-purple-900 mb-3">
                 両ファイルから「ベース出願 + 新規事項」を組み合わせた発明全体の明細書テキストを生成します。
                 以降の請求項抽出・先行技術調査はこの統合後テキストを対象とします。
+                ベース出願や新規事項を差し替えた場合は、必要に応じて再度統合してください。保存済みの統合結果への反映は自動確認していません。
               </p>
               <IntegrateButton
                 caseId={caseIdNum}
