@@ -346,6 +346,38 @@ loading, external J-PlatPat automation, or customer-data acceptance. It does not
 expand general permissions for other Issues. Necessary documentation updates
 belong in this work's scoped PR and are not an additional recovery gate.
 
+### Issue #123: bounded regular production pilot
+
+For Issue #123 only, OWNER-approved `REGULAR_PRODUCTION_PILOT_V1` permits the
+assigned Local owner to continue the stated preparation, bounded production
+imports, real-AI checks, reports, conditional merge/deploy and cleanup. Reuse
+completed work and do not return already-authorized routine steps for approval.
+The current Issue body remains the scope and acceptance contract; see
+`ops/koho-cloud-import.md`. This is not general production or customer-data
+authorization, and an Azure Job is the private service runtime, not Cloud Codex.
+
+If necessary, use at most one Manual Job in the existing environment, one
+private container in existing Storage, and the exact scoped identity/DB LOGIN
+privileges permitted by the Issue. Preserve its 2-vCPU/4-GiB, three-execution,
+six-hour aggregate and package limits. A necessary management-IP exception is
+one confirmed IPv4 rule on already-public DB access, at most six hours, with
+prompt exact-rule removal/read-back. Do not expand shared ACLs, schema,
+existing identities/secrets, public access, or create another DB/environment.
+Normal Local import and the old one-time production entrypoint remain restricted.
+Use existing dependencies first; only the official `@azure/identity` and its
+lockfile change are permitted if managed identity needs that dependency.
+
+Keep the new tax-inclusive JPY10,000 absolute ceiling and JPY8,000 pre-start
+forecast through completion/recovery. Separate historical costs/reserves and
+ordinary baseline charges. Substantiate image size, reserved DB growth,
+WAL/backup, transfer, logs and 30-day retained storage; unknown AI usage retains
+its reservation. Preserve fast2/normal6 cumulative sends and existing guards.
+Review/CI/deploy and Local tests do not prove the required two production
+updates, real monitoring or CSV/PDF acceptance. Keep physical PC-off,
+expert evaluation and customer-data acceptance separate. No ordinary phase
+requires a new approval within these boundaries; stop only for the Issue's
+actual limits, unknown writes, access failures or out-of-scope recovery.
+
 ### Self-contained Issues and GitHub Handoff
 
 For Issue #89 only, OWNER-approved `LOCAL_IMPORT_FIRST_V1` replaces Azure

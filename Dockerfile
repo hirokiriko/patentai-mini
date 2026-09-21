@@ -21,7 +21,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/vendor ./vendor
 COPY . .
 
-RUN pnpm build
+RUN pnpm build && pnpm exec tsc -p scripts/koho-cloud-import.tsconfig.json
 
 FROM base AS runner
 

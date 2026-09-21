@@ -25,7 +25,7 @@ export function updateCell(value: string): string {
   return value.replace(/[&<>"'`\\*_[\]{}()|!#~+=\-\r\n\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g,
     char => `&#${char.codePointAt(0)};`);
 }
-function metadata(parsed: KohoPackageParseResult) {
+export function updatePackageMetadata(parsed: KohoPackageParseResult) {
   const abstracts = parsed.csvResults.flatMap(c => c.result.logicalFile === "abstract" ? c.result.records : [])
     .flatMap(r => r.semantic?.recordType === "metadata" ? [r.semantic] : []);
   const listedDates = parsed.csvResults.flatMap(c => c.result.logicalFile === "document_list" ? c.result.records : [])
@@ -108,7 +108,7 @@ export async function collectUpdateCheck(config: UpdateConfiguration, directory:
       const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256: s.sha256 });
       const summary = summarizeManualPackage(parsed, plan);
       await finish(file.path, s);
-      Object.assign(p, { sha256: s.sha256, byteLength: s.byteLength, summary, sections: parsed.counts.bySection }, metadata(parsed));
+      Object.assign(p, { sha256: s.sha256, byteLength: s.byteLength, summary, sections: parsed.counts.bySection }, updatePackageMetadata(parsed));
       if (parsed.status !== "success") p.notes.push("parserの要確認/失敗を保持。原文・号・section/countを確認");
       if (parsed.status === "failed") { p.error = true; errors++; }
     } catch { p.error = true; p.notes.push("読取/解析未完了。発行号ZIPの分離/確認が必要"); errors++; }
