@@ -918,6 +918,7 @@ export async function saveKohoImportPlan(
   database: typeof db,
   plan: Parameters<KohoImportRepository["savePlan"]>[0],
   reuseExisting = false,
+  expectedDisposition?: "inserted" | "reused",
 ) {
     const validatedPlan = validatedPlanSnapshot(plan);
 
@@ -931,6 +932,7 @@ export async function saveKohoImportPlan(
           eq(kohoImportRuns.sourceSha256, validatedPlan.sourceSha256),
         ));
         if (existing) {
+          if (expectedDisposition === "inserted") throw new Error("koho_existing_import_unexpected");
           const rows = await tx.select().from(kohoImportDocuments)
             .where(eq(kohoImportDocuments.importId, existing.importId))
             .orderBy(asc(kohoImportDocuments.normalizedEntryPath));
@@ -949,6 +951,7 @@ export async function saveKohoImportPlan(
           return { run: toKohoImportRun(existing), savedDocumentCount: rows.length,
             disposition: "reused" as const };
         }
+        if (expectedDisposition === "reused") throw new Error("koho_expected_import_missing");
       }
       const [latestCursor] = await tx
         .select({ updatedAt: kohoImportRuns.updatedAt })

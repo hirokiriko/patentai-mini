@@ -365,3 +365,13 @@
 - Evidence: 発行表の観測行を基準とし、日付一致候補と号の確認を分ける。coverageProvenは常にfalse。receiptの構造完備、終了ACK、記録上の保存、現在DB、本番反映は別判定。v1の欠落情報を成功flagで補わず、先行成功と後続unknown/cleanupを保持する。
 - Validation: 完全架空のcompiled CLIと専用PG16で不足を含む2巡を通し、同bytesのreused、新号のinserted、既存row/更新時刻不変を測る。通常CIのDB SKIPは実測へ読み替えない。
 - Impact/rollback: schema/migration内容・保存ロジック・通常manual CLI契約/Local制限・receipt writer形式・AI/watch/UI/API・依存・CI/deploy設定は維持。通常deployはコード配備だけで、本番継続取込の承認ではない。revert PRと通常deployで戻し、運用原本/receipt/確認票を削除しない。本番取込の別Issue案は未承認のまま親#94へ引き継ぐ。
+
+## 2026-09-21: Issue #123 — 限定クラウド取込と定例本番試用
+
+- Status: `REGULAR_PRODUCTION_PILOT_V1` はOWNER承認済み。個々の本番受入・予算成立・回収は別の実測記録を必要とする。
+- Decision: 既存parser/plan/immutable保存を新しい固定Job入口から再利用し、既存環境のManual Job最大1件で異なる発行日2号のinsert→reuse＋insertを確認する。通常Local CLI、旧一回限りのproduction入口、public同期APIの制限は解除しない。任意image/command/URLを業務入力として受け付けず、private manifestの実bytes・plan・対象binding・codeとprivate終了記録を対応させる。
+- Authority: 今回だけ、本文の範囲で専用private container、最小identity/取込LOGIN、必要時の単一管理IPv4 ruleを用意できる。新environment/DB/server/storage account、migration、共有ACL、既存secret/identity、公開設定の変更は許可しない。通常工程の既承認操作を再承認待ちに戻さず、同じLocal担当が条件付きPR/merge/deployから本番実測・回収まで続ける。
+- Budget: 今回増分の税込10,000円上限と、終了・復旧・30日保管を含む開始前8,000円以内の見通しを適用する。既往費用・未確定予約・基礎料金を分離する。現在imageの容量と保存対象量/DB・WAL/backupの増分を裏付け、予約値やZIP容量だけを証明にしない。不明AI usageは予約維持。3実行/合計6時間、fast2/normal6等の本文上限は工程やsessionでリセットしない。
+- Evidence: DB COMMITの既知結果、private記録の永続化ACK、実Job終了、現在DB照合は独立した証拠とする。確定不能保存を自動再送せず、既知成功を後続の記録/cleanup失敗で消さない。実AI2巡・候補あり・書誌/原文・確認状態・CSV/全ページPDFを同じ架空案件で実測し、Local/CI/配備だけで完了としない。
+- Boundary/rollback: client切断後のクラウド継続と物理PC停止は別。専門家本人の評価、実顧客受入、顧客分離、期間網羅は別に残す。rollbackはJob停止、revert PR/通常deploy、今回対象の権限/設定復元まで。全表削除や追加serverを伴うPITRは含めない。成功公報/原本/記録と次回用のprivate Job/container/最小権限は保持し、一時IP等は回収、実行中Job0で終了する。次回の有料実行は今回承認から自動開始しない。
+- Procedure: `ops/koho-cloud-import.md`。本判断は#121の未承認案から#123の限定承認へ進んだことだけを記録し、一般の本番権限や実測済み範囲を拡大しない。
