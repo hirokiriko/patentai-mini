@@ -1,5 +1,5 @@
 import { buildPatentWatchReportCsv } from "./csv";
-import { currentPatentWatchDiagnostic, withPatentWatchDiagnostic } from "./diagnostic-context";
+import { currentPatentWatchDiagnostic, currentPatentWatchDiagnosticObservation, withPatentWatchDiagnostic } from "./diagnostic-context";
 import {
   boundedPatentWatchPublicText,
   comparePatentWatchTimestamps,
@@ -443,7 +443,9 @@ export function createPatentWatchRunHandlers(
         } catch (error) {
           const code = stablePatentWatchErrorCode(error);
           const diagnostic = code === "watch_ai_stopped" ? currentPatentWatchDiagnostic() : null;
-          return { code, response: diagnostic ? jsonResponse({ error: code, diagnostic }, 500) : errorResponse(error) };
+          const diagnosticObservation = diagnostic ? currentPatentWatchDiagnosticObservation() : null;
+          return { code, response: diagnostic ? jsonResponse({ error: code, diagnostic,
+            ...(diagnosticObservation ? { diagnosticObservation } : {}) }, 500) : errorResponse(error) };
         }
       });
     },

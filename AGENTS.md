@@ -367,7 +367,20 @@ Normal Local import and the old one-time production entrypoint remain restricted
 Use existing dependencies first; only the official `@azure/identity` and its
 lockfile change are permitted if managed identity needs that dependency.
 
-Keep the new tax-inclusive JPY10,000 absolute ceiling and JPY8,000 pre-start
+The following numeric limits describe the original V1 phase. For the bounded
+`PRODUCTION_FINISH_BATCH_V3` continuation, verify the already-received Local
+approval and follow the current Issue #123 body's cumulative limits, operation
+counts and limited acceptance contract. Never reset old usage or reservations.
+Reuse valid exact-code Local verification and independent review. Separate
+invoice reconciliation from the conservative forecast for remaining work.
+A billing API 404 ends that retrieval route; it does not itself block other
+evidence, require a prepared billing screen, or prove zero cost. Use existing
+measurements, applicable official rates and documented conservative quantities
+with independent Local recalculation. Established cost/release conditions
+unlock the authorized merge/deploy, real watch, reports and scoped cleanup;
+ordinary phases need no new approval.
+
+The original V1 used the tax-inclusive JPY10,000 absolute ceiling and JPY8,000 pre-start
 forecast through completion/recovery. Separate historical costs/reserves and
 ordinary baseline charges. Substantiate image size, reserved DB growth,
 WAL/backup, transfer, logs and 30-day retained storage; unknown AI usage retains

@@ -132,7 +132,19 @@ watch POSTの入口で暗号学的乱数UUID v4を生成し、当該POSTの応�
 
 stageは呼出境界で確定した `screening | detail | unknown`。reasonは `request_rejected | input_limit | request_limit | timeout | aborted | upstream_http_error | transport_error | invalid_response | usage_missing | usage_invalid | usage_limit | unknown` の固定値。実際の期限signalを確認した場合だけtimeoutとし、例外名だけでは期限到達と断定しない。実行内で最初の停止を保持し、SDKによる包み直し・後着abort・失敗finalizeで上書きしない。nested budgetの累計、35秒/120秒、送信・入力・usage上限、fallback/cursor/保存仕様は維持する。
 
-watch context中の `ai_operation_usage` は `diagnosticId/stage/reason` を追加する。非watchの既存数値ログは同じ形式。終端の `patent_watch_diagnostic` は最大1行、ID・既存結果code・固定stage/reasonのみとし、本文・token詳細・例外・provider情報を増やさない。実行/段階の終了後callbackは診断を更新せず追加送信しない。ログ・診断の失敗は業務結果を変更しない。プロセス停止や応答喪失後の記録保証、過去実行の原因確定、実請求額の証明ではない。
+watch context中の `ai_operation_usage` は `diagnosticId/stage/reason` を追加する。非watchの既存数値ログは同じ形式。終端の `patent_watch_diagnostic` は最大1行、ID・既存結果code・固定stage/reasonと下記の任意観測だけとし、本文・token詳細・例外・provider情報を増やさない。実行/段階の終了後callbackは診断を更新せず追加送信しない。ログ・診断の失敗は業務結果を変更しない。プロセス停止や応答喪失後の記録保証、過去実行の原因確定、実請求額の証明ではない。
+
+### 詳細比較の任意観測（Issue #125）
+
+Azureの有効なwatch detail contextに限り、同じ `watch_ai_stopped` HTTP500へ任意の兄弟field `diagnosticObservation` を付ける。旧 `diagnostic` はexact3項目のまま、header/no-store/旧UI/parser/DB保存形式を維持する。成功、他error、GET、CSV、reportには追加しない。観測欠損は従来の説明を使う。
+
+観測fieldは `id, stage, phase, candidateCount, independentClaimCount, requestBytes, attempt, stageElapsedMs, requestElapsedMs, phaseElapsedMs` のみ。idは既存UUID、stageはdetail固定。candidateCountは実際の詳細比較配列、independentClaimCountは既存filter後の独立請求項数。requestBytesは既存guardが受けるSDK完成POST文字列のUTF-8 bytesを再利用し、推定token値（bytes+8192）、元TXT、wire量と区別する。attemptは既存transport試行番号でありprovider受付・請求の証明ではない。
+
+phaseは送信前 `before_dispatch`、transport呼出からResponse取得まで `awaiting_response`、既存clone().json待ち `reading_response`、HTTP状態/usage同期検証 `validating_response`、guard検証終了 `response_validated`、未確定 `unknown`。最後のphaseはSDKの構造化出力schema検証成功を意味しない。Response取得を最初の生成tokenやprovider内部待機時間とは呼ばない。
+
+elapsedはdetail開始/実transport呼出/現phase開始を別々に単調時計で測る。非負安全整数へ切り下げ、未観測・時計障害はnull、実測0だけを0にする。35,000ms丁度の応答を保証しない。最初の停止のsnapshotは同じid/stage/attemptで固定し、finally、失敗finalize、並行処理、終了後の遅着で上書きしない。SDKの元Response読取がguard後に停止した場合も、一意に対応するdetail観測を保持する。複数呼出で対応が曖昧なSDK後段停止は観測を省略する。
+
+allowlistのown data propertyだけを投影し、追加key/getter/未知enum/id・stage不一致/不正数値は観測全体を省略する。要求/応答本文は観測contextへ保持しない。追加fetch/clone/本文読取/timer/待機/phaseログを増やさず、観測・logger障害で業務結果や最初の停止理由を変えない。
 
 ## 9. UIとreport
 

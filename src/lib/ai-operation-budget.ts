@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
+import type { DetailObservation } from "./patent-watch/diagnostic-observation";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -69,11 +70,13 @@ export class AiOperationBudget {
     const boundDiagnostic = capturePatentWatchDiagnostic();
     return async (url, init) => {
       const diagnostic = boundDiagnostic ?? capturePatentWatchDiagnostic();
+      let observation: DetailObservation | null = null;
+      try { observation = diagnostic?.observation() ?? null; } catch { /* optional */ }
       // Expired callbacks cannot send or poison a still-active shared budget.
       if (diagnostic && !diagnostic.active()) throw new AiOperationStopped("unknown");
       const stop = (reason: PatentWatchStopReason): AiOperationStopped => {
         this.stopped ??= new AiOperationStopped(reason);
-        diagnostic?.stop(this.stopped.reason);
+        diagnostic?.stop(this.stopped.reason, observation);
         return this.stopped;
       };
       const callerReason = (): PatentWatchStopReason =>
@@ -106,7 +109,9 @@ export class AiOperationBudget {
         }
         if (body.text?.format?.type !== "json_schema" || !body.text.format.schema ||
             typeof body.text.format.schema !== "object") throw stop("request_rejected");
-        estimatedInputTokens = Buffer.byteLength(init.body, "utf8") + 8192;
+        const requestBytes = Buffer.byteLength(init.body, "utf8");
+        try { observation?.bytes(requestBytes); } catch { /* optional */ }
+        estimatedInputTokens = requestBytes + 8192;
         maximumOutputTokens = body.max_output_tokens;
         if (estimatedInputTokens > (role === "normal" ? 150_000 : 50_000)) throw stop("input_limit");
       } catch { throw stop("request_rejected"); }
@@ -132,12 +137,16 @@ export class AiOperationBudget {
       };
       try {
         let response: Response;
+        try { observation?.dispatch(attempt); } catch { /* optional */ }
         try { response = await Promise.race([transport(url, { ...init, signal, redirect: "error" }), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "transport_error"); }
+        try { observation?.phase("validating_response"); } catch { /* optional */ }
         if (!response.ok) throw stop("upstream_http_error");
         let result;
+        try { observation?.phase("reading_response"); } catch { /* optional */ }
         try { result = await Promise.race([response.clone().json(), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "invalid_response"); }
+        try { observation?.phase("validating_response"); } catch { /* optional */ }
         const usage = result?.usage;
         if (usage === undefined || usage === null) throw stop("usage_missing");
         if (!Number.isSafeInteger(usage.input_tokens) || usage.input_tokens < 0 ||
@@ -145,6 +154,7 @@ export class AiOperationBudget {
         if (usage.input_tokens > estimatedInputTokens || usage.input_tokens > (role === "normal" ? 150_000 : 50_000) ||
             usage.output_tokens > maximumOutputTokens) throw stop("usage_limit");
         if (signal.aborted) throw stop(abortReason());
+        try { observation?.phase("response_validated"); } catch { /* optional */ }
         logUsage("reconciled", "unknown", usage);
         return response;
       } catch {

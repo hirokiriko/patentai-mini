@@ -3,6 +3,7 @@ import { aiOperationDeadline, withAiOperationBudget } from "./ai-operation-budge
 import { z } from "zod";
 import { aiProviderRetries, getGoogleThinkingProviderOptions, getModel } from "./ai-model";
 import type { ExtractedClaims } from "./extract-claims";
+import { observePatentWatchDetail } from "./patent-watch/diagnostic-context";
 
 export function screenPriorArt(...args: Parameters<typeof screenPriorArtWithinBudget>) {
   return withAiOperationBudget({ normal: 3, fast: 0 }, () => screenPriorArtWithinBudget(...args));
@@ -123,6 +124,7 @@ async function analyzeOverlapWithinBudget(
 ): Promise<ComparisonResult[]> {
   // 独立請求項のみを分析対象にする
   const independentClaims = extracted.claims.filter((c) => c.isIndependent);
+  if (process.env.AI_PROVIDER === "azure") observePatentWatchDetail(priorArts.length, independentClaims.length);
   const providerOptions = getGoogleThinkingProviderOptions();
 
   const { object } = await generateObject({
