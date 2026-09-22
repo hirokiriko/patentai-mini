@@ -5,13 +5,14 @@ const nextConfig: NextConfig = {
   // として扱い、parse-file.ts の side-effect import で output tracing に
   // 拾わせる。pdfjs-dist は vendor/ から動的 import するので external 指定
   // は不要。
-  serverExternalPackages: ["@napi-rs/canvas"],
+  serverExternalPackages: ["@napi-rs/canvas", "pdfkit"],
   // pnpm の node_modules は symlink のため、outputFileTracingIncludes に
   // ./node_modules/... を指定すると Vercel で invalid deployment package
   // エラーになる。postinstall で vendor/pdfjs-dist/ に必要ファイルを複製し、
   // そこを含める。
   outputFileTracingIncludes: {
     "/api/**/*": [
+      "./assets/fonts/**",
       "./vendor/pdfjs-dist/cmaps/**",
       "./vendor/pdfjs-dist/standard_fonts/**",
       "./vendor/pdfjs-dist/legacy/build/**",

@@ -4,6 +4,7 @@ import { PrintButton } from "../runs/[runId]/print-button";
 import { PeriodSelector } from "./period-selector";
 import { BibliographyLink } from "../bibliography-link";
 import { ComparisonScopeNotice } from "../comparison-scope-notice";
+import { PdfDownloadButton } from "./pdf-download-button";
 
 export const PERIOD_REPORT_PRINT_CSS = `
   .period-report { overflow-wrap: anywhere; }
@@ -46,6 +47,7 @@ export function PeriodReportView({ caseId, period, invalidQuery = false, result 
     <div className="print-hidden mb-6 flex flex-wrap justify-between gap-3">
       <a href={`/cases/${caseId}`} className="text-indigo-700 underline">案件へ戻る</a>
       {report && <PrintButton />}
+      {report && <PdfDownloadButton caseId={caseId} period={report.period} />}
     </div>
     <header className="border-b border-gray-300 pb-5">
       <p className="text-sm text-gray-600">出願後ウォッチング</p>
