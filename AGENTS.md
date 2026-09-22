@@ -136,6 +136,12 @@ Postgres migration rules:
 
 ## 7. PDF / File Parsing Rules
 
+Issue #123's direct period PDF implementation permits only PDFKit, its type
+definitions and normal transitive dependencies, plus one official OFL-licensed
+Japanese font and its copyright/license. The corresponding package/lock and
+font tracing/packaging changes are authorized. This exception does not change
+PDF parsing, browser permissions, other runtime dependencies or deployment policy.
+
 PDF parsing is fragile. Be conservative.
 
 - `src/lib/parse-file.ts` and `scripts/copy-pdfjs-assets.mjs` are high-risk

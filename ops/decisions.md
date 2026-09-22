@@ -1,5 +1,14 @@
 # Decisions
 
+## 2026-09-22: Issue #123 — 印刷ダイアログに依存しない期間PDF
+
+- Decision: 既存の検証済み期間モデルからNode上でPDFKitによりPDF bytesを生成し、明示GETで直接ダウンロードする。印刷/HTML/CSVを維持し、AI・DB write・ブラウザー処理を生成内部に加えない。
+- Packaging: PDFKitと型/推移依存だけを追加。公式Noto Sans JP RegularとOFL/著作権を同梱し、リクエスト時取得をしない。PDF.js解析や他のruntime依存は変更しない。
+- Limits: 31日/200実行/4,000候補/取得20秒を維持。生成は15秒の期限確認と協調yield、100万文字/200ページ/16MiBで全体拒否する。glyph欠落・過大・生成失敗は固定非2xx、完成前の部分PDFを返さない。
+- Evidence: 架空の実PDF・実GET・Linux build/startと独立Localレビューでコードを検証する。既知の保全版も同じモジュールで生成し、原本hash、全文、全ページを別に照合する。保全版の由来と保存/保全/生成時点を記載する。
+- Boundary: 旧ブラウザー印刷未達、未終了タブ、本番新方式positive未実施、専門家評価・顧客利用・PC_OFF等を完了へ変更しない。削除済み案件の復元や追加AIは行わず、成果物取得・照合前に唯一の検証データを回収しない。
+- Delivery/rollback: 最新Issueの残forward1回と用途別予約・独立レビュー・現head CI成立時のみ通常Squash Merge/既存deploy。revert PRと既存復旧枠で戻し、原本・成果PDF・費用履歴を保持する。Refs #123として自動Closeしない。
+
 ## Issue #93: 手動ウォッチの実行結果と保存済み情報
 
 - Date: 2026-09-15

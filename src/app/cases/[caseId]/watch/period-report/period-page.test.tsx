@@ -34,6 +34,7 @@ describe("period server page and print view", () => {
     const html = renderToStaticMarkup(await Page({ params: Promise.resolve({ caseId: "7" }), searchParams: Promise.resolve(fixturePeriod) }));
     expect(seam.read).toHaveBeenCalledExactlyOnceWith(7, fixturePeriod); expect(seam.write).not.toHaveBeenCalled();
     expect(html).toContain("2096-03-01"); expect(html).toContain("JST"); expect(html).toContain("単一runレポート");
+    expect(html).toContain("PDFをダウンロード");
     expect(html).not.toContain(SECRET_SENTINEL); expect(html).not.toContain(RAW_SENTINEL); expect(html).not.toContain("prefetch");
   });
   it("distinguishes no records, complete zero, all failed, running, mixed and unavailable", () => {
@@ -50,6 +51,7 @@ describe("period server page and print view", () => {
     for (const kind of ["unavailable", "too_many"] as const) {
       const errorHtml = renderToStaticMarkup(<PeriodReportView caseId={7} period={fixturePeriod} result={{ kind }} />);
       expect(errorHtml).not.toContain("data-finding-id"); expect(errorHtml).not.toContain("期間の集計");
+      expect(errorHtml).not.toContain("PDFをダウンロード");
       expect(errorHtml).toContain(kind === "unavailable" ? "データ取得不能" : "対象が多いため期間を短く");
     }
   });
