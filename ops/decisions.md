@@ -384,3 +384,9 @@
 - Flow: 既存PG16 helper/既存migration/実repositoryと、完全架空TXT・公報2回更新・実SDKの外部transport/Blob stubを接続したopt-in通し試験を用意する。125専用空DBだけに試験権限を与え、保存済みimageの存在確認・pull禁止・loopback bindを使う。DB不達/SKIPと実測成功を区別し、独立した架空view/PDF確認で代替しない。
 - Delivery gate: rootのみ編集、補助はLocal read-only。独立レビュー、現head必須CI、実DB/browser/PDF、費用/停止条件のいずれか未達ならDraft/Open/blockedを維持する。#123へ有限回数・未知送信/費用予約・受入順序・回収までの一括案を残し、通常工程を小分けのOWNER再承認にしない。
 - Impact/rollback: schema/migration内容、依存/lock、CI/deploy設定、Production DB/Azure/secret/envは変更しない。追加実AI/本番案件/Job0。rollbackはrevert PRと通常deploy、今回のLocal一時物のみ回収。#123/#94は自動Closeしない。
+
+## 2026-09-22: Issue #123 — V3の承認再利用と費用判断
+
+- Decision: 更新済みIssue本文と既知Local承認を照合し、過去請求の確定と残工程の保守見通しを分離する。請求404は当該経路の失敗であり、無料/予算超過/全工程停止の証明ではない。既存証拠・公式条件・根拠付き数量を独立Local検算して判断する。
+- Continuation: 条件成立後は同担当がPR反映、保存済み2号からの実AI監視、新規なし再実行の実結果、書誌/確認状態、CSV/期間PDF、限定回収へ続ける。旧予約/未知usage/送信数/Job消費をリセットしない。
+- Acceptance: 今回限定判定と元の更新間監視/専門家評価/顧客利用/PC_OFFを区別する。本記録は手順整合であり、本番受入成功の記録ではない。製品source/guard/依存/CI/deploy設定に変更なし。
