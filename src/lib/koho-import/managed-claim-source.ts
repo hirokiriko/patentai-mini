@@ -19,13 +19,16 @@ function number(value: string | null): number {
 /** Conservative Japanese reference grammar; ambiguous references remain incomplete. */
 export function managedClaimReferences(text: string): number[] {
   const normalized = digits(text), references = new Set<number>();
-  const separator = "(?:から|乃至|ないし|〜|～|－|-|、|,|及び|および|又は|または|若しくは|もしくは)";
+  const conjunction = "(?:及び|および|又は|または|若しくは|もしくは)";
+  const separator = `(?:から|乃至|ないし|〜|～|－|-|[、,]\\s*${conjunction}|、|,|${conjunction})`;
   const reference = new RegExp(`請求項\\s*([0-9]+(?:\\s*${separator}\\s*(?:請求項\\s*)?[0-9]+)*)`, "g");
   const remainder = normalized.replace(reference, (match: string, expression: string, offset: number) => {
     // A regex prefix is not a complete reference: unsupported composite separators
     // must not silently drop the remaining claim numbers (e.g. 1及び／又は2).
     const suffix = normalized.slice(offset + match.length).replace(/^\s*まで\s*/, "");
-    if (!/^\s*(?:$|に(?:記載|係る|おいて)|の(?:いずれか|何れか)|記載|を引用|[。．])/.test(suffix)) {
+    const existingTail = /^\s*(?:$|に(?:記載|係る|おいて)|の(?:いずれか|何れか)|記載|を引用|[。．])/;
+    const explicitSelectionTail = /^\s*(?:の記載の|(?:のすべてに|(?:の(?:うち(?:の)?|内|少なくとも))?(?:いずれか|何れか)(?:\s*[1一]項?)?\s*(?:に)?)記載(?:の|された|される|する|[。．]|$))/;
+    if (!existingTail.test(suffix) && !explicitSelectionTail.test(suffix)) {
       throw new ManagedClaimsError("reference_missing");
     }
     const items = expression.replace(/請求項\s*/g, "").split(new RegExp(`\\s*(${separator})\\s*`));
