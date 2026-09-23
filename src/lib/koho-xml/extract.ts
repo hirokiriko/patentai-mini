@@ -1174,8 +1174,7 @@ export function extractAmendment(
         )
       : null;
   const previousPublicationDate =
-    kind === "P5"
-      ? dateValue(
+    dateValue(
           singletonChildNamed(
             header,
             JP_PATENT,
@@ -1186,11 +1185,9 @@ export function extractAmendment(
           issues,
           "previousPublicationDate",
           false,
-        )
-      : null;
+        );
   const annualNumber =
-    kind === "P5"
-      ? optionalSourceString(
+    optionalSourceString(
           singletonChildNamed(
             header,
             JP_PATENT,
@@ -1200,8 +1197,7 @@ export function extractAmendment(
           ),
           issues,
           "annualNumber",
-        )
-      : null;
+        );
   const references = collectKohoReferences(
     root,
     source.sourceEntryPath,

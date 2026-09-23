@@ -22,6 +22,48 @@
       "when": 1788308618345,
       "tag": "0002_calm_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790130246645,
+      "tag": "0003_managed_watch",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790134041760,
+      "tag": "0004_managed_delivery_provenance",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790135478643,
+      "tag": "0005_managed_job_reservations",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790137307292,
+      "tag": "0006_managed_case_backup",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790140467704,
+      "tag": "0007_managed_base_original",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790141320855,
+      "tag": "0008_managed_review_version",
+      "breakpoints": true
     }
   ]
 }

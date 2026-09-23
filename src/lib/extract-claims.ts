@@ -1,7 +1,7 @@
 import { AiOperationStopped, isAiOperationStopped, withAiOperationBudget } from "./ai-operation-budget";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { getErrorMessage, runWithAiRetries } from "./ai-resilience";
+import { runWithAiRetries } from "./ai-resilience";
 import { aiProviderRetries, getFastModel } from "./ai-model";
 
 const claimElementSchema = z.object({
@@ -239,7 +239,7 @@ async function extractClaimsWithinBudget(
   } catch (error) {
     if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();
     console.warn(
-      `[extract-claims] using fallback parser after AI failure: ${getErrorMessage(error)}`
+      "[extract-claims] using fallback parser after AI failure"
     );
     return buildFallbackExtractedClaims(trimmed);
   }

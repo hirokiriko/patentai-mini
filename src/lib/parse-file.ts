@@ -154,9 +154,9 @@ async function extractWithDocumentIntelligenceFallback(
   try {
     const text = await extractTextWithDocumentIntelligence(buffer);
     return text.trim() ? text : null;
-  } catch (error) {
+  } catch {
     throw new FileParseError(
-      `Azure Document Intelligenceでの解析に失敗しました: ${getErrorMessage(error)}`,
+      "OCR・レイアウト解析に失敗しました。時間を置いてから再度お試しください。",
       "document-intelligence-failed"
     );
   }
@@ -202,7 +202,7 @@ async function parseDocx(buffer: Buffer): Promise<string> {
     return fallback ?? text;
   } catch (error) {
     if (text.trim()) {
-      console.warn("[parse-file] Document Intelligence DOCX fallback failed", error);
+      console.warn("[parse-file] Document Intelligence DOCX fallback failed");
       return text;
     }
     throw error;

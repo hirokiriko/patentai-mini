@@ -1,11 +1,14 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
 import { storeOriginalFile } from "@/lib/blob-storage";
 import { isFileParseError, parseFile } from "@/lib/parse-file";
+import { db } from "@/db";
+import { withManagedOriginalUpload } from "@/repositories/managed-case-graph";
 
 export const maxDuration = 60;
 
-export async function GET(
+ async function handleGET(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -14,7 +17,7 @@ export async function GET(
   return NextResponse.json(rows);
 }
 
-export async function POST(
+ async function handlePOST(
   request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -31,6 +34,7 @@ export async function POST(
   if (!file) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }
+  if (file.size < 1 || file.size > 50 * 1024**2) return NextResponse.json({ error: "ファイルは1バイト以上50MiB以下で指定してください" }, { status: 400 });
 
   const kindRaw = formData.get("kind");
   const kind =
@@ -55,6 +59,7 @@ export async function POST(
     // 抽出失敗してもレコードは作成する
   }
 
+  const row = await withManagedOriginalUpload(db, caseIdNum, async () => {
   const storedFile = await storeOriginalFile({
     caseId: caseIdNum,
     category: "drafts",
@@ -64,12 +69,16 @@ export async function POST(
     contentType: file.type,
   });
 
-  const row = await draftPatentRepo.create({
+  return draftPatentRepo.create({
     caseId: caseIdNum,
     kind,
     sourceFilePath: storedFile?.blobName ?? file.name,
     parsedText,
   });
+  });
 
   return NextResponse.json(row, { status: 201 });
 }
+
+export const GET = withOwnerRoute(handleGET);
+export const POST = withOwnerRoute(handlePOST);

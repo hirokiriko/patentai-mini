@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { patentWatchRepo } from "@/repositories";
 import { parsePeriodQuery, periodCaseId, PERIOD_QUERY_MESSAGE } from "@/lib/patent-watch/period";
 import { readPeriodReport } from "@/lib/patent-watch/period-report";
@@ -9,7 +10,7 @@ const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options"
 const failure = (status: number, error: string, message: string) => Response.json({ error, message }, { status, headers });
 const limit = () => failure(413, "period_pdf_limit", "対象が多いため期間を短くしてください。PDF全体を生成できませんでした。");
 
-export async function GET(request: Request, { params }: { params: Promise<{ caseId: string }> }) {
+ async function handleGET(request: Request, { params }: { params: Promise<{ caseId: string }> }) {
   const caseId = periodCaseId((await params).caseId);
   const search = new URL(request.url).searchParams;
   const query: Record<string, string | string[]> = Object.create(null);
@@ -30,3 +31,5 @@ export async function GET(request: Request, { params }: { params: Promise<{ case
     return failure(503, "period_pdf_unavailable", "PDFを生成できませんでした。期間画面で内容を確認してください。");
   }
 }
+
+export const GET = withOwnerRoute(handleGET);

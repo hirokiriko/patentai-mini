@@ -159,10 +159,10 @@ function renderUpdateCheck(config: UpdateConfiguration, tables: TableObservation
     if (p.issue) details.push(`ABSTRACT号 ${p.issue}（年通号/総通号との対応は未確認）`);
     if (p.sha256 && (duplicateGroups.get(p.sha256) ?? 0) > 1) details.push("同一bytesの重複取得候補（別名を含む）");
     if (row && p.sections) {
-      // Daily publication counts exclude amendments and attachments. XML candidate units
-      // may still differ from the table, so record the comparison without asserting completeness.
-      const units = row.packageType === "JPA" ? [["公開", row.dailyCounts.published, p.sections.P_A1.primaryXmlCandidates],
-        ["公表", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
+      // JPA daily counts include A5/P5 amendments. Preserve the component counts;
+      // attachments are separate and a total match alone never proves parsing completeness.
+      const units = row.packageType === "JPA" ? [["公開(本文+補正)", row.dailyCounts.published, p.sections.P_A1.primaryXmlCandidates + p.sections.P_A5.primaryXmlCandidates],
+        ["公表(本文+補正)", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates + p.sections.P_P5.primaryXmlCandidates]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
       for (const [name, daily, observed] of units) details.push(`${name}: 表の日件数 ${daily} / 対応section本文XML候補 ${observed}（比較単位の一致は未確認）`);
     }
     return details.join("; ");

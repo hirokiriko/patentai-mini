@@ -1,7 +1,7 @@
 import { AiOperationStopped, isAiOperationStopped, withAiOperationBudget } from "./ai-operation-budget";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { getErrorMessage, runWithAiRetries } from "./ai-resilience";
+import { runWithAiRetries } from "./ai-resilience";
 import { aiProviderRetries, getFastModel } from "./ai-model";
 import {
   findCompanyNameHints,
@@ -335,7 +335,7 @@ async function generateQueriesWithinBudget(
   } catch (error) {
     if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();
     console.warn(
-      `[generate-queries] using fallback queries after AI failure: ${getErrorMessage(error)}`
+      "[generate-queries] using fallback queries after AI failure"
     );
     object = buildFallbackQueries(extracted);
   }

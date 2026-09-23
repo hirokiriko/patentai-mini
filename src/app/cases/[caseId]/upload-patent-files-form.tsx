@@ -100,7 +100,7 @@ export function UploadPatentFilesForm({ caseId }: { caseId: number }) {
         <input
           type="file"
           name="file"
-          accept=".pdf,.docx,.txt"
+          accept=".pdf,.docx,.txt,.xml"
           multiple
           onChange={handleFileChange}
           className="flex-1 text-base file:mr-3 file:rounded file:border-0 file:bg-gray-100 file:px-4 file:py-2.5 file:text-base file:font-medium hover:file:bg-gray-200"

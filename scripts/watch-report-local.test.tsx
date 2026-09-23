@@ -1,3 +1,5 @@
+// Existing domain/renderer tests isolate authentication; owner-auth tests cover the real boundary.
+vi.mock("@/lib/owner-http", () => ({ withOwnerRoute: (handler: unknown) => handler, requireOwner: async () => undefined }));
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";

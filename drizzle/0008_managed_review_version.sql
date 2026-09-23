@@ -1,0 +1,1 @@
+ALTER TABLE "managed_watch_findings" ADD COLUMN "review_version" integer DEFAULT 0 NOT NULL;

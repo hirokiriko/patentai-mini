@@ -1,0 +1,5 @@
+ALTER TABLE "managed_watch_runs" ADD COLUMN "source_document_id" integer NOT NULL;--> statement-breakpoint
+ALTER TABLE "managed_watch_settings" ADD COLUMN "source_document_id" integer NOT NULL;--> statement-breakpoint
+ALTER TABLE "managed_watch_settings" ADD COLUMN "source_json" text NOT NULL;--> statement-breakpoint
+ALTER TABLE "managed_watch_runs" ADD CONSTRAINT "managed_watch_runs_source_document_id_prior_art_documents_doc_id_fk" FOREIGN KEY ("source_document_id") REFERENCES "public"."prior_art_documents"("doc_id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "managed_watch_settings" ADD CONSTRAINT "managed_watch_settings_source_document_id_prior_art_documents_doc_id_fk" FOREIGN KEY ("source_document_id") REFERENCES "public"."prior_art_documents"("doc_id") ON DELETE restrict ON UPDATE no action;

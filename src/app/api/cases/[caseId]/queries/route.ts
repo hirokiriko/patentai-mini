@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo, searchQuerySetRepo } from "@/repositories";
 import { generateQueries } from "@/lib/generate-queries";
@@ -7,7 +8,7 @@ import { latestDraft } from "@/lib/current-draft";
 
 export const maxDuration = 60;
 
-export async function GET(
+ async function handleGET(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -16,7 +17,7 @@ export async function GET(
   return NextResponse.json(rows);
 }
 
-export async function POST(
+ async function handlePOST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -66,9 +67,12 @@ export async function POST(
     });
 
     return NextResponse.json(row, { status: 201 });
-  } catch (err) {
-    console.error("[queries] generation failed:", err);
-    const message = err instanceof Error ? err.message : "検索式生成中にエラーが発生しました";
+  } catch {
+    console.error("[queries] generation failed");
+    const message = "検索式生成中にエラーが発生しました";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const GET = withOwnerRoute(handleGET);
+export const POST = withOwnerRoute(handlePOST);

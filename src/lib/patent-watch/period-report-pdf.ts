@@ -11,7 +11,8 @@ export class PeriodPdfError extends Error {
   constructor(public readonly reason: "limit" | "glyph" | "unavailable") { super(`period_pdf_${reason}`); }
 }
 export type PeriodPdfOrigin = { kind: "saved" } | { kind: "archive"; preservedAt: string };
-type Block = { text: string; heading?: boolean };
+export type ReportBlock = { text: string; heading?: boolean };
+type Block = ReportBlock;
 
 /** Explicit display projection. Extra properties, raw JSON, URLs and IDs never become metadata or links. */
 function* blocks(report: PeriodReportModel, origin: PeriodPdfOrigin, generatedAt: string): Generator<Block> {
@@ -68,16 +69,20 @@ function* blocks(report: PeriodReportModel, origin: PeriodPdfOrigin, generatedAt
 
 /** Finite, cooperative Node generation. Call only with buildPeriodReport/readPeriodReport output. */
 export async function generatePeriodReportPdf(report: PeriodReportModel, origin: PeriodPdfOrigin = { kind: "saved" }): Promise<Buffer> {
+  if (origin.kind === "archive" && !isValidPatentWatchTimestamp(origin.preservedAt)) throw new PeriodPdfError("unavailable");
+  return generateReportBlocksPdf(blocks(report, origin, new Date().toISOString()), "出願後ウォッチング 期間レポート");
+}
+/** Shared finite renderer; callers must project validated display-only blocks. */
+export async function generateReportBlocksPdf(content: Iterable<ReportBlock>, title: string): Promise<Buffer> {
   const deadline = performance.now() + PERIOD_PDF_LIMITS.milliseconds;
   const checkTime = () => { if (performance.now() >= deadline) throw new PeriodPdfError("limit"); };
   let doc: PDFKit.PDFDocument | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (origin.kind === "archive" && !isValidPatentWatchTimestamp(origin.preservedAt)) throw new PeriodPdfError("unavailable");
     const font = resolve(process.cwd(), "assets/fonts/NotoSansJP-Regular.otf");
     checkTime();
     doc = new PDFDocument({ size: "A4", margins: { top: 42, bottom: 54, left: 44, right: 44 },
-      font, bufferPages: true, info: { Title: "出願後ウォッチング 期間レポート", Author: "", Creator: "patentai-mini", Producer: "PDFKit" } });
+      font, bufferPages: true, info: { Title: title, Author: "", Creator: "patentai-mini", Producer: "PDFKit" } });
     const pdf = doc;
     // PDFKit's pinned embedded-font adapter exposes fontkit's cmap check. Fail closed if it changes.
     const embedded = (pdf as unknown as { _font: { font: { hasGlyphForCodePoint(code: number): boolean } } })._font.font;
@@ -100,7 +105,7 @@ export async function generatePeriodReportPdf(report: PeriodReportModel, origin:
     void completed.catch(() => undefined);
     timer = setTimeout(() => fail(new PeriodPdfError("limit")), Math.max(1, deadline - performance.now()));
     pdf.on("pageAdded", () => { checkTime(); if (++pages > PERIOD_PDF_LIMITS.pages) throw new PeriodPdfError("limit"); });
-    for (const block of blocks(report, origin, new Date().toISOString())) {
+    for (const block of content) {
       checkTime(); if (failure) throw failure;
       // Normalize layout whitespace only; never truncate a paragraph or list.
       const text = block.text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ");
@@ -113,8 +118,13 @@ export async function generatePeriodReportPdf(report: PeriodReportModel, origin:
         glyphs.add(code);
       }
       if (block.heading && pdf.y > pdf.page.height - 115) pdf.addPage();
-      pdf.fontSize(block.heading ? 12 : 10).fillColor(block.heading ? "#18344b" : "#202a33")
-        .text(text, { lineGap: 3, paragraphGap: 3 });
+      pdf.fontSize(block.heading ? 12 : 10).fillColor(block.heading ? "#18344b" : "#202a33");
+      const layout = { lineGap: 3, paragraphGap: 3 };
+      const height = pdf.heightOfString(text, layout);
+      // Keep short paragraphs together so a final character/line is not orphaned.
+      // Long claim explanations remain splittable and retain every character.
+      if (!block.heading && height <= 120 && pdf.y + height > pdf.page.height - pdf.page.margins.bottom) pdf.addPage();
+      pdf.text(text, layout);
       pdf.moveDown(block.heading ? 0.35 : 0.2);
       await yieldToStream();
     }

@@ -1,5 +1,8 @@
 # Issue #123: 限定クラウド取込と定例更新の運用手順
 
+Issue #129の標準サービスへの拡張は `ops/standard-managed-watch.md` と最新Issue本文に従う。
+以下は旧#123の試験枠の履歴であり、新しい枠の実行・費用・権限に流用しない。
+
 この手順は [Issue #123](https://github.com/hirokiriko/patentai-mini/issues/123)
 の `REGULAR_PRODUCTION_PILOT_V1` に限る。OWNERは資料準備から限定本番取込、
 実AI監視、CSV・期間PDF、費用実測、回収までを承認している。通常工程ごとの

@@ -1,3 +1,5 @@
+// Existing domain/renderer tests isolate authentication; owner-auth tests cover the real boundary.
+vi.mock("@/lib/owner-http", () => ({ withOwnerRoute: (handler: unknown) => handler, requireOwner: async () => undefined }));
 import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import { writeFile, readFile, mkdir, access, unlink } from "node:fs/promises";
@@ -15,6 +17,8 @@ import type { CaseWatchRun } from "../src/lib/patent-watch/types";
 
 const seam = vi.hoisted(() => ({ db: undefined as NodePgDatabase | undefined, blobs: new Map<string, Buffer>() }));
 vi.mock("../src/db", () => ({ get db() { return seam.db; } }));
+vi.mock("@/db", () => ({ get db() { return seam.db; } }));
+vi.mock("@/repositories/managed-case-graph", () => import("../src/repositories/managed-case-graph"));
 vi.mock("@/repositories", () => import("../src/repositories/drizzle"));
 vi.mock("@/lib/parse-file", () => import("../src/lib/parse-file"));
 vi.mock("@/lib/document-intelligence", () => import("../src/lib/document-intelligence"));

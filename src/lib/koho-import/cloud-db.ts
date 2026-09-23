@@ -6,16 +6,20 @@ import { requireManual } from "./manual-cli-config";
 import type { CloudConfiguration, CloudManifest } from "./cloud-config";
 import type { KohoImportPlan } from "./types";
 import type { ManualSaveOutcome } from "./manual-cli-db";
+import type { projectManagedPackage } from "./managed-package";
 
 export type CloudSaveResult = ManualSaveOutcome & { databaseGrowthBytes: number; capacityConfirmed: boolean };
 const tables = ["koho_import_runs", "koho_import_documents"];
 const expectedColumns = {
   koho_import_runs: ["import_id", "package_type", "source_sha256", "package_status", "document_count", "amendment_count", "nested_st26_count", "counts_json", "issues_json", "created_at", "updated_at"],
   koho_import_documents: ["document_id", "import_id", "normalized_entry_path", "parse_status", "kind", "publication_number", "application_number", "publication_date", "registration_number", "registration_date", "invention_title", "abstract_text", "claims_text", "applicants_json", "ipc_json", "fi_json", "parse_issues_json", "source_metadata_json", "content_sha256"],
+  managed_publication_claims: ["document_id", "content_sha256", "source_sha256", "claims_json", "claims_digest", "status", "reason", "created_at"],
+  managed_import_receipts: ["import_id", "source_sha256", "publication_date", "issue_number", "receipt_json", "receipt_digest"],
 };
 
 /** Server-side identity, TLS, exact corpus shape and directly bounded role scope. */
-export async function inspectCloudDatabase(client: Client, target: CloudConfiguration["expectedTarget"]) {
+export async function inspectCloudDatabase(client: Client, target: CloudConfiguration["expectedTarget"], managed = false) {
+  const allowedTables = managed ? [...tables, "managed_publication_claims", "managed_import_receipts"] : tables;
   const identity = (await client.query(`select current_database() as db, current_user as usr,
     current_setting('server_version_num')::int / 10000 as major, pg_is_in_recovery() as recovery,
     rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls,
@@ -35,13 +39,13 @@ export async function inspectCloudDatabase(client: Client, target: CloudConfigur
       where d.datname=current_database() and a.grantee=0 and a.privilege_type='TEMPORARY')) as scope_ok,
     (select bool_and(has_table_privilege(t,'SELECT') and has_table_privilege(t,'INSERT') and
       not has_table_privilege(t,'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') and not has_any_column_privilege(t,'UPDATE,REFERENCES'))
-      from unnest(array['public.koho_import_runs','public.koho_import_documents']) t) as tables_ok,
+      from unnest($1::text[]) t) as tables_ok,
     (select bool_and(has_sequence_privilege(s,'USAGE') and not has_sequence_privilege(s,'SELECT,UPDATE'))
       from unnest(array['public.koho_import_runs_import_id_seq','public.koho_import_documents_document_id_seq']) s) as sequences_ok,
     not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname !~ '^pg_' and n.nspname <> 'information_schema' and c.relkind in ('r','p','v','m','f','S') and
       (c.relowner=(select oid from pg_roles where rolname=current_user) or
-        (c.relkind <> 'S' and (n.nspname <> 'public' or c.relname not in ('koho_import_runs','koho_import_documents')) and
+        (c.relkind <> 'S' and (n.nspname <> 'public' or c.relname <> all($2::text[])) and
           (has_table_privilege(c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') or has_any_column_privilege(c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) or
         (c.relkind='S' and (n.nspname <> 'public' or c.relname not in ('koho_import_runs_import_id_seq','koho_import_documents_document_id_seq')) and
           has_sequence_privilege(c.oid,'USAGE,SELECT,UPDATE')))) and
@@ -55,25 +59,25 @@ export async function inspectCloudDatabase(client: Client, target: CloudConfigur
       lateral aclexplode(c.relacl) a where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
       and a.grantee=(select oid from pg_roles where rolname=current_user) and a.is_grantable) and
     not exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
-      and p.prosecdef and has_function_privilege(p.oid,'EXECUTE')) as isolated_ok`)).rows[0];
+      and p.prosecdef and has_function_privilege(p.oid,'EXECUTE')) as isolated_ok`, [allowedTables.map(t=>`public.${t}`), allowedTables])).rows[0];
   requireManual(access?.scope_ok && access.tables_ok && access.sequences_ok && access.isolated_ok);
   const relations = (await client.query(`select c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity,
     exists(select 1 from pg_trigger t where t.tgrelid=c.oid and not t.tgisinternal) as triggers,
     exists(select 1 from pg_rewrite r where r.ev_class=c.oid) as rules
-    from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`, [tables])).rows;
-  requireManual(relations.length === 2 && relations.every(r => r.relkind === "r" && !r.relrowsecurity && !r.relforcerowsecurity && !r.triggers && !r.rules));
+    from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`, [allowedTables])).rows;
+  requireManual(relations.length === allowedTables.length && relations.every(r => r.relkind === "r" && !r.relrowsecurity && !r.relforcerowsecurity && !r.triggers && !r.rules));
   const columns = (await client.query(`select c.relname, a.attname, format_type(a.atttypid,a.atttypmod) as type, a.attnotnull,
     pg_get_expr(d.adbin,d.adrelid) as def, a.attgenerated, a.attidentity
     from pg_class c join pg_namespace n on n.oid=c.relnamespace join pg_attribute a on a.attrelid=c.oid
     left join pg_attrdef d on d.adrelid=c.oid and d.adnum=a.attnum
-    where n.nspname='public' and c.relname=any($1) and a.attnum>0 and not a.attisdropped order by c.relname,a.attnum`, [tables])).rows;
-  for (const table of tables) {
+    where n.nspname='public' and c.relname=any($1) and a.attnum>0 and not a.attisdropped order by c.relname,a.attnum`, [allowedTables])).rows;
+  for (const table of allowedTables) {
     const actual = columns.filter(c => c.relname === table), expected = expectedColumns[table as keyof typeof expectedColumns];
     requireManual(actual.length === expected.length && actual.every((c, i) => {
-      const name = expected[i], serial = name === (table === "koho_import_runs" ? "import_id" : "document_id");
+      const name = expected[i], serial = tables.includes(table) && name === (table === "koho_import_runs" ? "import_id" : "document_id");
       const timestamp = ["created_at", "updated_at"].includes(name);
       const integer = ["import_id", "document_id", "document_count", "amendment_count", "nested_st26_count"].includes(name);
-      const nullable = ["registration_number", "registration_date", "abstract_text"].includes(name);
+      const nullable = ["registration_number", "registration_date", "abstract_text", "claims_json", "claims_digest", "reason"].includes(name);
       const validDefault = serial ? [ `nextval('${table}_${name}_seq'::regclass)`, `nextval('public.${table}_${name}_seq'::regclass)` ].includes(c.def) : timestamp ? c.def === "now()" : c.def === null;
       return c.attname === name && c.type === (timestamp ? "timestamp with time zone" : integer ? "integer" : "text") && c.attnotnull === !nullable && !c.attgenerated && !c.attidentity && validDefault;
     }));
@@ -94,8 +98,9 @@ export async function inspectCloudDatabase(client: Client, target: CloudConfigur
 
 /** ACK of COMMIT and ACK of receipt storage are deliberately independent. */
 export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudManifest, password: string, plan: KohoImportPlan,
-  onSaving: () => void, createClient?: () => Client): Promise<CloudSaveResult> {
+  onSaving: () => void, createClient?: () => Client, managed?: ReturnType<typeof projectManagedPackage>): Promise<CloudSaveResult> {
   requireManual(config.mode === "apply" && typeof password === "string" && password.length > 0 && password.length <= 8192);
+  requireManual((config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") === !!managed);
   const client = createClient?.() ?? new Client({ ...config.expectedTarget, password, ssl: { rejectUnauthorized: true, servername: config.expectedTarget.host },
     connectionTimeoutMillis: 30_000, statement_timeout: 120_000, query_timeout: 125_000, lock_timeout: 30_000,
     idle_in_transaction_session_timeout: 120_000, options: "-c search_path=pg_catalog,public", application_name: "koho-cloud-pilot-import" });
@@ -114,7 +119,7 @@ export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudM
     return result;
   }) as typeof client.query;
   try {
-    await client.connect(); await inspectCloudDatabase(client, config.expectedTarget);
+    await client.connect(); await inspectCloudDatabase(client, config.expectedTarget, !!managed);
     const before = Number((await client.query("select pg_database_size(current_database())::text as bytes")).rows[0]?.bytes);
     requireManual(!broken && Number.isSafeInteger(before) && before > 0 && before + manifest.reservedGrowthBytes <= manifest.maxDatabaseBytes && Date.now() < Date.parse(manifest.expiresAt));
     const approved = manifest.packages.find(p => p.sha256 === plan.sourceSha256 && p.packageType === plan.packageType);
@@ -122,7 +127,7 @@ export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudM
     const existing = (await client.query("select count(*)::int as count from public.koho_import_runs where package_type=$1 and source_sha256=$2", [plan.packageType, plan.sourceSha256])).rows[0]?.count;
     requireManual(existing === (approved.expectedDisposition === "reused" ? 1 : 0));
     onSaving();
-    const result = await saveKohoImportPlan(drizzle(client, { schema }), plan, true, approved.expectedDisposition);
+    const result = await saveKohoImportPlan(drizzle(client, { schema }), plan, true, approved.expectedDisposition, managed?.sources, managed?.receipt);
     requireManual(result.savedDocumentCount === plan.documentCount && (result.disposition === "inserted" || result.disposition === "reused"));
     saved = { outcome: result.disposition, savedDocumentCount: result.savedDocumentCount, databaseGrowthBytes: 0, capacityConfirmed: false };
     requireManual(!broken);

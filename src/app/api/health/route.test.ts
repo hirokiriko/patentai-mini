@@ -43,7 +43,7 @@ describe("health HTTP contract", () => {
   it("returns only the minimal success object without reading cases", async () => {
     const response = await GET();
     expect(await response.json()).toStrictEqual({
-      ok: true, status: "ok", database: { ok: true, type: "postgres" },
+      ok: true, status: "ok",
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -59,7 +59,7 @@ describe("health HTTP contract", () => {
     const response = await GET();
     expect(response.status).toBe(503);
     expect(await response.json()).toStrictEqual({
-      ok: false, status: "unavailable", database: { ok: false, type: "postgres" },
+      ok: false, status: "unavailable",
     });
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-type")).toContain("application/json");
@@ -96,7 +96,7 @@ describe("health HTTP contract", () => {
     const response = await GET();
     expect(response.status).toBe(503);
     expect(await response.json()).toStrictEqual({
-      ok: false, status: "unavailable", database: { ok: false, type: "postgres" },
+      ok: false, status: "unavailable",
     });
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(fakes.construct).not.toHaveBeenCalled();
@@ -112,7 +112,7 @@ describe("health HTTP contract", () => {
     const response = await GET();
     expect(response.status).toBe(503);
     expect(await response.json()).toStrictEqual({
-      ok: false, status: "unavailable", database: { ok: false, type: "postgres" },
+      ok: false, status: "unavailable",
     });
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("content-type")).toContain("application/json");

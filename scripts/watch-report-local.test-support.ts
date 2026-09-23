@@ -22,7 +22,7 @@ export async function isolatedCommand(file: string, args: string[], input = "", 
     child.stdin.on("error", () => undefined); child.stdin.end(input);
   });
 }
-export async function isolatedPg16(issue: 101 | 103 | 123 | 125 = 101) {
+export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
   if (process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1" || process.env.DATABASE_URL || process.env.PGHOST || process.env.PGSERVICE) {
     throw Error("isolated_database_opt_in_required");
   }
@@ -57,12 +57,23 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 = 101) {
     }
     createAttempted = true;
     const created = await docker(["create", "--name", container, "--label", `patentai.issue=${issue}`, "--label", `patentai.owner=${suffix}`,
-      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...([123, 125].includes(issue) ? ["--pull", "never"] : []), "postgres:16"],
+      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...([123, 125, 129].includes(issue) ? ["--pull", "never"] : []), "postgres:16"],
     { POSTGRES_PASSWORD: password, POSTGRES_DB: database });
     if (created.code !== 0) throw Error();
     phase = "container_start";
     if ((await docker(["start", container])).code !== 0) throw Error();
-    const match = /^127\.0\.0\.1:(\d+)\s*$/.exec((await docker(["port", container, "5432/tcp"])).output);
+    // Docker Desktop can acknowledge start before its dynamic host port is assigned.
+    phase = "port_binding";
+    let match: RegExpExecArray | null = null;
+    for (let n = 0; n < 40; n++) {
+      const binding = await docker(["port", container, "5432/tcp"]);
+      if (binding.code !== 0) throw Error();
+      match = /^127\.0\.0\.1:(\d+)\s*$/.exec(binding.output);
+      if (match && Number(match[1]) > 0 && Number(match[1]) <= 65535) break;
+      if (binding.output.trim() && (!match || Number(match[1]) > 65535)) throw Error();
+      match = null;
+      await new Promise(done => setTimeout(done, 100));
+    }
     if (!match) throw Error();
     const base = { host: "127.0.0.1" as const, port: Number(match[1]), database, ssl: false as const, connectionTimeoutMillis: 1000 };
     async function connect(user: string, secret: string) {

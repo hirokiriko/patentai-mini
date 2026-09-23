@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import { notFound } from "next/navigation";
 import { patentWatchRepo } from "@/repositories";
 import { parsePeriodQuery, periodCaseId } from "@/lib/patent-watch/period";
@@ -10,6 +11,7 @@ export default async function PatentWatchPeriodReportPage({ params, searchParams
   params: Promise<{ caseId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireOwner();
   const caseId = periodCaseId((await params).caseId);
   if (caseId === null) notFound();
   const query = parsePeriodQuery(await searchParams);

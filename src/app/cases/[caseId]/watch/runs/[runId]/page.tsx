@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -143,6 +144,7 @@ export default async function PatentWatchReportPage({
 }: {
   params: Promise<{ caseId: string; runId: string }>;
 }) {
+  await requireOwner();
   const values = await params;
   const caseId = positiveInteger(values.caseId);
   const runId = positiveInteger(values.runId);

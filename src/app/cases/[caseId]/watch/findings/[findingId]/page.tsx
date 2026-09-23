@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import { notFound } from "next/navigation";
 import { patentWatchRepo } from "@/repositories";
 import { readFindingBibliography } from "@/lib/patent-watch/bibliography";
@@ -6,6 +7,7 @@ import { BibliographyView } from "./bibliography-view";
 
 export const dynamic = "force-dynamic";
 export default async function FindingBibliographyPage({ params }: { params: Promise<{ caseId: string; findingId: string }> }) {
+  await requireOwner();
   const values = await params;
   const caseId = periodCaseId(values.caseId), findingId = periodCaseId(values.findingId);
   if (caseId === null || findingId === null) notFound();

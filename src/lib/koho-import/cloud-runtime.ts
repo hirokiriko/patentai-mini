@@ -12,6 +12,7 @@ import { cloudManifestName, cloudPlanSha256, cloudReceiptPrefix, cloudSourceName
 import type { CloudBlobBoundary } from "./cloud-blob";
 import { saveCloudPlan } from "./cloud-db";
 import { updatePackageMetadata } from "./update-check";
+import { projectManagedPackage } from "./managed-package";
 
 /** Conditional ETag updates preserve an append-only logical prefix; ambiguous ACK stops all later writes. */
 class CloudReceipt {
@@ -67,6 +68,9 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           const parsed = await parseKohoPackage({ packageType: pkg.packageType, source: { type: "file", path: source },
             limits: buildKohoManualImportLimits(pkg.byteLength) });
           const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256: pkg.sha256 });
+          const managed = config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1" ? projectManagedPackage(parsed, plan) : undefined;
+          if (managed) requireManual("managedSourcesSha256" in pkg && pkg.managedSourcesSha256 === managed.managedSourcesSha256 &&
+            "managedReceiptSha256" in pkg && pkg.managedReceiptSha256 === managed.managedReceiptSha256);
           const metadata = updatePackageMetadata(parsed);
           requireManual(metadata.date === pkg.publicationDate && metadata.issue === pkg.issueNumber && metadata.notes.length === 0);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
@@ -83,7 +87,7 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           else {
             requireManual(growth < manifest.reservedGrowthBytes);
             const saved = await (options.save ?? saveCloudPlan)(config, { ...manifest, reservedGrowthBytes: manifest.reservedGrowthBytes - growth }, options.password!, plan,
-              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; });
+              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; }, undefined, managed);
             result.outcome = saved.outcome; result.savedDocumentCount = saved.savedDocumentCount;
             result.includesReviewRequired = ["inserted", "reused"].includes(saved.outcome) && plan.packageStatus === "review_required";
             growth += saved.databaseGrowthBytes; capacityObserved = true; capacityConfirmed &&= saved.capacityConfirmed;

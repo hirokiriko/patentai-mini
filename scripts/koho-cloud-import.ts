@@ -3,6 +3,7 @@ import { parseCloudConfiguration } from "../src/lib/koho-import/cloud-config";
 import { createCloudBlobBoundary } from "../src/lib/koho-import/cloud-blob";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
 import { requireManual } from "../src/lib/koho-import/manual-cli-config";
+import { readFile } from "node:fs/promises";
 
 if (require.main === module) {
   const controller = new AbortController();
@@ -14,6 +15,9 @@ if (require.main === module) {
     try {
       requireManual(process.argv.length === 2 && typeof process.env.KOHO_CLOUD_CONFIG_JSON === "string" && Buffer.byteLength(process.env.KOHO_CLOUD_CONFIG_JSON) <= 32768);
       const config = parseCloudConfiguration(JSON.parse(process.env.KOHO_CLOUD_CONFIG_JSON));
+      if (config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") {
+        requireManual((await readFile(".managed-build-sha", "utf8")).trim() === config.expectedCodeSha && !process.env.MANAGED_WATCH_DATABASE_PASSWORD && !process.env.DATABASE_URL);
+      }
       const password = process.env.KOHO_CLOUD_DATABASE_PASSWORD;
       // No generic DATABASE_URL, PG* or provider configuration is consumed by this entrypoint.
       delete process.env.KOHO_CLOUD_CONFIG_JSON; delete process.env.KOHO_CLOUD_DATABASE_PASSWORD;

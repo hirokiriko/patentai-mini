@@ -1,10 +1,11 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { draftPatentRepo } from "@/repositories";
 import { extractClaims } from "@/lib/extract-claims";
 
 export const maxDuration = 60;
 
-export async function POST(
+ async function handlePOST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string; draftId: string }> }
 ) {
@@ -34,9 +35,11 @@ export async function POST(
     );
 
     return NextResponse.json(updated);
-  } catch (err) {
-    console.error("[extract] extraction failed:", err);
-    const message = err instanceof Error ? err.message : "請求項抽出中にエラーが発生しました";
+  } catch {
+    console.error("[extract] extraction failed");
+    const message = "請求項抽出中にエラーが発生しました";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const POST = withOwnerRoute(handlePOST);

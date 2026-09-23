@@ -17,6 +17,14 @@ patentability, validity, infringement, or rejection outcomes.
 
 ## Canonical workflow
 
+Issue #129's approved standard managed watch release follows its current Issue
+body and the scoped exception in AGENTS.md. The same Local root continues through
+implementation, independent read-only review, conditional merge/deploy, production
+acceptance, actual PC_OFF and handoff. Routine phases are already authorized.
+Historical one-time budgets are not reused. The OWNER-only authentication scope
+is separate from #66's future customer/enterprise login design. Operation is
+documented in `ops/standard-managed-watch.md`; documentation is not release proof.
+
 Issue #89's OWNER-approved `LOCAL_IMPORT_FIRST_V1` permits its bounded Local
 implementation, isolated real-DB validation and conditional production phases.
 Use its latest Issue body and the matching AGENTS.md exception. Issue #75 / PR

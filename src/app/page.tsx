@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import Link from "next/link";
 import { caseRepo } from "@/repositories";
 import type { Case } from "@/repositories";
@@ -6,6 +7,7 @@ import { NewCaseForm } from "./new-case-form";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+  await requireOwner();
   let rows: Case[] = [];
   let dbError = false;
 

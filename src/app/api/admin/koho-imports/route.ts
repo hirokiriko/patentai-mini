@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { createKohoManualImportPostHandler } from "@/lib/koho-import/manual-api";
 import { KohoImportPlanValidationError } from "@/lib/koho-import";
 import {
@@ -7,9 +8,11 @@ import {
 
 export const runtime = "nodejs";
 
-export const POST = createKohoManualImportPostHandler({
+ const handlePOST = createKohoManualImportPostHandler({
   repository: kohoImportRepo,
   isValidationError: (error) =>
     error instanceof KohoImportPlanValidationError ||
     error instanceof KohoImportRepositoryValidationError,
 });
+
+export const POST = withOwnerRoute(handlePOST);

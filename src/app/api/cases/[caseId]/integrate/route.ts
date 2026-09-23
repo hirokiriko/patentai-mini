@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { caseRepo, draftPatentRepo } from "@/repositories";
 import { integrateClaims } from "@/lib/integrate-claims";
@@ -5,7 +6,7 @@ import { latestDraft } from "@/lib/current-draft";
 
 export const maxDuration = 60;
 
-export async function POST(
+ async function handlePOST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -54,9 +55,11 @@ export async function POST(
     });
 
     return NextResponse.json(main);
-  } catch (err) {
-    console.error("[integrate] failed:", err);
-    const message = err instanceof Error ? err.message : "統合処理中にエラーが発生しました";
+  } catch {
+    console.error("[integrate] failed");
+    const message = "統合処理中にエラーが発生しました";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const POST = withOwnerRoute(handlePOST);
