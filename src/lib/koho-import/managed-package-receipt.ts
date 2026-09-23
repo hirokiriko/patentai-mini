@@ -3,7 +3,7 @@ import type { KohoPackageParseResult } from "../koho-package";
 import type { KohoImportPlan } from "./types";
 import { managedDate } from "../patent-watch/managed-period";
 import { managedHash, ManagedWatchError } from "../patent-watch/managed-types";
-import { updatePackageMetadata } from "./update-check";
+import { updatePackageMetadata } from "./package-metadata";
 import { managedCorrectionSchema, projectManagedCorrections } from "./managed-corrections";
 import { managedDigest } from "../patent-watch/managed-claims";
 export const managedPackageReceiptSchema = z.object({ schema: z.literal(1), sourceSha256: managedHash,
