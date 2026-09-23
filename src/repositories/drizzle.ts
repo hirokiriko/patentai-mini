@@ -1061,11 +1061,12 @@ export async function saveKohoImportPlan(
       }
 
       let savedDocumentCount = 0;
-      if (validatedPlan.documents.length > 0) {
+      // Bound PostgreSQL bind parameters without changing package transaction atomicity.
+      for (let offset = 0; offset < validatedPlan.documents.length; offset += 500) {
         const inserted = await tx
           .insert(kohoImportDocuments)
           .values(
-            validatedPlan.documents.map((document) => ({
+            validatedPlan.documents.slice(offset, offset + 500).map((document) => ({
               importId: runRow.importId,
               normalizedEntryPath: document.normalizedEntryPath,
               parseStatus: document.parseStatus,
@@ -1087,7 +1088,7 @@ export async function saveKohoImportPlan(
             })),
           )
           .returning({ documentId: kohoImportDocuments.documentId });
-        savedDocumentCount = inserted.length;
+        savedDocumentCount += inserted.length;
       }
 
       if (savedDocumentCount !== validatedPlan.documentCount) {

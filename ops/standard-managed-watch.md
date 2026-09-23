@@ -36,10 +36,15 @@ OWNER認証と非公開保存の確認前に本番試験案件を作らない。
 8割で内部再見積し、収まらない場合は新しい有料処理を停止する。
 
 本リリース累計上限は架空case5、watch開始40、normal900/fast80、Job24実行/48時間、
-package64/合計64GiB、forward deploy8/rollback2。1package2GiB、1Job120分/2vCPU/4GiB、
+package64/合計96GiB、forward deploy8/rollback2。1package8GiB、1Job120分/2vCPU/4GiB、
 parallelism1/completionCount1/retry0。全文watchだけnormal41/fast0・30分、
 1要求35秒・保守的入力見積normal150,000/fast50,000・出力8,192tokens。
 結果不明のwrite/AI/Job startを再送せず、保存済み対応情報で照合する。
+
+2026-09-23の追加承認は圧縮ZIPの各8GiB/累計96GiBだけ。旧pilotの各2GiBを変更しない。
+managed取込は従来のparser上限を保持し、宣言展開総量16GiB、実読取展開総量8GiB、
+1entry2GiB、directory128MiB/25万件、CSV128MiB/XML64MiBを超えれば未完了として停止する。
+大きいZIPに連動して上限を緩めず、実RSS・一時disk・時間の適合も取得前/本番開始前に確認する。
 
 契約中と終了後90日は顧客対応・設定・結果・納品物を保持する。期限プレビュー、
 所属照合、明示実行、結果確認を行う。共通公報/他案件は削除しない。
@@ -110,13 +115,15 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    今回対象のJPAを手動取得する。取得日・公開日・号・サイズ・SHAを台帳へ記録。
    許可されたpackage/累計サイズを超えるものはpreview/uploadせず停止する。
 2. `managed-koho-preview`へ `{schema:1,sourcePath,byteLength,sha256}` を渡し、元ファイルを変えず有限parseする。
-   plan/Sources/Receiptのhash、未解析、補正未解決、実測RSSを確認。未解析を0とみなさない。
+   plan/Sources/Receiptのhash、A1/P1/A5/P5件数、未解析、補正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
 3. import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
-   configはSTANDARD_MANAGED_WATCH_RELEASE_V1、manifestは配布一覧hash・preview結果・2GiB以内の各package・
+   configはSTANDARD_MANAGED_WATCH_RELEASE_V1、manifestは配布一覧hash・preview結果・8GiB以内の各package・
    6時間以内の期限・累計予約を固定。sourcesは各`sha256/path`。`stage`の返すETag付きconfig/manifestを保管する。
 4. `start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
+   文献保存は500件ごとに分け、package全体は同一transactionを維持する。各SQL/COMMITにも共通期限を適用し、
+   期限超過・中断時は残処理を停止する。確認済みcommitは保持し、ACK不明は照合対象として残す。
 5. 固定URLの標準特許ウォッチ画面で最大5監視元の比較を準備し、statusでrun IDを読み戻す。
    台帳の残枠・費用・不明予約を含むbudgetProofを確認してstartする。
    Job受理後の実行はクラウド内。PCやブラウザーを開き続ける必要はない。statusとstart-reconcileで完了を確認する。

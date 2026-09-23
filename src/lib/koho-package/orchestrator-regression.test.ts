@@ -182,6 +182,22 @@ function parseCsvWithEmptyDocumentList(
 }
 
 describe("package orchestration regression coverage", () => {
+  it.each(["csv", "xml"] as const)("rejects oversized %s metadata before reading the entry", async kind => {
+    const input = packageInput({ type: "buffer", bytes: buildZip({ entries: minimalJpaEntries() }).bytes });
+    const actual = await openKohoZip({ source: input.source, limits: input.limits.zip });
+    const oversized = actual.entries.find(e => kind === "csv" ? e.normalizedPath === "ABSTRACT.csv" : e.pathCandidate === "primary_xml")!;
+    const readIds: number[] = [];
+    const entries = actual.entries.map(e => e.id === oversized.id ? { ...e,
+      uncompressedSize: (kind === "csv" ? input.limits.csv.maxInputBytes : input.limits.xml.maxXmlBytes) + 1 } : e);
+    const reader: KohoZipReader = { entries, summary: summaryFor(entries), close: () => actual.close(),
+      readEntryBytes: async id => { readIds.push(id); return actual.readEntryBytes(id); } };
+    const result = await parseKohoPackageWithDependencies(input, { openZip: async () => reader });
+    expect(result.status).toBe("failed");
+    expect(readIds).not.toContain(oversized.id);
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      cause: { source: kind, code: kind === "csv" ? "input_too_large" : "xml_byte_limit_exceeded" } }));
+  });
+
   it("maps a ZIP open error without exposing its raw source", async () => {
     const result = await parseKohoPackageWithDependencies(
       packageInput({

@@ -55,7 +55,7 @@ describe.skipIf(process.env.KOHO_CLOUD_LOCAL_DB_TEST !== "1")("dedicated cloud e
     }) as typeof client.query;
     return client;
   };
-  const save = (failure?: Parameters<typeof newClient>[0]): typeof saveCloudPlan => (c, m, p, plan, begin) => saveCloudPlan(c, m, p, plan, begin, () => newClient(failure));
+  const save = (failure?: Parameters<typeof newClient>[0]): typeof saveCloudPlan => (c, m, p, plan, begin, _factory, managed, execution) => saveCloudPlan(c, m, p, plan, begin, () => newClient(failure), managed, execution);
   const run = (f: Awaited<ReturnType<typeof cloudFixture>>, failure?: Parameters<typeof newClient>[0]) => runCloudImport(f.config, f.blob, { password, save: save(failure) });
   const fresh = (issue: string, review = false) => cloudFixture({ blob, target, issue, review });
   beforeAll(async () => {
@@ -171,9 +171,36 @@ describe.skipIf(process.env.KOHO_CLOUD_LOCAL_DB_TEST !== "1")("dedicated cloud e
     const approved = await fresh("FICTIONAL-REVIEW", true); approved.manifest.allowReviewRequired = true; await approved.publish();
     expect((await run(approved)).results[0]).toMatchObject({ outcome: "inserted", includesReviewRequired: true });
   });
+  it.each(["deadline", "abort", "slow_query"] as const)("blocks COMMIT and rolls back on %s during the real TLS transaction", async cause => {
+    const before = await snapshot(), fixture = await fresh(`FICTIONAL-BOUNDED-${cause}`);
+    const controller = new AbortController(); let commits = 0, inserts = 0;
+    const boundedSave: typeof saveCloudPlan = (c, m, p, plan, begin, _factory, managed, execution) => {
+      if (!execution) throw Error("missing_shared_deadline");
+      const client = newClient(), query = client.query;
+      client.query = (async (...args: unknown[]) => {
+        const first = args[0], text = typeof first === "string" ? first : (first as { text?: string })?.text ?? "";
+        if (/^commit$/i.test(text)) commits++;
+        const documentInsert = /^insert into "koho_import_documents"/i.test(text);
+        if (documentInsert) inserts++;
+        if (documentInsert && cause === "slow_query") await Reflect.apply(query, client, ["select pg_sleep(5)"]);
+        const result = await Reflect.apply(query, client, args);
+        if (documentInsert && cause === "deadline") execution.deadline = performance.now() - 1;
+        if (documentInsert && cause === "abort") controller.abort();
+        return result;
+      }) as typeof client.query;
+      return saveCloudPlan(c, m, p, plan, () => {
+        begin(); if (cause === "slow_query") execution.deadline = performance.now() + 250;
+      }, () => client, managed, execution);
+    };
+    const started = performance.now();
+    const result = await runCloudImport(fixture.config, blob, { password, signal: controller.signal, save: boundedSave });
+    expect(result.exitCode).toBe(2); expect(inserts).toBe(1); expect(commits).toBe(0);
+    expect(performance.now() - started).toBeLessThan(4000);
+    expect(await snapshot()).toBe(before);
+  });
   it("uses a corpus-only managed scope, atomically saves full claims and receipt, and rejects application access", async () => {
     const f = await managedCloudImportFixture(); f.config.expectedTarget = target; f.manifest.target = target; await f.publish();
-    const managedSave: typeof saveCloudPlan = (c,m,p,plan,begin,_factory,managed) => saveCloudPlan(c,m,p,plan,begin,()=>newClient(),managed);
+    const managedSave: typeof saveCloudPlan = (c,m,p,plan,begin,_factory,managed,execution) => saveCloudPlan(c,m,p,plan,begin,()=>newClient(),managed,execution);
     expect((await runCloudImport(f.config,f.blob,{password,save:managedSave})).results[0].outcome).toBe("failed_before_save");
     await sql(`GRANT SELECT, INSERT ON public.managed_publication_claims, public.managed_import_receipts TO ${target.user}`);
     try {

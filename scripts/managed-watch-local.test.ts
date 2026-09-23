@@ -38,6 +38,29 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     await environment.sql(`grant select,update on prior_art_documents to ${watcher}`);
   }, 120_000);
   afterAll(async () => { await importer?.end(); await environment?.cleanup(); }, 60_000);
+  it("saves 4000 documents below the bind limit and rolls back earlier chunks when a later chunk fails", async () => {
+    const bytes = manualFixture("JPA", 4000, { publicationDate: "2099-03-11", issue: "FICTIONAL-LARGE-BATCH" });
+    const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+    const parsed = await parseKohoPackage({ packageType: "JPA", source: { type: "buffer", bytes },
+      limits: buildKohoManualImportLimits(bytes.length) });
+    const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256 });
+    expect(plan.documentCount).toBe(4000);
+    const database = drizzle(importer, { schema });
+    await environment.sql("alter table koho_import_documents add constraint fictional_late_batch check (publication_number <> '2099003601')");
+    try {
+      await expect(saveKohoImportPlan(database, plan, true, "inserted")).rejects.toThrow();
+      expect((await environment.sql("select count(*)::int as n from koho_import_runs where source_sha256=$1", [sourceSha256]))[0].n).toBe(0);
+      expect((await environment.sql("select count(*)::int as n from koho_import_documents"))[0].n).toBe(0);
+    } finally {
+      await environment.sql("alter table koho_import_documents drop constraint fictional_late_batch");
+    }
+    try {
+      expect((await saveKohoImportPlan(database, plan, true, "inserted")).savedDocumentCount).toBe(4000);
+      expect((await environment.sql("select count(*)::int as n from koho_import_documents d join koho_import_runs r using(import_id) where r.source_sha256=$1", [sourceSha256]))[0].n).toBe(4000);
+    } finally {
+      await environment.sql("delete from koho_import_runs where source_sha256=$1", [sourceSha256]);
+    }
+  }, 60_000);
   it("cancels a real server query at the request deadline and rolls back the transaction",async()=>{
     const database=managedDeadlineDatabase(environment.watchClient,250),started=Date.now();
     await expect(database.transaction(async tx=>{await tx.execute(sql`select pg_sleep(5)`);})).rejects.toThrow();

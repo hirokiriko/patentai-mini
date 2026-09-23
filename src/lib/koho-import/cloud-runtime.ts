@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { parseKohoPackage } from "../koho-package";
 import { buildKohoImportPlan } from "./builder";
 import { buildKohoManualImportLimits } from "./manual-api";
+import { buildManagedImportLimits } from "./managed-limits";
 import { requireManual } from "./manual-cli-config";
 import { verifyManualSnapshot } from "./manual-cli-source";
 import { projectManualResult, summarizeManualPackage, type ManualFileResult } from "./manual-cli-summary";
@@ -66,7 +67,8 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           requireManual(await blob.download(cloudSourceName(pkg.sha256), pkg.byteLength, pkg.etag, source) === pkg.sha256);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
           const parsed = await parseKohoPackage({ packageType: pkg.packageType, source: { type: "file", path: source },
-            limits: buildKohoManualImportLimits(pkg.byteLength) });
+            limits: config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1"
+              ? buildManagedImportLimits(pkg.byteLength) : buildKohoManualImportLimits(pkg.byteLength) });
           const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256: pkg.sha256 });
           const managed = config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1" ? projectManagedPackage(parsed, plan) : undefined;
           if (managed) requireManual("managedSourcesSha256" in pkg && pkg.managedSourcesSha256 === managed.managedSourcesSha256 &&
@@ -87,11 +89,12 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           else {
             requireManual(growth < manifest.reservedGrowthBytes);
             const saved = await (options.save ?? saveCloudPlan)(config, { ...manifest, reservedGrowthBytes: manifest.reservedGrowthBytes - growth }, options.password!, plan,
-              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; }, undefined, managed);
+              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; }, undefined, managed, { deadline, signal: options.signal });
             result.outcome = saved.outcome; result.savedDocumentCount = saved.savedDocumentCount;
             result.includesReviewRequired = ["inserted", "reused"].includes(saved.outcome) && plan.packageStatus === "review_required";
             growth += saved.databaseGrowthBytes; capacityObserved = true; capacityConfirmed &&= saved.capacityConfirmed;
             if (!saved.capacityConfirmed) stopped = true;
+            guard();
           }
         } catch {
           // Receipt/capacity failures cannot retroactively change an acknowledged DB result.
@@ -115,6 +118,7 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
       }
     }
     if (!receiptFailed) {
+      try { guard(); } catch { stopped = true; }
       const status = results.some(r => r.outcome === "save_outcome_unknown") ? "reconciliation_required" : stopped ? "stopped" : "complete";
       await receipt.record("batch_finished", { status, cleanup, savedRecordCount: results.reduce((n, r) => n + (r.outcome === "inserted" ? r.savedDocumentCount : 0), 0) });
       // Both completion object and receipt remain private and conditional; a missing ACK stays explicit.

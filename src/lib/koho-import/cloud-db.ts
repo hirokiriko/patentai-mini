@@ -1,4 +1,4 @@
-import { Client, DatabaseError } from "pg";
+import { Client, DatabaseError, type QueryConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { saveKohoImportPlan } from "../../repositories/drizzle";
@@ -98,22 +98,43 @@ export async function inspectCloudDatabase(client: Client, target: CloudConfigur
 
 /** ACK of COMMIT and ACK of receipt storage are deliberately independent. */
 export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudManifest, password: string, plan: KohoImportPlan,
-  onSaving: () => void, createClient?: () => Client, managed?: ReturnType<typeof projectManagedPackage>): Promise<CloudSaveResult> {
+  onSaving: () => void, createClient?: () => Client, managed?: ReturnType<typeof projectManagedPackage>,
+  execution?: { deadline: number; signal?: AbortSignal }): Promise<CloudSaveResult> {
   requireManual(config.mode === "apply" && typeof password === "string" && password.length > 0 && password.length <= 8192);
   requireManual((config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") === !!managed);
+  const budget = execution ?? { deadline: performance.now() + manifest.maxElapsedMs };
+  const remaining = () => Math.floor(Math.min(budget.deadline - performance.now(), Date.parse(manifest.expiresAt) - Date.now()));
+  requireManual(Number.isFinite(budget.deadline) && remaining() > 0 && !budget.signal?.aborted);
   const client = createClient?.() ?? new Client({ ...config.expectedTarget, password, ssl: { rejectUnauthorized: true, servername: config.expectedTarget.host },
     connectionTimeoutMillis: 30_000, statement_timeout: 120_000, query_timeout: 125_000, lock_timeout: 30_000,
     idle_in_transaction_session_timeout: 120_000, options: "-c search_path=pg_catalog,public", application_name: "koho-cloud-pilot-import" });
   let broken = false, writeAttempted = false, commitSubmitted = false, rollbackConfirmed = false;
   let saved: CloudSaveResult | undefined;
   const connectionError = () => { broken = true; }; client.on("error", connectionError);
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= client.end().catch(() => undefined);
+  const interrupt = () => { void close(); };
+  const timer = setTimeout(interrupt, remaining());
+  budget.signal?.addEventListener("abort", interrupt, { once: true });
   const query = client.query;
   client.query = (async (...args: unknown[]) => {
     const first = args[0], statement = typeof first === "string" ? first : (first as { text?: string })?.text ?? "";
+    const rollback = /^\s*rollback\b/i.test(statement);
+    if (!rollback) {
+      requireManual(!budget.signal?.aborted && remaining() > 0);
+      const timeout = Math.max(1, Math.min(remaining(), 120_000));
+      // Dedicated connection; trusted numeric timeout only. Never reset the run deadline per chunk.
+      await Reflect.apply(query, client, [{ text: `set statement_timeout = ${timeout}; set lock_timeout = ${Math.min(timeout, 30_000)}`,
+        query_timeout: timeout }]);
+      requireManual(!budget.signal?.aborted && remaining() > 0);
+    }
     if (/^\s*(insert|update|delete)\b/i.test(statement)) writeAttempted = true;
     if (/^\s*commit\b/i.test(statement)) commitSubmitted = true;
+    const originalConfig: QueryConfig = typeof first === "string" ? { text: first } : first as QueryConfig;
+    const bounded: QueryConfig & { query_timeout: number } = { ...originalConfig, values: (args[1] as unknown[] | undefined) ?? originalConfig.values,
+      query_timeout: rollback ? 5000 : Math.max(1, Math.min(remaining(), 125_000)) };
     let result;
-    try { result = await Reflect.apply(query, client, args); }
+    try { result = await Reflect.apply(query, client, [bounded]); }
     catch (error) { if (writeAttempted && !(error instanceof DatabaseError)) broken = true; throw error; }
     if (/^\s*rollback\b/i.test(statement)) rollbackConfirmed = true;
     return result;
@@ -139,5 +160,5 @@ export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudM
   } catch {
     return saved ?? { outcome: commitSubmitted || (writeAttempted && (!rollbackConfirmed || broken)) ? "save_outcome_unknown" : "failed_before_save",
       savedDocumentCount: 0, databaseGrowthBytes: 0, capacityConfirmed: false };
-  } finally { await client.end().catch(() => undefined); client.removeListener("error", connectionError); }
+  } finally { clearTimeout(timer); budget.signal?.removeEventListener("abort", interrupt); await close(); client.query = query; client.removeListener("error", connectionError); }
 }

@@ -36,10 +36,11 @@ const manifestSchema = z.object({ schemaVersion: z.literal(1), approval: z.liter
 const managedManifestSchema = manifestSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"), round: z.number().int().min(1).max(40),
   maxTotalBytes: z.number().int().positive().max(8 * 1024**3),
   // These are release-wide reservations, including this batch and all unknown outcomes.
-  releaseReservation: z.object({ packageCount: z.number().int().min(1).max(64), compressedBytes: z.number().int().positive().max(64 * 1024**3),
+  releaseReservation: z.object({ packageCount: z.number().int().min(1).max(64), compressedBytes: z.number().int().positive().max(96 * 1024**3),
     jobExecutions: z.number().int().min(1).max(24), jobMinutes: z.number().int().min(1).max(48*60), ledgerDigest: sha,
     additionalForecastYen: z.number().int().positive().max(50_000), monthlyForecastYen: z.number().int().positive().max(30_000) }).strict(),
-  packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"), managedSourcesSha256: sha, managedReceiptSha256: sha })).min(1).max(4),
+  packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"),
+    byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha })).min(1).max(4),
 });
 const allManifests = z.discriminatedUnion("approval", [manifestSchema, managedManifestSchema]);
 export type CloudManifest = z.infer<typeof allManifests>;

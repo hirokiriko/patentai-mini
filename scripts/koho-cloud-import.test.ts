@@ -8,6 +8,24 @@ import type { saveCloudPlan } from "../src/lib/koho-import/cloud-db";
 
 const saving = () => vi.fn<typeof saveCloudPlan>(async (_c, _m, _p, plan, begin) => { begin(); return {
   outcome: "inserted", savedDocumentCount: plan.documentCount, databaseGrowthBytes: 10, capacityConfirmed: true }; });
+it.each(["deadline", "abort"])("retains a commit ACK but stops the batch after %s during saving", async cause => {
+  const f = await cloudFixture(), second = await cloudFixture({ blob: f.blob, issue: "FICTIONAL-LATE", publicationDate: "2099-03-12" });
+  f.manifest.packages.push(second.manifest.packages[0]); await f.publish();
+  const controller = new AbortController();
+  const save = vi.fn<typeof saveCloudPlan>(async (_c, _m, _p, plan, begin, _factory, _managed, execution) => {
+    begin(); expect(execution?.signal).toBe(controller.signal);
+    if (cause === "deadline") vi.spyOn(performance, "now").mockReturnValue(execution!.deadline + 1);
+    else controller.abort();
+    return { outcome: "inserted", savedDocumentCount: plan.documentCount, databaseGrowthBytes: 10, capacityConfirmed: true };
+  });
+  try {
+    const result = await runCloudImport(f.config, f.blob, { password: "FICTIONAL", signal: controller.signal, save });
+    expect(result.status).toBe("reconciliation_required");
+    expect(result.results.map(r => r.outcome)).toEqual(["inserted", "not_processed"]);
+    expect(save).toHaveBeenCalledOnce();
+    expect(JSON.parse(f.blob.objects.get(cloudReceiptPrefix(f.config) + "finished.json")!.bytes.toString()).status).toBe("stopped");
+  } finally { vi.restoreAllMocks(); }
+});
 it("runs real parser/plan, private receipt v1 and fixed aggregate through the Blob boundary", async () => {
   const f = await cloudFixture(), save = saving();
   const result = await runCloudImport(f.config, f.blob, { password: "FICTIONAL-SECRET", save });
