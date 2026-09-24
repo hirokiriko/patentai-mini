@@ -6,7 +6,7 @@ import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage, markManagedBudgetUnknown,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
   type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
-import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
+import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, managedReleaseBudgetRequest, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
 import { managedWatchBudgetRequest, managedImportBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
@@ -364,6 +364,7 @@ export class ManagedServiceBudgetStorage {
         r.previousReviewDigest === (value.state.administration.at(-1)?.digest ?? null);
       if (reconcileOnly) return { status: matches(saved) ? "not_applied" as const : "review_stale" as const };
       check(matches(saved)); await this.verifySources(r.sources);
+      const releasePolicy = r.action.kind === "release-start" ? await this.executionPolicy(saved!, r.action.step.pricingDigest, 90) : undefined;
       let p: z.infer<typeof managedBudgetProfileSchema> | undefined;
       if (r.action.kind === "activate") {
         p = managedBudgetProfileSchema.parse((await this.readJson(`${MANAGED_BUDGET_PREFIX}profiles/${r.action.profileDigest}.json`, 64 * 1024)).value);
@@ -381,10 +382,25 @@ export class ManagedServiceBudgetStorage {
         const month = new Date(date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7);
         check(r.action.processingMonth === month);
         state = setManagedMonthPlan(saved!.state, { ...r.action, evidenceDigest }, clock);
-      } else state = activateManagedBudgetProfile(saved!.state, p, r.action, clock);
+      } else if (r.action.kind === "activate") state = activateManagedBudgetProfile(saved!.state, p, r.action, clock);
+      else {
+        // Local preflight binds the exact operation/refs and all CI/deploy
+        // triggers. The existing connector/CLI is invoked once only after this
+        // fresh ACK; reconciliation must never recreate an execution permit.
+        const request = managedReleaseBudgetRequest(r.action.step, pins.targetBindingHash, pins.ownerBindingHash);
+        const executionClock = this.clock(saved!, 90);
+        validateManagedBudgetPolicy(releasePolicy, this.binding, date, executionClock.maximumActionMs);
+        const reserved = reserveManagedBudget(saved!.state, request, null, executionClock); check(reserved.created);
+        state = claimManagedBudgetPhase(reserved.state, request.operationId, "start", null, executionClock);
+      }
       state.administration.push({ sequence: r.sequence, digest: evidenceDigest });
       state = validateManagedBudgetState(state, this.binding.targetBindingHash);
       await this.replace(saved!, state);
+      if (r.action.kind === "release-start") return { status: "admitted" as const, operationId: r.action.step.operationId,
+        trigger: r.action.step.trigger, repository: r.action.step.repository, targetRef: r.action.step.targetRef,
+        headSha: r.action.step.headSha, baseSha: r.action.step.baseSha, treeSha: r.action.step.treeSha,
+        remoteBeforeSha: r.action.step.remoteBeforeSha, prNumber: r.action.step.prNumber,
+        executeBefore: new Date(Math.min(date.getTime() + 60_000, Date.parse(r.validUntil))).toISOString() };
       return { status: "applied" as const };
     });
   }

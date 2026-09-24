@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { managedDigest } from "./managed-claims";
 import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema } from "./managed-service-budget";
 import { MANAGED_BUDGET_PREFIX, ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
-import { managedAdministrationReviewSchema, type ManagedAdministrationReview, type ManagedSettlementReview } from "./managed-budget-evidence";
+import { managedAdministrationReviewSchema, type ManagedAdministrationReview, type ManagedSettlementReview, type ManagedReleaseStep } from "./managed-budget-evidence";
 import { managedBudgetedWatchFixture } from "./managed-execution-budget.test-support";
 import { managedCloudFixture } from "./managed-cloud.test-support";
 import type { ManagedBudgetBinding } from "./managed-budget-contract";
@@ -64,7 +64,7 @@ function fixture(binding:ManagedBudgetBinding = { storageAccount: "fictional", c
       return { request: req, status, headers, bodyAsText, readableStreamBody: Readable.from(bytes) };
     },
   });
-  return { store, files, calls, created, current: () => managedBudgetStateSchema.parse(JSON.parse(files.get(key)!.bytes.toString())),
+  return { store, files, calls, created, binding, current: () => managedBudgetStateSchema.parse(JSON.parse(files.get(key)!.bytes.toString())),
     loseAck: (name = key) => { lostAck = name; }, restoreAck: () => { lostAck = null; },
     rejectStateWrite: (value: boolean) => { rejectStateWrite = value; },
     onRead:(hook:(name:string)=>void)=>{onRead=hook;},
@@ -216,7 +216,7 @@ it("shares the reviewed import reservation across ETag sealing, stage confirmati
 function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministrationReview["action"], changes: Partial<ManagedAdministrationReview> = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519"), der = publicKey.export({ format: "der", type: "spki" });
   const pins = { publicKeySpkiBase64: der.toString("base64"), publicKeySha256: createHash("sha256").update(der).digest("hex"),
-    ownerBindingHash: hash(8), targetBindingHash: hash(1), productionGoDigest: undefined as string | undefined };
+    ownerBindingHash: f.binding.ownerBindingHash, targetBindingHash: f.binding.targetBindingHash, productionGoDigest: undefined as string | undefined };
   const fact = Buffer.from(JSON.stringify({ schema: 1, kind: "FICTIONAL_REVIEWED_ADMINISTRATION" }));
   const factDigest = createHash("sha256").update(fact).digest("hex"), factKey = `${MANAGED_BUDGET_PREFIX}evidence/${factDigest}.json`;
   f.files.set(factKey, { bytes: fact, etag: '"fact"' });
@@ -226,6 +226,7 @@ function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministra
   if (action.kind === "open") action = { ...action, state: { ...action.state, openingEvidenceDigest: factDigest,
     plans: action.state.plans.map(p => ({ ...p, pricingDigest: factDigest })) } };
   if (action.kind === "month") action = { ...action, pricingDigest: factDigest };
+  if (action.kind === "release-start") action = { ...action, step: { ...action.step, preflightDigest: factDigest } };
   if (action.kind === "activate") {
     const p = managedBudgetProfileSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY, targetBindingHash: hash(1), ownerBindingHash: hash(8),
       companyKey: "FICTIONAL_COMPANY", cases: [1], monthlyCapYen: 30_000,
@@ -235,16 +236,64 @@ function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministra
     f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${action.profileDigest}.json`, { bytes: Buffer.from(JSON.stringify(p)), etag: '"profile"' });
     pins.productionGoDigest = factDigest;
   }
-  const review = managedAdministrationReviewSchema.parse({ schema: 1, purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1", targetBindingHash: hash(1), ownerBindingHash: hash(8),
+  const sources = [{ digest: factDigest, bytes: fact.length }];
+  if (action.kind === "release-start") sources.push({ digest: action.step.pricingDigest, bytes: f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${action.step.pricingDigest}.json`)!.bytes.length });
+  const review = managedAdministrationReviewSchema.parse({ schema: 1, purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1", targetBindingHash: pins.targetBindingHash, ownerBindingHash: pins.ownerBindingHash,
     sequence: action.kind === "open" ? 1 : current.administration.length + 1,
     previousReviewDigest: action.kind === "open" ? null : current.administration.at(-1)?.digest ?? null,
     expectedStateDigest: action.kind === "open" ? null : managedDigest(current),
-    issuedAt: "2026-09-22T00:00:00Z", validUntil: "2026-09-25T00:00:00Z", sources: [{ digest: factDigest, bytes: fact.length }], action, ...changes });
+    issuedAt: action.kind === "release-start" ? "2026-09-23T00:00:00Z" : "2026-09-22T00:00:00Z",
+    validUntil: action.kind === "release-start" ? "2026-09-23T00:15:00Z" : "2026-09-25T00:00:00Z", sources, action, ...changes });
   const envelope = { review, signature: sign(null, Buffer.from(managedDigest(review), "hex"), privateKey).toString("base64") };
   const digest = managedDigest(envelope);
   f.files.set(`${MANAGED_BUDGET_PREFIX}administration-reviews/${digest}.json`, { bytes: Buffer.from(JSON.stringify(envelope)), etag: '"review"' });
   return { digest, pins, envelope, factKey };
 }
+function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseStep["kind"]="validation"):ManagedReleaseStep {
+  return {issue:129,repository:"hirokiriko/patentai-mini",operationId:randomUUID(),kind,
+    trigger:kind==="validation"?"pr-push":"squash-merge",prNumber:130,
+    targetRef:kind==="validation"?"refs/heads/codex/issue-129-test":"refs/heads/main",
+    remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
+    ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
+}
+it.each(["validation","forward","rollback"] as const)("admits a signed Local %s step only from a new atomic CAS ACK",async kind=>{
+  const f=executionFixture(),step=releaseStep(f,kind),p=adminReviewed(f,{kind:"release-start",step});
+  expect(await f.store.applyReviewedAdministration(p.digest,p.pins,true)).toEqual({status:"not_applied"});
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+  expect(await f.store.applyReviewedAdministration(p.digest,p.pins)).toMatchObject({status:"admitted",operationId:step.operationId,
+    headSha:step.headSha,baseSha:step.baseSha,remoteBeforeSha:step.remoteBeforeSha,executeBefore:"2026-09-23T00:01:00.000Z"});
+  expect(f.current().operations).toHaveLength(1);expect(f.current().administration).toHaveLength(2);
+  expect(f.current().operations[0]).toMatchObject({kind:kind==="validation"?"validation":"deploy",start:"claimed",actualYen:null,
+    units:{...emptyManagedBudgetUnits(),...(kind==="validation"?{}:{[kind]:1})}});
+  expect(await f.store.applyReviewedAdministration(p.digest,p.pins)).toEqual({status:"already_applied"});
+  expect(await f.store.applyReviewedAdministration(p.digest,p.pins,true)).toEqual({status:"already_applied"});
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(1);
+});
+it("retains a release claim with a lost ACK but never reconstructs its permit",async()=>{
+  const f=executionFixture(),step=releaseStep(f,"forward"),p=adminReviewed(f,{kind:"release-start",step});f.loseAck();
+  await expect(f.store.applyReviewedAdministration(p.digest,p.pins)).rejects.toThrow();f.restoreAck();
+  expect(f.current().operations[0]).toMatchObject({start:"claimed",reservationYen:100,units:{forward:1}});
+  expect(await f.store.applyReviewedAdministration(p.digest,p.pins,true)).toEqual({status:"already_applied"});
+  const retry=adminReviewed(f,{kind:"release-start",step});await expect(f.store.applyReviewedAdministration(retry.digest,retry.pins)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(1);
+});
+it.each(["expired","long-signature","changed-price-bytes","budget-exhausted","stale-state"])("rejects a %s release review before the atomic admission",async reason=>{
+  const f=executionFixture(),step=releaseStep(f);
+  if(reason==="budget-exhausted"){const s=f.current();s.plans[0].pools.remaining=0;f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));}
+  const p=adminReviewed(f,{kind:"release-start",step},reason==="long-signature"?{validUntil:"2026-09-24T00:00:00Z"}:{});
+  if(reason==="expired")f.setDate("Wed, 23 Sep 2026 00:15:00 GMT");
+  if(reason==="changed-price-bytes")f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${f.pricingDigest}.json`)!.bytes=Buffer.from("{}");
+  if(reason==="stale-state"){
+    const s=f.current();s.releaseTailYen-=1;
+    f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));
+  }
+  await expect(f.store.applyReviewedAdministration(p.digest,p.pins)).rejects.toThrow();expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+});
+it("admits only one competing signed release step against the reviewed state",async()=>{
+  const f=executionFixture(),a=adminReviewed(f,{kind:"release-start",step:releaseStep(f)}),b=adminReviewed(f,{kind:"release-start",step:releaseStep(f)});
+  f.raceReads();const results=await Promise.allSettled([f.store.applyReviewedAdministration(a.digest,a.pins),f.store.applyReviewedAdministration(b.digest,b.pins)]);
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);expect(f.current().operations).toHaveLength(1);expect(f.current().administration).toHaveLength(2);
+});
 it("records reviewed month plans once and reconciles a lost admin CAS ACK without reapplying", async () => {
   const f = fixture(), r = request("watch"); await f.store.reserve(r);
   const p = adminReviewed(f); f.loseAck();

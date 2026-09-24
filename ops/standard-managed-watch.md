@@ -230,7 +230,31 @@ CAS ACK不明・再送は実行許可にせず、定額予約を保持する。�
 API/stdinから料金や保存先を指定しない。納品はAPIの90秒、backup/復元は管理入口の5分期限を予算IOにも引き継ぐ。
 隔離復元はbackupIdと別のrecoveryOperationIdで、DB確定sha/bytesを拘束してから原本を読み戻す。
 期限後は今回作成した隔離fixtureの有限cleanupのみを継続する。保存済みread/reconcileに新規予約や自動返金はない。
-deployへの共通ガード接続、証拠収集/署名手順、予約枠確定、本番統合受入は未完了。
+検証/配備は既存`managed-budget-admin`の署名済み`release-start` actionで予約する。
+stdinは従来どおりreview digestだけであり、CLI引数から金額・対象・unitsを受け付けない。
+専用の別release基盤やpublic CI向けの台帳資格情報は追加しない。
+
+署名対象はIssue129/repository、具体trigger、PR/対象ref、対象branchのremoteBeforeSha、head/base/tree、
+CI/deploy workflowの原文SHA256、pricing/preflightの原文digest、税込の保守的予約額である。
+preflightにはその操作から起動するCI・既存preview候補・ACR build/push・app/Job更新・保持/復旧を漏れなく割り当てる。
+validationは9単位0、forward/rollbackは対応する一方だけ1をコードで導出する。旧不明額・既消費単位を引き継ぐ。
+review有効期間は最大15分。現state digest、連続admin sequence、当月pricing/policy期限と90分の処理余裕を照合し、
+reserve＋start claim＋admin sequenceを一度のCASで保存する。新規成功ACKの`admitted`だけが開始根拠になる。
+`already_applied`・reconcile・CAS ACK不明から開始権を復元しない。予約は残し、結果を先に照合する。
+
+Local担当は`admitted`のexecuteBefore（Blob Date基準の最大60秒）より前に対象を再照合して固定操作を一度だけ行う。
+PR push/作成/再開はCI等の起動前、main merge/dispatchは全配備triggerの起動前に予約する。
+main CIとAzure deployは独立起動するため、main CI成功後に配備されるとは説明しない。
+merge前にheadと統合treeの検証・独立review・必須CI・停止条件を確認する。expected-headはbaseのCASではないため、
+base/対象ref/workflow/Job bindingが変わった場合は停止して再検証・新reviewを作る。auto-merge待機や自動rebaseはしない。
+queued/running・結果不明の既存実行があれば新操作を止め、待ち行列を重ねない。
+workflowのCI20分・deploy40分timeoutを予約へ織り込む。初回操作でも、実際のtrigger/refで実行されるworkflow原文を確認し、
+未反映のtimeout変更を適用済みとして見積もらない。PR未作成branchのpushはPR番号・旧remote SHAのnullも署名し、PR作成とは別に予約する。
+発火後は実行ID/attempt/SHA/開始時刻を照合し、
+20分以内に開始しない実行は既知IDの取消・結果確認へ進む。自動rerunや別triggerへの迂回はせず、取消成功でも不明費用を0にしない。
+これはLocalの実行手順による制御であり、キューや請求遅延を含む厳密な請求上限の機械保証ではない。
+
+証拠収集/署名・create-only配置の手順、予約枠確定、本番統合受入は未完了。
 定例運用が成立したとは扱わず、残工程と本番GOを確認するまで標準profileの有効化は行わない。
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、
