@@ -41,6 +41,7 @@ const planSchema = z.object({ month, baseYen: yen, pools, evidenceDigests: z.arr
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases, lastTrustedAt: z.iso.datetime(),
   releaseTailYen: yen, legacyUnknownYen: yen, openingEvidenceDigest: hash,
+  administration: z.array(z.object({ sequence: quantity.refine(v => v > 0), digest: hash }).strict()).max(1200),
   plans: z.array(planSchema).max(1200), operations: z.array(operationSchema).max(10_000) }).strict();
 export type ManagedBudgetState = z.infer<typeof managedBudgetStateSchema>;
 // Created only by the fixed private-Blob adapter. Never accept these fields from stdin/HTTP.
@@ -78,6 +79,8 @@ function seal(value: ManagedBudgetState) {
   check(new Set(s.plans.map(p => p.month)).size === s.plans.length);
   check(new Set(s.operations.map(o => o.operationId)).size === s.operations.length);
   check(new Set(s.operations.map(o => o.requestDigest)).size === s.operations.length);
+  check(new Set(s.administration.map(r => r.digest)).size === s.administration.length &&
+    s.administration.every((r, i) => r.sequence === i + 1));
   check(Buffer.byteLength(JSON.stringify({ ...s, operations: [] })) <= 1024 ** 2);
   check(s.operations.length * 20 * 1024 + 1024 ** 2 <= 16 * 1024 ** 2);
   for (const o of s.operations) {
@@ -89,6 +92,8 @@ function seal(value: ManagedBudgetState) {
       expiry > reserved && expiry <= Math.min(reserved + 6 * 60 * 60_000, monthEnd));
     check(o.scope === "standard" ? o.profileDigest !== null : o.profileDigest === null);
     check(o.kind === "import" ? o.stage !== "unused" && (o.start !== "claimed" || o.stage === "done") : o.stage === "unused");
+    check(o.actualYen === null || unitKeys.every(k => o.knownUnits[k] !== undefined));
+    check(o.settlements.length === Math.min(o.lastProofSequence, 64));
     check(new Set(o.settlements.map(p => p.evidenceDigest)).size === o.settlements.length &&
       o.settlements.every((p, i) => p.sequence === o.lastProofSequence - o.settlements.length + i + 1));
   }

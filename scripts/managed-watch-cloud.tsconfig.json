@@ -2,6 +2,6 @@
   "extends": "../tsconfig.json",
   "compilerOptions": { "module": "CommonJS", "moduleResolution": "Node", "noEmit": false, "incremental": false,
     "outDir": "../.koho-ops/managed", "rootDir": "..", "jsx": "react-jsx" },
-  "include": ["managed-watch-cloud.ts", "managed-watch-operator.ts", "managed-koho-preview.ts", "managed-koho-operator.ts", "managed-base-preview.ts"],
+  "include": ["managed-watch-cloud.ts", "managed-watch-operator.ts", "managed-koho-preview.ts", "managed-koho-operator.ts", "managed-base-preview.ts", "managed-budget-admin.ts"],
   "exclude": ["../node_modules", "../.koho-ops"]
 }

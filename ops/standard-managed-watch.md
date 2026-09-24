@@ -168,15 +168,45 @@ deletion-previewの所属・期限・件数・完全な対象digestを確認し�
 stage/startは同じoperationを使用し、月替わり・profile改版・ACK喪失で予約を解放しない。
 精算後に追加額が判明した場合も、再精算まで翌月へ保持する。
 
-adapterは固定service prefix、HTTP Date、ETag条件付き単発書込を使い、404を新しい空台帳にしない。
+adapterは固定service prefix、HTTP Date、ETag条件付き単発書込を使い、通常の404を新しい空台帳にしない。
 保存先は管理端末の信頼済み設定`MANAGED_BUDGET_STORAGE_ACCOUNT`、`MANAGED_BUDGET_CONTAINER`、
 `MANAGED_BUDGET_TARGET_SHA256`で固定し、requestからは選ばない。既存Storage接続又は同じJobのMIを使う。
 予算のclaim ACKが不明な呼出元に開始権を返さず、受理済みworkerの読戻しは別処理とする。
 workerの二重実行防止には既存のDB/receipt実行claimも必要である。
 
 精算証拠は連番と最新64件のfingerprintを保持し、上限後の追加料金も記録して再確認を要求する。
-古い証拠の再確認には、同じoperation/連番のimmutable原本を管理adapterで照合する必要がある。
-開設証拠、実usageによる精算、月額再見積とGO/価格/実測の独立pinを検証する管理入口は未接続。
+古い証拠の再確認には、同じoperation/連番のimmutable原本を管理adapterで照合する。
+署名が有効な期間に登録済みの原本は、Blobのcreation timeを確認して期限後も同じ精算を再開できる。
+Last-Modifiedや端末時刻を登録時刻の代用にしない。原本登録/状態CASのACK不明は、先にread-onlyで照合する。
+
+Local専用の`managed-budget-admin`はstdinの`command`と`evidenceDigest`だけを受け付ける。
+`status`、`review-apply`/`review-reconcile`、`settlement-apply`/`settlement-reconcile`を提供し、金額・GO判定・
+保存先・鍵を業務requestから受け付けない。build後の入口は`.koho-ops/managed/scripts/managed-budget-admin.js`。
+statusの月/時刻は最後に記録された値であり、当月開始の許可ではない。
+
+根拠は固定prefixの`evidence/<raw-bytes-sha256>.json`、精算reviewは`settlement-reviews/<review-digest>.json`、
+管理reviewは`administration-reviews/<review-digest>.json`へcreate-onlyで保管する。各128KiB以下、根拠は最大16件。
+reviewは対応するstrict schemaで正規化し、そのJSON SHA256の32bytesをEd25519で署名する。
+schemaに従うreviewとbase64署名を持つenvelopeのJSON SHA256がreview-digestになる。
+app/Jobに秘密署名鍵を渡さず、別のLocal管理・独立確認後にだけ署名を発行する。署名は実測や請求確定の代用ではない。
+実行receipt/usageのoperation対応を確認し、金額未確定は部分観測だけにする。全9単位の最終量と費用が確認できるまで予約を保持する。
+
+公開検証鍵は`MANAGED_BUDGET_REVIEW_PUBLIC_KEY`（Ed25519 SPKI/base64）、独立SHA256は
+`MANAGED_BUDGET_REVIEW_KEY_SHA256`、OWNERは`MANAGED_BUDGET_OWNER_SHA256`で固定する。
+標準profile有効化には、独立した本番受入後だけ設置する`MANAGED_BUDGET_PRODUCTION_GO_SHA256`も必要。
+管理review内の自己申告GOだけでは有効化しない。実測/価格/GO根拠の各bytes hashとprofileの対応を照合する。
+
+開設reviewだけがstateをcreate-onlyで作成でき、既存stateの初期化・置換はしない。
+`opening-intent.json`→初期state→`opened.json`の順にcreate-onlyで確定し、開設完了markerがない台帳からの
+業務開始を拒否する。開設途中の再開は署名済み初期stateの全体digestと一致する場合だけ。
+開設済みmarkerがあるのにstateが失われた場合は復元を要する事故として停止し、古い開設reviewを再適用しない。
+開設時は旧費用の不明予約と今回既実行分を別々に引き継ぎ、今回の予約をrelease累計から落とさない。
+空の履歴配列を累計消費0の証拠にせず、同じcut-offまでの実行記録の完全性を確認する。
+月額計画・profile改版は署名時のstate digest、連続sequence、直前review digestをCASで確認する。
+競合した古い計画を再適用せず、現状を再確認して新reviewを作る。適用済みdigestは永続historyから照合し二重反映しない。
+1200管理変更・768 operationを越える前に容量確認が必要で、履歴を削除して枠を再開しない。
+
+証拠の収集・独立判定・署名発行とcreate-only配置は、検証済みのLocal管理手順として確定する必要がある。
 現在のoperator/workerもこの共通予算adapterへ未接続であり、定例運用が成立したとは扱わない。
 予約枠の確定・上記接続・実DB/SDK統合試験を終えるまで、標準profileの有効化は行わない。
 
