@@ -4,12 +4,14 @@ import { z } from "zod";
 import { requireManual } from "./manual-cli-config";
 import { updateDate } from "./update-check-config";
 import type { KohoImportPlan } from "./types";
+import { managedBudgetBindingSchema, managedBudgetReferenceSchema, isManagedExecutionApproval } from "../patent-watch/managed-budget-contract";
 
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
 const codeSha = z.string().regex(/^[a-f0-9]{40}$/);
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const bytes = z.number().int().positive().max(2 * 1024 ** 3);
 const environment = z.string().regex(/^\/subscriptions\/[a-f0-9-]{36}\/resourceGroups\/[a-zA-Z0-9_.()-]{1,90}\/providers\/Microsoft\.App\/managedEnvironments\/[a-zA-Z0-9-]{1,60}$/);
+export const cloudEnvironmentResourceIdSchema = environment;
 const etag = z.string().regex(/^"[A-Za-z0-9]+"$/).max(128);
 export const cloudTargetSchema = z.object({ host: z.string().regex(/^[a-z0-9-]+\.postgres\.database\.azure\.com$/),
   port: z.literal(5432), database: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,62}$/),
@@ -20,8 +22,10 @@ const configSchema = z.object({ approval: z.literal("REGULAR_PRODUCTION_PILOT_V1
   managedIdentityClientId: z.uuid().optional(), expectedCodeSha: codeSha, expectedEnvironmentResourceId: environment, expectedTarget: cloudTargetSchema,
   manifest: z.object({ sha256: sha, etag, byteLength: z.number().int().positive().max(131072) }).strict(),
 }).strict();
-const managedConfigSchema = configSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1") });
-const allConfigs = z.discriminatedUnion("approval", [configSchema, managedConfigSchema]);
+const managedConfigSchema = configSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"),
+  serviceBudget: managedBudgetReferenceSchema.optional(), budgetBinding: managedBudgetBindingSchema.optional() });
+const standardConfigSchema = managedConfigSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_STANDARD_V1") });
+const allConfigs = z.discriminatedUnion("approval", [configSchema, managedConfigSchema, standardConfigSchema]);
 export type CloudConfiguration = z.infer<typeof allConfigs>;
 const manifestSchema = z.object({ schemaVersion: z.literal(1), approval: z.literal("REGULAR_PRODUCTION_PILOT_V1"),
   operationId: z.uuidv4(), mode: z.enum(["preview", "apply"]), codeSha,
@@ -42,9 +46,24 @@ const managedManifestSchema = manifestSchema.extend({ approval: z.literal("STAND
   packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"),
     byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha })).min(1).max(4),
 });
-const allManifests = z.discriminatedUnion("approval", [manifestSchema, managedManifestSchema]);
+const standardManifestSchema = managedManifestSchema.omit({ releaseReservation: true }).extend({
+  approval: z.literal("STANDARD_MANAGED_WATCH_STANDARD_V1"), round: count.refine(v => v > 0) });
+const allManifests = z.discriminatedUnion("approval", [manifestSchema, managedManifestSchema, standardManifestSchema]);
 export type CloudManifest = z.infer<typeof allManifests>;
 export function parseCloudConfiguration(value: unknown) { return allConfigs.parse(value); }
+export function isManagedCloudConfiguration(c: CloudConfiguration): c is z.infer<typeof managedConfigSchema> | z.infer<typeof standardConfigSchema> {
+  return isManagedExecutionApproval(c.approval);
+}
+export function isManagedCloudManifest(m: CloudManifest): m is z.infer<typeof managedManifestSchema> | z.infer<typeof standardManifestSchema> {
+  return isManagedExecutionApproval(m.approval);
+}
+export function parseManagedCloudImportConfiguration(value: unknown) {
+  const c = parseCloudConfiguration(value);
+  requireManual(isManagedCloudConfiguration(c) && c.serviceBudget && c.budgetBinding);
+  if (!isManagedCloudConfiguration(c) || !c.serviceBudget || !c.budgetBinding) throw Error("cloud_budget_required");
+  requireManual((c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1") === (c.serviceBudget.profileDigest !== null));
+  return { ...c, serviceBudget: c.serviceBudget, budgetBinding: c.budgetBinding };
+}
 export const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 /** Independent approved digest binds every parsed field, not only the document count. */
 export function cloudPlanSha256(plan: KohoImportPlan) {

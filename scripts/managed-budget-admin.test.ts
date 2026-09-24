@@ -6,7 +6,7 @@ const hash = "a".repeat(64), pins = { publicKeySpkiBase64: "FICTIONAL_PUBLIC_KEY
 function store() { return { snapshot: vi.fn(async () => managedBudgetStateSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY,
   targetBindingHash: hash, activeProfileDigest: null, cases: [1], lastTrustedAt: "2026-09-23T00:00:00Z", releaseTailYen: 2000,
   legacyUnknownYen: 600, openingEvidenceDigest: hash, administration: [], operations: [],
-  plans: [{ month: "2026-09", baseYen: 1000, pools: { remaining: 1000, storage: 1000, recovery: 1000 }, evidenceDigests: [hash] }] })),
+  plans: [{ month: "2026-09", baseYen: 1000, pools: { remaining: 1000, storage: 1000, recovery: 1000 }, pricingDigest: hash, evidenceDigests: [hash] }] })),
   applyReviewedAdministration: vi.fn(async () => ({ status: "applied" as const })),
   settleReviewed: vi.fn(async () => ({ status: "applied" as const })) }; }
 it("returns a bounded summary without ledger identifiers or raw evidence", async () => {

@@ -14,6 +14,7 @@ import { ManagedArchiveStorage } from "../src/lib/patent-watch/managed-archive-s
 import { verifyManagedBackupRestore } from "./managed-watch-restore";
 import { managedId, managedHash, managedSettingSchema } from "../src/lib/patent-watch/managed-types";
 import { ManagedPrivateStorage, reconcileManagedDelivery } from "../src/lib/patent-watch/managed-storage";
+import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
 const binding=managedCloudConfigSchema.omit({operationId:true,runs:true,expiresAt:true,budgetProof:true});
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("setting-save"),setting:managedSettingSchema}).strict(),
@@ -85,7 +86,9 @@ if(require.main===module){
             }
             if(!found)throw Error();
           }
-          output=await dispatchManagedWatch(starts,{...b,operationId:request.operationId,runs,expiresAt:new Date(Date.now()+3*60*60_000).toISOString(),budgetProof:request.budgetProof},await operatorArm(b.jobResourceId));break;
+          const budget=ManagedServiceBudgetStorage.configured();
+          const config=await budget.prepareWatch({...b,operationId:request.operationId,runs,expiresAt:new Date(Date.now()+3*60*60_000).toISOString(),budgetProof:request.budgetProof});
+          output=await dispatchManagedWatch(starts,config,await operatorArm(b.jobResourceId),budget);break;
         }
         case "start-reconcile":{const existing=await starts.get(request.operationId);if(existing.config.jobResourceId!==b.jobResourceId)throw Error();
           existing.config.runs.forEach(r=>scope(r.caseId));output=await reconcileManagedWatchStart(starts,request.operationId,await operatorArm(b.jobResourceId));break;}

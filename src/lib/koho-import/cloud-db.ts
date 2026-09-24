@@ -3,7 +3,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { saveKohoImportPlan } from "../../repositories/drizzle";
 import { requireManual } from "./manual-cli-config";
-import type { CloudConfiguration, CloudManifest } from "./cloud-config";
+import { isManagedCloudConfiguration, type CloudConfiguration, type CloudManifest } from "./cloud-config";
 import type { KohoImportPlan } from "./types";
 import type { ManualSaveOutcome } from "./manual-cli-db";
 import type { projectManagedPackage } from "./managed-package";
@@ -101,7 +101,7 @@ export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudM
   onSaving: () => void, createClient?: () => Client, managed?: ReturnType<typeof projectManagedPackage>,
   execution?: { deadline: number; signal?: AbortSignal }): Promise<CloudSaveResult> {
   requireManual(config.mode === "apply" && typeof password === "string" && password.length > 0 && password.length <= 8192);
-  requireManual((config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") === !!managed);
+  requireManual(isManagedCloudConfiguration(config) === !!managed);
   const budget = execution ?? { deadline: performance.now() + manifest.maxElapsedMs };
   const remaining = () => Math.floor(Math.min(budget.deadline - performance.now(), Date.parse(manifest.expiresAt) - Date.now()));
   requireManual(Number.isFinite(budget.deadline) && remaining() > 0 && !budget.signal?.aborted);

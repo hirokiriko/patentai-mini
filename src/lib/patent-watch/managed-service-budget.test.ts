@@ -17,7 +17,7 @@ function settleManagedBudget(s: ManagedBudgetState, proof: Omit<Parameters<typeo
 function state(): ManagedBudgetState { return managedBudgetStateSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY,
   targetBindingHash: digest(1), activeProfileDigest: null, cases: [], lastTrustedAt: "2026-09-22T00:00:00.000Z",
   releaseTailYen: 20_000, legacyUnknownYen: 2000, openingEvidenceDigest: digest(2), administration: [],
-  plans: [{ month: "2026-09", baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 }, evidenceDigests: [digest(3)] }], operations: [] }); }
+  plans: [{ month: "2026-09", baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 }, pricingDigest: digest(4), evidenceDigests: [digest(3)] }], operations: [] }); }
 function request(overrides: Record<string, unknown> = {}) { return { operationId: randomUUID(), requestDigest: managedDigest(randomUUID()),
   scope: "release", kind: "import", profileDigest: null, pricingDigest: digest(4), cases: [1], reservationYen: 1000,
   units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, packages: 1, bytes: 1024 }, ...overrides }; }
@@ -30,7 +30,7 @@ function activate(s: ManagedBudgetState, p: ManagedBudgetProfile, date = clock()
 }
 function nextMonth(s: ManagedBudgetState, date = "2026-09-30T15:00:01.000Z") {
   return setManagedMonthPlan(s, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
-    evidenceDigest: digest(8), releaseTailYen: s.releaseTailYen }, clock(date));
+    pricingDigest: digest(4), evidenceDigest: digest(8), releaseTailYen: s.releaseTailYen }, clock(date));
 }
 it("allocates one import reservation across stage/start without adding it to its pool again", () => {
   const original = state(), r = request(); const reserved = reserveManagedBudget(original, r, null, clock()).state;
@@ -97,7 +97,7 @@ it("persists an observed overrun, retains future work funds, and stops new start
     evidenceDigest: digest(31), knownUnits: r.units, actualYen: 1200 }, clock());
   expect(final.releaseTailYen).toBe(19_000); expect(final.operations[0].actualYen).toBe(1200);
   const reviewed = setManagedMonthPlan(final, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
-    releaseTailYen: final.releaseTailYen, evidenceDigest: digest(32), reviewedOperationIds: [r.operationId] }, clock());
+    pricingDigest: digest(4), releaseTailYen: final.releaseTailYen, evidenceDigest: digest(32), reviewedOperationIds: [r.operationId] }, clock());
   expect(reserveManagedBudget(reviewed, request(), null, clock()).created).toBe(true);
 });
 it("records late actual increases and over-cap quantities without turning them into another start allowance", () => {
@@ -132,7 +132,7 @@ it("keeps release totals across months while standard operations use the measure
 });
 it("records an over-cap plan for reconciliation but never treats it as permission", () => {
   const over = setManagedMonthPlan(state(), { baseYen: 40_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
-    releaseTailYen: 20_000, evidenceDigest: digest(70) }, clock());
+    pricingDigest: digest(4), releaseTailYen: 20_000, evidenceDigest: digest(70) }, clock());
   expect(managedBudgetForecast(over, "2026-09")).toBe(52_000);
   expect(() => reserveManagedBudget(over, request(), null, clock())).toThrow();
   expect(() => reserveManagedBudget({ ...state(), serviceKey: "another-wallet" }, request(), null, clock())).toThrow();
@@ -145,7 +145,7 @@ it("carries a later unsettled bill after a prior final bill, even after an admin
     evidenceDigest: digest(81), knownUnits: {}, observedYen: 1200 }, clock());
   expect(observed.operations[0]).toMatchObject({ actualYen: 100, observedYen: 1200, unknown: true, reviewRequired: true });
   const reviewed = setManagedMonthPlan(observed, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
-    releaseTailYen: observed.releaseTailYen, evidenceDigest: digest(82), reviewedOperationIds: [r.operationId] }, clock());
+    pricingDigest: digest(4), releaseTailYen: observed.releaseTailYen, evidenceDigest: digest(82), reviewedOperationIds: [r.operationId] }, clock());
   expect(managedBudgetForecast(nextMonth(reviewed), "2026-10")).toBe(23_200);
   const final = settleManagedBudget(reviewed, { operationId: r.operationId, requestDigest: r.requestDigest,
     evidenceDigest: digest(83), knownUnits: r.units, actualYen: 1200 }, clock());
@@ -162,7 +162,7 @@ it("retains the 65th bill and bounded audit fingerprints, then stops further adm
   expect(managedBudgetForecast(nextMonth(s), "2026-10")).toBe(23_200);
   expect(() => reserveManagedBudget(s, request(), null, clock())).toThrow();
   const review = { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
-    releaseTailYen: s.releaseTailYen, evidenceDigest: digest(200), reviewedOperationIds: [r.operationId] };
+    pricingDigest: digest(4), releaseTailYen: s.releaseTailYen, evidenceDigest: digest(200), reviewedOperationIds: [r.operationId] };
   const reviewed = setManagedMonthPlan(s, review, clock());
   expect(reviewed.operations[0].reviewRequired).toBe(false);
   expect(setManagedMonthPlan(reviewed, review, clock())).toEqual(reviewed);
@@ -171,7 +171,7 @@ it("retains the 65th bill and bounded audit fingerprints, then stops further adm
 });
 it("keeps global plan growth out of capacity reserved for final operation evidence", () => {
   const s = state();
-  s.plans = Array.from({ length: 120 }, (_, i) => ({ ...s.plans[0], month: `${2030 + Math.floor(i / 12)}-${String(i % 12 + 1).padStart(2, "0")}`,
+  s.plans = Array.from({ length: 112 }, (_, i) => ({ ...s.plans[0], month: `${2030 + Math.floor(i / 12)}-${String(i % 12 + 1).padStart(2, "0")}`,
     evidenceDigests: Array.from({ length: 128 }, (_, n) => digest(n + 1)) }));
   expect(() => validateManagedBudgetState(s, digest(1))).not.toThrow();
   s.plans.push({ ...s.plans[0], month: "2026-09" });

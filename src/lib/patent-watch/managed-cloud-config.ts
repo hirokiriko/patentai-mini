@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { cloudTargetSchema } from "../koho-import/cloud-config";
+import { cloudTargetSchema, cloudEnvironmentResourceIdSchema } from "../koho-import/cloud-config";
 import { managedHash, managedId, ManagedWatchError } from "./managed-types";
-export const managedCloudConfigSchema = z.object({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"), operationId: z.uuidv4(),
+import { managedExecutionApprovalSchema, managedBudgetReferenceSchema, managedBudgetBindingSchema, managedBudgetBindingEnvironment } from "./managed-budget-contract";
+export const managedCloudConfigSchema = z.object({ approval: managedExecutionApprovalSchema, operationId: z.uuidv4(),
   codeSha: z.string().regex(/^[a-f0-9]{40}$/), image: z.string().regex(/^[a-z0-9]+\.azurecr\.io\/patentai-mini@sha256:[a-f0-9]{64}$/),
   jobName: z.string().regex(/^[a-z][a-z0-9-]{1,58}[a-z0-9]$/),
   jobResourceId: z.string().regex(/^\/subscriptions\/[a-f0-9-]{36}\/resourceGroups\/[a-zA-Z0-9_.()-]{1,90}\/providers\/Microsoft\.App\/jobs\/[a-z0-9-]{1,60}$/),
@@ -15,6 +16,9 @@ export const managedCloudConfigSchema = z.object({ approval: z.literal("STANDARD
     monthlyForecastYen: z.number().int().positive().max(30_000), externalJobExecutions: z.number().int().nonnegative().max(24),
     externalJobReservedMinutes: z.number().int().nonnegative().max(48*60), externalNormalSends: z.number().int().nonnegative().max(900),
     externalFastSends: z.number().int().nonnegative().max(80) }).strict(),
+  // No defaults: historical serialized configurations and template hashes remain unchanged.
+  serviceBudget: managedBudgetReferenceSchema.optional(), budgetBinding: managedBudgetBindingSchema.optional(),
+  expectedEnvironmentResourceId: cloudEnvironmentResourceIdSchema.optional(),
 }).strict();
 export type ManagedCloudConfiguration = z.infer<typeof managedCloudConfigSchema>;
 export function parseManagedCloudConfiguration(value: unknown, now = Date.now(), requireFreshBudget = true): ManagedCloudConfiguration {
@@ -25,9 +29,16 @@ export function parseManagedCloudConfiguration(value: unknown, now = Date.now(),
     Date.parse(c.budgetProof.checkedAt) > now + 60_000 || (requireFreshBudget && now - Date.parse(c.budgetProof.checkedAt) > 30*60_000)) throw new ManagedWatchError("invalid_setting");
   return c;
 }
+export function parseManagedCloudStartConfiguration(value: unknown, now = Date.now(), requireFreshBudget = true) {
+  const c = parseManagedCloudConfiguration(value, now, requireFreshBudget);
+  if (!c.serviceBudget || !c.budgetBinding || !c.expectedEnvironmentResourceId ||
+    (c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1") !== (c.serviceBudget.profileDigest !== null)) throw new ManagedWatchError("invalid_setting");
+  return { ...c, serviceBudget: c.serviceBudget, budgetBinding: c.budgetBinding, expectedEnvironmentResourceId:c.expectedEnvironmentResourceId };
+}
+export type ManagedCloudStartConfiguration = ReturnType<typeof parseManagedCloudStartConfiguration>;
 /** Only this fixed template may be sent by the operator. No inherited import credential. */
 export function managedWatchJobTemplate(value: ManagedCloudConfiguration, freshDispatch = true) {
-  const c = freshDispatch ? parseManagedCloudConfiguration(value) : managedCloudConfigSchema.parse(value);
+  const c = freshDispatch ? parseManagedCloudStartConfiguration(value) : managedCloudConfigSchema.parse(value);
   return { containers: [{ name: "managed-watch", image: c.image, command: ["node", ".koho-ops/managed/scripts/managed-watch-cloud.js"], args: [],
     resources: { cpu: 2, memory: "4Gi" }, env: [
       { name: "MANAGED_WATCH_CONFIG_JSON", value: JSON.stringify(c) },
@@ -35,5 +46,6 @@ export function managedWatchJobTemplate(value: ManagedCloudConfiguration, freshD
       { name: "AZURE_API_KEY", secretRef: c.secrets.ai },
       { name: "AI_PROVIDER", value: "azure" }, { name: "AZURE_RESOURCE_NAME", value: c.ai.resourceName },
       { name: "AZURE_OPENAI_DEPLOYMENT_NAME", value: c.ai.deployment }, { name: "AZURE_OPENAI_API_VERSION", value: c.ai.apiVersion },
+      ...(c.budgetBinding ? managedBudgetBindingEnvironment(c.budgetBinding) : []),
     ] }], initContainers: [] };
 }

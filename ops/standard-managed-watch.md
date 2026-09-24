@@ -118,14 +118,17 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    plan/Sources/Receiptのhash、A1/P1/A5/P5件数、未解析、補正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
 3. import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
    configはSTANDARD_MANAGED_WATCH_RELEASE_V1、manifestは配布一覧hash・preview結果・8GiB以内の各package・
-   6時間以内の期限・累計予約を固定。sourcesは各`sha256/path`。`stage`の返すETag付きconfig/manifestを保管する。
+   6時間以内の期限・累計予約を固定。sourcesは各`sha256/path`。先にread-onlyの`prepare`で
+   料金表・固定対象に結合したconfig/manifestを取得し、Localへ保存してから`stage`に渡す。
+   `stage`の返すETag付きconfig/manifestも保管する。
 4. `start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
    文献保存は500件ごとに分け、package全体は同一transactionを維持する。各SQL/COMMITにも共通期限を適用し、
    期限超過・中断時は残処理を停止する。確認済みcommitは保持し、ACK不明は照合対象として残す。
 5. 固定URLの標準特許ウォッチ画面で最大5監視元の比較を準備し、statusでrun IDを読み戻す。
-   台帳の残枠・費用・不明予約を含むbudgetProofを確認してstartする。
+   台帳の残枠・費用・不明予約を確認してstartする。旧budgetProofだけでは新規開始できず、
+   operatorが固定共通台帳の当月料金表から実行参照を作り、予約・開始権のACKを確認する。
    Job受理後の実行はクラウド内。PCやブラウザーを開き続ける必要はない。statusとstart-reconcileで完了を確認する。
 6. 25日締めの対象期間を変えず、配布一覧・実取込・全文不足・補正・各runを照合する。
    訂正の元国内公開日が特定できない場合、WO番号の年を国内公開年の代用にしない。
@@ -171,6 +174,7 @@ stage/startは同じoperationを使用し、月替わり・profile改版・ACK�
 adapterは固定service prefix、HTTP Date、ETag条件付き単発書込を使い、通常の404を新しい空台帳にしない。
 保存先は管理端末の信頼済み設定`MANAGED_BUDGET_STORAGE_ACCOUNT`、`MANAGED_BUDGET_CONTAINER`、
 `MANAGED_BUDGET_TARGET_SHA256`で固定し、requestからは選ばない。既存Storage接続又は同じJobのMIを使う。
+OWNER bindingと、既存user-assigned MIを使う場合の`MANAGED_BUDGET_IDENTITY_CLIENT_ID`も独立設定へ固定する。
 予算のclaim ACKが不明な呼出元に開始権を返さず、受理済みworkerの読戻しは別処理とする。
 workerの二重実行防止には既存のDB/receipt実行claimも必要である。
 
@@ -207,8 +211,19 @@ app/Jobに秘密署名鍵を渡さず、別のLocal管理・独立確認後に�
 1200管理変更・768 operationを越える前に容量確認が必要で、履歴を削除して枠を再開しない。
 
 証拠の収集・独立判定・署名発行とcreate-only配置は、検証済みのLocal管理手順として確定する必要がある。
-現在のoperator/workerもこの共通予算adapterへ未接続であり、定例運用が成立したとは扱わない。
-予約枠の確定・上記接続・実DB/SDK統合試験を終えるまで、標準profileの有効化は行わない。
+watch/import operatorとworkerには共通予算adapterを接続した。watchは共通予約→DB予約→submitting ACK→
+共通start claim→ARM POST、importは共通予約→stage claim→保存済みmanifest照合→stage確認→start claim→ARM POSTの順。
+新規startは当月planのraw pricing SHAと現profileを使い、受理済みworkerは元のimmutable policy/profileを検証する。
+各phaseはBlob Dateで設定期限の必要残時間を確認し、workerも再確認する。statusは旧設定・旧期限の読取りを保持する。
+旧設定に任意の初期値を補って新規startすることはない。Standardは別approvalと承認済みprofileを必須とし、
+release累計を再開・リセットしない。JobのDB履歴は最大1000件、release上限はrelease行だけに適用し、
+watch/import全体の費用・単位は共通台帳で制限する。DBの95分worker枠と共通台帳の120分Job枠を混同しない。
+
+料金表は固定Job/environment、code/image、watch/importの異なるDB login・secretRef、AI、保存先、OWNERを結合する。
+金額は料金表の保守的予約額とrun数/ZIP GiBから導出し、業務requestの自己申告額を採用しない。
+料金表原文は署名済み月額計画へ含め、profileのpricing/measurement digestとも照合する。
+納品・backup・restore・deployへの共通ガード接続、証拠収集/署名手順、予約枠確定、本番統合受入は未完了。
+定例運用が成立したとは扱わず、残工程と本番GOを確認するまで標準profileの有効化は行わない。
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、
 他顧客/基盤モデル学習への提供とは区別し、abuse monitoringやGlobal処理場所の条件も記録する。保持0を未確認のまま表示しない。

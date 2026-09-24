@@ -15,7 +15,7 @@ export interface CloudBlobBoundary {
 }
 
 /** Only ACA's injected loopback identity endpoint is admitted; there is no credential fallback. */
-export function cloudManagedIdentity(config: CloudConfiguration, env: Record<string, string | undefined> = process.env, signal?: AbortSignal) {
+export function cloudManagedIdentity(config: Pick<CloudConfiguration, "managedIdentityClientId">, env: Record<string, string | undefined> = process.env, signal?: AbortSignal) {
   const endpoint = new URL(env.IDENTITY_ENDPOINT ?? "");
   requireManual(endpoint.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) &&
     endpoint.pathname === "/msi/token" && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash &&

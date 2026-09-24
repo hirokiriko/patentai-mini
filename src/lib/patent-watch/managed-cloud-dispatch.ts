@@ -1,7 +1,8 @@
-import { managedWatchJobTemplate, parseManagedCloudConfiguration, type ManagedCloudConfiguration } from "./managed-cloud-config";
+import { managedWatchJobTemplate, parseManagedCloudStartConfiguration, type ManagedCloudConfiguration } from "./managed-cloud-config";
 import type { ManagedCloudStartRepository } from "../../repositories/managed-cloud-start";
 import { ManagedWatchError } from "./managed-types";
 import { managedDigest } from "./managed-claims";
+import { ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 const VERSION="2025-07-01";
 const url=(config:ManagedCloudConfiguration)=>`https://management.azure.com${config.jobResourceId}`;
 type Arm = (url:string,method:"GET"|"POST",body?:unknown)=>Promise<{status:number;body:unknown}>;
@@ -25,16 +26,20 @@ function templateMatches(actual:unknown,config:ManagedCloudConfiguration){
     managedDigest(c.args??[])===managedDigest(expected.args)&&resources?.cpu===2&&resources.memory==="4Gi"&&
     managedDigest(normalizeEnv(c.env))===managedDigest(normalizeEnv(expected.env));
 }
-/** A POST is possible only after a unique durable reservation and the submitting ACK.
- * The operator must include import/other costs in the monotone external ledger proof. */
-export async function dispatchManagedWatch(starts:ManagedCloudStartRepository,value:unknown,arm:Arm){
-  const config=parseManagedCloudConfiguration(value), target=await arm(`${url(config)}?api-version=${VERSION}`,"GET");
-  const body=target.body as {id?:string;properties?:{configuration?:{triggerType?:string;replicaTimeout?:number;replicaRetryLimit?:number;manualTriggerConfig?:{parallelism?:number;replicaCompletionCount?:number}};template?:{containers?:Array<{image?:string}>}}};
+export type ManagedWatchDispatchBudget = Pick<ManagedServiceBudgetStorage, "reserveWatch" | "claimWatch" | "markUnknown">;
+/** Shared money/units are reserved before DB writes. A start POST needs both
+ * the unique business reservation and the shared ledger's one-time claim. */
+export async function dispatchManagedWatch(starts:ManagedCloudStartRepository,value:unknown,arm:Arm,
+  budget:ManagedWatchDispatchBudget=ManagedServiceBudgetStorage.configured()){
+  const config=parseManagedCloudStartConfiguration(value), target=await arm(`${url(config)}?api-version=${VERSION}`,"GET");
+  const body=target.body as {id?:string;properties?:{environmentId?:string;configuration?:{triggerType?:string;replicaTimeout?:number;replicaRetryLimit?:number;manualTriggerConfig?:{parallelism?:number;replicaCompletionCount?:number}};template?:{containers?:Array<{image?:string}>}}};
   const c=body?.properties?.configuration, containers=body?.properties?.template?.containers;
-  if(target.status!==200||body?.id?.toLowerCase()!==config.jobResourceId.toLowerCase()||c?.triggerType!=="Manual"||c.replicaRetryLimit!==0||
+  if(target.status!==200||body?.id?.toLowerCase()!==config.jobResourceId.toLowerCase()||body.properties?.environmentId!==config.expectedEnvironmentResourceId||c?.triggerType!=="Manual"||c.replicaRetryLimit!==0||
     !c.replicaTimeout||c.replicaTimeout>7200||c.replicaTimeout<5700||c.manualTriggerConfig?.parallelism!==1||c.manualTriggerConfig.replicaCompletionCount!==1||
     containers?.length!==1||containers[0].image!==config.image)throw new ManagedWatchError("unavailable");
+  if(!(await budget.reserveWatch(config)).created)throw new ManagedWatchError("conflict");
   await starts.reserve(config);await starts.submitting(config);
+  await budget.claimWatch(config);
   try{
     const result=await arm(`${url(config)}/start?api-version=${VERSION}`,"POST",managedWatchJobTemplate(config));
     if(![200,202].includes(result.status))throw Error();
@@ -47,6 +52,8 @@ export async function dispatchManagedWatch(starts:ManagedCloudStartRepository,va
     const observed=await starts.get(config.operationId);
     return {operationId:config.operationId,status:observed.status==="accepted"||observed.status==="completed"?observed.status:"submitting"};
   }catch{
+    // Losing an ARM response never releases money or grants another start.
+    await budget.markUnknown(config.operationId).catch(()=>undefined);
     const observed=await starts.get(config.operationId);
     if(observed.status==="accepted"||observed.status==="completed")return{operationId:config.operationId,status:observed.status};
     await starts.markUnknown(config);throw new ManagedWatchError("outcome_unknown");

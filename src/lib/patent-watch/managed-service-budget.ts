@@ -37,7 +37,7 @@ const operationSchema = managedBudgetRequestSchema.extend({ intentDigest: hash, 
   evidenceChainDigest: hash, lastProofSequence: quantity,
   settlements: z.array(z.object({ sequence: quantity.refine(v => v > 0), evidenceDigest: hash, proofDigest: hash }).strict()).max(64) }).strict();
 type Operation = z.infer<typeof operationSchema>;
-const planSchema = z.object({ month, baseYen: yen, pools, evidenceDigests: z.array(hash).min(1).max(128) }).strict();
+const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128) }).strict();
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases, lastTrustedAt: z.iso.datetime(),
   releaseTailYen: yen, legacyUnknownYen: yen, openingEvidenceDigest: hash,
@@ -125,7 +125,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile)
   check(sum([s.releaseTailYen, ...s.operations.filter(o => o.scope === "release").map(cost)]) <= 50_000);
   const release = totals(s, "release", m);
   for (const k of unitKeys) check(release[k] <= managedReleaseCaps[k]);
-  if (profile) { const total = totals(s, "month", m); for (const k of unitKeys) check(total[k] <= profile.monthlyUnits[k]); }
+  if (profile) { check(profile.pricingDigest === s.plans.find(p => p.month === m)?.pricingDigest);
+    const total = totals(s, "month", m); for (const k of unitKeys) check(total[k] <= profile.monthlyUnits[k]); }
 }
 function find(s: ManagedBudgetState, id: string) { const o = s.operations.find(o => o.operationId === id); check(o); return o; }
 function evidence(o: Operation, digest: string) {
@@ -138,9 +139,9 @@ function evidence(o: Operation, digest: string) {
 
 /** Administrative evidence must be checked by the adapter before these transitions. */
 export function setManagedMonthPlan(value: unknown, input: { baseYen: number; pools: z.infer<typeof pools>;
-  evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[] }, clock: ManagedBudgetClock) {
+  pricingDigest: string; evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[] }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
-  const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools,
+  const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
     evidenceDigests: [...new Set([...(old?.evidenceDigests ?? []), hash.parse(input.evidenceDigest)])] });
   if (old) s.plans[s.plans.indexOf(old)] = plan; else s.plans.push(plan);
   s.releaseTailYen = yen.parse(input.releaseTailYen);
@@ -171,6 +172,7 @@ export function reserveManagedBudget(value: unknown, request: unknown, profile: 
   else check(r.profileDigest === null);
   s.cases = [...new Set([...s.cases, ...r.cases])].sort((a, b) => a - b); check(s.cases.length <= 5);
   const plan = s.plans.find(p => p.month === m), pool = poolOf(r); check(plan);
+  check(r.pricingDigest === plan.pricingDigest);
   check(poolUsed(s, m, pool) + r.reservationYen <= plan.pools[pool]);
   if (r.scope === "release") { check(s.releaseTailYen >= r.reservationYen); s.releaseTailYen -= r.reservationYen; }
   s.operations.push({ ...r, intentDigest: managedDigest(r), processingMonth: m, reservedAt: s.lastTrustedAt,
@@ -182,6 +184,7 @@ export function reserveManagedBudget(value: unknown, request: unknown, profile: 
 export function claimManagedBudgetPhase(value: unknown, id: string, phase: "stage" | "start", profile: unknown, clock: ManagedBudgetClock) {
   const { s, ms, month: m, end } = current(value, clock), o = find(s, id);
   check(!o.unknown && o.actualYen === null && o.processingMonth === m && ms + clock.maximumActionMs < Math.min(end, Date.parse(o.expiresAt)));
+  check(o.pricingDigest === s.plans.find(p => p.month === m)?.pricingDigest);
   const p = o.scope === "standard" ? active(s, profile) : undefined;
   if (p) check(o.profileDigest === managedDigest(p));
   admit(s, m, p);

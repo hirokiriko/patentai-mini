@@ -1,27 +1,32 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { Readable } from "node:stream";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { managedDigest } from "./managed-claims";
 import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema } from "./managed-service-budget";
 import { MANAGED_BUDGET_PREFIX, ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 import { managedAdministrationReviewSchema, type ManagedAdministrationReview, type ManagedSettlementReview } from "./managed-budget-evidence";
+import { managedBudgetedWatchFixture } from "./managed-execution-budget.test-support";
+import { managedCloudFixture } from "./managed-cloud.test-support";
+import type { ManagedBudgetBinding } from "./managed-budget-contract";
+import { managedCloudImportFixture } from "../../../scripts/managed-koho-cloud.test-support";
+afterEach(()=>{vi.restoreAllMocks();vi.useRealTimers();});
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), key = `${MANAGED_BUDGET_PREFIX}state.json`;
 const openedKey = `${MANAGED_BUDGET_PREFIX}opened.json`, openingIntentKey = `${MANAGED_BUDGET_PREFIX}opening-intent.json`;
 function request(kind: "watch" | "import" = "import") { return { operationId: randomUUID(), requestDigest: managedDigest(randomUUID()),
   scope: "release", kind, profileDigest: null, pricingDigest: hash(4), cases: [1], reservationYen: 600,
   units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, ...(kind === "watch" ? { starts: 1, normal: 41 } : { packages: 1, bytes: 1024 }) } }; }
-function fixture() {
-  const binding = { storageAccount: "fictional", container: "private-import", targetBindingHash: hash(1) };
-  const initial = managedBudgetStateSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY, targetBindingHash: hash(1),
+function fixture(binding:ManagedBudgetBinding = { storageAccount: "fictional", container: "private-import", targetBindingHash: hash(1), ownerBindingHash: hash(8) }) {
+  const initial = managedBudgetStateSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY, targetBindingHash: binding.targetBindingHash,
     activeProfileDigest: null, cases: [], lastTrustedAt: "2026-09-22T00:00:00.000Z", releaseTailYen: 20_000,
     legacyUnknownYen: 2000, openingEvidenceDigest: hash(2), administration: [{ sequence: 1, digest: hash(2) }], plans: [{ month: "2026-09", baseYen: 10_000,
-      pools: { remaining: 1000, storage: 1000, recovery: 1000 }, evidenceDigests: [hash(3)] }], operations: [] });
+      pools: { remaining: 1000, storage: 1000, recovery: 1000 }, pricingDigest: hash(4), evidenceDigests: [hash(3)] }], operations: [] });
   const files = new Map([[key, { bytes: Buffer.from(JSON.stringify(initial)), etag: '"v1"' }]]), calls: string[] = [];
   files.set(openedKey, { bytes: Buffer.from(JSON.stringify({ schema: 1, reviewDigest: hash(2), initialStateDigest: hash(20) })), etag: '"opened"' });
   const created = new Map<string, string>();
   let counter = 1, lostAck: string | null = null, noDate = false, publicContainer = false, date = "Wed, 23 Sep 2026 00:00:00 GMT";
   let rejectStateWrite = false;
+  let onRead:(name:string)=>void=()=>{};
   let barrier: Promise<void> | undefined, release: (() => void) | undefined, reads = 0;
   const store = ManagedServiceBudgetStorage.withIdentity(binding, { async getToken() { return { token: "FICTIONAL_TOKEN", expiresOnTimestamp: Date.now() + 3600_000 }; } }, {
     async sendRequest(req) {
@@ -44,6 +49,7 @@ function fixture() {
           if (!created.has(name)) created.set(name, date);
           headers.set("etag", etag); status = 201; if (lostAck === name) throw Error("PRIVATE_RAW_ERROR_MUST_NOT_ESCAPE"); }
       } else {
+        if(req.method==="GET")onRead(name);
         const stored = files.get(name);
         if (!stored) { status = 404; headers.set("x-ms-error-code", "BlobNotFound"); headers.set("content-type", "application/xml"); bodyAsText = "<Error><Code>BlobNotFound</Code></Error>"; }
         else {
@@ -61,6 +67,7 @@ function fixture() {
   return { store, files, calls, created, current: () => managedBudgetStateSchema.parse(JSON.parse(files.get(key)!.bytes.toString())),
     loseAck: (name = key) => { lostAck = name; }, restoreAck: () => { lostAck = null; },
     rejectStateWrite: (value: boolean) => { rejectStateWrite = value; },
+    onRead:(hook:(name:string)=>void)=>{onRead=hook;},
     omitDate: () => { noDate = true; }, makePublic: () => { publicContainer = true; },
     setDate: (v: string) => { date = v; }, raceReads: () => { barrier = new Promise<void>(resolve => { release = resolve; }); } };
 }
@@ -73,6 +80,93 @@ it("uses the real SDK to allow only one concurrent watch/import reservation from
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(2);
 });
 
+function executionFixture(){
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
+  const b=managedBudgetedWatchFixture(managedCloudFixture()),f=fixture(b.binding);
+  const s=f.current();s.plans[0].pricingDigest=b.pricingDigest;f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
+  return{...f,...b};
+}
+it("derives a watch reservation from reviewed policy, claims once, and verifies the original execution",async()=>{
+  const f=executionFixture(),legacy=managedCloudFixture();
+  const c=await f.store.prepareWatch(legacy);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+  expect(await f.store.reserveWatch(c)).toEqual({created:true});
+  expect(f.current().operations[0]).toMatchObject({reservationYen:410,units:{jobs:1,minutes:120,starts:1,normal:41},pricingDigest:f.pricingDigest});
+  await f.store.claimWatch(c);await f.store.markUnknown(c.operationId);
+  expect(await f.store.verifyWatch(c)).toMatchObject({processingMonth:"2026-09",expiresAt:c.expiresAt});
+  await expect(f.store.claimWatch(c)).rejects.toThrow();
+  expect(await f.store.reserveWatch(c)).toEqual({created:false});
+  expect(f.current().operations).toHaveLength(1);
+  await expect(f.store.verifyWatch({...c,runs:[{...c.runs[0],snapshotDigest:hash(45)}]})).rejects.toThrow();
+});
+it.each(["changed-policy","raw-policy","missing-policy","changed-binding","expired-policy"])("blocks %s before reserving business costs",async reason=>{
+  const f=executionFixture(),c=await f.store.prepareWatch(managedCloudFixture());
+  if(reason==="changed-policy"){const s=f.current();s.plans[0].pricingDigest=hash(11);f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));}
+  if(reason==="raw-policy")f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${f.pricingDigest}.json`)!.bytes=Buffer.from(JSON.stringify({...f.policy,reservations:{...f.policy.reservations,watchRunYen:1}}));
+  if(reason==="missing-policy")f.files.delete(`${MANAGED_BUDGET_PREFIX}evidence/${f.pricingDigest}.json`);
+  if(reason==="changed-binding")c.budgetBinding.ownerBindingHash=hash(77);
+  if(reason==="expired-policy")f.setDate("Wed, 30 Sep 2026 14:30:00 GMT");
+  await expect(f.store.reserveWatch(c)).rejects.toThrow("managed_budget_stopped");
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it("rechecks state and Blob Date after pricing IO before admitting a reservation",async()=>{
+  const f=executionFixture(),c=await f.store.prepareWatch(managedCloudFixture());let changed=false;
+  f.onRead(name=>{if(!changed&&name.endsWith(`${f.pricingDigest}.json`)){changed=true;f.files.get(key)!.etag='"competing-update"';}});
+  await expect(f.store.reserveWatch(c)).rejects.toThrow();expect(f.current().operations).toEqual([]);
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it("retains an original Standard profile for an already claimed worker after profile and price revision",async()=>{
+  const f=executionFixture();
+  const p=managedBudgetProfileSchema.parse({schema:1,serviceKey:MANAGED_SERVICE_KEY,targetBindingHash:f.binding.targetBindingHash,ownerBindingHash:f.binding.ownerBindingHash,
+    companyKey:"FICTIONAL_COMPANY",cases:[7],monthlyCapYen:30_000,monthlyUnits:{...emptyManagedBudgetUnits(),jobs:2,minutes:240,starts:2,normal:82},
+    pricingDigest:f.pricingDigest,measurementDigest:f.policy.measurementDigest,goEvidenceDigest:hash(76)});
+  const a=managedDigest(p),s=f.current();s.activeProfileDigest=a;s.cases=[7];f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${a}.json`,{bytes:Buffer.from(JSON.stringify(p)),etag:'"profile-a"'});
+  const c=await f.store.prepareWatch({...managedCloudFixture(),approval:"STANDARD_MANAGED_WATCH_STANDARD_V1"});
+  await f.store.reserveWatch(c);await f.store.claimWatch(c);
+  const revised=f.current();revised.activeProfileDigest=hash(78);revised.plans[0].pricingDigest=hash(79);f.files.get(key)!.bytes=Buffer.from(JSON.stringify(revised));
+  expect(await f.store.verifyWatch(c)).toMatchObject({processingMonth:"2026-09"});
+  await expect(f.store.claimWatch(c)).rejects.toThrow();
+  f.files.delete(`${MANAGED_BUDGET_PREFIX}profiles/${a}.json`);
+  await expect(f.store.verifyWatch(c)).rejects.toThrow();
+});
+it("rechecks expiry and operation status after policy IO in the Worker",async()=>{
+  const f=executionFixture(),c=await f.store.prepareWatch(managedCloudFixture());await f.store.reserveWatch(c);await f.store.claimWatch(c);
+  f.onRead(name=>{if(name.endsWith(`${f.pricingDigest}.json`))f.setDate("Wed, 23 Sep 2026 02:00:00 GMT");});
+  await expect(f.store.verifyWatch(c)).rejects.toThrow();
+});
+it("refuses to reserve a watch whose execution deadline cannot contain the job",async()=>{
+  const f=executionFixture(),c=await f.store.prepareWatch({...managedCloudFixture(),expiresAt:"2026-09-23T01:00:00.000Z"});
+  await expect(f.store.reserveWatch(c)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it.each(["stage","start"] as const)("refuses an import %s claim when only its manifest deadline is too near",async phase=>{
+  vi.spyOn(Date,"now").mockReturnValue(Date.parse("2026-09-23T00:00:00Z"));
+  const b=await managedCloudImportFixture(),f=fixture(b.binding),s=f.current();s.plans[0].pricingDigest=b.pricingDigest;
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
+  const c=await f.store.prepareImport(b.config,b.manifest,b.job);await f.store.reserveImport(c,b.manifest,b.job);
+  if(phase==="start"){await f.store.claimImport(c,b.manifest,b.job,"stage");await f.store.confirmImport(c,b.manifest,b.job);}
+  f.setDate(phase==="stage"?"Wed, 23 Sep 2026 02:10:00 GMT":"Wed, 23 Sep 2026 01:00:00 GMT");
+  const writes=f.calls.filter(c=>c.startsWith("PUT:"));let effects=0;
+  await expect(f.store.claimImport(c,b.manifest,b.job,phase).then(()=>{effects++;})).rejects.toThrow();
+  expect(effects).toBe(0);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);
+  expect(f.current().operations[0][phase]).toBe("ready");
+});
+it("shares the reviewed import reservation across ETag sealing, stage confirmation, start and worker read-back",async()=>{
+  vi.spyOn(Date,"now").mockReturnValue(Date.parse("2026-09-23T00:00:00Z"));
+  const b=await managedCloudImportFixture(),f=fixture(b.binding),s=f.current();s.plans[0].pricingDigest=b.pricingDigest;
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
+  const c=await f.store.prepareImport(b.config,b.manifest,b.job);expect(await f.store.reserveImport(c,b.manifest,b.job)).toEqual({created:true});
+  await f.store.claimImport(c,b.manifest,b.job,"stage");await expect(f.store.claimImport(c,b.manifest,b.job,"start")).rejects.toThrow();
+  b.manifest.packages[0].etag='"sealed"';await b.publish();const sealed={...c,manifest:b.config.manifest};
+  await f.store.confirmImport(sealed,b.manifest,b.job);await f.store.confirmImport(sealed,b.manifest,b.job);
+  await f.store.claimImport(sealed,b.manifest,b.job,"start");
+  expect(await f.store.verifyImport(sealed,b.manifest,b.job)).toMatchObject({processingMonth:"2026-09"});
+  expect(f.current().operations).toHaveLength(1);expect(f.current().operations[0]).toMatchObject({reservationYen:90,stage:"done",start:"claimed",units:{packages:1,bytes:b.data.length}});
+  await expect(f.store.claimImport(sealed,b.manifest,b.job,"start")).rejects.toThrow();
+  await expect(f.store.verifyImport(sealed,{...b.manifest,packages:[{...b.manifest.packages[0],managedSourcesSha256:hash(70)}]},b.job)).rejects.toThrow();
+});
+
 function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministrationReview["action"], changes: Partial<ManagedAdministrationReview> = {}) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519"), der = publicKey.export({ format: "der", type: "spki" });
   const pins = { publicKeySpkiBase64: der.toString("base64"), publicKeySha256: createHash("sha256").update(der).digest("hex"),
@@ -82,8 +176,10 @@ function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministra
   f.files.set(factKey, { bytes: fact, etag: '"fact"' });
   const current = f.current();
   action ??= { kind: "month", processingMonth: "2026-09", baseYen: 10_001,
-    pools: { remaining: 1000, storage: 1000, recovery: 1000 }, releaseTailYen: current.releaseTailYen, reviewedOperationIds: [] };
-  if (action.kind === "open") action = { ...action, state: { ...action.state, openingEvidenceDigest: factDigest } };
+    pools: { remaining: 1000, storage: 1000, recovery: 1000 }, pricingDigest: factDigest, releaseTailYen: current.releaseTailYen, reviewedOperationIds: [] };
+  if (action.kind === "open") action = { ...action, state: { ...action.state, openingEvidenceDigest: factDigest,
+    plans: action.state.plans.map(p => ({ ...p, pricingDigest: factDigest })) } };
+  if (action.kind === "month") action = { ...action, pricingDigest: factDigest };
   if (action.kind === "activate") {
     const p = managedBudgetProfileSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY, targetBindingHash: hash(1), ownerBindingHash: hash(8),
       companyKey: "FICTIONAL_COMPANY", cases: [1], monthlyCapYen: 30_000,
@@ -131,7 +227,8 @@ it("never reapplies an opening snapshot after the opened ledger is lost", async 
   const f = fixture(), p = adminReviewed(f, { kind: "open", state: { ...f.current(), administration: [] } });
   f.files.delete(key); f.files.delete(openedKey);
   await f.store.applyReviewedAdministration(p.digest, p.pins);
-  const r = request("watch"); await f.store.reserve(r); await f.store.claim(r.operationId, "start"); await f.store.markUnknown(r.operationId);
+  const r = { ...request("watch"), pricingDigest: f.current().plans[0].pricingDigest };
+  await f.store.reserve(r); await f.store.claim(r.operationId, "start"); await f.store.markUnknown(r.operationId);
   f.files.delete(key); const before = f.calls.length;
   await expect(f.store.applyReviewedAdministration(p.digest, p.pins)).rejects.toThrow("managed_budget_stopped");
   await expect(f.store.applyReviewedAdministration(p.digest, p.pins, true)).rejects.toThrow("managed_budget_stopped");
@@ -188,7 +285,7 @@ it.each(["future-month", "sequence", "previous", "fact", "expired"])("rejects in
   if (reason === "sequence") changes.sequence = 3;
   if (reason === "previous") changes.previousReviewDigest = hash(90);
   const action: ManagedAdministrationReview["action"] = { kind: "month", processingMonth: reason === "future-month" ? "2026-10" : "2026-09",
-    baseYen: 10_000, pools: { remaining: 1000, storage: 1000, recovery: 1000 }, releaseTailYen: 20_000, reviewedOperationIds: [] };
+    baseYen: 10_000, pools: { remaining: 1000, storage: 1000, recovery: 1000 }, pricingDigest: hash(4), releaseTailYen: 20_000, reviewedOperationIds: [] };
   const p = adminReviewed(f, action, changes);
   if (reason === "fact") f.files.get(p.factKey)!.bytes = Buffer.from("{}");
   if (reason === "expired") f.setDate("Sat, 26 Sep 2026 00:00:00 GMT");
@@ -196,9 +293,10 @@ it.each(["future-month", "sequence", "previous", "fact", "expired"])("rejects in
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);
 });
 it("activates only a signed profile whose GO digest is independently installed", async () => {
-  const f = fixture(), p = adminReviewed(f, { kind: "activate", profileDigest: hash(1), goEvidenceDigest: hash(1), measurementDigest: hash(1), pricingDigest: hash(1) });
+  const f = fixture(), plan = adminReviewed(f); await f.store.applyReviewedAdministration(plan.digest, plan.pins);
+  const p = adminReviewed(f, { kind: "activate", profileDigest: hash(1), goEvidenceDigest: hash(1), measurementDigest: hash(1), pricingDigest: hash(1) }), before = f.calls.length;
   await expect(f.store.applyReviewedAdministration(p.digest, { ...p.pins, productionGoDigest: undefined })).rejects.toThrow();
-  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);
+  expect(f.calls.slice(before).filter(c => c.startsWith("PUT:"))).toHaveLength(0);
   expect(await f.store.applyReviewedAdministration(p.digest, p.pins)).toEqual({ status: "applied" });
   expect(f.current().activeProfileDigest).not.toBeNull();
 });

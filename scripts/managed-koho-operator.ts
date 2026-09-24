@@ -3,13 +3,15 @@ import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { BlobServiceClient, type ContainerClient } from "@azure/storage-blob";
 import { z } from "zod";
-import { parseCloudConfiguration, parseCloudManifest, cloudManifestName, cloudSourceName, cloudReceiptPrefix, sha256, type CloudConfiguration } from "../src/lib/koho-import/cloud-config";
+import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, isManagedCloudManifest, parseCloudManifest, cloudManifestName, cloudSourceName, cloudReceiptPrefix, sha256, type CloudConfiguration } from "../src/lib/koho-import/cloud-config";
 import { verifyManualSnapshot } from "../src/lib/koho-import/manual-cli-source";
 import { managedCloudConfigSchema } from "../src/lib/patent-watch/managed-cloud-config";
 import { operatorArm } from "./managed-watch-operator";
 import { requireManual } from "../src/lib/koho-import/manual-cli-config";
+import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
+import { managedBudgetBindingEnvironment } from "../src/lib/patent-watch/managed-budget-contract";
 
-const inputSchema=z.object({schema:z.literal(1),command:z.enum(["stage","start","status"]),config:z.unknown(),manifest:z.unknown(),
+const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
     databaseSecretRef:z.string().regex(/^[a-z0-9-]{1,64}$/)}).strict(),
   sources:z.array(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),path:z.string().max(4096).refine(isAbsolute)}).strict()).max(4).default([]),
@@ -29,13 +31,15 @@ async function existing(container:ContainerClient,name:string){
 }
 /** A conditional marker precedes every batch of external writes. An ambiguous ACK
  * requires status/read-back, never another stage/start with a new id. */
-export async function operateManagedKoho(value:unknown,container:ContainerClient,arm:Awaited<ReturnType<typeof operatorArm>>){
-  const input=inputSchema.parse(value),config=parseCloudConfiguration(input.config);
-  requireManual(config.approval==="STANDARD_MANAGED_WATCH_RELEASE_V1"&&input.job.resourceId.endsWith(`/jobs/${input.job.name}`));
+export type ManagedKohoBudget = Pick<ManagedServiceBudgetStorage,"prepareImport"|"reserveImport"|"claimImport"|"confirmImport"|"markUnknown">;
+export async function operateManagedKoho(value:unknown,container:ContainerClient,arm:Awaited<ReturnType<typeof operatorArm>>,budgetDependency?:ManagedKohoBudget){
+  const input=inputSchema.parse(value),config=input.command==="status"||input.command==="prepare"?parseCloudConfiguration(input.config):parseManagedCloudImportConfiguration(input.config);
+  requireManual(isManagedCloudConfiguration(config)&&input.job.resourceId.endsWith(`/jobs/${input.job.name}`));
   const bytes=Buffer.from(JSON.stringify(input.manifest)),validationConfig:CloudConfiguration={...config,manifest:{...config.manifest,sha256:sha256(bytes),byteLength:bytes.length}};
   const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),input.command!=="status");
   if(input.command==="start")requireManual(sha256(bytes)===config.manifest.sha256);
-  requireManual(manifest.approval==="STANDARD_MANAGED_WATCH_RELEASE_V1" && container.url===`https://${config.storageAccount}.blob.core.windows.net/${config.container}`);
+  requireManual(isManagedCloudManifest(manifest) && container.url===`https://${config.storageAccount}.blob.core.windows.net/${config.container}`);
+  if(input.command==="prepare")return{status:"prepared",config:await (budgetDependency??ManagedServiceBudgetStorage.configured()).prepareImport(config,manifest,input.job),manifest};
   requireManual(!(await container.getProperties({abortSignal:AbortSignal.timeout(20_000)})).blobPublicAccess);
   const fresh=()=>requireManual(Date.parse(manifest.expiresAt)>Date.now()&&Date.parse(manifest.expiresAt)-Date.now()<=6*60*60_000);
   const marker=async(name:string,data:Buffer)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
@@ -66,6 +70,7 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
     return{status:report.status==="complete"?"complete":"reconciliation_required",cleanup:report.cleanup==="complete"?"complete":"required",capacityConfirmed:report.capacityConfirmed===true,
       databaseGrowthBytes:Number.isSafeInteger(report.databaseGrowthBytes)?report.databaseGrowthBytes:null};
   }
+  const budget=budgetDependency??ManagedServiceBudgetStorage.configured();
   if(input.command==="stage"){
     requireManual(input.sources.length===manifest.packages.length&&new Set(input.sources.map(s=>s.sha256)).size===input.sources.length);
     for(const pkg of manifest.packages){
@@ -73,6 +78,8 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       const stat=await lstat(source.path);requireManual(stat.isFile()&&!stat.isSymbolicLink()&&stat.size===pkg.byteLength);
       await verifyManualSnapshot(source.path,pkg.byteLength,pkg.sha256);
     }
+    requireManual((await budget.reserveImport(config,manifest,input.job)).created);
+    await budget.claimImport(config,manifest,input.job,"stage");
     await marker("staging-started.json",Buffer.from(JSON.stringify({...binding,state:"staging"})));
     for(const pkg of manifest.packages){
       const name=cloudSourceName(pkg.sha256),present=await existing(container,name);
@@ -89,6 +96,7 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
     const reread=await container.getBlobClient(cloudManifestName(config)).downloadToBuffer(0,finalBytes.length,{conditions:{ifMatch:saved.etag},abortSignal:AbortSignal.timeout(20_000)});
     parseCloudManifest(reread,finalConfig);
     await marker("staged.json",Buffer.from(JSON.stringify({config:finalConfig,manifestDigest:sha256(finalBytes)})));
+    await budget.confirmImport(finalConfig,manifest,input.job);
     return {status:"staged",config:finalConfig,manifest};
   }
   const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
@@ -96,19 +104,27 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
   const staged=await existing(container,cloudManifestName(config));
   requireManual(staged?.etag===config.manifest.etag&&staged.contentLength===config.manifest.byteLength);
   const savedManifest=await container.getBlobClient(cloudManifestName(config)).downloadToBuffer(0,config.manifest.byteLength,{conditions:{ifMatch:config.manifest.etag},abortSignal:AbortSignal.timeout(20_000)});
-  parseCloudManifest(savedManifest,config);
+  const verifiedManifest=parseCloudManifest(savedManifest,config);
   const current=await arm(`https://management.azure.com${input.job.resourceId}?api-version=2025-07-01`,"GET");
-  const job=current.body as {id?:string;properties?:{environmentId?:string;configuration?:{triggerType?:string;replicaRetryLimit?:number;replicaTimeout?:number;manualTriggerConfig?:{parallelism?:number;replicaCompletionCount?:number}};template?:{containers?:Array<{name?:string;image?:string}>}}};
+  const job=current.body as {id?:string;properties?:{environmentId?:string;configuration?:{triggerType?:string;replicaRetryLimit?:number;replicaTimeout?:number;manualTriggerConfig?:{parallelism?:number;replicaCompletionCount?:number}};template?:{containers?:Array<{name?:string;image?:string}>;initContainers?:unknown}}};
   const c=job?.properties?.configuration;
   requireManual(current.status===200&&job.id?.toLowerCase()===input.job.resourceId.toLowerCase()&&job.properties?.environmentId===config.expectedEnvironmentResourceId&&c?.triggerType==="Manual"&&c.replicaRetryLimit===0&&
     c.replicaTimeout!==undefined&&c.replicaTimeout<=7200&&c.replicaTimeout>=Math.ceil(manifest.maxElapsedMs/1000)&&c.manualTriggerConfig?.parallelism===1&&c.manualTriggerConfig.replicaCompletionCount===1&&
     job.properties.template?.containers?.length===1&&job.properties.template.containers[0].image===input.job.image&&/^[a-z0-9-]{1,64}$/.test(job.properties.template.containers[0].name??""));
+  const init=job.properties!.template!.initContainers;requireManual(init===undefined||init===null||(Array.isArray(init)&&init.length===0));
+  // Explicit start can finish a lost stage-confirmation ACK from sealed content;
+  // status never writes the budget or creates permission to submit a Job.
+  await budget.confirmImport(config,verifiedManifest,input.job);
+  await budget.claimImport(config,verifiedManifest,input.job,"start");
   await marker("start-requested.json",Buffer.from(JSON.stringify({operationId:config.operationId,manifestDigest:config.manifest.sha256,jobResourceId:input.job.resourceId,image:input.job.image})));
   fresh();
-  const response=await arm(`https://management.azure.com${input.job.resourceId}/start?api-version=2025-07-01`,"POST",{containers:[{name:job.properties!.template!.containers![0].name!,image:input.job.image,
+  const managedConfig=parseManagedCloudImportConfiguration(config);
+  try{const response=await arm(`https://management.azure.com${input.job.resourceId}/start?api-version=2025-07-01`,"POST",{containers:[{name:job.properties!.template!.containers![0].name!,image:input.job.image,
     command:["node",".koho-ops/cloud/scripts/koho-cloud-import.js"],args:[],resources:{cpu:2,memory:"4Gi"},env:[{name:"KOHO_CLOUD_CONFIG_JSON",value:JSON.stringify(config)},
-      ...(config.mode==="apply"?[{name:"KOHO_CLOUD_DATABASE_PASSWORD",secretRef:input.job.databaseSecretRef}]:[])]}]});
+      {name:"MANAGED_IMPORT_JOB_JSON",value:JSON.stringify(input.job)},...managedBudgetBindingEnvironment(managedConfig.budgetBinding),
+      ...(config.mode==="apply"?[{name:"KOHO_CLOUD_DATABASE_PASSWORD",secretRef:input.job.databaseSecretRef}]:[])]}],initContainers:[]});
   requireManual([200,202].includes(response.status));return{status:"submitting",operationId:config.operationId};
+  }catch{await budget.markUnknown(config.operationId).catch(()=>undefined);throw Error("cloud_start_unknown");}
 }
 if(require.main===module){
   const watchdog=setTimeout(()=>{process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);},65*60_000);

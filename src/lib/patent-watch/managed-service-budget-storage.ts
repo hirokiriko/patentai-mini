@@ -7,12 +7,15 @@ import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
   type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
+import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
+import { validateManagedBudgetPolicy } from "./managed-budget-policy";
+import { managedWatchBudgetRequest, managedImportBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
+import { parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
+import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration } from "../koho-import/cloud-config";
 
 // The storage binding comes from the installed operator/worker environment, never
 // from a request, reporting month, profile revision, or arbitrary Blob name.
-const bindingSchema = z.object({ storageAccount: z.string().regex(/^[a-z0-9]{3,24}$/),
-  container: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/),
-  targetBindingHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const bindingSchema = managedBudgetBindingSchema;
 export type ManagedBudgetStorageBinding = z.infer<typeof bindingSchema>;
 export const MANAGED_BUDGET_PREFIX = `managed-services/${MANAGED_SERVICE_KEY}/`;
 const STATE = `${MANAGED_BUDGET_PREFIX}state.json`, MAX_STATE = 16 * 1024 ** 2, IO_MS = 20_000;
@@ -40,8 +43,7 @@ export class ManagedServiceBudgetStorage {
     return new ManagedServiceBudgetStorage(service.getContainerClient(b.container), b);
   }
   static configured(env: Record<string, string | undefined> = process.env) {
-    const b = bindingSchema.parse({ storageAccount: env.MANAGED_BUDGET_STORAGE_ACCOUNT,
-      container: env.MANAGED_BUDGET_CONTAINER, targetBindingHash: env.MANAGED_BUDGET_TARGET_SHA256 });
+    const b = managedBudgetBindingFromEnvironment(env);
     check(env.AZURE_STORAGE_CONNECTION_STRING);
     const service = BlobServiceClient.fromConnectionString(env.AZURE_STORAGE_CONNECTION_STRING!, options);
     return new ManagedServiceBudgetStorage(service.getContainerClient(b.container), b);
@@ -72,12 +74,147 @@ export class ManagedServiceBudgetStorage {
     }
     return { state, etag: saved.etag, date: saved.date };
   }
-  private async profile(s: ManagedBudgetState) {
-    if (s.activeProfileDigest === null) return null;
-    const saved = await this.readJson(`${MANAGED_BUDGET_PREFIX}profiles/${s.activeProfileDigest}.json`, 64 * 1024);
+  private async profile(s: ManagedBudgetState, digest = s.activeProfileDigest) {
+    if (digest === null) return null;
+    const saved = await this.readJson(`${MANAGED_BUDGET_PREFIX}profiles/${digest}.json`, 64 * 1024);
     const p = managedBudgetProfileSchema.parse(saved.value);
-    check(managedDigest(p) === s.activeProfileDigest && p.targetBindingHash === this.binding.targetBindingHash);
+    check(managedDigest(p) === digest && p.targetBindingHash === this.binding.targetBindingHash && p.ownerBindingHash === this.binding.ownerBindingHash);
     return p;
+  }
+  private async executionPolicy(saved: ReadState, digest: string, minutes: number) {
+    check(/^[a-f0-9]{64}$/.test(digest));
+    const source = await this.readJson(`${MANAGED_BUDGET_PREFIX}evidence/${digest}.json`, 128 * 1024);
+    check(source.sha256 === digest);
+    return validateManagedBudgetPolicy(source.value, this.binding, saved.date, this.clock(saved, minutes).maximumActionMs);
+  }
+  private currentPricing(saved: ReadState) {
+    const month = new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7);
+    const plan = saved.state.plans.find(p => p.month === month); check(plan); return plan!.pricingDigest;
+  }
+  private async watchRequest(value: unknown, saved: ReadState, worker = false) {
+    const c = parseManagedCloudConfiguration(value, saved.date.getTime(), !worker);
+    const op = worker ? saved.state.operations.find(o => o.operationId === c.operationId) : undefined;
+    if (worker) check(op);
+    const pricingDigest = worker ? op!.pricingDigest : this.currentPricing(saved);
+    const profileDigest = worker ? op!.profileDigest : c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? saved.state.activeProfileDigest : null;
+    const p = await this.executionPolicy(saved, pricingDigest, worker ? 95 : 120);
+    const business = { ...c, expectedEnvironmentResourceId:c.expectedEnvironmentResourceId ?? p.targets.environmentResourceId };
+    const request = managedWatchBudgetRequest(business, p, this.binding, pricingDigest, profileDigest);
+    const serviceBudget = { serviceKey: MANAGED_SERVICE_KEY, requestDigest: request.requestDigest, profileDigest, pricingDigest };
+    if (c.budgetBinding) check(managedDigest(c.budgetBinding) === managedDigest(this.binding));
+    if (c.serviceBudget) check(managedDigest(c.serviceBudget) === managedDigest(serviceBudget));
+    const profile = await this.executionProfile(saved, profileDigest, p);
+    return { config: parseManagedCloudStartConfiguration({ ...business, serviceBudget, budgetBinding: this.binding }, saved.date.getTime(), !worker), request, policy: p, profile, executionExpiresAt:c.expiresAt };
+  }
+  private async importRequest(value: unknown, manifest: unknown, job: ManagedImportJob, saved: ReadState, worker = false) {
+    const c = parseCloudConfiguration(value); check(isManagedCloudConfiguration(c));
+    if (!isManagedCloudConfiguration(c)) throw new ManagedBudgetError();
+    const op = worker ? saved.state.operations.find(o => o.operationId === c.operationId) : undefined;
+    if (worker) check(op);
+    const pricingDigest = worker ? op!.pricingDigest : this.currentPricing(saved);
+    const profileDigest = worker ? op!.profileDigest : c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? saved.state.activeProfileDigest : null;
+    const p = await this.executionPolicy(saved, pricingDigest, 120);
+    const request = managedImportBudgetRequest(c, manifest, job, p, this.binding, pricingDigest, profileDigest);
+    const serviceBudget = { serviceKey: MANAGED_SERVICE_KEY, requestDigest: request.requestDigest, profileDigest, pricingDigest };
+    if (c.budgetBinding) check(managedDigest(c.budgetBinding) === managedDigest(this.binding));
+    if (c.serviceBudget) check(managedDigest(c.serviceBudget) === managedDigest(serviceBudget));
+    const profile = await this.executionProfile(saved, profileDigest, p);
+    return { config: parseManagedCloudImportConfiguration({ ...c, serviceBudget, budgetBinding: this.binding }), request, policy: p, profile,
+      executionExpiresAt:(manifest as {expiresAt:string}).expiresAt };
+  }
+  private async executionProfile(saved: ReadState, digest: string | null, policy: Awaited<ReturnType<ManagedServiceBudgetStorage["executionPolicy"]>>) {
+    const p = await this.profile(saved.state, digest);
+    if (p) check(p.measurementDigest === policy.measurementDigest);
+    return p;
+  }
+  private async commitExecution(saved: ReadState, context: Awaited<ReturnType<ManagedServiceBudgetStorage["watchRequest"]>> |
+    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>, phase?: "stage" | "start") {
+    const fresh = await this.read(); check(fresh.etag === saved.etag);
+    // In addition to bounded Blob IO, a start retains a minute for the marker
+    // and ARM request. Worker admission rechecks any subsequent scheduling delay.
+    const minutes = phase === "stage" ? 65 : phase === "start" ? (context.request.kind === "watch" ? 96 : 121) : 120;
+    check(fresh.date.getTime() + this.clock(fresh, minutes).maximumActionMs < Date.parse(context.executionExpiresAt));
+    validateManagedBudgetPolicy(context.policy, this.binding, fresh.date, this.clock(fresh, minutes).maximumActionMs);
+    if (phase) {
+      const o = fresh.state.operations.find(o => o.operationId === context.request.operationId);
+      check(o?.intentDigest === managedDigest({ ...context.request, cases: [...context.request.cases].sort((a,b) => a-b) }));
+      await this.replace(fresh, claimManagedBudgetPhase(fresh.state, context.request.operationId, phase, context.profile, this.clock(fresh, minutes)));
+      return { created: false };
+    }
+    const result = reserveManagedBudget(fresh.state, context.request, context.profile, this.clock(fresh, minutes));
+    if (result.created) await this.replace(fresh, result.state);
+    return { created: result.created };
+  }
+  /** Preparation is read-only. Only the installed binding and a reviewed current
+   * plan can select prices and the active Standard profile. */
+  async prepareWatch(value: unknown) { return this.guarded(async () => {
+    const c = parseManagedCloudConfiguration(value); return (await this.watchRequest(c, await this.read())).config;
+  }); }
+  async prepareImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
+    return this.guarded(async () => {
+      const c = parseCloudConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job);
+      return (await this.importRequest(c, m, j, await this.read())).config;
+    });
+  }
+  async reserveWatch(value: unknown) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudStartConfiguration(value), saved = await this.read();
+      return this.commitExecution(saved, await this.watchRequest(c, saved));
+    });
+  }
+  async reserveImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      return this.commitExecution(saved, await this.importRequest(c, m, j, saved));
+    });
+  }
+  async claimWatch(value: unknown) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudStartConfiguration(value), saved = await this.read();
+      await this.commitExecution(saved, await this.watchRequest(c, saved), "start");
+    });
+  }
+  async claimImport(value: unknown, manifest: unknown, job: ManagedImportJob, phase: "stage" | "start") {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      await this.commitExecution(saved, await this.importRequest(c, m, j, saved), phase);
+    });
+  }
+  async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      const context = await this.importRequest(c, m, j, saved), fresh = await this.read(); check(fresh.etag === saved.etag);
+      const o = fresh.state.operations.find(o => o.operationId === c.operationId);
+      check(o?.intentDigest === managedDigest(context.request));
+      if (o!.stage === "done") { check(o!.evidenceDigests.includes(c.manifest.sha256)); return; }
+      await this.replace(fresh, confirmManagedBudgetStage(fresh.state, c.operationId, context.request.requestDigest, c.manifest.sha256, this.clock(fresh, 1)));
+    });
+  }
+  async verifyWatch(value: unknown) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudStartConfiguration(value, Date.now(), false), saved = await this.read();
+      return this.verifyExecution(await this.watchRequest(c, saved, true), c.expiresAt);
+    });
+  }
+  async verifyImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      // The intent builder validates the manifest schema and fixed target first.
+      return this.verifyExecution(await this.importRequest(c, m, j, saved, true), (m as { expiresAt: string }).expiresAt);
+    });
+  }
+  private async verifyExecution(context: Awaited<ReturnType<ManagedServiceBudgetStorage["watchRequest"]>> |
+    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>, executionExpiresAt: string) {
+    const saved = await this.read(), r = context.request, o = saved.state.operations.find(o => o.operationId === r.operationId);
+    check(o && o.intentDigest === managedDigest({ ...r, cases: [...r.cases].sort((a,b) => a-b) }) &&
+      o.start === "claimed" && o.actualYen === null && (o.kind === "watch" ? o.stage === "unused" : o.stage === "done"));
+    const now = saved.date.getTime(), month = new Date(now + 9 * 60 * 60_000).toISOString().slice(0,7);
+    const maximumActionMs = this.clock(saved, o!.kind === "watch" ? 95 : 120).maximumActionMs;
+    const policy = validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximumActionMs);
+    const expiry = Math.min(Date.parse(o!.expiresAt), Date.parse(executionExpiresAt), Date.parse(policy.validUntil));
+    check(o!.processingMonth === month && now + maximumActionMs < expiry);
+    if (context.profile) check(context.profile.pricingDigest === o!.pricingDigest && o!.cases.every(id => context.profile!.cases.includes(id)));
+    return { processingMonth: month, expiresAt: new Date(expiry).toISOString(), remainingMs: expiry - now - 4 * IO_MS - 1000 };
   }
   private clock(saved: ReadState, minutes: number): ManagedBudgetClock {
     // Include bounded metadata/CAS latency and HTTP Date's one-second precision.
@@ -183,7 +320,7 @@ export class ManagedServiceBudgetStorage {
    * while a lost ACK is resolved from its permanently retained sequence/digest. */
   async applyReviewedAdministration(evidenceDigest: string, pins: ManagedBudgetEvidencePins, reconcileOnly = false) {
     return this.guarded(async () => {
-      check(/^[a-f0-9]{64}$/.test(evidenceDigest) && pins.targetBindingHash === this.binding.targetBindingHash);
+      check(/^[a-f0-9]{64}$/.test(evidenceDigest) && pins.targetBindingHash === this.binding.targetBindingHash && pins.ownerBindingHash === this.binding.ownerBindingHash);
       const name = `${MANAGED_BUDGET_PREFIX}administration-reviews/${evidenceDigest}.json`;
       const source = await this.readJson(name, 128 * 1024);
       const envelope = verifyManagedAdministrationReview(source.value, evidenceDigest, pins, source.date, false), r = envelope.review;
@@ -229,7 +366,7 @@ export class ManagedServiceBudgetStorage {
    * pins. Input selects a signed review by digest, never an amount or usage DTO. */
   async settleReviewed(evidenceDigest: string, pins: ManagedBudgetEvidencePins, reconcileOnly = false) {
     return this.guarded(async () => {
-      check(/^[a-f0-9]{64}$/.test(evidenceDigest) && pins.targetBindingHash === this.binding.targetBindingHash);
+      check(/^[a-f0-9]{64}$/.test(evidenceDigest) && pins.targetBindingHash === this.binding.targetBindingHash && pins.ownerBindingHash === this.binding.ownerBindingHash);
       const source = await this.readJson(`${MANAGED_BUDGET_PREFIX}settlement-reviews/${evidenceDigest}.json`, 128 * 1024);
       const envelope = verifyManagedSettlementReview(source.value, evidenceDigest, pins, source.date, false), r = envelope.review;
       const slotName = `${MANAGED_BUDGET_PREFIX}settlements/${r.operationId}/${r.sequence}.json`;
@@ -290,7 +427,10 @@ export class ManagedServiceBudgetStorage {
       const monthEnd = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth() + 1, 1) - 9 * 60 * 60_000;
       const deadline = Math.min(monthEnd, Date.parse(o!.expiresAt));
       check(now + this.clock(saved, kind === "watch" ? 95 : 120).maximumActionMs < deadline);
-      if (o!.scope === "standard") { const p = await this.profile(saved.state); check(p && managedDigest(p) === o!.profileDigest); }
+      if (o!.scope === "standard") {
+        const p = await this.profile(saved.state, o!.profileDigest);
+        check(p && p.pricingDigest === o!.pricingDigest && o!.cases.every(id => p.cases.includes(id)));
+      }
       return { processingMonth: o!.processingMonth, expiresAt: new Date(deadline).toISOString() };
     });
   }

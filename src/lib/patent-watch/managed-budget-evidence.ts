@@ -31,7 +31,7 @@ export const managedAdministrationReviewSchema = z.object({ schema: z.literal(1)
   action: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("open"), state: managedBudgetStateSchema }).strict(),
     z.object({ kind: z.literal("month"), processingMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
-      baseYen: yen, pools: z.object({ remaining: yen, storage: yen, recovery: yen }).strict(), releaseTailYen: yen,
+      baseYen: yen, pools: z.object({ remaining: yen, storage: yen, recovery: yen }).strict(), pricingDigest: hash, releaseTailYen: yen,
       reviewedOperationIds: z.array(z.uuidv4()).max(768).refine(ids => new Set(ids).size === ids.length) }).strict(),
     z.object({ kind: z.literal("activate"), profileDigest: hash, goEvidenceDigest: hash, measurementDigest: hash, pricingDigest: hash }).strict(),
   ]),
@@ -75,8 +75,10 @@ export function verifyManagedAdministrationReview(value: unknown, expectedDigest
       [r.action.goEvidenceDigest, r.action.measurementDigest, r.action.pricingDigest].every(d => sources.has(d)));
     if (r.action.kind === "open") check(r.sequence === 1 && r.previousReviewDigest === null && r.expectedStateDigest === null &&
       r.action.state.administration.length === 0 && r.action.state.activeProfileDigest === null &&
-      r.action.state.targetBindingHash === pins.targetBindingHash && sources.has(r.action.state.openingEvidenceDigest));
+      r.action.state.targetBindingHash === pins.targetBindingHash && sources.has(r.action.state.openingEvidenceDigest) &&
+      r.action.state.plans.every(p => sources.has(p.pricingDigest)));
     else check(r.expectedStateDigest !== null);
+    if (r.action.kind === "month") check(sources.has(r.action.pricingDigest));
     return envelope;
   } catch { throw new ManagedBudgetError(); }
 }

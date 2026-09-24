@@ -9,7 +9,7 @@ import { requireManual } from "./manual-cli-config";
 import { verifyManualSnapshot } from "./manual-cli-source";
 import { projectManualResult, summarizeManualPackage, type ManualFileResult } from "./manual-cli-summary";
 import { cloudManifestName, cloudPlanSha256, cloudReceiptPrefix, cloudSourceName, parseCloudConfiguration, parseCloudManifest,
-  type CloudConfiguration } from "./cloud-config";
+  isManagedCloudConfiguration, parseManagedCloudImportConfiguration, type CloudConfiguration, type CloudManifest } from "./cloud-config";
 import type { CloudBlobBoundary } from "./cloud-blob";
 import { saveCloudPlan } from "./cloud-db";
 import { updatePackageMetadata } from "./update-check";
@@ -33,6 +33,7 @@ class CloudReceipt {
 
 export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, options: {
   password?: string; signal?: AbortSignal; save?: typeof saveCloudPlan;
+  budget?: { verify(config: CloudConfiguration, manifest: CloudManifest): Promise<{ expiresAt: string; remainingMs: number }> };
 } = {}) {
   const started = performance.now(), config = parseCloudConfiguration(value);
   let receiptAcknowledgement: "confirmed" | "unconfirmed" = "unconfirmed", cleanup: "complete" | "required" = "complete";
@@ -42,8 +43,13 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
     await blob.assertPrivate();
     const manifest = parseCloudManifest(await blob.read(cloudManifestName(config), config.manifest.byteLength, config.manifest.etag), config);
     requireManual(config.mode === "preview" || (typeof options.password === "string" && options.password.length > 0));
-    const deadline = started + manifest.maxElapsedMs;
-    const guard = () => requireManual(!options.signal?.aborted && performance.now() < deadline && Date.now() < Date.parse(manifest.expiresAt));
+    const managed = isManagedCloudConfiguration(config);
+    if(managed){parseManagedCloudImportConfiguration(config);requireManual(options.budget);}
+    const permit=managed?await options.budget!.verify(config,manifest):undefined;
+    if(permit)requireManual(Number.isSafeInteger(permit.remainingMs)&&permit.remainingMs>0&&Number.isFinite(Date.parse(permit.expiresAt)));
+    const deadline = Math.min(started + manifest.maxElapsedMs, permit ? performance.now()+permit.remainingMs : Infinity);
+    const expiry = Math.min(Date.parse(manifest.expiresAt),permit?Date.parse(permit.expiresAt):Infinity);
+    const guard = () => requireManual(!options.signal?.aborted && performance.now() < deadline && Date.now() < expiry);
     guard();
     // A lost marker ACK still prevents replay. Never retry this operation ID automatically.
     await blob.create(cloudReceiptPrefix(config) + "started.json", Buffer.from(JSON.stringify({ schemaVersion: 1,
@@ -67,10 +73,10 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           requireManual(await blob.download(cloudSourceName(pkg.sha256), pkg.byteLength, pkg.etag, source) === pkg.sha256);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
           const parsed = await parseKohoPackage({ packageType: pkg.packageType, source: { type: "file", path: source },
-            limits: config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1"
+            limits: isManagedCloudConfiguration(config)
               ? buildManagedImportLimits(pkg.byteLength) : buildKohoManualImportLimits(pkg.byteLength) });
           const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256: pkg.sha256 });
-          const managed = config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1" ? projectManagedPackage(parsed, plan) : undefined;
+          const managed = isManagedCloudConfiguration(config) ? projectManagedPackage(parsed, plan) : undefined;
           if (managed) requireManual("managedSourcesSha256" in pkg && pkg.managedSourcesSha256 === managed.managedSourcesSha256 &&
             "managedReceiptSha256" in pkg && pkg.managedReceiptSha256 === managed.managedReceiptSha256);
           const metadata = updatePackageMetadata(parsed);

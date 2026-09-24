@@ -201,11 +201,11 @@ describe.skipIf(process.env.KOHO_CLOUD_LOCAL_DB_TEST !== "1")("dedicated cloud e
   it("uses a corpus-only managed scope, atomically saves full claims and receipt, and rejects application access", async () => {
     const f = await managedCloudImportFixture(); f.config.expectedTarget = target; f.manifest.target = target; await f.publish();
     const managedSave: typeof saveCloudPlan = (c,m,p,plan,begin,_factory,managed,execution) => saveCloudPlan(c,m,p,plan,begin,()=>newClient(),managed,execution);
-    expect((await runCloudImport(f.config,f.blob,{password,save:managedSave})).results[0].outcome).toBe("failed_before_save");
+    expect((await runCloudImport(f.config,f.blob,{password,save:managedSave,budget:f.bindBudget().budget})).results[0].outcome).toBe("failed_before_save");
     await sql(`GRANT SELECT, INSERT ON public.managed_publication_claims, public.managed_import_receipts TO ${target.user}`);
     try {
       const g = await managedCloudImportFixture();g.config.expectedTarget=target;g.manifest.target=target;await g.publish();
-      expect((await runCloudImport(g.config,g.blob,{password,save:managedSave})).results[0].outcome).toBe("inserted");
+      expect((await runCloudImport(g.config,g.blob,{password,save:managedSave,budget:g.bindBudget().budget})).results[0].outcome).toBe("inserted");
       expect((await sql("select count(*)::int as n from managed_import_receipts where source_sha256=$1",[g.plan.sourceSha256]))[0].n).toBe(1);
       expect((await sql("select count(*)::int as n from managed_publication_claims where source_sha256=$1",[g.plan.sourceSha256]))[0].n).toBe(1);
       await sql(`GRANT SELECT ON public.cases TO ${target.user}`);

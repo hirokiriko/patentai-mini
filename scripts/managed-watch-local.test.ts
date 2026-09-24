@@ -21,6 +21,8 @@ import { DISTRIBUTION_HEADERS } from "../src/lib/koho-distribution-table";
 import type { ManagedDelivery } from "../src/lib/patent-watch/managed-delivery";
 import { ManagedCloudStartRepository } from "../src/repositories/managed-cloud-start";
 import { managedCloudFixture } from "../src/lib/patent-watch/managed-cloud.test-support";
+import { managedBudgetedWatchFixture } from "../src/lib/patent-watch/managed-execution-budget.test-support";
+import { managedCloudConfigSchema } from "../src/lib/patent-watch/managed-cloud-config";
 import { managedDeadlineDatabase } from "../src/lib/patent-watch/managed-request-db";
 import { addFictionalManagedOriginal } from "./managed-base.test-support";
 
@@ -99,12 +101,32 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     const csvText = [DISTRIBUTION_HEADERS.JPA.join(","), row("20260724", "136", "01103"), row("20260812", "148", "01115"), row("20260813", "149", "01116"), row("20260826", "158", "01125")].join("\r\n")+"\r\n";
     const sha = createHash("sha256").update(csvText).digest("hex");
     await environment.sql("insert into managed_distribution_snapshots(sha256,source_url,csv_text,acquired_at) values($1,$2,$3,$4)", [sha, MANAGED_DISTRIBUTION_URL, csvText, "2026-09-22T00:00:00Z"]);
-    const starts = new ManagedCloudStartRepository(database), operationIds: string[] = [];
+    const starts = new ManagedCloudStartRepository(database), operationIds: string[] = [], historicalStandard:string[]=[];
     const complete = async () => {
-      const prepared = await repository.prepare(caseId, period), config = {...managedCloudFixture(caseId,prepared.runId,prepared.snapshotDigest),operationId:randomUUID()};
-      const exhausted = {...config,budgetProof:{...config.budgetProof,externalJobExecutions:24}};
-      await expect(starts.reserve(exhausted)).rejects.toThrow("conflict");
-      await starts.reserve(config);operationIds.push(config.operationId);
+      const prepared = await repository.prepare(caseId, period), config = managedBudgetedWatchFixture({...managedCloudFixture(caseId,prepared.runId,prepared.snapshotDigest),operationId:randomUUID(),
+        approval:operationIds.length===1?"STANDARD_MANAGED_WATCH_STANDARD_V1":"STANDARD_MANAGED_WATCH_RELEASE_V1"}).config;
+      if(operationIds.length===0){
+        const seed=async(standard:boolean,count:number)=>{
+          const ids:string[]=[];
+          for(let n=0;n<count;n++){
+            const c=managedCloudConfigSchema.parse({...config,operationId:randomUUID(),approval:standard?"STANDARD_MANAGED_WATCH_STANDARD_V1":config.approval,
+              serviceBudget:{...config.serviceBudget,profileDigest:standard?"d".repeat(64):null}});
+            await environment.sql("insert into managed_watch_job_starts(operation_id,config_json,config_digest,logical_starts,reserved_normal,reserved_minutes,status,created_at) values($1,$2,$3,1,0,95,'completed','2026-08-01T00:00:00Z')",
+              [c.operationId,JSON.stringify(c),managedDigest(c)]);ids.push(c.operationId);
+          }return ids;
+        };
+        // An older Standard month's 25 rows must not exhaust the release's
+        // separate cumulative cap. Its 24 release rows still do, across months.
+        historicalStandard.push(...await seed(true,25));const release=await seed(false,24);
+        await expect(starts.reserve(config)).rejects.toThrow("conflict");
+        await environment.sql("delete from managed_watch_job_starts where operation_id=any($1::text[])",[release]);
+        const bad=managedBudgetedWatchFixture({...config,operationId:randomUUID(),caseAllowList:[caseId,9876],
+          runs:[...config.runs,{caseId:9876,runId:randomUUID(),snapshotDigest:"f".repeat(64)}]}).config;
+        await expect(starts.reserve(bad)).rejects.toThrow("conflict");
+        expect((await environment.sql("select start_reservation_id from managed_watch_runs where run_id=$1",[prepared.runId]))[0].start_reservation_id).toBeNull();
+        await starts.reserve(config);operationIds.push(config.operationId);
+      }else{await starts.reserve(config);operationIds.push(config.operationId);
+        if(config.approval==="STANDARD_MANAGED_WATCH_STANDARD_V1")await environment.sql("delete from managed_watch_job_starts where operation_id=any($1::text[])",[historicalStandard]);}
       await expect(starts.reserve({...config,operationId:randomUUID()})).rejects.toThrow("conflict");
       await expect(repository.claim(caseId,prepared.runId,"fictional-worker")).rejects.toThrow("conflict");
       await starts.submitting(config);

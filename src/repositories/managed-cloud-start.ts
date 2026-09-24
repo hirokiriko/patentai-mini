@@ -2,36 +2,39 @@ import { and, eq, inArray, or, isNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../db/schema";
 import { managedDigest } from "../lib/patent-watch/managed-claims";
-import { managedCloudConfigSchema, parseManagedCloudConfiguration, type ManagedCloudConfiguration } from "../lib/patent-watch/managed-cloud-config";
+import { managedCloudConfigSchema, parseManagedCloudStartConfiguration, type ManagedCloudConfiguration } from "../lib/patent-watch/managed-cloud-config";
 import { ManagedWatchError } from "../lib/patent-watch/managed-types";
 type Database = NodePgDatabase<typeof schema>;
 const J = schema.managedWatchJobStarts, R = schema.managedWatchRuns;
 const check = (value: unknown) => { if (!value) throw new ManagedWatchError("conflict"); };
-/** A small release-specific start ledger, independent of deleted customer rows. */
+/** Finite business execution history, independent of deleted customer rows.
+ * Shared Blob accounting separately gates money and combined watch/import use. */
 export class ManagedCloudStartRepository {
   constructor(private readonly database: Database) {}
   async reserve(value: unknown) {
-    const config = parseManagedCloudConfiguration(value);
+    const config = parseManagedCloudStartConfiguration(value);
     return this.database.transaction(async tx => {
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
-      const previous = await tx.select().from(J).limit(25); check(previous.length < 24);
+      const previous = await tx.select().from(J).limit(1001); check(previous.length < 1000);
       const previousConfigs = previous.map(row => {
         const config = managedCloudConfigSchema.parse(JSON.parse(row.configJson)); check(managedDigest(config) === row.configDigest); return config;
       });
       const cases = new Set([...previousConfigs.flatMap(c=>c.caseAllowList), ...config.caseAllowList]); check(cases.size <= 5);
-      const proof = config.budgetProof;
-      for (const c of previousConfigs) for (const field of ["externalJobExecutions", "externalJobReservedMinutes", "externalNormalSends", "externalFastSends"] as const)
-        check(proof[field] >= c.budgetProof[field]);
-      check(previous.length + proof.externalJobExecutions + 1 <= 24);
-      check(previous.reduce((n,r)=>n+r.logicalStarts,0) + config.runs.length <= 40);
-      check(previous.reduce((n,r)=>n+r.reservedMinutes,0) + proof.externalJobReservedMinutes + 95 <= 48*60);
-      check(previous.reduce((n,r)=>n+r.reservedNormal,0) + proof.externalNormalSends + config.runs.length*41 <= 900);
+      if (config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") {
+        const release = previous.filter((_r,i) => previousConfigs[i].approval === "STANDARD_MANAGED_WATCH_RELEASE_V1");
+        check(release.length + 1 <= 24);
+        check(release.reduce((n,r)=>n+r.logicalStarts,0) + config.runs.length <= 40);
+        check(release.reduce((n,r)=>n+r.reservedMinutes,0) + 95 <= 48*60);
+        check(release.reduce((n,r)=>n+r.reservedNormal,0) + config.runs.length*41 <= 900);
+      }
       for (const input of config.runs) {
         const [run] = await tx.select().from(R).where(and(eq(R.runId,input.runId),eq(R.caseId,input.caseId))).for("update");
         check(run && run.status === "prepared" && run.startReservationId === null && run.snapshotDigest === input.snapshotDigest);
         await tx.update(R).set({ startReservationId: config.operationId }).where(eq(R.runId,input.runId));
       }
       await tx.insert(J).values({ operationId:config.operationId, configJson:JSON.stringify(config), configDigest:managedDigest(config),
+        // This existing DB column records the 95-minute worker bound. The shared
+        // service ledger separately reserves the full 120-minute Job allocation.
         logicalStarts:config.runs.length, reservedNormal:config.runs.length*41, reservedMinutes:95, status:"reserved" });
       return config;
     });
