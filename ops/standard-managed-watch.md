@@ -161,5 +161,24 @@ deletion-previewの所属・期限・件数・完全な対象digestを確認し�
 提供開始までに、実測で成立する1周期の容量・費用予約と、試験台帳を保持した定例運用の契約を確定する。
 この確定、実際のOWNER認証、全周期量、実AI2巡、PC_OFF、費用・cleanupが未確認の間は本番GOではない。
 
+### 共通予算のLocal実装状況
+
+`managed-service-budget`と専用Blob adapterは、release累計と実処理JST月を分離する。
+月額は基礎料金・残工程・保管・復旧と未精算額を合算し、watch/importの予約を同じpoolへ割り当てる。
+stage/startは同じoperationを使用し、月替わり・profile改版・ACK喪失で予約を解放しない。
+精算後に追加額が判明した場合も、再精算まで翌月へ保持する。
+
+adapterは固定service prefix、HTTP Date、ETag条件付き単発書込を使い、404を新しい空台帳にしない。
+保存先は管理端末の信頼済み設定`MANAGED_BUDGET_STORAGE_ACCOUNT`、`MANAGED_BUDGET_CONTAINER`、
+`MANAGED_BUDGET_TARGET_SHA256`で固定し、requestからは選ばない。既存Storage接続又は同じJobのMIを使う。
+予算のclaim ACKが不明な呼出元に開始権を返さず、受理済みworkerの読戻しは別処理とする。
+workerの二重実行防止には既存のDB/receipt実行claimも必要である。
+
+精算証拠は連番と最新64件のfingerprintを保持し、上限後の追加料金も記録して再確認を要求する。
+古い証拠の再確認には、同じoperation/連番のimmutable原本を管理adapterで照合する必要がある。
+開設証拠、実usageによる精算、月額再見積とGO/価格/実測の独立pinを検証する管理入口は未接続。
+現在のoperator/workerもこの共通予算adapterへ未接続であり、定例運用が成立したとは扱わない。
+予約枠の確定・上記接続・実DB/SDK統合試験を終えるまで、標準profileの有効化は行わない。
+
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、
 他顧客/基盤モデル学習への提供とは区別し、abuse monitoringやGlobal処理場所の条件も記録する。保持0を未確認のまま表示しない。
