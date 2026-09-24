@@ -4,6 +4,8 @@ import { z } from "zod";
 import { managedHash, managedId, ManagedWatchError } from "./managed-types";
 import { generateManagedDeliveryPdf, managedDeliveryCsv, validateManagedDelivery, type ManagedDelivery } from "./managed-delivery";
 import type { ManagedDeliveryRepository } from "../../repositories/managed-delivery";
+import { configuredManagedArtifactAdmission } from "./managed-artifact-budget";
+import { managedArtifactIntentSchema, type ManagedArtifactAdmission, type ManagedArtifactIntent } from "./managed-artifact-contract";
 const artifactSchema=z.object({kind:z.enum(["snapshot","pdf","csv"]),sha256:managedHash,bytes:z.number().int().positive().max(16*1024**2)}).strict();
 export const managedArtifactManifestSchema=z.object({schema:z.literal(1),caseId:managedId,deliveryId:z.uuidv4(),artifacts:z.array(artifactSchema).length(3)}).strict();
 export type ManagedArtifactManifest=z.infer<typeof managedArtifactManifestSchema>;
@@ -17,6 +19,7 @@ export function validateManagedArtifactManifest(value:unknown,caseId:number,deli
 }
 export class ManagedPrivateStorage{
   constructor(private readonly container:ContainerClient,private readonly deadline?:AbortSignal){}
+  get location(){return this.container.url;}
   withDeadline(deadline:AbortSignal){return new ManagedPrivateStorage(this.container,this.deadline?AbortSignal.any([this.deadline,deadline]):deadline);}
   private signal(){return this.deadline?AbortSignal.any([this.deadline,AbortSignal.timeout(20_000)]):AbortSignal.timeout(20_000);}
   static configured(deadline?:AbortSignal){
@@ -52,6 +55,18 @@ export class ManagedPrivateStorage{
   async read(manifest:ManagedArtifactManifest,kind:ManagedArtifactKind){
     const bytes=await this.readIfPresent(manifest,kind);if(bytes===null)throw new ManagedWatchError("unavailable");return bytes;
   }
+}
+/** Admit the complete creation before opening its preparation transaction. */
+export async function createManagedDelivery(repository:ManagedDeliveryRepository,storage:ManagedPrivateStorage,
+  value:Extract<ManagedArtifactIntent,{kind:"delivery"}>,deadline:AbortSignal,
+  admit:ManagedArtifactAdmission=configuredManagedArtifactAdmission()){
+  const input=managedArtifactIntentSchema.parse(value);
+  if(input.kind!=="delivery")throw new ManagedWatchError("incomplete");
+  await admit(input,storage.location,deadline);deadline.throwIfAborted();
+  const report=await repository.prepare(input.caseId,input.period,{distributionTableSha256:input.distributionTableSha256},
+    input.reason,input.deliveredOn,input.deliveryId,deadline);
+  await storeManagedDelivery(repository,storage,report,deadline);
+  return report;
 }
 /** Reserve exact bytes before the first cloud write. A lost ACK never triggers a repeat upload. */
 export async function storeManagedDelivery(repository:ManagedDeliveryRepository,storage:ManagedPrivateStorage,value:ManagedDelivery,deadline?:AbortSignal){

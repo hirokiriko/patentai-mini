@@ -5,6 +5,7 @@ import { managedDigest } from "./managed-claims";
 import { managedBudgetPolicySchema, managedBudgetTargetDigest, type ManagedBudgetPolicy } from "./managed-budget-policy";
 import { managedBudgetBindingSchema, type ManagedBudgetBinding } from "./managed-budget-contract";
 import { emptyManagedBudgetUnits, managedBudgetRequestSchema, ManagedBudgetError } from "./managed-service-budget";
+import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
 
 export const managedImportJobSchema = z.object({ resourceId: managedCloudConfigSchema.shape.jobResourceId,
   name: managedCloudConfigSchema.shape.jobName, image: managedCloudConfigSchema.shape.image,
@@ -23,6 +24,22 @@ function reference(approval: string, profileDigest: string | null) {
   const standard = approval === "STANDARD_MANAGED_WATCH_STANDARD_V1";
   check(standard ? profileDigest !== null : profileDigest === null);
   return { scope: standard ? "standard" as const : "release" as const, profileDigest };
+}
+/** Fixed reservations include the existing maximum output/read sizes. The DB
+ * still seals the exact artifact hashes; a result never rewrites this intent. */
+export function managedArtifactBudgetRequest(value: unknown, context: unknown, approvedPolicy: ManagedBudgetPolicy,
+  binding: ManagedBudgetBinding, pricingDigest: string, profileDigest: string | null) {
+  binding = managedBudgetBindingSchema.parse(binding);
+  const intent = managedArtifactIntentSchema.parse(value), c = managedArtifactContextSchema.parse(context), p = policy(approvedPolicy, binding);
+  const destination = p.targets.artifactStorage;
+  check(c.codeSha === p.codeSha && same(c.target, p.targets.watchTarget) &&
+    c.containerUrl === `https://${destination.storageAccount}.blob.core.windows.net/${destination.container}`);
+  if (intent.kind === "recovery") check(intent.recoveryOperationId !== intent.backupId);
+  const operationId = intent.kind === "delivery" ? intent.deliveryId : intent.kind === "backup" ? intent.backupId : intent.recoveryOperationId;
+  return managedBudgetRequestSchema.parse({ operationId,
+    requestDigest: managedDigest({ schema: 1, intent, context: c, budgetBinding: binding }),
+    ...reference(c.approval, profileDigest), kind: intent.kind, pricingDigest, cases: [intent.caseId],
+    reservationYen: p.reservations[`${intent.kind}Yen`], units: emptyManagedBudgetUnits() });
 }
 /** Recomputed by operator and worker. Caller-written totals and the reference
  * itself do not determine the intent, reservation amount, or operation units. */

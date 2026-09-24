@@ -13,7 +13,7 @@ vi.mock("../../repositories/managed-watch",()=>({ManagedWatchRepository:class{se
 vi.mock("../../repositories/managed-delivery",()=>({ManagedDeliveryRepository:class{acquireDistribution=b.distribution;prepare=b.delivery;get=b.get;}}));
 vi.mock("./managed-request-db",()=>({withManagedDeliveryDatabase:b.database}));
 vi.mock("./managed-storage",async()=>({...await vi.importActual<typeof import("./managed-storage")>("./managed-storage"),
-  ManagedPrivateStorage:class{static configured(){return {read:b.read};}},storeManagedDelivery:b.store,reconcileManagedDelivery:b.reconcile}));
+  ManagedPrivateStorage:class{static configured(){return {read:b.read};}},createManagedDelivery:b.store,reconcileManagedDelivery:b.reconcile}));
 import { POST as prepare } from "../../app/api/cases/[caseId]/managed-watch/runs/route";
 import { POST as distribution } from "../../app/api/cases/[caseId]/managed-watch/distribution/route";
 import { POST as delivery } from "../../app/api/cases/[caseId]/managed-watch/deliveries/route";
@@ -72,9 +72,9 @@ it("passes case IDs and CAS versions unchanged and preserves not-found/conflict 
   b.get.mockRejectedValue(new ManagedWatchError("not_found"));expect((await download(request("GET",{}),ctx("8"))).status).toBe(404);expect(b.read).not.toHaveBeenCalled();
 });
 it("keeps duplicate deliveries and uncertain writes distinct, with no automatic retry or secret exposure",async()=>{
-  b.delivery.mockRejectedValueOnce(new ManagedWatchError("conflict"));expect((await delivery(request("POST",deliveryInput),ctx())).status).toBe(409);expect(b.store).not.toHaveBeenCalled();
-  b.delivery.mockResolvedValue(managedDeliveryFixture());b.store.mockRejectedValueOnce(new ManagedWatchError("outcome_unknown"));
-  const unknown=await delivery(request("POST",deliveryInput),ctx());expect(unknown.status).toBe(503);expect(await unknown.json()).toEqual({error:"outcome_unknown"});expect(b.store).toHaveBeenCalledTimes(1);
+  b.store.mockRejectedValueOnce(new ManagedWatchError("conflict"));expect((await delivery(request("POST",deliveryInput),ctx())).status).toBe(409);expect(b.delivery).not.toHaveBeenCalled();
+  b.store.mockRejectedValueOnce(new ManagedWatchError("outcome_unknown"));
+  const unknown=await delivery(request("POST",deliveryInput),ctx());expect(unknown.status).toBe(503);expect(await unknown.json()).toEqual({error:"outcome_unknown"});expect(b.store).toHaveBeenCalledTimes(2);
   b.reconcile.mockRejectedValueOnce(Error("FICTIONAL_PRIVATE_SENTINEL"));const response=await reconcile(request("POST",{abandonPartial:false}),ctx());
   expect(response.status).toBe(503);expect(await response.text()).not.toContain("SENTINEL");expect(response.headers.get("cache-control")).toContain("no-store");expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   b.finding.mockRejectedValue(z.object({saved:z.string()}).safeParse({}).error);expect((await finding(request("GET",{}),ctx())).status).toBe(503);

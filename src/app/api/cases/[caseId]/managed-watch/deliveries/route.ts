@@ -4,7 +4,7 @@ import { managedApiError, managedCaseId, managedJson,managedRequestInput,managed
 import { withManagedDeliveryDatabase } from "@/lib/patent-watch/managed-request-db";
 import { ManagedDeliveryRepository } from "@/repositories/managed-delivery";
 import { managedHash } from "@/lib/patent-watch/managed-types";
-import { ManagedPrivateStorage, storeManagedDelivery } from "@/lib/patent-watch/managed-storage";
+import { ManagedPrivateStorage, createManagedDelivery } from "@/lib/patent-watch/managed-storage";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=120;
@@ -15,8 +15,7 @@ export const POST=withOwnerRoute(async(request:Request,{params}:{params:Promise<
     const caseId=managedCaseId((await params).caseId),value=await managedJson(request,2048),body=managedRequestInput(()=>input.parse(value));
     return await withManagedDeliveryDatabase(async(db,deadline)=>{
     const repository=new ManagedDeliveryRepository(db);
-    const report=await repository.prepare(caseId,body.period,{distributionTableSha256:body.distributionTableSha256},body.reason,body.deliveredOn,body.deliveryId,deadline);
-    await storeManagedDelivery(repository,ManagedPrivateStorage.configured(deadline),report,deadline);
+    const report=await createManagedDelivery(repository,ManagedPrivateStorage.configured(deadline),{kind:"delivery",caseId,...body},deadline);
     return Response.json({status:"stored",deliveryId:report.deliveryId,version:report.version,complete:report.coverage.complete},{status:201});
     });
   }catch(error){return managedApiError(error);}

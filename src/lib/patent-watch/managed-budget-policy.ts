@@ -9,6 +9,8 @@ const hash = z.string().regex(/^[a-f0-9]{64}$/), yen = z.number().int().nonnegat
 const targets = z.object({ ownerBindingHash: hash, jobResourceId: managedCloudConfigSchema.shape.jobResourceId,
   environmentResourceId: z.string().regex(/^\/subscriptions\/[a-f0-9-]{36}\/resourceGroups\/[a-zA-Z0-9_.()-]{1,90}\/providers\/Microsoft\.App\/managedEnvironments\/[a-zA-Z0-9-]{1,60}$/),
   storageAccount: managedBudgetBindingSchema.shape.storageAccount, container: managedBudgetBindingSchema.shape.container,
+  artifactStorage: z.object({ storageAccount: managedBudgetBindingSchema.shape.storageAccount,
+    container: managedBudgetBindingSchema.shape.container }).strict(),
   managedIdentityClientId: z.uuid().nullable(), watchTarget: cloudTargetSchema, importTarget: cloudTargetSchema,
   watchAi: managedCloudConfigSchema.shape.ai, watchSecrets: managedCloudConfigSchema.shape.secrets,
   importDatabaseSecretRef: z.string().regex(/^[a-z0-9-]{1,64}$/) }).strict().refine(t =>

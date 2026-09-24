@@ -102,7 +102,7 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
 | finding-status / finding-review | caseId, findingId。変更時は reviewed, expectedVersion も指定 |
 | distribution-acquire | 最新の公式配布一覧を取得してhashと取得日時を固定 |
 | backup-create / backup-reconcile | caseId, backupId。reconcileは必要時だけabandonMissing |
-| backup-verify-restore | caseId, backupId。実保管bytesから今回対象だけ隔離PG16へ復元 |
+| backup-verify-restore | caseId, backupId, recoveryOperationId。backupIdとは別の固定UUIDで予約し、実保管bytesから今回対象だけ隔離PG16へ復元 |
 | deletion-preview | caseId。削除予定graph・原本・納品物・backupを固定 |
 | deletion-execute / deletion-reconcile | caseId, deletionId, manifestDigest。特定previewだけを実行/照合 |
 
@@ -222,7 +222,15 @@ watch/import全体の費用・単位は共通台帳で制限する。DBの95分w
 料金表は固定Job/environment、code/image、watch/importの異なるDB login・secretRef、AI、保存先、OWNERを結合する。
 金額は料金表の保守的予約額とrun数/ZIP GiBから導出し、業務requestの自己申告額を採用しない。
 料金表原文は署名済み月額計画へ含め、profileのpricing/measurement digestとも照合する。
-納品・backup・restore・deployへの共通ガード接続、証拠収集/署名手順、予約枠確定、本番統合受入は未完了。
+納品・backup・restoreは、新規処理の前に共通台帳の予約とstart claimを同じCASで確定する。
+CAS ACK不明・再送は実行許可にせず、定額予約を保持する。料金は既存の最大出力/読取量を含む保守額とし、
+納品・backupはstorage、隔離復元はrecovery poolへ割り当てる。9実行単位をwatch/Job/ZIPとして加算しない。
+料金表の`targets.artifactStorage`に実成果物の既存保存先を明示し、実clientのcontainer URLを完全一致で確認する。
+共通台帳/取込containerへ成果物を移動しない。installed `MANAGED_ARTIFACT_APPROVAL`、実build SHA、watch DB targetを使い、
+API/stdinから料金や保存先を指定しない。納品はAPIの90秒、backup/復元は管理入口の5分期限を予算IOにも引き継ぐ。
+隔離復元はbackupIdと別のrecoveryOperationIdで、DB確定sha/bytesを拘束してから原本を読み戻す。
+期限後は今回作成した隔離fixtureの有限cleanupのみを継続する。保存済みread/reconcileに新規予約や自動返金はない。
+deployへの共通ガード接続、証拠収集/署名手順、予約枠確定、本番統合受入は未完了。
 定例運用が成立したとは扱わず、残工程と本番GOを確認するまで標準profileの有効化は行わない。
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、

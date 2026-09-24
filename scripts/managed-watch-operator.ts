@@ -11,7 +11,11 @@ import { ManagedDeliveryRepository } from "../src/repositories/managed-delivery"
 import { ManagedRetentionRepository } from "../src/repositories/managed-retention";
 import { ManagedBackupRepository } from "../src/repositories/managed-backup";
 import { ManagedArchiveStorage } from "../src/lib/patent-watch/managed-archive-storage";
-import { verifyManagedBackupRestore } from "./managed-watch-restore";
+import { restoreManagedBackup } from "./managed-watch-restore";
+import { configuredManagedArtifactAdmission } from "../src/lib/patent-watch/managed-artifact-budget";
+import { managedDeadlineDatabase } from "../src/lib/patent-watch/managed-request-db";
+import { performance } from "node:perf_hooks";
+import { hasUnconfirmedIsolatedProcess } from "./watch-report-local.test-support";
 import { managedId, managedHash, managedSettingSchema } from "../src/lib/patent-watch/managed-types";
 import { ManagedPrivateStorage, reconcileManagedDelivery } from "../src/lib/patent-watch/managed-storage";
 import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
@@ -27,7 +31,7 @@ const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("delivery-reconcile"),caseId:managedId,deliveryId:z.uuidv4(),abandonPartial:z.boolean().default(false)}).strict(),
   z.object({command:z.literal("backup-create"),caseId:managedId,backupId:z.uuidv4()}).strict(),
   z.object({command:z.literal("backup-reconcile"),caseId:managedId,backupId:z.uuidv4(),abandonMissing:z.boolean().default(false)}).strict(),
-  z.object({command:z.literal("backup-verify-restore"),caseId:managedId,backupId:z.uuidv4()}).strict(),
+  z.object({command:z.literal("backup-verify-restore"),caseId:managedId,backupId:z.uuidv4(),recoveryOperationId:z.uuidv4()}).strict(),
   z.object({command:z.literal("deletion-preview"),caseId:managedId}).strict(),
   z.object({command:z.literal("deletion-execute"),caseId:managedId,deletionId:z.uuidv4(),manifestDigest:managedHash}).strict(),
   z.object({command:z.literal("deletion-reconcile"),caseId:managedId,deletionId:z.uuidv4(),manifestDigest:managedHash}).strict(),
@@ -58,17 +62,26 @@ async function readRequest(){
   finally{clearTimeout(timer);}
 }
 if(require.main===module){
-  const watchdog=setTimeout(()=>{process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);},5*60_000);
+  const started=performance.now(),deadline=AbortSignal.timeout(5*60_000);
+  // Artifact work shares the original five-minute deadline. Allow only bounded
+  // cleanup of the known isolated fixture after cancellation, before hard exit.
+  let artifactCommand=false;
+  const watchdog=setTimeout(()=>{if(!artifactCommand){process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);}},5*60_000);
+  const hardWatchdog=setTimeout(()=>{process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);},7*60_000);
   void(async()=>{
     let connection:Awaited<ReturnType<typeof openManagedCloudDatabase>>|undefined;
+    const close=()=>{void connection?.client.end().catch(()=>undefined);};
     try{
       if(process.argv.length!==2)throw Error();
       const input=await readRequest(),password=process.env.MANAGED_WATCH_DATABASE_PASSWORD;delete process.env.MANAGED_WATCH_DATABASE_PASSWORD;
       if(!password)throw Error();
       const request=input.request,b=input.binding;
+      artifactCommand=request.command==="backup-create"||request.command==="backup-verify-restore";
       const scope=(caseId:number)=>{if(!b.caseAllowList.includes(caseId))throw Error();};
       if("caseId" in request)scope(request.caseId);if(request.command==="setting-save")scope(request.setting.caseId);
       connection=await openManagedCloudDatabase(b,password);
+      deadline.throwIfAborted();
+      if(artifactCommand){deadline.addEventListener("abort",close,{once:true});connection.database=managedDeadlineDatabase(connection.client,5*60_000-(performance.now()-started));}
       const watch=new ManagedWatchRepository(connection.database),starts=new ManagedCloudStartRepository(connection.database),deliveries=new ManagedDeliveryRepository(connection.database);
       let output:unknown;
       switch(request.command){
@@ -93,12 +106,11 @@ if(require.main===module){
         case "start-reconcile":{const existing=await starts.get(request.operationId);if(existing.config.jobResourceId!==b.jobResourceId)throw Error();
           existing.config.runs.forEach(r=>scope(r.caseId));output=await reconcileManagedWatchStart(starts,request.operationId,await operatorArm(b.jobResourceId));break;}
         case "delivery-reconcile":output={status:await reconcileManagedDelivery(deliveries,ManagedPrivateStorage.configured(),request.caseId,request.deliveryId,request.abandonPartial)};break;
-        case "backup-create":output=await new ManagedBackupRepository(connection.database,ManagedArchiveStorage.configured()).create(request.caseId,request.backupId);break;
+        case "backup-create":output=await new ManagedBackupRepository(connection.database,ManagedArchiveStorage.configured(),configuredManagedArtifactAdmission(b.target)).create(request.caseId,request.backupId,deadline);break;
         case "backup-reconcile":output=await new ManagedBackupRepository(connection.database,ManagedArchiveStorage.configured()).reconcile(request.caseId,request.backupId,request.abandonMissing);break;
         case "backup-verify-restore":{
-          const saved=await new ManagedBackupRepository(connection.database,ManagedArchiveStorage.configured()).read(request.caseId,request.backupId);
-          if(saved.row.status!=="stored")throw Error();
-          output=await verifyManagedBackupRestore(saved.bytes,saved.row.sha256,request.caseId,request.backupId);break;
+          output=await restoreManagedBackup(new ManagedBackupRepository(connection.database,ManagedArchiveStorage.configured()),
+            request.caseId,request.backupId,request.recoveryOperationId,deadline,configuredManagedArtifactAdmission(b.target));break;
         }
         case "deletion-preview":output=await new ManagedRetentionRepository(connection.database,ManagedArchiveStorage.configured()).preview(request.caseId);break;
         case "deletion-execute":output=await new ManagedRetentionRepository(connection.database,ManagedArchiveStorage.configured()).execute(request.caseId,request.deletionId,request.manifestDigest);break;
@@ -106,6 +118,9 @@ if(require.main===module){
       }
       process.stdout.write(JSON.stringify(output)+"\n");process.exitCode=0;
     }catch{process.stdout.write(JSON.stringify({status:"reconciliation_required",diagnosticId:randomUUID()})+"\n");process.exitCode=2;}
-    finally{await connection?.client.end().catch(()=>undefined);clearTimeout(watchdog);}
+    finally{deadline.removeEventListener("abort",close);await connection?.client.end().catch(()=>undefined);clearTimeout(watchdog);
+      // A late close may let the process exit normally; a still-ref'ed unknown
+      // child must retain the original finite hard-stop boundary.
+      if(hasUnconfirmedIsolatedProcess())hardWatchdog.unref();else clearTimeout(hardWatchdog);}
   })();
 }

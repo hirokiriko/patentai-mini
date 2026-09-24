@@ -11,27 +11,49 @@ import type { ManualConfiguration } from "../src/lib/koho-import/manual-cli-conf
 // The isolated lifecycle follows koho-manual-import-local.test.ts. Never read .env.
 export const isolatedChildEnv = () => ({ NODE_ENV: "test" as const, SystemRoot: process.env.SystemRoot,
   WINDIR: process.env.WINDIR, TEMP: process.env.TEMP, TMP: process.env.TMP, PATH: process.env.PATH });
-export async function isolatedCommand(file: string, args: string[], input = "", env: Record<string, string | undefined> = {}, timeout = 60_000) {
+const unconfirmedProcesses = new Set<ReturnType<typeof spawn>>();
+export const hasUnconfirmedIsolatedProcess = () => unconfirmedProcesses.size > 0;
+export async function isolatedCommand(file: string, args: string[], input = "", env: Record<string, string | undefined> = {}, timeout = 60_000, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   return await new Promise<{ code: number | null; output: string; stderr: string }>((resolvePromise, reject) => {
     const child = spawn(file, args, { windowsHide: true, env: { ...isolatedChildEnv(), ...env } });
     let output = "", stderr = "";
-    const timer = setTimeout(() => { child.kill(); reject(Error("isolated_process_timeout")); }, timeout);
+    let failure: string | undefined, exitTimer: ReturnType<typeof setTimeout> | undefined;
+    const stop = (reason: string) => {
+      if (failure) return;
+      failure = reason;
+      // Do not race cleanup against a still-running Docker command. Failure to
+      // observe close is itself unknown and must never authorize a new create.
+      exitTimer = setTimeout(() => { unconfirmedProcesses.add(child); reject(Error("isolated_process_exit_unconfirmed")); }, 5000);
+      child.kill();
+    };
+    const timer = setTimeout(() => stop("isolated_process_timeout"), timeout);
+    const abort = () => stop("isolated_process_cancelled");
+    signal?.addEventListener("abort", abort, { once: true });
+    const done = () => { unconfirmedProcesses.delete(child); clearTimeout(timer); clearTimeout(exitTimer); signal?.removeEventListener("abort", abort); };
     child.stdout.on("data", chunk => { output += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
-    child.on("error", () => { clearTimeout(timer); reject(Error("isolated_process_unavailable")); });
-    child.on("close", code => { clearTimeout(timer); resolvePromise({ code, output, stderr }); });
+    // A kill error (including synchronous EPERM) is not a close notification.
+    child.on("error", () => { if (!failure) { done(); reject(Error("isolated_process_unavailable")); } });
+    child.on("close", code => { done(); if (failure) reject(Error(failure)); else resolvePromise({ code, output, stderr }); });
     child.stdin.on("error", () => undefined); child.stdin.end(input);
   });
 }
-export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
+export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101, deadline?: AbortSignal) {
+  deadline?.throwIfAborted();
   if (process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1" || process.env.DATABASE_URL || process.env.PGHOST || process.env.PGSERVICE) {
     throw Error("isolated_database_opt_in_required");
   }
   const directory = await mkdtemp(join(tmpdir(), "watch-report-test-"));
   const suffix = randomBytes(8).toString("hex"), database = `koho_manual_import_test_${suffix}`;
   const container = `watch-report-test-${suffix}`, password = randomBytes(24).toString("hex");
-  const clients: Client[] = []; let createAttempted = false;
-  const docker = (args: string[], env: Record<string, string | undefined> = {}) => isolatedCommand("docker", ["--config", join(directory, "docker-config"), ...args], "", env);
+  const clients: Client[] = []; let createAttempted = false, createAcknowledged = false;
+  let cleaning = false;
+  const docker = (args: string[], env: Record<string, string | undefined> = {}) => isolatedCommand("docker", ["--config", join(directory, "docker-config"), ...args], "", env,
+    cleaning && deadline ? 15_000 : 60_000, cleaning ? undefined : deadline);
+  const abort = () => { for (const client of clients) void client.end().catch(() => undefined); };
+  deadline?.addEventListener("abort", abort, { once: true });
   const cleanup = async () => {
+    cleaning = true; deadline?.removeEventListener("abort", abort);
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { await Promise.race([Promise.all(clients.map(client => client.end().catch(() => undefined))),
       new Promise<void>(done => { timer = setTimeout(done, 3000); })]); }
@@ -40,6 +62,9 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
       const inspect = () => docker(["container", "inspect", "--format", '{{index .Config.Labels "patentai.owner"}}', container]);
       const absent = (result: Awaited<ReturnType<typeof docker>>) => result.code !== 0 && /No such (?:object|container)/i.test(result.stderr);
       const target = await inspect();
+      // A cancelled create can still be finishing inside Docker. A transient
+      // absence is not proof of cleanup; keep the private recovery directory.
+      if (absent(target) && !createAcknowledged) throw Error("isolated_cleanup_unconfirmed");
       if (!absent(target)) {
         if (target.code !== 0 || target.output.trim() !== suffix) throw Error("isolated_cleanup_unconfirmed");
         if ((await docker(["rm", "--force", "--volumes", container])).code !== 0 || !absent(await inspect())) throw Error("isolated_cleanup_unconfirmed");
@@ -60,6 +85,7 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
       "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...([123, 125, 129].includes(issue) ? ["--pull", "never"] : []), "postgres:16"],
     { POSTGRES_PASSWORD: password, POSTGRES_DB: database });
     if (created.code !== 0) throw Error();
+    createAcknowledged = true;
     phase = "container_start";
     if ((await docker(["start", container])).code !== 0) throw Error();
     // Docker Desktop can acknowledge start before its dynamic host port is assigned.
@@ -77,8 +103,9 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
     if (!match) throw Error();
     const base = { host: "127.0.0.1" as const, port: Number(match[1]), database, ssl: false as const, connectionTimeoutMillis: 1000 };
     async function connect(user: string, secret: string) {
+      deadline?.throwIfAborted();
       const client = new Client({ ...base, user, password: secret }); client.on("error", () => undefined);
-      try { await client.connect(); clients.push(client); return client; }
+      try { await client.connect(); clients.push(client); deadline?.throwIfAborted(); return client; }
       catch { await client.end().catch(() => undefined); throw Error("isolated_connection_failed"); }
     }
     let admin: Client | undefined;
@@ -89,6 +116,7 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101) {
     }
     if (!admin) throw Error();
     const sql = async (text: string, values?: unknown[]) => {
+      deadline?.throwIfAborted();
       try { return (await admin!.query(text, values)).rows; }
       catch { throw Error("isolated_sql_check_failed"); }
     };

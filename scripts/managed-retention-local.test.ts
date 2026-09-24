@@ -7,7 +7,8 @@ import { ManagedWatchRepository } from "../src/repositories/managed-watch";
 import { ManagedRetentionRepository } from "../src/repositories/managed-retention";
 import { ManagedBackupRepository, parseManagedCaseBackup } from "../src/repositories/managed-backup";
 import { ManagedArchiveStorage, archiveSha, type ArchiveBlob } from "../src/lib/patent-watch/managed-archive-storage";
-import { verifyManagedBackupRestore } from "./managed-watch-restore";
+import { restoreManagedBackup, verifyManagedBackupRestore } from "./managed-watch-restore";
+import { artifactAdmissionFixture } from "../src/lib/patent-watch/managed-artifact.test-support";
 import { withManagedOriginalUpload, type ManagedDatabase } from "../src/repositories/managed-case-graph";
 import { addFictionalManagedOriginal } from "./managed-base.test-support";
 import { managedArtifactName } from "../src/lib/patent-watch/managed-storage";
@@ -16,6 +17,8 @@ import { managedDeliveryFixture } from "../src/lib/patent-watch/managed-delivery
 function memoryStorage() {
   const blobs = new Map<string,Buffer>(); let deleteFailure = false;
   const implementation = {
+    location:"https://fictional.blob.core.windows.net/private",
+    withDeadline(deadline:AbortSignal){deadline.throwIfAborted();return this;},
     async list(caseId:number) { return [...blobs.keys()].filter(k=>k.startsWith(`cases/${caseId}/`)).sort(); },
     async read(_caseId:number,name:string) { const data=blobs.get(name);return data?{metadata:{name,bytes:data.length,sha256:archiveSha(data),etag:archiveSha(data)},data:Buffer.from(data)}:null; },
     async writeBackup(caseId:number,id:string,bytes:Buffer) { const name=`cases/${caseId}/managed-backups/${id}.json`;if(blobs.has(name))throw Error("conflict");blobs.set(name,Buffer.from(bytes)); },
@@ -57,19 +60,26 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("managed retention
     await expect(withManagedOriginalUpload(database,f.caseId,async()=>{throw Error("must_not_upload");})).rejects.toThrow("not_found");
   },30_000);
   it("reserves an immutable backup, reads it back, verifies corruption rejection, and restores into a fresh PG16",async()=>{
-    const s=memoryStorage(),f=await fixture(s),backups=new ManagedBackupRepository(database,s.storage),backupId=randomUUID();
+    const s=memoryStorage(),f=await fixture(s),budget=artifactAdmissionFixture(),backups=new ManagedBackupRepository(database,s.storage,budget.admit),backupId=randomUUID();
     const created=await backups.create(f.caseId,backupId);expect(created.status).toBe("stored");
     await expect(backups.create(f.caseId,backupId)).rejects.toThrow("conflict");
     const saved=await backups.read(f.caseId,backupId);
+    // A current admission outage must not prevent historical verification.
+    const historical=new ManagedBackupRepository(database,s.storage,async()=>{throw Error("current_budget_unavailable");});
+    expect((await historical.read(f.caseId,backupId)).row.sha256).toBe(saved.row.sha256);
+    expect((await historical.reconcile(f.caseId,backupId)).status).toBe("stored");
     const corrupt=Buffer.from(saved.bytes);corrupt[corrupt.length-3]^=1;
     expect(()=>parseManagedCaseBackup(corrupt,saved.row.sha256,f.caseId,backupId)).toThrow("incomplete");
-    expect(await verifyManagedBackupRestore(saved.bytes,saved.row.sha256,f.caseId,backupId)).toMatchObject({verified:true,caseId:f.caseId,artifacts:2,productionWrite:false});
+    const recoveryOperationId=randomUUID();
+    expect(await restoreManagedBackup(backups,f.caseId,backupId,recoveryOperationId,AbortSignal.timeout(90_000),budget.admit)).toMatchObject({verified:true,caseId:f.caseId,artifacts:2,productionWrite:false});
+    expect(budget.records.get(recoveryOperationId)).toMatchObject({kind:"recovery",sha256:saved.row.sha256,bytes:saved.row.bytes});
+    await expect(restoreManagedBackup(backups,f.caseId,backupId,recoveryOperationId,AbortSignal.timeout(90_000),budget.admit)).rejects.toThrow("conflict");
     const retention=new ManagedRetentionRepository(database,s.storage),preview=await retention.preview(f.caseId);
     expect(preview.blobs).toBe(3);await retention.execute(f.caseId,preview.deletionId,preview.manifestDigest);
     expect(s.blobs.size).toBe(0);expect((await environment.sql("select backup_id from managed_watch_backups where case_id=$1",[f.caseId])).length).toBe(0);
   },120_000);
   it("retains abandoned deliveries, records only permitted missing artifacts, and verifies the bound original",async()=>{
-    const s=memoryStorage(),f=await fixture(s),backups=new ManagedBackupRepository(database,s.storage);
+    const s=memoryStorage(),f=await fixture(s),backups=new ManagedBackupRepository(database,s.storage,artifactAdmissionFixture().admit);
     const setting=(await environment.sql("select setting_id,base_digest from managed_watch_settings where case_id=$1",[f.caseId]))[0];
     const distribution=archiveSha(Buffer.from("fictional-distribution"));
     await database.insert(schema.managedDistributionSnapshots).values({sha256:distribution,sourceUrl:"https://fictional.invalid/JPA.csv",csvText:"fictional",acquiredAt:new Date().toISOString()});

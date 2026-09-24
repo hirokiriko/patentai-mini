@@ -7,6 +7,8 @@ import { managedHash, managedId, ManagedWatchError } from "../lib/patent-watch/m
 import { managedArtifactName, validateManagedArtifactManifest } from "../lib/patent-watch/managed-storage";
 import { managedBaseSourceSchema, verifyManagedBaseOriginal } from "../lib/patent-watch/managed-base-source";
 import { parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
+import { configuredManagedArtifactAdmission } from "../lib/patent-watch/managed-artifact-budget";
+import type { ManagedArtifactAdmission } from "../lib/patent-watch/managed-artifact-contract";
 const B = schema.managedWatchBackups;
 export const MANAGED_BACKUP_REFERENCES = [["koho_import_runs", "import_id"], ["koho_import_documents", "document_id"], ["managed_distribution_snapshots", "sha256"]] as const;
 type References = Record<typeof MANAGED_BACKUP_REFERENCES[number][0], Record<string, unknown>[]>;
@@ -71,12 +73,17 @@ function abandonedArtifactNames(graph: CaseGraph, caseId: number) {
   return names;
 }
 export class ManagedBackupRepository {
-  constructor(private readonly database: ManagedDatabase, private readonly storage: ManagedArchiveStorage) {}
-  async create(caseId: number, backupId: string) {
+  constructor(private readonly database: ManagedDatabase, private readonly storage: ManagedArchiveStorage,
+    private readonly admit: ManagedArtifactAdmission = configuredManagedArtifactAdmission()) {}
+  get location() { return this.storage.location; }
+  async create(caseId: number, backupId: string, deadline: AbortSignal = AbortSignal.timeout(5 * 60_000)) {
     managedId.parse(caseId); z.uuidv4().parse(backupId);
+    await this.admit({ kind: "backup", caseId, backupId }, this.storage.location, deadline); deadline.throwIfAborted();
+    const storage = this.storage.withDeadline(deadline);
     let bytes: Buffer;
     // Reserve the exact digest before any cloud write. The input id is never regenerated on retry.
     const reservation = await this.database.transaction(async tx => {
+      deadline.throwIfAborted();
       const d = tx as unknown as ManagedDatabase;
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`); await lockManagedCase(d, caseId);
       const existing = await tx.select().from(B).where(eq(B.backupId, backupId));
@@ -105,7 +112,8 @@ export class ManagedBackupRepository {
       const missingArtifacts: string[] = [], permittedMissing = abandonedArtifactNames(graph, caseId);
       let total = Buffer.byteLength(JSON.stringify({ graph, references })); archiveCheck(total <= 64 * 1024**2);
       for (const name of managedGraphBlobNames(graph, caseId)) {
-        const result = await this.storage.read(caseId, name);
+        deadline.throwIfAborted();
+        const result = await storage.read(caseId, name);
         if (!result) { archiveCheck(permittedMissing.has(name)); missingArtifacts.push(name); continue; }
         total += Math.ceil(result.data.length * 4 / 3); archiveCheck(total <= 250 * 1024**2);
         artifacts.push({ name, bytes: result.metadata.bytes, sha256: result.metadata.sha256, data: result.data.toString("base64") });
@@ -114,12 +122,13 @@ export class ManagedBackupRepository {
       const createdAt = new Date().toISOString();
       bytes = Buffer.from(JSON.stringify(canonicalManaged({ schema: 1, backupId, caseId, createdAt, graph, references, artifacts, missingArtifacts })));
       const sha256 = archiveSha(bytes); parseManagedCaseBackup(bytes, sha256, caseId, backupId);
+      deadline.throwIfAborted();
       await tx.insert(B).values({ backupId, caseId, sha256, bytes: bytes.length, status: "prepared", createdAt });
       return { backupId, caseId, sha256, bytes: bytes.length };
     });
     try {
-      await this.storage.writeBackup(caseId, backupId, bytes!);
-      await this.reconcile(caseId, backupId);
+      deadline.throwIfAborted(); await storage.writeBackup(caseId, backupId, bytes!);
+      await this.reconcile(caseId, backupId, false, deadline);
       return { ...reservation, status: "stored" };
     } catch {
       const [observed] = await this.database.select().from(B).where(and(eq(B.caseId, caseId), eq(B.backupId, backupId)));
@@ -128,16 +137,23 @@ export class ManagedBackupRepository {
       throw new ManagedWatchError("outcome_unknown");
     }
   }
-  async read(caseId: number, backupId: string) {
+  async metadata(caseId: number, backupId: string) {
+    managedId.parse(caseId);
     const [row] = await this.database.select().from(B).where(and(eq(B.caseId, caseId), eq(B.backupId, z.uuidv4().parse(backupId))));
     if (!row) throw new ManagedWatchError("not_found");
-    const saved = await this.storage.read(caseId, managedBackupName(caseId, backupId)); archiveCheck(saved && saved.data.length === row.bytes);
+    return row;
+  }
+  async read(caseId: number, backupId: string, deadline?: AbortSignal) {
+    const row = await this.metadata(caseId, backupId); deadline?.throwIfAborted();
+    const storage = deadline ? this.storage.withDeadline(deadline) : this.storage;
+    const saved = await storage.read(caseId, managedBackupName(caseId, backupId)); archiveCheck(saved && saved.data.length === row.bytes);
     return { row, bytes: saved.data, archive: parseManagedCaseBackup(saved.data, row.sha256, caseId, backupId) };
   }
-  async reconcile(caseId: number, backupId: string, abandonMissing = false) {
+  async reconcile(caseId: number, backupId: string, abandonMissing = false, deadline?: AbortSignal) {
     const [row] = await this.database.select().from(B).where(and(eq(B.caseId, caseId), eq(B.backupId, z.uuidv4().parse(backupId))));
     if (!row || row.status === "abandoned") throw new ManagedWatchError("not_found");
-    const saved = await this.storage.read(caseId, managedBackupName(caseId, backupId));
+    deadline?.throwIfAborted();
+    const saved = await (deadline ? this.storage.withDeadline(deadline) : this.storage).read(caseId, managedBackupName(caseId, backupId));
     if (!saved) {
       if (!abandonMissing || row.status === "stored" || Date.now() - Date.parse(row.createdAt) < 10 * 60_000) throw new ManagedWatchError("outcome_unknown");
       await this.database.update(B).set({ status: "abandoned" }).where(and(eq(B.backupId, backupId), eq(B.status, row.status)));

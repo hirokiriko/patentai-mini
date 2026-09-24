@@ -6,6 +6,7 @@ export function managedBudgetPolicyFixture() {
     targets: { ownerBindingHash: "8".repeat(64), jobResourceId: c.jobResourceId,
       environmentResourceId: c.jobResourceId.replace("/jobs/fictional-manual", "/managedEnvironments/fictional"),
       storageAccount: "fictional", container: "private-import", managedIdentityClientId: null,
+      artifactStorage: { storageAccount: "fictional", container: "private-artifacts" },
       watchTarget: c.target, importTarget: { ...c.target, user: "fictional_import" }, watchAi: c.ai, watchSecrets: c.secrets,
       importDatabaseSecretRef: "fictional-import-db" }, codeSha: c.codeSha, image: c.image,
     validFrom: "2026-09-01T00:00:00Z", validUntil: "2026-09-30T15:00:00Z", measurementDigest: "9".repeat(64),

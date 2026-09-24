@@ -9,7 +9,8 @@ import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
-import { managedWatchBudgetRequest, managedImportBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
+import { managedWatchBudgetRequest, managedImportBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
+import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
 import { parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
 import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration } from "../koho-import/cloud-config";
 
@@ -32,9 +33,13 @@ type Credential = Parameters<typeof newPipeline>[0];
 /** One existing private container and one ETag compare-and-swap ledger. No reset,
  * delete, upsert, automatic initialization, write retry, or caller-selected key. */
 export class ManagedServiceBudgetStorage {
-  private constructor(private readonly container: ContainerClient, private readonly binding: ManagedBudgetStorageBinding) {
+  private constructor(private readonly container: ContainerClient, private readonly binding: ManagedBudgetStorageBinding, private readonly deadline?: AbortSignal) {
     check(container.url === `https://${binding.storageAccount}.blob.core.windows.net/${binding.container}`);
   }
+  withDeadline(deadline: AbortSignal) {
+    return new ManagedServiceBudgetStorage(this.container, this.binding, this.deadline ? AbortSignal.any([this.deadline, deadline]) : deadline);
+  }
+  private signal() { return this.deadline ? AbortSignal.any([this.deadline, AbortSignal.timeout(IO_MS)]) : AbortSignal.timeout(IO_MS); }
   static withIdentity(binding: ManagedBudgetStorageBinding, credential: Credential, httpClient?: StoragePipelineOptions["httpClient"]) {
     const b = bindingSchema.parse(binding);
     check(credential);
@@ -49,7 +54,7 @@ export class ManagedServiceBudgetStorage {
     return new ManagedServiceBudgetStorage(service.getContainerClient(b.container), b);
   }
   private async readJson(name: string, maximum: number) {
-    const signal = AbortSignal.timeout(IO_MS);
+    const signal = this.signal(); signal.throwIfAborted();
     check(!(await this.container.getProperties({ abortSignal: signal })).blobPublicAccess);
     const blob = this.container.getBlobClient(name), p = await blob.getProperties({ abortSignal: signal });
     check(p.etag && p.contentLength && p.contentLength <= maximum && !p.contentEncoding);
@@ -126,6 +131,25 @@ export class ManagedServiceBudgetStorage {
     const p = await this.profile(saved.state, digest);
     if (p) check(p.measurementDigest === policy.measurementDigest);
     return p;
+  }
+  /** Reserve and claim commit atomically. An interrupted attempt keeps both
+   * records; only a fresh CAS ACK grants execution, never a recovered record. */
+  async admitArtifact(value: unknown, installedContext: unknown) {
+    return this.guarded(async () => {
+      check(this.deadline); this.deadline!.throwIfAborted();
+      const intent = managedArtifactIntentSchema.parse(value), context = managedArtifactContextSchema.parse(installedContext);
+      const minutes = intent.kind === "delivery" ? 1.5 : 5;
+      const saved = await this.read(), pricingDigest = this.currentPricing(saved);
+      const profileDigest = context.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? saved.state.activeProfileDigest : null;
+      const policy = await this.executionPolicy(saved, pricingDigest, minutes), profile = await this.executionProfile(saved, profileDigest, policy);
+      const request = managedArtifactBudgetRequest(intent, context, policy, this.binding, pricingDigest, profileDigest);
+      const fresh = await this.read(); check(fresh.etag === saved.etag);
+      validateManagedBudgetPolicy(policy, this.binding, fresh.date, this.clock(fresh, minutes).maximumActionMs);
+      const reserved = reserveManagedBudget(fresh.state, request, profile, this.clock(fresh, minutes));
+      check(reserved.created);
+      await this.replace(fresh, claimManagedBudgetPhase(reserved.state, request.operationId, "start", profile, this.clock(fresh, minutes)));
+      this.deadline!.throwIfAborted();
+    });
   }
   private async commitExecution(saved: ReadState, context: Awaited<ReturnType<ManagedServiceBudgetStorage["watchRequest"]>> |
     Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>, phase?: "stage" | "start") {
@@ -221,12 +245,14 @@ export class ManagedServiceBudgetStorage {
     return { blobDate: saved.date, maximumActionMs: minutes * 60_000 + 4 * IO_MS + 1000 };
   }
   private async replace(saved: ReadState, state: ManagedBudgetState) {
+    this.deadline?.throwIfAborted();
     const bytes = Buffer.from(JSON.stringify(validateManagedBudgetState(state, this.binding.targetBindingHash)));
     check(bytes.length <= MAX_STATE && state.targetBindingHash === this.binding.targetBindingHash);
     const result = await this.container.getBlockBlobClient(STATE).uploadData(bytes, { conditions: { ifMatch: saved.etag },
-      abortSignal: AbortSignal.timeout(IO_MS), maxSingleShotSize: MAX_STATE, concurrency: 1,
+      abortSignal: this.signal(), maxSingleShotSize: MAX_STATE, concurrency: 1,
       blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });
     check(result.etag); // An exception, including lost ACK, never grants permission.
+    this.deadline?.throwIfAborted();
   }
   private async guarded<T>(action: () => Promise<T>): Promise<T> {
     try { return await action(); } catch { throw new ManagedBudgetError(); }
@@ -268,7 +294,7 @@ export class ManagedServiceBudgetStorage {
   private async createJson(name: string, value: unknown, maximum: number) {
     const bytes = Buffer.from(JSON.stringify(value)); check(bytes.length <= maximum);
     const result = await this.container.getBlockBlobClient(name).uploadData(bytes, { conditions: { ifNoneMatch: "*" },
-      abortSignal: AbortSignal.timeout(IO_MS), maxSingleShotSize: maximum, concurrency: 1,
+      abortSignal: this.signal(), maxSingleShotSize: maximum, concurrency: 1,
       blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });
     check(result.etag);
   }
@@ -406,7 +432,7 @@ export class ManagedServiceBudgetStorage {
       if (!slot) {
         const bytes = Buffer.from(JSON.stringify(envelope));
         const result = await this.container.getBlockBlobClient(slotName).uploadData(bytes, { conditions: { ifNoneMatch: "*" },
-          abortSignal: AbortSignal.timeout(IO_MS), maxSingleShotSize: 128 * 1024, concurrency: 1,
+          abortSignal: this.signal(), maxSingleShotSize: 128 * 1024, concurrency: 1,
           blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });
         check(result.etag);
       }

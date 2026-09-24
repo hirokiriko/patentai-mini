@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { AnonymousCredential, BlobServiceClient, newPipeline } from "@azure/storage-blob";
-import { describe, expect, it } from "vitest";
-import { ManagedPrivateStorage, reconcileManagedDelivery, storeManagedDelivery } from "./managed-storage";
+import { describe, expect, it, vi } from "vitest";
+import { ManagedPrivateStorage, reconcileManagedDelivery, storeManagedDelivery, createManagedDelivery } from "./managed-storage";
+import { artifactAdmissionFixture } from "./managed-artifact.test-support";
 import type { ManagedArtifactManifest } from "./managed-storage";
 import type { ManagedDeliveryRepository } from "../../repositories/managed-delivery";
 import { managedDeliveryFixture } from "./managed-delivery.test-support";
@@ -33,6 +34,7 @@ function boundary() {
   const report = managedDeliveryFixture(), state: { status: string; manifest: ManagedArtifactManifest | null } = { status: "prepared", manifest: null };
   let lostCommitAck = false;
   const repository = {
+    prepare:vi.fn(async()=>report),
     async reserveArtifacts(_report: unknown, manifest: ManagedArtifactManifest) { if (state.manifest) throw Error(); state.manifest = manifest; },
     async markArtifacts(_report: unknown, _manifest: unknown, status: string) { state.status = status; if (status === "stored" && lostCommitAck) throw Error("lost ACK"); },
     async get() { return { report, ...state }; },
@@ -41,6 +43,23 @@ function boundary() {
     setPublic: () => { publicContainer = true; }, failPdf: () => { failPdf = true; }, corrupt: () => { wrongBytes = true; }, loseCommitAck: () => { lostCommitAck = true; } };
 }
 describe("actual Blob SDK bounded delivery storage with fake HTTP transport", { timeout: 30_000 }, () => {
+  const input=(b:ReturnType<typeof boundary>)=>({kind:"delivery" as const,caseId:b.report.caseId,deliveryId:b.report.deliveryId,
+    period:b.report.period,distributionTableSha256:"a".repeat(64),reason:"initial" as const,deliveredOn:null});
+  it("admits before DB preparation and retains the one claim after a partial write",async()=>{
+    const b=boundary(),budget=artifactAdmissionFixture();b.failPdf();
+    await expect(createManagedDelivery(b.repository,b.storage,input(b),AbortSignal.timeout(90_000),budget.admit)).rejects.toThrow("outcome_unknown");
+    expect(budget.records.size).toBe(1);expect(b.repository.prepare).toHaveBeenCalledTimes(1);
+    await expect(createManagedDelivery(b.repository,b.storage,input(b),AbortSignal.timeout(90_000),budget.admit)).rejects.toThrow("conflict");
+    expect(b.repository.prepare).toHaveBeenCalledTimes(1);expect(b.requests.filter(r=>r.method==="PUT")).toHaveLength(2);
+    expect(await reconcileManagedDelivery(b.repository,b.storage,b.report.caseId,b.report.deliveryId)).toBe("storage_unknown");
+    expect(budget.records.size).toBe(1);expect(b.requests.filter(r=>r.method==="PUT")).toHaveLength(2);
+  });
+  it.each(["refused","expired","lost-ack"])("does not prepare or write a delivery after budget %s",async mode=>{
+    const b=boundary(),controller=new AbortController();
+    const admit=async()=>{if(mode==="expired")controller.abort();else throw Error("reconciliation_required");};
+    await expect(createManagedDelivery(b.repository,b.storage,input(b),controller.signal,admit)).rejects.toThrow();
+    expect(b.repository.prepare).not.toHaveBeenCalled();expect(b.requests).toEqual([]);
+  });
   it("stores immutable exact bytes and rereads them without AI or uploads", async () => {
     const b = boundary(), manifest = await storeManagedDelivery(b.repository, b.storage, b.report);
     expect(b.state.status).toBe("stored"); expect(b.requests.filter(r => r.method === "PUT")).toHaveLength(3);

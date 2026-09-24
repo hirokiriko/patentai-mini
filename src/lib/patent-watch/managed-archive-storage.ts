@@ -33,19 +33,23 @@ export function managedGraphBlobNames(graph: CaseGraph, caseId: number): string[
   return [...names].sort();
 }
 export class ManagedArchiveStorage {
-  constructor(private readonly container: ContainerClient) {}
+  constructor(private readonly container: ContainerClient, private readonly deadline?: AbortSignal) {}
+  get location() { return this.container.url; }
+  withDeadline(deadline: AbortSignal) { return new ManagedArchiveStorage(this.container, this.deadline ? AbortSignal.any([this.deadline, deadline]) : deadline); }
+  private signal(milliseconds = 20_000) { return this.deadline ? AbortSignal.any([this.deadline, AbortSignal.timeout(milliseconds)]) : AbortSignal.timeout(milliseconds); }
   static configured() {
     const connection = process.env.AZURE_STORAGE_CONNECTION_STRING, name = process.env.AZURE_BLOB_CONTAINER_NAME;
     if (!connection || !name) throw new ManagedWatchError("unavailable");
     return new ManagedArchiveStorage(BlobServiceClient.fromConnectionString(connection, { retryOptions: { maxTries: 1, tryTimeoutInMs: 20_000 } }).getContainerClient(name));
   }
   private async privateContainer() {
-    if ((await this.container.getProperties({ abortSignal: AbortSignal.timeout(20_000) })).blobPublicAccess) throw new ManagedWatchError("unavailable");
+    this.deadline?.throwIfAborted();
+    if ((await this.container.getProperties({ abortSignal: this.signal() })).blobPublicAccess) throw new ManagedWatchError("unavailable");
   }
   async list(caseId: number): Promise<string[]> {
     try {
       await this.privateContainer(); const names: string[] = [];
-      for await (const page of this.container.listBlobsFlat({ prefix: `cases/${managedId.parse(caseId)}/`, abortSignal: AbortSignal.timeout(20_000) }).byPage({ maxPageSize: 257 })) {
+      for await (const page of this.container.listBlobsFlat({ prefix: `cases/${managedId.parse(caseId)}/`, abortSignal: this.signal() }).byPage({ maxPageSize: 257 })) {
         for (const item of page.segment.blobItems) names.push(item.name);
         archiveCheck(names.length <= 256 && names.every(name => validManagedCaseBlob(name, caseId)));
       }
@@ -56,10 +60,10 @@ export class ManagedArchiveStorage {
     archiveCheck(validManagedCaseBlob(name, caseId));
     try {
       await this.privateContainer(); const blob = this.container.getBlobClient(name);
-      const p = await blob.getProperties({ abortSignal: AbortSignal.timeout(20_000) });
+      const p = await blob.getProperties({ abortSignal: this.signal() });
       const max = name.includes("/managed-backups/") ? 256 * 1024**2 : 50 * 1024**2;
       archiveCheck(p.etag && Number.isSafeInteger(p.contentLength) && p.contentLength! >= 0 && p.contentLength! <= max);
-      const data = p.contentLength === 0 ? Buffer.alloc(0) : await blob.downloadToBuffer(0, p.contentLength, { conditions: { ifMatch: p.etag }, abortSignal: AbortSignal.timeout(20_000) });
+      const data = p.contentLength === 0 ? Buffer.alloc(0) : await blob.downloadToBuffer(0, p.contentLength, { conditions: { ifMatch: p.etag }, abortSignal: this.signal() });
       archiveCheck(data.length === p.contentLength);
       return { metadata: { name, bytes: data.length, sha256: archiveSha(data), etag: p.etag! }, data };
     } catch (error) {
@@ -71,7 +75,7 @@ export class ManagedArchiveStorage {
     archiveCheck(bytes.length > 0 && bytes.length <= 256 * 1024**2);
     try {
       await this.privateContainer();
-      await this.container.getBlockBlobClient(managedBackupName(caseId, id)).uploadData(bytes, { conditions: { ifNoneMatch: "*" }, abortSignal: AbortSignal.timeout(30_000),
+      await this.container.getBlockBlobClient(managedBackupName(caseId, id)).uploadData(bytes, { conditions: { ifNoneMatch: "*" }, abortSignal: this.signal(30_000),
         blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });
     } catch { throw new ManagedWatchError("outcome_unknown"); }
   }
@@ -81,7 +85,7 @@ export class ManagedArchiveStorage {
     archiveCheck(current.metadata.sha256 === entry.sha256 && current.metadata.bytes === entry.bytes && current.metadata.etag === entry.etag);
     try {
       // Retained versions/soft-delete are separately reported by the operator preflight.
-      await this.container.getBlobClient(entry.name).delete({ conditions: { ifMatch: entry.etag }, deleteSnapshots: "include", abortSignal: AbortSignal.timeout(20_000) });
+      await this.container.getBlobClient(entry.name).delete({ conditions: { ifMatch: entry.etag }, deleteSnapshots: "include", abortSignal: this.signal() });
     } catch { throw new ManagedWatchError("outcome_unknown"); }
     archiveCheck(await this.read(caseId, entry.name) === null);
   }

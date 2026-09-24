@@ -87,6 +87,52 @@ function executionFixture(){
   f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
   return{...f,...b};
 }
+function artifactFixture(kind: "delivery" | "backup" | "recovery") {
+  const f=executionFixture(),id=randomUUID();
+  const intent=kind==="delivery"?{kind,caseId:1,deliveryId:id,period:{from:"2026-07-26",to:"2026-08-25"},
+    distributionTableSha256:hash(51),reason:"initial",deliveredOn:null}:kind==="backup"?{kind,caseId:1,backupId:id}:
+    {kind,caseId:1,backupId:randomUUID(),recoveryOperationId:id,sha256:hash(52),bytes:100};
+  const context={approval:f.config.approval,target:f.config.target,codeSha:f.config.codeSha,
+    containerUrl:"https://fictional.blob.core.windows.net/private-artifacts"};
+  return {...f,intent,context,admit:(value:unknown=intent,c:unknown=context,signal=AbortSignal.timeout(90_000))=>f.store.withDeadline(signal).admitArtifact(value,c)};
+}
+it.each(["delivery","backup","recovery"] as const)("atomically admits one %s with fixed prices and no watch/import units",async kind=>{
+  const f=artifactFixture(kind);await f.admit();
+  expect(f.current().operations).toHaveLength(1);
+  expect(f.current().operations[0]).toMatchObject({kind,start:"claimed",stage:"unused",actualYen:null,
+    reservationYen:kind==="recovery"?500:50,units:emptyManagedBudgetUnits()});
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(1);
+  await expect(f.admit()).rejects.toThrow();await expect(f.admit({...f.intent,caseId:2})).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(1);
+});
+it("retains an artifact claim after a lost CAS ACK and denies replay",async()=>{
+  const f=artifactFixture("backup");f.loseAck();await expect(f.admit()).rejects.toThrow();
+  expect(f.current().operations[0]).toMatchObject({start:"claimed",actualYen:null,reservationYen:50});
+  f.restoreAck();await expect(f.admit()).rejects.toThrow();expect(f.current().operations).toHaveLength(1);
+});
+it.each(["target","storage","code","price","recovery-id"])("rejects changed artifact %s before a write",async field=>{
+  const f=artifactFixture("recovery"),c=structuredClone(f.context),value={...f.intent};
+  if(field==="target")c.target.user="wrong";
+  if(field==="storage")c.containerUrl="https://fictional.blob.core.windows.net/private-import";
+  if(field==="code")c.codeSha="f".repeat(40);
+  if(field==="price")Object.assign(value,{reservationYen:0});
+  if(field==="recovery-id")Object.assign(value,{recoveryOperationId:value.backupId});
+  await expect(f.admit(value,c)).rejects.toThrow();expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it.each([["delivery","Wed, 30 Sep 2026 14:57:09 GMT"],["backup","Wed, 30 Sep 2026 14:53:39 GMT"]] as const)("rejects %s at the exact month-end safety boundary",async(kind,date)=>{
+  const f=artifactFixture(kind);f.setDate(date);await expect(f.admit()).rejects.toThrow();expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it("honors the parent's abort during artifact policy IO, without a later CAS",async()=>{
+  const f=artifactFixture("delivery"),controller=new AbortController();
+  f.onRead(name=>{if(name.includes("/evidence/"))controller.abort();});
+  await expect(f.admit(f.intent,f.context,controller.signal)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+});
+it("allows only one concurrent artifact CAS",async()=>{
+  const f=artifactFixture("backup");f.raceReads();
+  const results=await Promise.allSettled([f.admit(),f.admit()]);
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);expect(f.current().operations).toHaveLength(1);
+});
 it("derives a watch reservation from reviewed policy, claims once, and verifies the original execution",async()=>{
   const f=executionFixture(),legacy=managedCloudFixture();
   const c=await f.store.prepareWatch(legacy);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
