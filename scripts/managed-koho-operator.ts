@@ -10,11 +10,14 @@ import { operatorArm } from "./managed-watch-operator";
 import { requireManual } from "../src/lib/koho-import/manual-cli-config";
 import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
 import { managedBudgetBindingEnvironment } from "../src/lib/patent-watch/managed-budget-contract";
+import { archiveRead, archiveReceiptName, confirmArchiveReceipt, readVerifiedArchive, verifyArchiveBytes } from "../src/lib/koho-import/managed-archive";
+import { releaseManagedTransfer } from "./managed-koho-transfer";
 
-const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","start","status"]),config:z.unknown(),manifest:z.unknown(),
+const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","release-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
     databaseSecretRef:z.string().regex(/^[a-z0-9-]{1,64}$/)}).strict(),
   sources:z.array(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),path:z.string().max(4096).refine(isAbsolute)}).strict()).max(4).default([]),
+  transferId:z.uuidv4().optional(),
 }).strict();
 function canonical(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
@@ -29,18 +32,26 @@ async function existing(container:ContainerClient,name:string){
   try{return await container.getBlobClient(name).getProperties({abortSignal:AbortSignal.timeout(20_000)});}
   catch(error){if(error&&typeof error==="object"&&"statusCode"in error&&error.statusCode===404&&"code"in error&&error.code==="BlobNotFound")return null;throw error;}
 }
-/** A conditional marker precedes every batch of external writes. An ambiguous ACK
- * requires status/read-back, never another stage/start with a new id. */
-export type ManagedKohoBudget = Pick<ManagedServiceBudgetStorage,"prepareImport"|"reserveImport"|"claimImport"|"confirmImport"|"markUnknown">;
+/** A conditional marker precedes every batch of external writes. A ready
+ * reservation can receive its first fresh stage claim; claimed writes cannot replay. */
+export type ManagedKohoBudget = Pick<ManagedServiceBudgetStorage,"prepareImport"|"reserveImport"|"claimImport"|"confirmImport"|"verifyImportStaging"|"verifyArchiveRelease"|"markUnknown">;
 export async function operateManagedKoho(value:unknown,container:ContainerClient,arm:Awaited<ReturnType<typeof operatorArm>>,budgetDependency?:ManagedKohoBudget){
   const input=inputSchema.parse(value),config=input.command==="status"||input.command==="prepare"?parseCloudConfiguration(input.config):parseManagedCloudImportConfiguration(input.config);
   requireManual(isManagedCloudConfiguration(config)&&input.job.resourceId.endsWith(`/jobs/${input.job.name}`));
   const bytes=Buffer.from(JSON.stringify(input.manifest)),validationConfig:CloudConfiguration={...config,manifest:{...config.manifest,sha256:sha256(bytes),byteLength:bytes.length}};
-  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),input.command!=="status");
+  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),!["status","release-transfer"].includes(input.command));
   if(input.command==="start")requireManual(sha256(bytes)===config.manifest.sha256);
   requireManual(isManagedCloudManifest(manifest) && container.url===`https://${config.storageAccount}.blob.core.windows.net/${config.container}`);
+  if(input.command==="start")requireManual(!manifest.archiveOnly);
   if(input.command==="prepare")return{status:"prepared",config:await (budgetDependency??ManagedServiceBudgetStorage.configured()).prepareImport(config,manifest,input.job),manifest};
   requireManual(!(await container.getProperties({abortSignal:AbortSignal.timeout(20_000)})).blobPublicAccess);
+  if(input.command==="release-transfer"){
+    requireManual(manifest.archiveOnly&&input.transferId&&input.sources.length===0&&sha256(bytes)===config.manifest.sha256);
+    const receipt=await archiveRead(container,archiveReceiptName(config.operationId));requireManual(receipt);
+    await (budgetDependency??ManagedServiceBudgetStorage.configured()).verifyArchiveRelease(config,manifest,sha256(receipt.data));
+    return releaseManagedTransfer({transferId:input.transferId,config,package:{...manifest.packages[0],archive:{operationId:config.operationId,
+      manifestSha256:config.manifest.sha256,receiptSha256:sha256(receipt.data)}}},container);
+  }
   const fresh=()=>requireManual(Date.parse(manifest.expiresAt)>Date.now()&&Date.parse(manifest.expiresAt)-Date.now()<=6*60*60_000);
   const marker=async(name:string,data:Buffer)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
   const binding={operationId:config.operationId,approvalDigest:approvalDigest(manifest),configurationDigest:configurationDigest(config),jobDigest:sha256(canonical(input.job))};
@@ -71,33 +82,53 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       databaseGrowthBytes:Number.isSafeInteger(report.databaseGrowthBytes)?report.databaseGrowthBytes:null};
   }
   const budget=budgetDependency??ManagedServiceBudgetStorage.configured();
-  if(input.command==="stage"){
-    requireManual(input.sources.length===manifest.packages.length&&new Set(input.sources.map(s=>s.sha256)).size===input.sources.length);
-    for(const pkg of manifest.packages){
+  if(input.command==="stage"||input.command==="reconcile-stage"){
+    const reconcile=input.command==="reconcile-stage",fromArchives=manifest.packages.every(p=>p.archive);
+    if(reconcile)requireManual(manifest.archiveOnly||fromArchives);
+    requireManual(input.sources.length===(reconcile||fromArchives?0:manifest.packages.length)&&new Set(input.sources.map(s=>s.sha256)).size===input.sources.length);
+    if(!reconcile&&!fromArchives)for(const pkg of manifest.packages){
       const source=input.sources.find(s=>s.sha256===pkg.sha256);requireManual(source);
       const stat=await lstat(source.path);requireManual(stat.isFile()&&!stat.isSymbolicLink()&&stat.size===pkg.byteLength);
       await verifyManualSnapshot(source.path,pkg.byteLength,pkg.sha256);
     }
-    requireManual((await budget.reserveImport(config,manifest,input.job)).created);
-    await budget.claimImport(config,manifest,input.job,"stage");
-    await marker("staging-started.json",Buffer.from(JSON.stringify({...binding,state:"staging"})));
+    if(reconcile){
+      const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
+      requireManual(beginning&&Object.entries(binding).every(([key,v])=>beginning.value[key]===v));
+      await budget.verifyImportStaging(config,manifest,input.job);
+    }else{
+      await budget.reserveImport(config,manifest,input.job);
+      // A lost reserve ACK may have left stage=ready, before any upload. Only a
+      // new successful stage CAS grants permission; claimed/done still reject.
+      await budget.claimImport(config,manifest,input.job,"stage");
+      await marker("staging-started.json",Buffer.from(JSON.stringify({...binding,state:"staging"})));
+    }
+    let archiveReceiptSha256:string|undefined;
     for(const pkg of manifest.packages){
+      if(pkg.archive){await readVerifiedArchive(container,config,pkg);continue;}
       const name=cloudSourceName(pkg.sha256),present=await existing(container,name);
       fresh();
+      if(reconcile)requireManual(present); // Never replay an ambiguous ZIP upload.
       if(!present)await container.getBlockBlobClient(name).uploadFile(input.sources.find(s=>s.sha256===pkg.sha256)!.path,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(15*60_000),
         blockSize:8*1024**2,concurrency:1,blobHTTPHeaders:{blobContentType:"application/zip",blobCacheControl:"private, no-store"}});
       const saved=await existing(container,name);requireManual(saved?.contentLength===pkg.byteLength&&typeof saved.etag==="string");pkg.etag=saved.etag;
-      await verifyManualSnapshot(input.sources.find(s=>s.sha256===pkg.sha256)!.path,pkg.byteLength,pkg.sha256);
+      if(!manifest.archiveOnly)await verifyArchiveBytes(container,pkg);fresh();
+      if(!reconcile)await verifyManualSnapshot(input.sources.find(s=>s.sha256===pkg.sha256)!.path,pkg.byteLength,pkg.sha256);
+      if(manifest.archiveOnly)archiveReceiptSha256=await confirmArchiveReceipt(container,config,pkg,reconcile,fresh);
     }
     fresh();
-    const finalBytes=Buffer.from(JSON.stringify(manifest)),saved=await container.getBlockBlobClient(cloudManifestName(config)).uploadData(finalBytes,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
-    requireManual(saved.etag);
-    const finalConfig:CloudConfiguration={...config,manifest:{sha256:sha256(finalBytes),byteLength:finalBytes.length,etag:saved.etag}};
-    const reread=await container.getBlobClient(cloudManifestName(config)).downloadToBuffer(0,finalBytes.length,{conditions:{ifMatch:saved.etag},abortSignal:AbortSignal.timeout(20_000)});
-    parseCloudManifest(reread,finalConfig);
-    await marker("staged.json",Buffer.from(JSON.stringify({config:finalConfig,manifestDigest:sha256(finalBytes)})));
+    const finalBytes=Buffer.from(JSON.stringify(manifest));
+    let stored=await archiveRead(container,cloudManifestName(config));
+    if(!stored){await container.getBlockBlobClient(cloudManifestName(config)).uploadData(finalBytes,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
+      stored=await archiveRead(container,cloudManifestName(config));}
+    requireManual(stored&&stored.data.equals(finalBytes));
+    const finalConfig:CloudConfiguration={...config,manifest:{sha256:sha256(finalBytes),byteLength:finalBytes.length,etag:stored.props.etag!}};
+    parseCloudManifest(stored.data,finalConfig);
+    const stageRecord={config:finalConfig,manifestDigest:sha256(finalBytes)};
+    const previous=await readJson(cloudReceiptPrefix(config)+"staged.json",65536);
+    if(previous)requireManual(canonical(previous.value)===canonical(stageRecord));
+    else await marker("staged.json",Buffer.from(JSON.stringify(stageRecord)));
     await budget.confirmImport(finalConfig,manifest,input.job);
-    return {status:"staged",config:finalConfig,manifest};
+    return {status:"staged",config:finalConfig,manifest,...(archiveReceiptSha256?{archive:{operationId:config.operationId,manifestSha256:finalConfig.manifest.sha256,receiptSha256:archiveReceiptSha256}}:{})};
   }
   const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
   requireManual(beginning&&Object.entries(binding).every(([key,v])=>beginning.value[key]===v));

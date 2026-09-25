@@ -70,6 +70,7 @@ pnpm install --frozen-lockfile
 node scripts/build-managed-operators.mjs
 node .koho-ops/managed/scripts/managed-base-preview.js
 node .koho-ops/managed/scripts/managed-koho-preview.js
+node .koho-ops/managed/scripts/managed-koho-transfer.js
 node .koho-ops/managed/scripts/managed-koho-operator.js
 node .koho-ops/managed/scripts/managed-watch-operator.js
 ```
@@ -112,16 +113,21 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
 ## 週次取得から納品まで
 
 1. [JPO公報発行サイト](https://www.gazette.jpo.go.jp/)の正規配布一覧と利用条件・掲載保持期間を確認し、
-   今回対象のJPAを手動取得する。取得日・公開日・号・サイズ・SHAを台帳へ記録。
+   今回対象のJPAを1 packageずつ手動取得する。下記の転送専用slotを使用し、全周期ZIPをLocalへ蓄積しない。
+   既存ユーザー保存原本は保持し、取得日・公開日・号・サイズ・SHAを台帳へ記録。
    許可されたpackage/累計サイズを超えるものはpreview/uploadせず停止する。
 2. `managed-koho-preview`へ `{schema:1,sourcePath,byteLength,sha256}` を渡し、元ファイルを変えず有限parseする。
    plan/Sources/Receiptのhash、A1/P1/A5/P5件数、未解析、補正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
-3. import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
+3. まず1 packageだけの`archiveOnly:true` manifestを作り、`acquiredAt`も固定する。
+   import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
    configはSTANDARD_MANAGED_WATCH_RELEASE_V1、manifestは配布一覧hash・preview結果・8GiB以内の各package・
    6時間以内の期限・累計予約を固定。sourcesは各`sha256/path`。先にread-onlyの`prepare`で
    料金表・固定対象に結合したconfig/manifestを取得し、Localへ保存してから`stage`に渡す。
-   `stage`の返すETag付きconfig/manifestも保管する。
-4. `start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
+   `stage`の返すETag付きconfig/manifestと`archive`参照も保管する。これは原本保存でありJobを開始しない。
+   Azure正本の完全性と台帳のstage完了を確認した`release-transfer`だけで転送slotを解放し、次の1 packageへ進む。
+4. 保存済み`archive`参照を各packageへ付け、`archiveOnly`なしのJob manifestを作る。
+   1〜4 package・合計8GiB以内でまとめ、各ZIPの原本identityは保持する。Local ZIPは不要、`sources:[]`とする。
+   このmanifestも`prepare`→`stage`で固定し、`start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
    文献保存は500件ごとに分け、package全体は同一transactionを維持する。各SQL/COMMITにも共通期限を適用し、
@@ -137,6 +143,51 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
 8. PDF全頁・CSV全列・件数・期間・原文確認方法・説明末尾を確認する。現在の確認状態を取得して更新する場合は、
    更新前versionを照合する。応答不明・競合時は先に再取得する。旧納品版は不変で、反映は更新版として作る。
 9. 運営者が手動メール納品する。不足時は保存版の連絡用文案を確認して手動使用する。自動送信は行わない。
+
+### 1 packageの転送・中断再開
+
+転送CLIはprivate stdin JSONだけを受け付ける。プロジェクト内のGit追跡外`_imports/.managed-transfer/current`が唯一の稼働slotを指し、
+未解放のslotがあれば次packageのcopy/download割当を拒否する。既存のユーザー保存原本と通常の`_imports`原本は削除対象にしない。
+ZIP自体は初めからtransferId固有ディレクトリへ置き、古い削除処理が次のZIPと同じパスを参照しない。
+個人パス・取得元の認証情報はLocalだけで扱う。CLIのパス出力をGitHubや共用ログへ転記しない。
+
+| command | inputと意味 |
+|---|---|
+| copy | `{sourcePath,byteLength,sha256,acquiredAt}`。既存原本を検証し、新しい専用ファイルへコピー |
+| allocate-download | `{maxBytes,sourceIdentity:{packageType:"JPA",issueNumber,publicationDate,distributionTableSha256}}`。1 ZIPの正規手動取得先を割当 |
+| complete-download | `{transferId,acquiredAt}`。正規ダウンロードの完了確認後にサイズ・SHA・所有記録を固定 |
+| status | inputなし。同じslotのtransferIdと取得/所有記録を読戻し |
+
+形式は`{command,input}`、statusだけ`{command:"status"}`。allocate-downloadが返すdestinationへ、正規認証済みの取得経路から
+当該1 ZIPだけを保存する。割当自体は認証・取得成功の証明ではなく、実取得の完了と公式配布identityを別途照合する。
+直接Azure取得は未実証の後続候補であり、このLocal転送経路の前提ではない。
+copy中断は元入力へ同じ`transferId`を追加して再開する。記録済みinode・元原本SHA・既存prefixを照合し、未コピー部分だけ追記する。
+別内容や所有不明ファイルは上書き・削除せず停止する。owner記録自体が確定していない中断は自動回収しない。
+
+原本保存は`inputs/<sha>.zip`へのcreate-only書込と、ETag固定の全量streaming SHA/size読戻しで確認する。
+検証中に2本目のLocal ZIPは作らない。号・公開日・配布一覧hash・取得日時・parse provenanceと検証日時を
+create-only `archive-verified.json`、sealed manifest、処理receiptへ対応付ける。原本保存後もJob側は同じETag/hashを再検証する。
+この経路は上書き・Blob削除を提供しない。Storage管理者に対するWORM保持policyが導入済みという意味ではない。
+
+応答喪失時は最初に`status`を読戻す。未完のsealは元の有効な予約・同operation/intentで`reconcile-stage`を実行し、`sources:[]`とする。
+予約ACKだけを失いstage=readyのままなら、同じ`stage`入力で最初のstage claim CASを一度だけ確定できる。
+既にclaimed/doneなら新しい開始権は発行しない。別operationで同じ原本を再予約する方法は使わない。
+ZIPの再uploadとJob startは行わず、確認済み保存物の不足markerだけをcreate-onlyで補う。既存receiptがあれば全量再読出しはしない。
+全量検証には初回と明示的reconcile各1回のslotがあり、並行・再実行で増やさない。料金表は両方の最大読出しを含める。
+Blob不在、検証失敗、両slot不明、期限切れは一時コピーと予約を保持して停止し、別UUIDで再送しない。
+
+`release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
+期限後も歴史receiptと共通台帳のstage=doneを読戻し、固定slotの所有ID・inode・SHA一致を確認した1ファイルだけunlinkする。
+小さい所有/削除記録はtransferId名で保持し、削除完了応答が失われても同IDを照合できる。新しいslotや既存原本へcleanupを広げない。
+
+archive操作は共通台帳のpackages/bytesを1回、jobs/minutesを0として予約し、参照Jobはjobs1/minutes120・packages/bytes0とする。
+`archivePackageYen`と`archiveGiBYen`の署名済み料金にはupload・最大2回の読戻し通信・metadata・必要保持を含め、
+参照Jobの`importJobYen`にはJob読出し・parse・DB・ログを含める。料金未設定の旧policyを新経路へ暗黙適用しない。
+既取得archiveは元台帳の容量・費用を残して再利用し、Jobごとに新規予約を行う。旧release archiveは同一service/targetのStandard運用でも参照できる。
+21 ZIPを21 Jobへ固定せず、小さいZIPを既存batchへまとめる。5対象2巡のwatchは1 Job最大3 runsのため最低4 Jobが必要で、
+再試験・無変更確認も含めて累計24回に収まる実行計画を開始前に確定する。
+
+LocalのZIP削除後にworkerが完了する試験はLocal非依存の検証であり、実Azure受入・実PC_OFFの代用にしない。
 
 ## 終了・削除・復旧
 

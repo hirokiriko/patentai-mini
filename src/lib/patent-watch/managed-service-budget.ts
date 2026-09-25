@@ -32,6 +32,7 @@ export const managedBudgetRequestSchema = z.object({ operationId: z.uuidv4(), re
 type Request = z.infer<typeof managedBudgetRequestSchema>;
 const operationSchema = managedBudgetRequestSchema.extend({ intentDigest: hash, processingMonth: month,
   reservedAt: z.iso.datetime(), expiresAt: z.iso.datetime(), stage: z.enum(["unused", "ready", "claimed", "done"]),
+  stageDigest: hash.optional(),
   start: z.enum(["ready", "claimed"]), unknown: z.boolean(), actualYen: yen.nullable(), observedYen: yen.nullable(), reviewRequired: z.boolean(),
   knownUnits: managedBudgetUnitsSchema.partial().strict(), evidenceDigests: z.array(hash).max(64),
   evidenceChainDigest: hash, lastProofSequence: quantity,
@@ -92,6 +93,7 @@ function seal(value: ManagedBudgetState) {
       expiry > reserved && expiry <= Math.min(reserved + 6 * 60 * 60_000, monthEnd));
     check(o.scope === "standard" ? o.profileDigest !== null : o.profileDigest === null);
     check(o.kind === "import" ? o.stage !== "unused" && (o.start !== "claimed" || o.stage === "done") : o.stage === "unused");
+    if (o.stageDigest) check(o.kind === "import" && o.stage === "done");
     check(o.actualYen === null || unitKeys.every(k => o.knownUnits[k] !== undefined));
     check(o.settlements.length === Math.min(o.lastProofSequence, 64));
     check(new Set(o.settlements.map(p => p.evidenceDigest)).size === o.settlements.length &&
@@ -195,7 +197,7 @@ export function claimManagedBudgetPhase(value: unknown, id: string, phase: "stag
 export function confirmManagedBudgetStage(value: unknown, id: string, requestDigest: string, stageDigest: string, clock: ManagedBudgetClock) {
   const { s } = current(value, clock), o = find(s, id);
   check(o.requestDigest === requestDigest && o.stage === "claimed" && o.start === "ready");
-  o.stage = "done"; o.unknown = false; evidence(o, stageDigest); return seal(s);
+  o.stage = "done"; o.stageDigest = hash.parse(stageDigest); o.unknown = false; evidence(o, stageDigest); return seal(s);
 }
 export function markManagedBudgetUnknown(value: unknown, id: string, clock: ManagedBudgetClock) {
   const { s } = current(value, clock), o = find(s, id); if (!closed(o)) o.unknown = true; return seal(s);

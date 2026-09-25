@@ -24,6 +24,7 @@ export const managedBudgetPolicySchema = z.object({ schema: z.literal(1), servic
   validFrom: z.iso.datetime(), validUntil: z.iso.datetime(), measurementDigest: hash,
   reservations: z.object({ watchJobYen: yen, watchRunYen: yen.refine(v => v > 0),
     importJobYen: yen.refine(v => v > 0), importGiBYen: yen, deliveryYen: yen.refine(v => v > 0),
+    archivePackageYen: yen.refine(v => v > 0).optional(), archiveGiBYen: yen.optional(),
     backupYen: yen.refine(v => v > 0), recoveryYen: yen.refine(v => v > 0) }).strict() }).strict();
 export type ManagedBudgetPolicy = z.infer<typeof managedBudgetPolicySchema>;
 export function managedBudgetTargetDigest(value: unknown) { return managedDigest(targets.parse(value)); }

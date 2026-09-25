@@ -12,7 +12,8 @@ import { validateManagedBudgetPolicy } from "./managed-budget-policy";
 import { managedWatchBudgetRequest, managedImportBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
 import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
 import { parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
-import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration } from "../koho-import/cloud-config";
+import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256 } from "../koho-import/cloud-config";
+import { readVerifiedArchive } from "../koho-import/managed-archive";
 
 // The storage binding comes from the installed operator/worker environment, never
 // from a request, reporting month, profile revision, or arbitrary Blob name.
@@ -120,12 +121,40 @@ export class ManagedServiceBudgetStorage {
     const profileDigest = worker ? op!.profileDigest : c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? saved.state.activeProfileDigest : null;
     const p = await this.executionPolicy(saved, pricingDigest, 120);
     const request = managedImportBudgetRequest(c, manifest, job, p, this.binding, pricingDigest, profileDigest);
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    const parsed = parseCloudManifest(bytes, { ...c, manifest: { ...c.manifest, byteLength: bytes.length, sha256: sha256(bytes) } }, Date.now(), false);
+    check(isManagedCloudManifest(parsed));
+    if (!isManagedCloudManifest(parsed)) throw new ManagedBudgetError();
+    for (const pkg of parsed.packages) if (pkg.archive) {
+      await this.verifyArchiveReference(saved,c,pkg);
+    }
     const serviceBudget = { serviceKey: MANAGED_SERVICE_KEY, requestDigest: request.requestDigest, profileDigest, pricingDigest };
     if (c.budgetBinding) check(managedDigest(c.budgetBinding) === managedDigest(this.binding));
     if (c.serviceBudget) check(managedDigest(c.serviceBudget) === managedDigest(serviceBudget));
     const profile = await this.executionProfile(saved, profileDigest, p);
     return { config: parseManagedCloudImportConfiguration({ ...c, serviceBudget, budgetBinding: this.binding }), request, policy: p, profile,
       executionExpiresAt:(manifest as {expiresAt:string}).expiresAt };
+  }
+  private async verifyArchiveReference(saved: ReadState, config: Parameters<typeof readVerifiedArchive>[1], pkg: Parameters<typeof readVerifiedArchive>[2]) {
+    check(pkg.archive);
+    const archive = await readVerifiedArchive(this.container,config,pkg), recorded = saved.state.operations.find(o => o.operationId === pkg.archive!.operationId);
+    check(recorded?.kind === "import" && recorded.stage === "done" && recorded.start === "ready" &&
+      recorded.scope === (archive.manifest.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? "standard" : "release") &&
+      recorded.units.jobs === 0 && recorded.units.minutes === 0 && recorded.units.packages === 1 && recorded.units.bytes === pkg.byteLength &&
+      (recorded.knownUnits.packages ?? 1) === 1 && (recorded.knownUnits.bytes ?? pkg.byteLength) === pkg.byteLength &&
+      recorded.requestDigest === archive.receipt.requestDigest && recorded.stageDigest === pkg.archive!.manifestSha256);
+    return archive;
+  }
+  /** Historical proof only: no new admission, policy renewal, or fee release. */
+  async verifyArchiveRelease(value: unknown, manifest: unknown, receiptSha256: string) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), bytes = Buffer.from(JSON.stringify(manifest));
+      const m = parseCloudManifest(bytes,c,Date.now(),false); check(isManagedCloudManifest(m) && m.archiveOnly);
+      if (!isManagedCloudManifest(m)) throw new ManagedBudgetError();
+      const pkg = { ...m.packages[0], archive: { operationId:c.operationId,manifestSha256:c.manifest.sha256,receiptSha256 } };
+      const archive = await this.verifyArchiveReference(await this.read(),c,pkg);
+      check(archive.receipt.requestDigest === c.serviceBudget.requestDigest);
+    });
   }
   private async executionProfile(saved: ReadState, digest: string | null, policy: Awaited<ReturnType<ManagedServiceBudgetStorage["executionPolicy"]>>) {
     const p = await this.profile(saved.state, digest);
@@ -201,7 +230,22 @@ export class ManagedServiceBudgetStorage {
   async claimImport(value: unknown, manifest: unknown, job: ManagedImportJob, phase: "stage" | "start") {
     return this.guarded(async () => {
       const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      if (phase === "start") check(!(m as { archiveOnly?: boolean }).archiveOnly);
       await this.commitExecution(saved, await this.importRequest(c, m, j, saved), phase);
+    });
+  }
+  /** Only sealing a previously claimed stage is resumable. This read grants no
+   * upload or ARM start permission and never reserves or claims again. */
+  async verifyImportStaging(value: unknown, manifest: unknown, job: ManagedImportJob) {
+    return this.guarded(async () => {
+      const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), saved = await this.read();
+      const context = await this.importRequest(c, m, structuredClone(job), saved);
+      const o = saved.state.operations.find(o => o.operationId === c.operationId);
+      check(o?.intentDigest === managedDigest(context.request) && (o.stage === "claimed" || o.stage === "done") && o.start === "ready" && o.actualYen === null && !o.unknown);
+      const maximum = this.clock(saved, 65).maximumActionMs;
+      check(saved.date.getTime() + maximum < Math.min(Date.parse(o!.expiresAt), Date.parse(context.executionExpiresAt)) &&
+        o!.processingMonth === new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
+      validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximum);
     });
   }
   async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
@@ -210,7 +254,7 @@ export class ManagedServiceBudgetStorage {
       const context = await this.importRequest(c, m, j, saved), fresh = await this.read(); check(fresh.etag === saved.etag);
       const o = fresh.state.operations.find(o => o.operationId === c.operationId);
       check(o?.intentDigest === managedDigest(context.request));
-      if (o!.stage === "done") { check(o!.evidenceDigests.includes(c.manifest.sha256)); return; }
+      if (o!.stage === "done") { check(o!.stageDigest ? o!.stageDigest === c.manifest.sha256 : o!.evidenceDigests.includes(c.manifest.sha256)); return; }
       await this.replace(fresh, confirmManagedBudgetStage(fresh.state, c.operationId, context.request.requestDigest, c.manifest.sha256, this.clock(fresh, 1)));
     });
   }
@@ -223,6 +267,7 @@ export class ManagedServiceBudgetStorage {
   async verifyImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
     return this.guarded(async () => {
       const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
+      check(!(m as { archiveOnly?: boolean }).archiveOnly);
       // The intent builder validates the manifest schema and fixed target first.
       return this.verifyExecution(await this.importRequest(c, m, j, saved, true), (m as { expiresAt: string }).expiresAt);
     });

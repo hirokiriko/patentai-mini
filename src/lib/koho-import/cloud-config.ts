@@ -38,13 +38,17 @@ const manifestSchema = z.object({ schemaVersion: z.literal(1), approval: z.liter
     publicationDate: updateDate, issueNumber: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), distributionTableSha256: sha }).strict()).min(1).max(4),
 }).strict();
 const managedManifestSchema = manifestSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"), round: z.number().int().min(1).max(40),
+  // Archive one package before assembling a Job batch. No Job may execute an archive-only manifest.
+  archiveOnly: z.literal(true).optional(),
   maxTotalBytes: z.number().int().positive().max(8 * 1024**3),
   // These are release-wide reservations, including this batch and all unknown outcomes.
   releaseReservation: z.object({ packageCount: z.number().int().min(1).max(64), compressedBytes: z.number().int().positive().max(96 * 1024**3),
     jobExecutions: z.number().int().min(1).max(24), jobMinutes: z.number().int().min(1).max(48*60), ledgerDigest: sha,
     additionalForecastYen: z.number().int().positive().max(50_000), monthlyForecastYen: z.number().int().positive().max(30_000) }).strict(),
   packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"),
-    byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha })).min(1).max(4),
+    byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha,
+    acquiredAt: z.iso.datetime({ precision: 3 }).optional(),
+    archive: z.object({ operationId: z.uuidv4(), manifestSha256: sha, receiptSha256: sha }).strict().optional() })).min(1).max(4),
 });
 const standardManifestSchema = managedManifestSchema.omit({ releaseReservation: true }).extend({
   approval: z.literal("STANDARD_MANAGED_WATCH_STANDARD_V1"), round: count.refine(v => v > 0) });
@@ -82,6 +86,15 @@ export function parseCloudManifest(bytes: Uint8Array, config: CloudConfiguration
     new Set(manifest.packages.map(p => p.sha256)).size === manifest.packages.length);
   if (manifest.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") requireManual(manifest.releaseReservation.packageCount >= manifest.packages.length &&
     manifest.releaseReservation.compressedBytes >= manifest.packages.reduce((n,p)=>n+p.byteLength,0) && manifest.releaseReservation.jobMinutes >= Math.ceil(manifest.maxElapsedMs/60_000));
+  if (isManagedCloudManifest(manifest)) {
+    const archived = manifest.packages.filter(p => p.archive);
+    requireManual(archived.length === 0 || archived.length === manifest.packages.length);
+    if (manifest.archiveOnly) requireManual(manifest.packages.length === 1 && archived.length === 0 && manifest.packages[0].acquiredAt);
+    for (const p of manifest.packages) {
+      if (p.acquiredAt) requireManual(Date.parse(p.acquiredAt) <= Date.parse(manifest.expiresAt));
+      if (p.archive) requireManual(p.acquiredAt && p.archive.operationId !== manifest.operationId);
+    }
+  }
   return manifest;
 }
 export const cloudManifestName = (config: CloudConfiguration) => `manifests/${config.operationId}.json`;

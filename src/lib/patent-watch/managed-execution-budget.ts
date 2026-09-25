@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { managedCloudConfigSchema } from "./managed-cloud-config";
-import { parseCloudConfiguration, parseCloudManifest, isManagedCloudConfiguration, sha256 } from "../koho-import/cloud-config";
+import { parseCloudConfiguration, parseCloudManifest, isManagedCloudConfiguration, isManagedCloudManifest, sha256 } from "../koho-import/cloud-config";
 import { managedDigest } from "./managed-claims";
 import { managedBudgetPolicySchema, managedBudgetTargetDigest, type ManagedBudgetPolicy } from "./managed-budget-policy";
 import { managedBudgetBindingSchema, type ManagedBudgetBinding } from "./managed-budget-contract";
@@ -76,10 +76,25 @@ export function managedImportBudgetRequest(value: unknown, manifestValue: unknow
   // Sealing stage changes only package ETags and the manifest reference. All
   // publication, plan, provenance, deadline, and fixed Job fields stay bound.
   const packages = m.packages.map(pkg => { const { etag, ...identity } = pkg; void etag; return identity; });
-  const requestDigest = managedDigest({ schema: 1, kind: "import", configuration: business,
+  let requestDigest = managedDigest({ schema: 1, kind: "import", configuration: business,
     manifest: { ...m, packages }, job, budgetBinding: binding });
   const size = m.packages.reduce((n, pkg) => n + pkg.byteLength, 0);
+  check(isManagedCloudManifest(m));
+  if (!isManagedCloudManifest(m)) throw new ManagedBudgetError();
+  const archiveOnly = m.archiveOnly === true, fromArchives = m.packages.every(pkg => pkg.archive);
+  if (archiveOnly) {
+    const pkg = m.packages[0];
+    // A new UUID, acquisition timestamp, code version or month cannot purchase
+    // a second reservation for the same canonical source. Reuse its receipt.
+    requestDigest = managedDigest({ schema: 1, kind: "archive", budgetBinding: binding, source: {
+      packageType: pkg.packageType, issueNumber: pkg.issueNumber, publicationDate: pkg.publicationDate,
+      distributionTableSha256: pkg.distributionTableSha256, sha256: pkg.sha256, byteLength: pkg.byteLength } });
+  }
+  if (archiveOnly) check(p.reservations.archivePackageYen !== undefined && p.reservations.archiveGiBYen !== undefined);
+  const reservationYen = archiveOnly ? p.reservations.archivePackageYen! + Math.ceil(size / 1024 ** 3) * p.reservations.archiveGiBYen! :
+    p.reservations.importJobYen + (fromArchives ? 0 : Math.ceil(size / 1024 ** 3) * p.reservations.importGiBYen);
   return managedBudgetRequestSchema.parse({ operationId: c.operationId, requestDigest, ...reference(c.approval, profileDigest),
-    kind: "import", pricingDigest, cases: [], reservationYen: p.reservations.importJobYen + Math.ceil(size / 1024 ** 3) * p.reservations.importGiBYen,
-    units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, packages: m.packages.length, bytes: size } });
+    kind: "import", pricingDigest, cases: [], reservationYen,
+    units: { ...emptyManagedBudgetUnits(), jobs: archiveOnly ? 0 : 1, minutes: archiveOnly ? 0 : 120,
+      packages: fromArchives ? 0 : m.packages.length, bytes: fromArchives ? 0 : size } });
 }

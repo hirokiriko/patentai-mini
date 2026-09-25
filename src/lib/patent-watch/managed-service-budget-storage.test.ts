@@ -2,13 +2,15 @@ import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedDigest } from "./managed-claims";
-import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema } from "./managed-service-budget";
+import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema, settleManagedBudget, setManagedMonthPlan } from "./managed-service-budget";
 import { MANAGED_BUDGET_PREFIX, ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 import { managedAdministrationReviewSchema, type ManagedAdministrationReview, type ManagedSettlementReview, type ManagedReleaseStep } from "./managed-budget-evidence";
 import { managedBudgetedWatchFixture } from "./managed-execution-budget.test-support";
 import { managedCloudFixture } from "./managed-cloud.test-support";
 import type { ManagedBudgetBinding } from "./managed-budget-contract";
 import { managedCloudImportFixture } from "../../../scripts/managed-koho-cloud.test-support";
+import { archivePackageIdentity, archiveReceiptName } from "../koho-import/managed-archive";
+import { cloudManifestName, cloudSourceName, sha256 } from "../koho-import/cloud-config";
 afterEach(()=>{vi.restoreAllMocks();vi.useRealTimers();});
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), key = `${MANAGED_BUDGET_PREFIX}state.json`;
@@ -211,6 +213,81 @@ it("shares the reviewed import reservation across ETag sealing, stage confirmati
   expect(f.current().operations).toHaveLength(1);expect(f.current().operations[0]).toMatchObject({reservationYen:90,stage:"done",start:"claimed",units:{packages:1,bytes:b.data.length}});
   await expect(f.store.claimImport(sealed,b.manifest,b.job,"start")).rejects.toThrow();
   await expect(f.store.verifyImport(sealed,{...b.manifest,packages:[{...b.manifest.packages[0],managedSourcesSha256:hash(70)}]},b.job)).rejects.toThrow();
+});
+async function archivedExecutionFixture(){
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
+  const b=await managedCloudImportFixture(),f=fixture(b.binding);
+  b.policy.reservations.archivePackageYen=5;b.policy.reservations.archiveGiBYen=10;
+  const policyBytes=Buffer.from(JSON.stringify(b.policy)),pricingDigest=sha256(policyBytes),state=f.current();state.plans[0].pricingDigest=pricingDigest;
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${pricingDigest}.json`,{bytes:policyBytes,etag:'"archivepolicy"'});
+  b.manifest.archiveOnly=true;b.manifest.packages[0].acquiredAt="2026-09-22T23:59:00.000Z";delete b.config.serviceBudget;
+  const config=await f.store.prepareImport(b.config,b.manifest,b.job);
+  await f.store.reserveImport(config,b.manifest,b.job);await f.store.claimImport(config,b.manifest,b.job,"stage");
+  const bytes=Buffer.from(JSON.stringify(b.manifest)),sealed={...config,manifest:{byteLength:bytes.length,sha256:sha256(bytes),etag:'"archivemanifest"'}};
+  const pkg=b.manifest.packages[0],identity=archivePackageIdentity(pkg),receipt=Buffer.from(JSON.stringify({schema:1,operationId:sealed.operationId,
+    requestDigest:sealed.serviceBudget.requestDigest,identityDigest:managedDigest(identity),identity,blobName:cloudSourceName(pkg.sha256),etag:pkg.etag,
+    verifiedAt:"2026-09-23T00:00:00.000Z"}));
+  f.files.set(cloudManifestName(sealed),{bytes,etag:sealed.manifest.etag});f.files.set(archiveReceiptName(sealed.operationId),{bytes:receipt,etag:'"archivereceipt"'});
+  f.files.set(cloudSourceName(pkg.sha256),{bytes:Buffer.from(b.data),etag:pkg.etag});
+  const receiptSha256=sha256(receipt),archive={operationId:sealed.operationId,manifestSha256:sealed.manifest.sha256,receiptSha256};
+  const id=randomUUID(),{archiveOnly,...body}=b.manifest;void archiveOnly;
+  const manifest={...body,operationId:id,packages:[{...pkg,expectedDisposition:"reused" as const,archive}]};
+  const {serviceBudget,...business}=sealed;void serviceBudget;const batchConfig={...business,operationId:id};
+  return{...f,b,sealed,receiptSha256,manifest,batchConfig,pricingDigest};
+}
+it("requires confirmed original archive accounting before cleanup or a zero-package Job reservation",async()=>{
+  const f=await archivedExecutionFixture();
+  await expect(f.store.verifyArchiveRelease(f.sealed,f.b.manifest,f.receiptSha256)).rejects.toThrow();
+  await expect(f.store.prepareImport(f.batchConfig,f.manifest,f.b.job)).rejects.toThrow();
+  await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job);
+  await f.store.verifyArchiveRelease(f.sealed,f.b.manifest,f.receiptSha256);
+  await expect(f.store.claimImport(f.sealed,f.b.manifest,f.b.job,"start")).rejects.toThrow();
+  await expect(f.store.verifyImport(f.sealed,f.b.manifest,f.b.job)).rejects.toThrow();
+  const config=await f.store.prepareImport(f.batchConfig,f.manifest,f.b.job);await f.store.reserveImport(config,f.manifest,f.b.job);
+  await f.store.claimImport(config,f.manifest,f.b.job,"stage");await f.store.confirmImport(config,f.manifest,f.b.job);await f.store.claimImport(config,f.manifest,f.b.job,"start");
+  await f.store.verifyImport(config,f.manifest,f.b.job);
+  expect(f.current().operations.map(o=>({yen:o.reservationYen,units:o.units}))).toMatchObject([
+    {yen:15,units:{jobs:0,minutes:0,packages:1,bytes:f.b.data.length}},
+    {yen:f.b.policy.reservations.importJobYen,units:{jobs:1,minutes:120,packages:0,bytes:0}}]);
+  const id=randomUUID();const duplicate=await f.store.prepareImport({...f.b.config,operationId:id},{...f.b.manifest,operationId:id},f.b.job);
+  await expect(f.store.reserveImport(duplicate,{...f.b.manifest,operationId:id},f.b.job)).rejects.toThrow();
+  expect(f.current().operations).toHaveLength(2);
+});
+it.each(["receipt","source-etag","source-size","source-identity","manifest","ledger"])("rejects changed archive %s before Job reservation",async change=>{
+  const f=await archivedExecutionFixture();await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job);
+  const pkg=f.manifest.packages[0];
+  if(change==="receipt")f.files.get(archiveReceiptName(f.sealed.operationId))!.bytes=Buffer.from("{}");
+  if(change==="manifest")f.files.get(cloudManifestName(f.sealed))!.bytes=Buffer.from("{}");
+  if(change==="source-etag")f.files.get(cloudSourceName(pkg.sha256))!.etag='"altered"';
+  if(change==="source-size")f.files.get(cloudSourceName(pkg.sha256))!.bytes=Buffer.from("altered");
+  if(change==="source-identity")pkg.acquiredAt="2026-09-22T23:58:00.000Z";
+  if(change==="ledger"){const state=f.current();state.operations=[];f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));}
+  const writes=f.calls.filter(c=>c.startsWith("PUT:"));await expect(f.store.prepareImport(f.batchConfig,f.manifest,f.b.job)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);
+});
+it("uses historical release archives in a current Standard Job without renewing or clearing the original reservation",async()=>{
+  const f=await archivedExecutionFixture();await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job);
+  const profile=managedBudgetProfileSchema.parse({schema:1,serviceKey:MANAGED_SERVICE_KEY,targetBindingHash:f.binding.targetBindingHash,ownerBindingHash:f.binding.ownerBindingHash,
+    companyKey:"FICTIONAL_COMPANY",cases:[],monthlyCapYen:30_000,monthlyUnits:{...emptyManagedBudgetUnits(),jobs:2,minutes:240,packages:1,bytes:f.b.data.length},
+    pricingDigest:f.pricingDigest,measurementDigest:f.b.policy.measurementDigest,goEvidenceDigest:hash(76)});
+  const state=f.current(),prior=structuredClone(state.operations[0]),profileDigest=managedDigest(profile);state.activeProfileDigest=profileDigest;
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${profileDigest}.json`,{bytes:Buffer.from(JSON.stringify(profile)),etag:'"profile"'});
+  f.setDate("Thu, 24 Sep 2026 00:00:00 GMT");vi.setSystemTime(new Date("2026-09-24T00:00:00Z"));
+  const {releaseReservation,...body}=f.manifest;void releaseReservation;
+  const manifest={...body,approval:"STANDARD_MANAGED_WATCH_STANDARD_V1" as const,expiresAt:"2026-09-24T03:00:00.000Z"};
+  const config=await f.store.prepareImport({...f.batchConfig,approval:manifest.approval},manifest,f.b.job);
+  await f.store.reserveImport(config,manifest,f.b.job);expect(f.current().operations[0]).toEqual(prior);
+  await f.store.verifyArchiveRelease(f.sealed,f.b.manifest,f.receiptSha256);
+});
+it("retains canonical stage proof after more than 64 reviewed accounting observations",async()=>{
+  const f=await archivedExecutionFixture();await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job);
+  let state=f.current();const original=state.operations[0],clock={blobDate:new Date("2026-09-23T00:00:00Z"),maximumActionMs:60_000};
+  for(let i=1;i<=65;i++)state=settleManagedBudget(state,{operationId:original.operationId,requestDigest:original.requestDigest,sequence:i,evidenceDigest:hash(1000+i),knownUnits:{},observedYen:1},clock);
+  state=setManagedMonthPlan(state,{...state.plans[0],evidenceDigest:hash(2000),releaseTailYen:state.releaseTailYen,reviewedOperationIds:[original.operationId]},clock);
+  expect(state.operations[0].evidenceDigests).not.toContain(f.sealed.manifest.sha256);expect(state.operations[0].stageDigest).toBe(f.sealed.manifest.sha256);
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));await f.store.verifyArchiveRelease(f.sealed,f.b.manifest,f.receiptSha256);
+  const config=await f.store.prepareImport(f.batchConfig,f.manifest,f.b.job);await f.store.reserveImport(config,f.manifest,f.b.job);
+  expect(f.current().operations[0].units).toEqual(original.units);expect(f.current().operations[0].reservationYen).toBe(original.reservationYen);
 });
 
 function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministrationReview["action"], changes: Partial<ManagedAdministrationReview> = {}) {

@@ -5,6 +5,7 @@ import { managedCloudConfigSchema, managedWatchJobTemplate, parseManagedCloudSta
 import { managedWatchBudgetRequest, managedImportBudgetRequest } from "./managed-execution-budget";
 import { managedCloudImportFixture } from "../../../scripts/managed-koho-cloud.test-support";
 import { managedDigest } from "./managed-claims";
+import { randomUUID } from "node:crypto";
 afterEach(()=>vi.useRealTimers());
 it("preserves historical serialized config/template hashes without granting a new start",()=>{
   vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
@@ -40,4 +41,17 @@ it("binds import intent across ETag sealing while retaining bytes/provenance and
   const standard={...m,approval:"STANDARD_MANAGED_WATCH_STANDARD_V1" as const,round:100};
   const c={...f.config,approval:standard.approval};
   expect(()=>request(standard,c)).toThrow();expect(request(standard,c,"d".repeat(64))).toMatchObject({scope:"standard",profileDigest:"d".repeat(64)});
+});
+it("counts canonical packages once and charges every reference Job separately",async()=>{
+  const f=await managedCloudImportFixture();f.manifest.archiveOnly=true;f.manifest.packages[0].acquiredAt=new Date(Date.now()-1000).toISOString();
+  const request=(m:unknown,c:unknown=f.config)=>managedImportBudgetRequest(c,m,f.job,f.policy,f.binding,f.pricingDigest,null);
+  expect(()=>request(f.manifest)).toThrow();f.policy.reservations.archivePackageYen=5;f.policy.reservations.archiveGiBYen=10;
+  const archive=request(f.manifest);expect(archive).toMatchObject({reservationYen:15,units:{jobs:0,minutes:0,packages:1,bytes:f.data.length}});
+  const id=randomUUID();expect(request({...f.manifest,operationId:id},{...f.config,operationId:id}).requestDigest).toBe(archive.requestDigest);
+  const {archiveOnly,...body}=f.manifest;void archiveOnly;
+  const pkg={...f.manifest.packages[0],archive:{operationId:f.config.operationId,manifestSha256:"a".repeat(64),receiptSha256:"b".repeat(64)}};
+  const batch={...body,operationId:id,packages:[pkg]};
+  expect(request(batch,{...f.config,operationId:id})).toMatchObject({reservationYen:f.policy.reservations.importJobYen,units:{jobs:1,minutes:120,packages:0,bytes:0}});
+  expect(request({...batch,packages:[{...pkg,expectedDisposition:"reused"}]},{...f.config,operationId:id}).requestDigest).not.toBe(request(batch,{...f.config,operationId:id}).requestDigest);
+  expect(()=>request({...batch,packages:[pkg,{...pkg,sha256:"e".repeat(64),archive:undefined}]},{...f.config,operationId:id})).toThrow();
 });

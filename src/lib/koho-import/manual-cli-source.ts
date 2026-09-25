@@ -41,7 +41,7 @@ async function hashHandle(handle: FileHandle, size: number) {
   }
   requireManual(offset === size); return hash.digest("hex");
 }
-export async function copyManualSource(path: string, snapshot: string, size: number) {
+export async function copyManualSource(path: string, snapshot: string, size: number, onCreated?: (stat: SourceStat) => Promise<void>) {
   const before = await inspectManualSource(path, size); requireManual(before.size === size);
   const source = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
@@ -49,6 +49,7 @@ export async function copyManualSource(path: string, snapshot: string, size: num
     const dest = await open(snapshot, "wx", 0o600);
     const hash = createHash("sha256"); let copied = 0;
     try {
+      if (onCreated) await onCreated(await dest.stat());
       const buffer = Buffer.alloc(64 * 1024);
       while (true) {
         const { bytesRead } = await source.read(buffer, 0, buffer.length, copied);
@@ -70,6 +71,41 @@ export async function copyManualSource(path: string, snapshot: string, size: num
     return digest;
   } finally { await source.close(); }
 }
+/** Resume only an owned partial copy. Existing bytes must match the untouched
+ * source prefix; writes append, never truncate or replace a file. */
+export async function resumeManualSourceCopy(path: string, snapshot: string, size: number, digest: string, identity: { dev: number; ino: number }) {
+  const before = await inspectManualSource(path,size); requireManual(before.size === size);
+  await inspectManualDirectory(dirname(resolve(snapshot)));
+  const partial = await lstat(snapshot);
+  requireManual(partial.isFile() && !partial.isSymbolicLink() && partial.nlink === 1 && partial.dev === identity.dev && partial.ino === identity.ino && partial.size <= size);
+  const source = await open(path,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    unchanged(before,await source.stat());
+    requireManual(await hashHandle(source,size) === digest);
+    unchanged(before,await source.stat());unchanged(before,await lstat(path));
+    const dest = await open(snapshot,constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
+    try {
+      unchanged(partial,await dest.stat());
+      const buffer = Buffer.alloc(64*1024), existing = Buffer.alloc(64*1024); let offset = 0;
+      while(offset < size) {
+        const length = Math.min(buffer.length,size-offset,offset < partial.size ? partial.size-offset : buffer.length);
+        const read = await source.read(buffer,0,length,offset); requireManual(read.bytesRead === length);
+        if(offset < partial.size) {
+          const old = await dest.read(existing,0,length,offset); requireManual(old.bytesRead === length && existing.subarray(0,length).equals(buffer.subarray(0,length)));
+        } else {
+          let written = 0;
+          while(written < length) { const w = await dest.write(buffer,written,length-written,offset+written); requireManual(w.bytesWritten>0); written += w.bytesWritten; }
+        }
+        offset += length;
+      }
+      await dest.sync();
+      requireManual(await hashHandle(source,size) === digest && await hashHandle(dest,size) === digest);
+      const final = await dest.stat(), named = await lstat(snapshot);
+      requireManual(final.nlink === 1 && final.dev === partial.dev && final.ino === partial.ino); unchanged(final,named);
+      unchanged(before,await source.stat()); unchanged(before,await lstat(path));
+    } finally { await dest.close(); }
+  } finally { await source.close(); }
+}
 export async function verifyManualSnapshot(path: string, size: number, digest: string) {
   const before = await inspectManualSource(path, size); requireManual(before.size === size);
   const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -78,4 +114,10 @@ export async function verifyManualSnapshot(path: string, size: number, digest: s
     requireManual(await hashHandle(handle, size) === digest);
     unchanged(before, await handle.stat()); unchanged(before, await lstat(path));
   } finally { await handle.close(); }
+}
+export async function hashManualSource(path: string, limit: number) {
+  const before=await inspectManualSource(path,limit),handle=await open(path,constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try{unchanged(before,await handle.stat());const sha256=await hashHandle(handle,before.size);
+    unchanged(before,await handle.stat());unchanged(before,await lstat(path));return{byteLength:before.size,sha256,stat:before};}
+  finally{await handle.close();}
 }

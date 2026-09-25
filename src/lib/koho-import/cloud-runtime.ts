@@ -44,6 +44,7 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
     const manifest = parseCloudManifest(await blob.read(cloudManifestName(config), config.manifest.byteLength, config.manifest.etag), config);
     requireManual(config.mode === "preview" || (typeof options.password === "string" && options.password.length > 0));
     const managed = isManagedCloudConfiguration(config);
+    requireManual(!("archiveOnly" in manifest && manifest.archiveOnly));
     if(managed){parseManagedCloudImportConfiguration(config);requireManual(options.budget);}
     const permit=managed?await options.budget!.verify(config,manifest):undefined;
     if(permit)requireManual(Number.isSafeInteger(permit.remainingMs)&&permit.remainingMs>0&&Number.isFinite(Date.parse(permit.expiresAt)));
