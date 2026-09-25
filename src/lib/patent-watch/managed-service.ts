@@ -27,7 +27,10 @@ export const managedAzureAnalysis = {
   async screening(input: ReturnType<typeof managedScreeningInput>) {
     if (process.env.AI_PROVIDER !== "azure") throw new ManagedWatchError("unavailable");
     const prompt = JSON.stringify(input);
-    if (Buffer.byteLength(prompt) > 90_000) throw new ManagedWatchError("limit");
+    // A full 100-candidate Japanese summary can exceed the detail chunk size.
+    // The actual serialized SDK request still must pass UTF-8 bytes + 8,192
+    // <= 150,000 in the shared pre-send guard; escaping/schema count there.
+    if (Buffer.byteLength(prompt) > 130_000) throw new ManagedWatchError("limit");
     const { object } = await generateObject({ model: getModel(), schema: managedScreeningSchema,
       system: SYSTEM + "全候補のcandidateIdをそれぞれ一度返し、詳しく全文比較する技術的候補を最大20件selected=trueにしてください。選別段階は全文比較ではありません。",
       prompt, maxRetries: 0, maxOutputTokens: 8192, abortSignal: AbortSignal.timeout(35_000) });
