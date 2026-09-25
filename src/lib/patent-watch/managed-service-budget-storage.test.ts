@@ -53,7 +53,7 @@ function fixture(binding:ManagedBudgetBinding = { storageAccount: "fictional", c
       } else {
         if(req.method==="GET")onRead(name);
         const stored = files.get(name);
-        if (!stored) { status = 404; headers.set("x-ms-error-code", "BlobNotFound"); headers.set("content-type", "application/xml"); bodyAsText = "<Error><Code>BlobNotFound</Code></Error>"; }
+        if (!stored) { status = 404; headers.set("x-ms-error-code", "BlobNotFound"); headers.set("content-type", "application/xml"); bodyAsText = req.method === "HEAD" ? "" : "<Error><Code>BlobNotFound</Code></Error>"; }
         else {
           if (req.method === "GET") {
             expect(req.headers.get("if-match")).toBe(stored.etag); bytes = Buffer.from(stored.bytes);

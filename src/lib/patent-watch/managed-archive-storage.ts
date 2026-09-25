@@ -67,7 +67,7 @@ export class ManagedArchiveStorage {
       archiveCheck(data.length === p.contentLength);
       return { metadata: { name, bytes: data.length, sha256: archiveSha(data), etag: p.etag! }, data };
     } catch (error) {
-      if (error && typeof error === "object" && "statusCode" in error && error.statusCode === 404 && "code" in error && error.code === "BlobNotFound") return null;
+      if (isAzureBlobNotFound(error)) return null;
       throw new ManagedWatchError("unavailable");
     }
   }
@@ -90,3 +90,4 @@ export class ManagedArchiveStorage {
     archiveCheck(await this.read(caseId, entry.name) === null);
   }
 }
+import { isAzureBlobNotFound } from "../azure-blob-errors";

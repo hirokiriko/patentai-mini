@@ -14,6 +14,7 @@ import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./man
 import { parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
 import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256 } from "../koho-import/cloud-config";
 import { readVerifiedArchive } from "../koho-import/managed-archive";
+import { isAzureBlobNotFound } from "../azure-blob-errors";
 
 // The storage binding comes from the installed operator/worker environment, never
 // from a request, reporting month, profile revision, or arbitrary Blob name.
@@ -26,8 +27,7 @@ const openingRecordSchema = z.object({ schema: z.literal(1), reviewDigest: z.str
   initialStateDigest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 const check = (value: unknown) => { if (!value) throw new ManagedBudgetError(); };
 const options = { retryOptions: { maxTries: 1, tryTimeoutInMs: IO_MS } };
-const missingBlob = (e: unknown) => e && typeof e === "object" && "statusCode" in e && e.statusCode === 404 &&
-  "code" in e && e.code === "BlobNotFound";
+const missingBlob = isAzureBlobNotFound;
 type ReadState = { state: ManagedBudgetState; etag: string; date: Date };
 type Credential = Parameters<typeof newPipeline>[0];
 

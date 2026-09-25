@@ -14,7 +14,7 @@ function transport() {
     } else if(url.searchParams.get("restype")==="container") {if(publicContainer)headers.set("x-ms-blob-public-access","container");}
     else if(request.method==="PUT") {expect(request.headers.get("if-none-match")).toBe("*");if(files.has(path))status=412;else{files.set(path,Buffer.from(request.body as Uint8Array));status=201;}}
     else if(unknownRead)throw Error("FICTIONAL_PRIVATE_SENTINEL");
-    else if(!files.has(path)) {status=404;headers.set("x-ms-error-code","BlobNotFound");bodyAsText='<?xml version="1.0"?><Error><Code>BlobNotFound</Code><Message>absent</Message></Error>';headers.set("content-type","application/xml");}
+    else if(!files.has(path)) {status=404;headers.set("x-ms-error-code","BlobNotFound");bodyAsText=request.method==="HEAD"?"":'<?xml version="1.0"?><Error><Code>BlobNotFound</Code><Message>absent</Message></Error>';headers.set("content-type","application/xml");}
     else if(request.method==="DELETE") {expect(request.headers.get("if-match")).toBe('"fictional-etag"');files.delete(path);status=202;}
     else {data=Buffer.from(files.get(path)!);headers.set("content-length",String(data.length));headers.set("etag",'"fictional-etag"');}
     return {request,status,headers,bodyAsText,readableStreamBody:Readable.from(data)};

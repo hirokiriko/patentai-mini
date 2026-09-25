@@ -12,6 +12,7 @@ import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-ser
 import { managedBudgetBindingEnvironment } from "../src/lib/patent-watch/managed-budget-contract";
 import { archiveRead, archiveReceiptName, confirmArchiveReceipt, readVerifiedArchive, verifyArchiveBytes } from "../src/lib/koho-import/managed-archive";
 import { releaseManagedTransfer } from "./managed-koho-transfer";
+import { isAzureBlobNotFound } from "../src/lib/azure-blob-errors";
 
 const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","release-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
@@ -30,7 +31,7 @@ function approvalDigest(manifest:ReturnType<typeof parseCloudManifest>) {
 function configurationDigest(config:CloudConfiguration){return sha256(canonical({...config,manifest:null}));}
 async function existing(container:ContainerClient,name:string){
   try{return await container.getBlobClient(name).getProperties({abortSignal:AbortSignal.timeout(20_000)});}
-  catch(error){if(error&&typeof error==="object"&&"statusCode"in error&&error.statusCode===404&&"code"in error&&error.code==="BlobNotFound")return null;throw error;}
+  catch(error){if(isAzureBlobNotFound(error))return null;throw error;}
 }
 /** A conditional marker precedes every batch of external writes. A ready
  * reservation can receive its first fresh stage claim; claimed writes cannot replay. */

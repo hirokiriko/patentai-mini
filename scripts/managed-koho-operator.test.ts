@@ -38,7 +38,7 @@ async function fixture(archiveOnly=false){
       if(name===expireAfter)vi.spyOn(Date,"now").mockReturnValue(Date.parse(f.manifest.expiresAt)+1);
       if(name===loseAck)throw Error("FICTIONAL_LOST_ACK");
     } else if(!files.has(name)){
-      status=404;headers.set("x-ms-error-code","BlobNotFound");headers.set("content-type","application/xml");bodyAsText='<Error><Code>BlobNotFound</Code></Error>';
+      status=404;headers.set("x-ms-error-code","BlobNotFound");headers.set("content-type","application/xml");bodyAsText=request.method==="HEAD"?"":'<Error><Code>BlobNotFound</Code></Error>';
     } else {
       if(request.method==="GET")expect(request.headers.get("if-match")).toBe('"sealed"');
       data=Buffer.from(files.get(name)!);headers.set("content-length",String(data.length));

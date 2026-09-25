@@ -27,7 +27,7 @@ function boundary() {
         else { files.set(path, Buffer.from(request.body as Uint8Array)); status = 201; }
       } else if (!files.has(path)) { status = 404; headers.set("x-ms-error-code", "BlobNotFound"); headers.set("content-type", "application/xml"); }
       else { body = Buffer.from(files.get(path)!); if (wrongBytes) body[0] ^= 1; headers.set("etag", '"fixture-etag"'); headers.set("content-length", String(body.length)); }
-      return { request, status, headers, readableStreamBody: Readable.from(body), bodyAsText: status >= 400 ? "<?xml version=\"1.0\"?><Error><Code>BlobNotFound</Code><Message>fictional absent</Message></Error>" : undefined };
+      return { request, status, headers, readableStreamBody: Readable.from(body), bodyAsText: status >= 400 ? request.method === "HEAD" ? "" : "<?xml version=\"1.0\"?><Error><Code>BlobNotFound</Code><Message>fictional absent</Message></Error>" : undefined };
     },
   } });
   const storage = new ManagedPrivateStorage(new BlobServiceClient("https://fictional.blob.core.windows.net", pipeline).getContainerClient("private"));

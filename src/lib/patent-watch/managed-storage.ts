@@ -45,7 +45,7 @@ export class ManagedPrivateStorage{
       const bytes=await blob.downloadToBuffer(0,a.bytes,{conditions:{ifMatch:p.etag},abortSignal:this.signal()});
       if(bytes.length!==a.bytes||sha(bytes)!==a.sha256)throw Error();return bytes;
     }catch(error){
-      if(error && typeof error === "object" && "statusCode" in error && error.statusCode===404 && "code" in error && error.code==="BlobNotFound")return null;
+      if(isAzureBlobNotFound(error))return null;
       throw new ManagedWatchError("unavailable");
     }
   }
@@ -113,3 +113,4 @@ export async function reconcileManagedDelivery(repository:ManagedDeliveryReposit
   if(abandonPartial){await repository.markArtifacts(stored.report,manifest,"abandoned");return "abandoned" as const;}
   await repository.markArtifacts(stored.report,manifest,"storage_unknown");return "storage_unknown" as const;
 }
+import { isAzureBlobNotFound } from "../azure-blob-errors";

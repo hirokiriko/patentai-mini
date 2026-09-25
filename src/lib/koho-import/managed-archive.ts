@@ -15,7 +15,7 @@ export async function archiveRead(container: ContainerClient, name: string, maxi
   const blob = container.getBlobClient(name), signal = AbortSignal.timeout(20_000);
   let props;
   try { props = await blob.getProperties({ abortSignal: signal }); }
-  catch (e) { if (e && typeof e === "object" && "statusCode" in e && e.statusCode === 404 && "code" in e && e.code === "BlobNotFound") return null; throw e; }
+  catch (e) { if (isAzureBlobNotFound(e)) return null; throw e; }
   requireManual(props.etag && props.contentLength && props.contentLength <= maximum && !props.contentEncoding);
   const response = await blob.download(0, undefined, { conditions: { ifMatch: props.etag }, abortSignal: signal, maxRetryRequests: 0 });
   requireManual(response.etag === props.etag && response.contentLength === props.contentLength && !response.contentEncoding && response.readableStreamBody);
@@ -85,3 +85,4 @@ export async function confirmArchiveReceipt(container: ContainerClient, config: 
   requireManual(managedDigest(actual) === managedDigest(expected));
   return sha256(saved.data);
 }
+import { isAzureBlobNotFound } from "../azure-blob-errors";
