@@ -5,6 +5,7 @@ import { withManagedWatchBudget, type ManagedWatchDispatchJournal } from "../ai-
 import { managedComparisonSchema, managedDigest, type ManagedComparisonChunk } from "./managed-claims";
 import { managedScreeningInput, ManagedWatchError, type ManagedRun } from "./managed-types";
 import type { ManagedWatchRepository } from "../../repositories/managed-watch";
+import { managedWatchAiBudgetSchema, type ManagedWatchAiBudget } from "./managed-watch-cost";
 
 export const managedScreeningSchema = z.object({ decisions: z.array(z.object({ candidateId: z.number().int().positive(),
   selected: z.boolean(), reason: z.enum(["technical_overlap", "limited_overlap", "needs_source_review"]) }).strict()).max(100) }).strict();
@@ -42,7 +43,8 @@ export const managedAzureAnalysis = {
 };
 /** Only called by the awaited fixed cloud worker, never detached from an HTTP route. */
 export async function executeManagedRun(repository: ManagedWatchRepository, caseId: number, runId: string, executionId: string,
-  analysis = managedAzureAnalysis, proof?: {operationId:string;snapshotDigest:string}) {
+  analysis = managedAzureAnalysis, proof?: {operationId:string;snapshotDigest:string;aiBudget:ManagedWatchAiBudget}) {
+  const aiBudget = Object.freeze(managedWatchAiBudgetSchema.parse(proof?.aiBudget));
   const run = await repository.claim(caseId, runId, executionId, proof);
   let journal: ManagedWatchDispatchJournal | undefined;
   const boundary: ManagedWatchDispatchJournal = {
@@ -53,13 +55,13 @@ export async function executeManagedRun(repository: ManagedWatchRepository, case
     return await withManagedWatchBudget({ consumed: run.consumedNormal, deadlineAt: Date.parse(run.deadlineAt!), journal: boundary }, async () => {
       if (run.snapshot.candidates.length) {
         const input = managedScreeningInput(run.snapshot);
-        journal = repository.journal(run, "screening", null, managedDigest(input));
+        journal = repository.journal(run, "screening", null, managedDigest(input), aiBudget);
         const value = await analysis.screening(input);
         const selected = validateManagedScreening(run, value);
         run.plan = await repository.saveScreening(run, selected);
         for (let index = 0; index < run.plan.chunks.length; index++) {
           const chunk = run.plan.chunks[index];
-          journal = repository.journal(run, "detail", index, managedDigest(chunk));
+          journal = repository.journal(run, "detail", index, managedDigest(chunk), aiBudget);
           await repository.saveDetail(run, index, await analysis.detail(chunk));
         }
       }

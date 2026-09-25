@@ -26,6 +26,7 @@ import { managedCloudConfigSchema } from "../src/lib/patent-watch/managed-cloud-
 import { managedDeadlineDatabase } from "../src/lib/patent-watch/managed-request-db";
 import { addFictionalManagedOriginal } from "./managed-base.test-support";
 
+const aiBudget = { inputYenPerMillion: 500, outputYenPerMillion: 3000, maximumYen: 30_000 };
 describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch isolated PG16", () => {
   let environment: Awaited<ReturnType<typeof isolatedPg16>>;
   let importer: Client;
@@ -133,7 +134,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
       const execution=`fictional-manual-${prepared.runId}`, proof={operationId:config.operationId,snapshotDigest:prepared.snapshotDigest};
       const run=await repository.claim(caseId,prepared.runId,execution,proof);
       if (run.snapshot.candidates.length) {
-        const journal = repository.journal(run, "screening", null, managedDigest(managedScreeningInput(run.snapshot)));
+        const journal = repository.journal(run, "screening", null, managedDigest(managedScreeningInput(run.snapshot)), aiBudget);
         await journal.reserve({ ordinal: 1, requestSha256: "c".repeat(64), estimatedInputTokens: 100, maximumOutputTokens: 8192 });
         await journal.reconcile({ ordinal: 1, inputTokens: 30, outputTokens: 20 });
         run.plan = await repository.saveScreening(run, []);
@@ -278,17 +279,25 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     const run = await repository.claim(c1, prepared.runId, "fictional-worker-1");
     await expect(repository.claim(c1, prepared.runId, "fictional-worker-2")).rejects.toThrow("in_progress");
     const request = (ordinal: number) => ({ ordinal, requestSha256: "d".repeat(64), estimatedInputTokens: 1000, maximumOutputTokens: 8192 });
-    const screening = repository.journal(run, "screening", null, managedDigest(managedScreeningInput(run.snapshot)));
+    const screening = repository.journal(run, "screening", null, managedDigest(managedScreeningInput(run.snapshot)), aiBudget);
     const poisoned = structuredClone(run), original = poisoned.snapshot.candidates[0].source!;
     poisoned.snapshot.candidates[0].source = { ...original, claims: original.claims.map((c,i) => i ? c : { ...c, text: c.text + "INVALID" }) };
-    await expect(repository.journal(poisoned, "screening", null, managedDigest(managedScreeningInput(run.snapshot))).reserve(request(1))).rejects.toThrow();
-    await expect(repository.journal({ ...run, settingId: other.settingId }, "screening", null, managedDigest(managedScreeningInput(run.snapshot))).reserve(request(1))).rejects.toThrow();
+    await expect(repository.journal(poisoned, "screening", null, managedDigest(managedScreeningInput(run.snapshot)), aiBudget).reserve(request(1))).rejects.toThrow();
+    await expect(repository.journal({ ...run, settingId: other.settingId }, "screening", null, managedDigest(managedScreeningInput(run.snapshot)), aiBudget).reserve(request(1))).rejects.toThrow();
     expect((await repository.run(c1, run.runId)).consumedNormal).toBe(0);
     await screening.reserve(request(1)); await screening.reconcile({ ordinal: 1, inputTokens: 200, outputTokens: 40 });
     run.plan = await repository.saveScreening(run, [run.snapshot.candidates[0].candidateId]);
-    await expect(repository.journal(run, "detail", 0, "e".repeat(64)).reserve(request(2))).rejects.toThrow();
+    // Reconciled usage does not refund the run's original monetary reservations.
+    const firstChunk = run.plan.chunks[0], smallBudget = { ...aiBudget, maximumYen: 50 };
+    const expensive = repository.journal(run, "detail", 0, managedDigest(firstChunk), smallBudget);
+    smallBudget.maximumYen = 30_000; // Caller mutation cannot enlarge the captured permit.
+    await expect(expensive.reserve(request(2))).rejects.toThrow("limit");
+    expect((await repository.run(c1, run.runId)).consumedNormal).toBe(1);
+    expect((await environment.sql("select count(*)::int as n from managed_watch_dispatches where run_id=$1", [run.runId]))[0].n).toBe(1);
+    expect(() => repository.journal(run, "detail", 0, managedDigest(firstChunk), undefined as unknown as typeof aiBudget)).toThrow();
+    await expect(repository.journal(run, "detail", 0, "e".repeat(64), aiBudget).reserve(request(2))).rejects.toThrow();
     for (const [index, chunk] of run.plan.chunks.entries()) {
-      const journal = repository.journal(run, "detail", index, managedDigest(chunk));
+      const journal = repository.journal(run, "detail", index, managedDigest(chunk), aiBudget);
       await journal.reserve(request(index + 2)); await journal.reconcile({ ordinal: index + 2, inputTokens: 500, outputTokens: 100 });
       const results = chunk.pairs.map(pair => {
         const b = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo)!, c = chunk.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo)!;
@@ -316,7 +325,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     const late = await repository.prepare(c1, period); expect(late.snapshot.candidates).toHaveLength(1);
     expect(late.snapshot.candidates[0].publicationDate).toBe("2026-08-13");
     const lateRunning = await repository.claim(c1, late.runId, "fictional-late");
-    await repository.journal(lateRunning, "screening", null, managedDigest(managedScreeningInput(lateRunning.snapshot))).reserve(request(1));
+    await repository.journal(lateRunning, "screening", null, managedDigest(managedScreeningInput(lateRunning.snapshot)), aiBudget).reserve(request(1));
     expect(await repository.hasUnknownDispatch(lateRunning)).toBe(true);
     await repository.fail(lateRunning, true);
     await expect(repository.prepare(c1, period)).rejects.toThrow("in_progress");

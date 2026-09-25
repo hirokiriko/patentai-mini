@@ -10,6 +10,7 @@ export function managedBudgetPolicyFixture() {
       watchTarget: c.target, importTarget: { ...c.target, user: "fictional_import" }, watchAi: c.ai, watchSecrets: c.secrets,
       importDatabaseSecretRef: "fictional-import-db" }, codeSha: c.codeSha, image: c.image,
     validFrom: "2026-09-01T00:00:00Z", validUntil: "2026-09-30T15:00:00Z", measurementDigest: "9".repeat(64),
+    watchAiRates: { inputYenPerMillion: 500, outputYenPerMillion: 3000 },
     reservations: { watchJobYen: 10, watchRunYen: 400, importJobYen: 50, importGiBYen: 40,
       deliveryYen: 50, backupYen: 50, recoveryYen: 500 } });
   const binding = { storageAccount: policy.targets.storageAccount, container: policy.targets.container,

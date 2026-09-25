@@ -4,6 +4,7 @@ import { managedCloudConfigSchema } from "./managed-cloud-config";
 import { managedDigest } from "./managed-claims";
 import { managedBudgetBindingSchema, type ManagedBudgetBinding } from "./managed-budget-contract";
 import { MANAGED_SERVICE_KEY, ManagedBudgetError } from "./managed-service-budget";
+import { managedWatchAiRatesSchema } from "./managed-watch-cost";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), yen = z.number().int().nonnegative().max(30_000);
 const targets = z.object({ ownerBindingHash: hash, jobResourceId: managedCloudConfigSchema.shape.jobResourceId,
@@ -22,6 +23,7 @@ const targets = z.object({ ownerBindingHash: hash, jobResourceId: managedCloudCo
 export const managedBudgetPolicySchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targets, codeSha: z.string().regex(/^[a-f0-9]{40}$/), image: managedCloudConfigSchema.shape.image,
   validFrom: z.iso.datetime(), validUntil: z.iso.datetime(), measurementDigest: hash,
+  watchAiRates: managedWatchAiRatesSchema.optional(),
   reservations: z.object({ watchJobYen: yen, watchRunYen: yen.refine(v => v > 0),
     importJobYen: yen.refine(v => v > 0), importGiBYen: yen, deliveryYen: yen.refine(v => v > 0),
     archivePackageYen: yen.refine(v => v > 0).optional(), archiveGiBYen: yen.optional(),

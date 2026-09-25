@@ -15,6 +15,7 @@ import { readOriginalFile, isScopedOriginalName } from "../lib/blob-storage";
 import { parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
 import { verifyManagedBaseOriginal, MANAGED_BASE_XML_BYTES } from "../lib/patent-watch/managed-base-source";
 import { lockManagedCase } from "./managed-case-graph";
+import { managedWatchAiBudgetSchema, requireManagedWatchCost, type ManagedWatchAiBudget } from "../lib/patent-watch/managed-watch-cost";
 
 type Database = NodePgDatabase<typeof schema>;
 const S = schema.managedWatchSettings, R = schema.managedWatchRuns, D = schema.managedWatchDispatches, F = schema.managedWatchFindings;
@@ -223,7 +224,8 @@ export class ManagedWatchRepository {
       row.deadlineAt !== null && Date.parse(row.deadlineAt) > Date.now(), "expired");
     return row;
   }
-  journal(run: ManagedRun, stage: "screening" | "detail", chunkIndex: number | null, inputDigest: string): ManagedWatchDispatchJournal {
+  journal(run: ManagedRun, stage: "screening" | "detail", chunkIndex: number | null, inputDigest: string, aiBudget: ManagedWatchAiBudget): ManagedWatchDispatchJournal {
+    const fixedBudget = Object.freeze(managedWatchAiBudgetSchema.parse(aiBudget));
     return {
       reserve: async entry => this.database.transaction(async tx => {
         const row = await this.running(tx, run);
@@ -233,6 +235,10 @@ export class ManagedWatchRepository {
           : row.planJson !== null && chunkIndex !== null && entry.ordinal === chunkIndex + 2);
         requireState(stage === "screening" ? inputDigest === managedDigest(managedScreeningInput(current.snapshot))
           : current.plan?.chunks[chunkIndex!] && inputDigest === managedDigest(current.plan.chunks[chunkIndex!]), "incomplete");
+        const previous = await tx.select({ estimatedInputTokens: D.estimatedInputTokens, maximumOutputTokens: D.maximumOutputTokens })
+          .from(D).where(eq(D.runId, run.runId));
+        requireState(previous.length === row.consumedNormal, "incomplete");
+        requireManagedWatchCost(fixedBudget, [...previous, entry]);
         await tx.insert(D).values({ runId: run.runId, ...entry, stage, chunkIndex, inputDigest, status: "reserved" });
         await tx.update(R).set({ consumedNormal: entry.ordinal }).where(eq(R.runId, run.runId));
       }),

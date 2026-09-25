@@ -47,6 +47,7 @@ export function managedWatchBudgetRequest(value: unknown, approvedPolicy: Manage
   pricingDigest: string, profileDigest: string | null) {
   binding = managedBudgetBindingSchema.parse(binding);
   const c = managedCloudConfigSchema.parse(value), p = policy(approvedPolicy, binding);
+  check(p.watchAiRates);
   check(c.jobResourceId === p.targets.jobResourceId && c.jobResourceId.endsWith(`/jobs/${c.jobName}`) &&
     c.expectedEnvironmentResourceId === p.targets.environmentResourceId &&
     c.codeSha === p.codeSha && c.image === p.image && same(c.target, p.targets.watchTarget) &&

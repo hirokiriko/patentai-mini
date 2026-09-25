@@ -141,7 +141,8 @@ it("derives a watch reservation from reviewed policy, claims once, and verifies 
   expect(await f.store.reserveWatch(c)).toEqual({created:true});
   expect(f.current().operations[0]).toMatchObject({reservationYen:410,units:{jobs:1,minutes:120,starts:1,normal:41},pricingDigest:f.pricingDigest});
   await f.store.claimWatch(c);await f.store.markUnknown(c.operationId);
-  expect(await f.store.verifyWatch(c)).toMatchObject({processingMonth:"2026-09",expiresAt:c.expiresAt});
+  expect(await f.store.verifyWatch(c)).toMatchObject({processingMonth:"2026-09",expiresAt:c.expiresAt,
+    aiBudget:{inputYenPerMillion:500,outputYenPerMillion:3000,maximumYen:400}});
   await expect(f.store.claimWatch(c)).rejects.toThrow();
   expect(await f.store.reserveWatch(c)).toEqual({created:false});
   expect(f.current().operations).toHaveLength(1);

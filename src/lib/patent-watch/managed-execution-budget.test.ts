@@ -21,6 +21,10 @@ it("derives conservative charges/units and ignores caller-written budget totals"
   expect(managedWatchBudgetRequest(f.config,f.policy,Object.fromEntries(Object.entries(f.binding).reverse()) as typeof f.binding,f.pricingDigest,null)).toEqual(request(f.config));
   expect(request({...f.config,runs:[{...f.config.runs[0],snapshotDigest:"e".repeat(64)}]}).requestDigest).not.toBe(request(f.config).requestDigest);
 });
+it("refuses a watch policy without reviewed token rates",()=>{
+  const f=managedBudgetedWatchFixture();delete f.policy.watchAiRates;
+  expect(()=>managedWatchBudgetRequest(f.config,f.policy,f.binding,f.pricingDigest,null)).toThrow();
+});
 it.each(["code","image","job","db","ai","secret"])("rejects replacement of the reviewed watch %s",field=>{
   const f=managedBudgetedWatchFixture(),c=structuredClone(f.config);
   if(field==="code")c.codeSha="e".repeat(40);

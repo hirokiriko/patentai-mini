@@ -261,7 +261,10 @@ export class ManagedServiceBudgetStorage {
   async verifyWatch(value: unknown) {
     return this.guarded(async () => {
       const c = parseManagedCloudStartConfiguration(value, Date.now(), false), saved = await this.read();
-      return this.verifyExecution(await this.watchRequest(c, saved, true), c.expiresAt);
+      const context = await this.watchRequest(c, saved, true);
+      const permit = await this.verifyExecution(context, c.expiresAt);
+      check(context.policy.watchAiRates);
+      return { ...permit, aiBudget: { ...context.policy.watchAiRates!, maximumYen: context.policy.reservations.watchRunYen } };
     });
   }
   async verifyImport(value: unknown, manifest: unknown, job: ManagedImportJob) {

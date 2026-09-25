@@ -277,6 +277,14 @@ watch/import全体の費用・単位は共通台帳で制限する。DBの95分w
 CAS ACK不明・再送は実行許可にせず、定額予約を保持する。料金は既存の最大出力/読取量を含む保守額とし、
 納品・backupはstorage、隔離復元はrecovery poolへ割り当てる。9実行単位をwatch/Job/ZIPとして加算しない。
 料金表の`targets.artifactStorage`に実成果物の既存保存先を明示し、実clientのcontainer URLを完全一致で確認する。
+watchの署名済み料金表には`watchAiRates.inputYenPerMillion`と`outputYenPerMillion`を、
+対象deploymentの公式単価に税・余裕を含めて整数円へ切上げて固定する。業務requestから料金を指定しない。
+workerは元operationのpricingから`watchRunYen`と単価を取得し、各runの送信予約transactionで
+全dispatchの保守入力見積×入力単価＋最大出力×出力単価を累積照合する。予約円額を超える次送信は0、
+runは未完了として停止する。既に精算できたusageやrun間の残額によって送信中の枠を復活させない。
+41要求・入力150,000・出力8,192・実usage照合・期限・unknown保持は維持する。署名料金がないwatch開始/workerは拒否し、
+import/archive/statusの旧policy読取りは維持する。`watchJobYen`にはJob/DB/Blob/ログ等の非AI費を含める。
+これは請求遅延を含む厳密な請求上限保証ではない。低い予約で途中停止した試験は本番受入成功にしない。
 共通台帳/取込containerへ成果物を移動しない。installed `MANAGED_ARTIFACT_APPROVAL`、実build SHA、watch DB targetを使い、
 API/stdinから料金や保存先を指定しない。納品はAPIの90秒、backup/復元は管理入口の5分期限を予算IOにも引き継ぐ。
 隔離復元はbackupIdと別のrecoveryOperationIdで、DB確定sha/bytesを拘束してから原本を読み戻す。
