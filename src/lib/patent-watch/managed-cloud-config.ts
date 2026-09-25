@@ -10,7 +10,7 @@ export const managedCloudConfigSchema = z.object({ approval: managedExecutionApp
   caseAllowList: z.array(managedId).min(1).max(5),
   runs: z.array(z.object({ caseId: managedId, runId: z.uuidv4(), snapshotDigest: managedHash }).strict()).min(1).max(3),
   ai: z.object({ resourceName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,62}$/), deployment: z.string().regex(/^[a-zA-Z0-9_.-]{1,100}$/),
-    apiVersion: z.string().regex(/^\d{4}-\d{2}-\d{2}(?:-preview)?$/) }).strict(),
+    apiVersion: z.string().regex(/^(?:v1|\d{4}-\d{2}-\d{2}(?:-preview)?)$/) }).strict(),
   secrets: z.object({ database: z.string().regex(/^[a-z0-9-]{1,64}$/), ai: z.string().regex(/^[a-z0-9-]{1,64}$/) }).strict(),
   budgetProof: z.object({ ledgerDigest: managedHash, checkedAt: z.iso.datetime(), additionalForecastYen: z.number().int().positive().max(50_000),
     monthlyForecastYen: z.number().int().positive().max(30_000), externalJobExecutions: z.number().int().nonnegative().max(24),

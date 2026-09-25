@@ -4,6 +4,14 @@ import { managedBudgetPolicySchema, managedBudgetTargetDigest, validateManagedBu
 import { managedBudgetBindingEnvironment, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 
 const at = new Date("2026-09-23T00:00:00Z"), duration = 120 * 60_000;
+it("pins Azure v1 exactly and refuses changing a version under an installed target binding", () => {
+  const f = managedBudgetPolicyFixture();
+  f.policy.targets.watchAi.apiVersion = "v1";
+  f.binding.targetBindingHash = managedBudgetTargetDigest(f.policy.targets);
+  expect(validateManagedBudgetPolicy(f.policy, f.binding, at, duration).targets.watchAi.apiVersion).toBe("v1");
+  f.policy.targets.watchAi.apiVersion = "2025-04-01-preview";
+  expect(() => validateManagedBudgetPolicy(f.policy, f.binding, at, duration)).toThrow("managed_budget_stopped");
+});
 it("keeps one installed target binding across code and price revisions", () => {
   const f = managedBudgetPolicyFixture();
   expect(validateManagedBudgetPolicy(f.policy, f.binding, at, duration)).toEqual(f.policy);

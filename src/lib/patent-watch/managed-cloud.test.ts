@@ -18,6 +18,20 @@ function boundary(){
   return{config,repository,arm,budget,order};
 }
 describe("fixed cloud dispatch and unknown-start reconciliation",()=>{
+  it("preserves the existing Azure v1 version through the fixed Job template and dispatch",async()=>{
+    const b=boundary();b.config.ai.apiVersion="v1";
+    expect(parseManagedCloudConfiguration(b.config).ai.apiVersion).toBe("v1");
+    const template=managedWatchJobTemplate(b.config);
+    expect(template.containers[0].env.find(e=>e.name==="AZURE_OPENAI_API_VERSION")).toEqual({name:"AZURE_OPENAI_API_VERSION",value:"v1"});
+    await dispatchManagedWatch(b.repository,b.config,b.arm,b.budget);
+    const sent=b.arm.mock.calls.find(c=>c[1]==="POST")![2] as typeof template;
+    expect(sent.containers[0].env.find(e=>e.name==="AZURE_OPENAI_API_VERSION")).toEqual({name:"AZURE_OPENAI_API_VERSION",value:"v1"});
+  });
+  it.each(["", "v2", "v1/other", "v1?other=value", "v1\n"])("rejects an unapproved Azure version before dispatch: %j",async version=>{
+    const b=boundary();b.config.ai.apiVersion=version;
+    await expect(dispatchManagedWatch(b.repository,b.config,b.arm,b.budget)).rejects.toThrow();
+    expect(b.order).toEqual([]);
+  });
   it("builds only the bounded watch command and its two secret references",()=>{
     const template=managedWatchJobTemplate(managedBudgetedWatchFixture().config),c=template.containers[0];
     expect(c.resources).toEqual({cpu:2,memory:"4Gi"});expect(c.command).toEqual(["node",".koho-ops/managed/scripts/managed-watch-cloud.js"]);

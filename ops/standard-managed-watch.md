@@ -76,7 +76,10 @@ node .koho-ops/managed/scripts/managed-watch-operator.js
 ```
 
 buildは未変更のレビュー済みcheckoutだけを受け付け、2つのworkerと管理入口をcompileして
-`.managed-build-sha`を固定する。配備imageと異なるコードで新しいstage/startを行わない。
+`.managed-build-sha`を固定する。Job実行用のstage/startは配備imageに対応したコードだけで行う。
+Jobを起動しない`archiveOnly`の保存に限り、レビュー済みLocal SHAと現在のJob image digestを
+別々にpolicyへ固定できる。Local SHAを照合し、管理wrapperのARM操作を拒否して、
+`start`を使用しない。原本保存のためだけにJobやappを配備しない。
 過去のstatusは保存された元SHAで照合できる。実行中のビルド書換えは禁止。
 
 初回は次の順で行う。
