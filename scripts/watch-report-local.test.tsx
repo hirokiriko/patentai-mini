@@ -1,3 +1,5 @@
+// Existing domain/renderer tests isolate authentication; owner-auth tests cover the real boundary.
+vi.mock("@/lib/owner-http", () => ({ withOwnerRoute: (handler: unknown) => handler, requireOwner: async () => undefined }));
 import { createServer, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
@@ -145,7 +147,8 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("watch report is
     const setting = await patentWatchRepo.getSetting(caseA), count = (await (await get(caseA)).json()).findings.length;
     stopAi = true;
     const response = await runs.POST(new Request("http://127.0.0.1/run", { method: "POST" }), context(caseA));
-    expect(response.status).toBe(500); expect(await response.json()).toEqual({ error: "watch_ai_stopped" });
+    expect(response.status).toBe(500); expect(await response.json()).toEqual({ error: "watch_ai_stopped",
+      diagnostic:{id:expect.stringMatching(/^[a-f0-9-]{36}$/),stage:"detail",reason:"unknown"} });
     failed = (await patentWatchRepo.listRuns(caseA, 1))[0]; expect(failed.status).toBe("failed");
     const after = await patentWatchRepo.getSetting(caseA);
     expect(after?.cursorImportId).toBe(setting?.cursorImportId); expect(after?.cursorRunUpdatedAt).toBe(setting?.cursorRunUpdatedAt);

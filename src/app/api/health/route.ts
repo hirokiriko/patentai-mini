@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const ok = await checkDatabaseHealth();
   return NextResponse.json(
-    { ok, status: ok ? "ok" : "unavailable", database: { ok, type: "postgres" } },
+    { ok, status: ok ? "ok" : "unavailable" },
     { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } },
   );
 }

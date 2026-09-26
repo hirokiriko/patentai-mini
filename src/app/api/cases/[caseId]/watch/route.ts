@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { createPatentWatchHandlers } from "@/lib/patent-watch/api";
 import { patentWatchRepo } from "@/repositories";
 
@@ -5,5 +6,8 @@ export const runtime = "nodejs";
 
 const handlers = createPatentWatchHandlers({ repository: patentWatchRepo });
 
-export const GET = handlers.GET;
-export const PUT = handlers.PUT;
+ const handleGET = handlers.GET;
+ const handlePUT = handlers.PUT;
+
+export const GET = withOwnerRoute(handleGET);
+export const PUT = withOwnerRoute(handlePUT);

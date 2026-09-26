@@ -9,6 +9,8 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { cloudFixture, FictionalCloudBlob } from "./koho-cloud-import-fixtures";
+import { managedCloudImportFixture } from "./managed-koho-cloud.test-support";
+import { inspectManagedCloudDatabase } from "../src/lib/patent-watch/managed-cloud-db";
 import { protectUpdateTestDirectory } from "./koho-update-check-fixtures";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
 import { inspectCloudDatabase, saveCloudPlan } from "../src/lib/koho-import/cloud-db";
@@ -53,7 +55,7 @@ describe.skipIf(process.env.KOHO_CLOUD_LOCAL_DB_TEST !== "1")("dedicated cloud e
     }) as typeof client.query;
     return client;
   };
-  const save = (failure?: Parameters<typeof newClient>[0]): typeof saveCloudPlan => (c, m, p, plan, begin) => saveCloudPlan(c, m, p, plan, begin, () => newClient(failure));
+  const save = (failure?: Parameters<typeof newClient>[0]): typeof saveCloudPlan => (c, m, p, plan, begin, _factory, managed, execution) => saveCloudPlan(c, m, p, plan, begin, () => newClient(failure), managed, execution);
   const run = (f: Awaited<ReturnType<typeof cloudFixture>>, failure?: Parameters<typeof newClient>[0]) => runCloudImport(f.config, f.blob, { password, save: save(failure) });
   const fresh = (issue: string, review = false) => cloudFixture({ blob, target, issue, review });
   beforeAll(async () => {
@@ -168,5 +170,68 @@ describe.skipIf(process.env.KOHO_CLOUD_LOCAL_DB_TEST !== "1")("dedicated cloud e
     expect((await run(fixture)).results[0].outcome).toBe("review_not_saved");
     const approved = await fresh("FICTIONAL-REVIEW", true); approved.manifest.allowReviewRequired = true; await approved.publish();
     expect((await run(approved)).results[0]).toMatchObject({ outcome: "inserted", includesReviewRequired: true });
+  });
+  it.each(["deadline", "abort", "slow_query"] as const)("blocks COMMIT and rolls back on %s during the real TLS transaction", async cause => {
+    const before = await snapshot(), fixture = await fresh(`FICTIONAL-BOUNDED-${cause}`);
+    const controller = new AbortController(); let commits = 0, inserts = 0;
+    const boundedSave: typeof saveCloudPlan = (c, m, p, plan, begin, _factory, managed, execution) => {
+      if (!execution) throw Error("missing_shared_deadline");
+      const client = newClient(), query = client.query;
+      client.query = (async (...args: unknown[]) => {
+        const first = args[0], text = typeof first === "string" ? first : (first as { text?: string })?.text ?? "";
+        if (/^commit$/i.test(text)) commits++;
+        const documentInsert = /^insert into "koho_import_documents"/i.test(text);
+        if (documentInsert) inserts++;
+        if (documentInsert && cause === "slow_query") await Reflect.apply(query, client, ["select pg_sleep(5)"]);
+        const result = await Reflect.apply(query, client, args);
+        if (documentInsert && cause === "deadline") execution.deadline = performance.now() - 1;
+        if (documentInsert && cause === "abort") controller.abort();
+        return result;
+      }) as typeof client.query;
+      return saveCloudPlan(c, m, p, plan, () => {
+        begin(); if (cause === "slow_query") execution.deadline = performance.now() + 250;
+      }, () => client, managed, execution);
+    };
+    const started = performance.now();
+    const result = await runCloudImport(fixture.config, blob, { password, signal: controller.signal, save: boundedSave });
+    expect(result.exitCode).toBe(2); expect(inserts).toBe(1); expect(commits).toBe(0);
+    expect(performance.now() - started).toBeLessThan(4000);
+    expect(await snapshot()).toBe(before);
+  });
+  it("uses a corpus-only managed scope, atomically saves full claims and receipt, and rejects application access", async () => {
+    const f = await managedCloudImportFixture(); f.config.expectedTarget = target; f.manifest.target = target; await f.publish();
+    const managedSave: typeof saveCloudPlan = (c,m,p,plan,begin,_factory,managed,execution) => saveCloudPlan(c,m,p,plan,begin,()=>newClient(),managed,execution);
+    expect((await runCloudImport(f.config,f.blob,{password,save:managedSave,budget:f.bindBudget().budget})).results[0].outcome).toBe("failed_before_save");
+    await sql(`GRANT SELECT, INSERT ON public.managed_publication_claims, public.managed_import_receipts TO ${target.user}`);
+    try {
+      const g = await managedCloudImportFixture();g.config.expectedTarget=target;g.manifest.target=target;await g.publish();
+      expect((await runCloudImport(g.config,g.blob,{password,save:managedSave,budget:g.bindBudget().budget})).results[0].outcome).toBe("inserted");
+      expect((await sql("select count(*)::int as n from managed_import_receipts where source_sha256=$1",[g.plan.sourceSha256]))[0].n).toBe(1);
+      expect((await sql("select count(*)::int as n from managed_publication_claims where source_sha256=$1",[g.plan.sourceSha256]))[0].n).toBe(1);
+      await sql(`GRANT SELECT ON public.cases TO ${target.user}`);
+      const client=newClient();await client.connect();
+      try { await expect(inspectCloudDatabase(client,target,true)).rejects.toThrow(); }
+      finally { await client.end();await sql(`REVOKE SELECT ON public.cases FROM ${target.user}`); }
+    } finally { await sql(`REVOKE ALL ON public.managed_publication_claims, public.managed_import_receipts FROM ${target.user}`); }
+  });
+  it("checks real TLS app privileges including column writes, schema creation and sequence delegation", async () => {
+    const user=`app_${target.user}`,secret=randomBytes(24).toString("hex");
+    await sql(`CREATE ROLE ${user} LOGIN PASSWORD '${secret}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
+    await sql(`GRANT CONNECT ON DATABASE ${target.database} TO ${user}`);await sql(`GRANT USAGE ON SCHEMA public TO ${user}`);
+    await sql(`GRANT SELECT ON koho_import_runs,koho_import_documents,managed_publication_claims,managed_import_receipts TO ${user}`);
+    await sql(`GRANT SELECT,INSERT,UPDATE ON managed_watch_runs,managed_watch_dispatches,managed_watch_findings,managed_watch_job_starts TO ${user}`);
+    const client=new Client({host:"127.0.0.1",port,database:target.database,user,password:secret,ssl:{rejectUnauthorized:true,ca,servername:"localhost"},connectionTimeoutMillis:5000,statement_timeout:5000});
+    client.on("error",()=>undefined);await client.connect();const appTarget={...target,user};
+    try{
+      await inspectManagedCloudDatabase(client,appTarget);
+      const changes=[
+        [`GRANT UPDATE(claims_text) ON koho_import_documents TO ${user}`,`REVOKE UPDATE(claims_text) ON koho_import_documents FROM ${user}`],
+        [`GRANT SELECT ON managed_watch_runs TO ${user} WITH GRANT OPTION`,`REVOKE GRANT OPTION FOR SELECT ON managed_watch_runs FROM ${user}`],
+        [`CREATE SCHEMA fictional_forbidden AUTHORIZATION ${user}`,"DROP SCHEMA fictional_forbidden"],
+        [`GRANT UPDATE ON SEQUENCE cases_case_id_seq TO ${user}`,`REVOKE UPDATE ON SEQUENCE cases_case_id_seq FROM ${user}`],
+      ];
+      for(const[grant,revoke]of changes){await sql(grant);try{await expect(inspectManagedCloudDatabase(client,appTarget)).rejects.toThrow("unavailable");}finally{await sql(revoke);}}
+      await inspectManagedCloudDatabase(client,appTarget);
+    }finally{await client.end();}
   });
 });

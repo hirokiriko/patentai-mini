@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import {
   caseRepo,
@@ -86,7 +87,7 @@ function fallbackAnalysisRows(
   });
 }
 
-export async function POST(
+ async function handlePOST(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -195,3 +196,5 @@ export async function POST(
     });
   }
 }
+
+export const POST = withOwnerRoute(handlePOST);

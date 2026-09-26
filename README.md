@@ -11,7 +11,7 @@
 
 ## 非目標
 - 弁理士・弁護士レベルの法的判断の代替
-- 本番レベルの堅牢性、強固な認証認可、高度な監査ログ
+- 顧客別ポータル・企業別ユーザー管理（標準ウォッチのOWNER限定保護とは別）
 - J-PlatPat の自動操作
 
 ## PoC の基本方針
@@ -47,5 +47,7 @@ Codexがユーザーへ進捗・完了を報告する際は、`## 🚨 Codexへ�
 - [公報package手動取込API仕様](docs/08-koho-manual-import-api-spec.md)
 - [公報corpus案件接続仕様](docs/09-koho-corpus-case-connection-spec.md)
 - [出願後ウォッチングMVP仕様](docs/10-patent-watching-mvp-spec.md)
+- [標準特許ウォッチの運用手順](ops/standard-managed-watch.md) — 公開期間別・全文比較・保存版PDF/CSV。提供開始はIssue #129の本番受入成立後。
+- [標準特許ウォッチのサービス説明](docs/standard-managed-watch-service.md)
 
 Issueにない機能や将来拡張は同時に追加せず、現在の受入条件を満たす最小変更に限定します。

@@ -289,3 +289,164 @@ export const caseWatchFindings = pgTable(
     ),
   ],
 );
+
+/** Additive standard-service storage. Existing run-date watch tables keep their contract. */
+export const managedDistributionSnapshots = pgTable("managed_distribution_snapshots", {
+  sha256: text("sha256").primaryKey(),
+  sourceUrl: text("source_url").notNull(),
+  csvText: text("csv_text").notNull(),
+  acquiredAt: timestamp("acquired_at", { mode: "string", withTimezone: true }).notNull(),
+});
+export const managedImportReceipts = pgTable("managed_import_receipts", {
+  importId: integer("import_id").primaryKey().references(() => kohoImportRuns.importId, { onDelete: "cascade" }),
+  sourceSha256: text("source_sha256").notNull(),
+  publicationDate: text("publication_date").notNull(),
+  issueNumber: text("issue_number").notNull(),
+  receiptJson: text("receipt_json").notNull(),
+  receiptDigest: text("receipt_digest").notNull(),
+}, table => [uniqueIndex("managed_import_receipt_source").on(table.sourceSha256)]);
+
+export const managedPublicationClaims = pgTable("managed_publication_claims", {
+  documentId: integer("document_id").primaryKey().references(() => kohoImportDocuments.documentId, { onDelete: "cascade" }),
+  contentSha256: text("content_sha256").notNull(),
+  sourceSha256: text("source_sha256").notNull(),
+  claimsJson: text("claims_json"),
+  claimsDigest: text("claims_digest"),
+  status: text("status").notNull(),
+  reason: text("reason"),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [check("managed_publication_claims_state", sql`(${table.status} = 'complete' and ${table.claimsJson} is not null and ${table.claimsDigest} is not null and ${table.reason} is null) or (${table.status} = 'review_required' and ${table.claimsJson} is null and ${table.claimsDigest} is null and ${table.reason} is not null)`)]);
+
+export const managedWatchSettings = pgTable("managed_watch_settings", {
+  settingId: serial("setting_id").primaryKey(),
+  // Ordinary case DELETE must not bypass active-contract/90-day retention.
+  caseId: integer("case_id").notNull().references(() => cases.caseId, { onDelete: "restrict" }),
+  contractSignedOn: text("contract_signed_on").notNull(),
+  monitoringStartsOn: text("monitoring_starts_on").notNull(),
+  contractEndsOn: text("contract_ends_on"),
+  enabled: boolean("enabled").notNull().default(true),
+  baseClaimsJson: text("base_claims_json").notNull(),
+  sourceDocumentId: integer("source_document_id").notNull().references(() => priorArtDocuments.docId, {onDelete:"restrict"}),
+  sourceJson: text("source_json").notNull(),
+  selectedClaimsJson: text("selected_claims_json").notNull(),
+  baseDigest: text("base_digest").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("managed_watch_settings_case_unique").on(table.caseId)]);
+
+export const managedWatchRuns = pgTable("managed_watch_runs", {
+  runId: text("run_id").primaryKey(),
+  settingId: integer("setting_id").notNull().references(() => managedWatchSettings.settingId, { onDelete: "cascade" }),
+  caseId: integer("case_id").notNull().references(() => cases.caseId, { onDelete: "restrict" }),
+  status: text("status").notNull(),
+  periodFrom: text("period_from").notNull(),
+  periodTo: text("period_to").notNull(),
+  baseDigest: text("base_digest").notNull(),
+  snapshotJson: text("snapshot_json").notNull(),
+  snapshotDigest: text("snapshot_digest").notNull(),
+  sourceDocumentId: integer("source_document_id").notNull().references(() => priorArtDocuments.docId, {onDelete:"restrict"}),
+  planJson: text("plan_json"),
+  planDigest: text("plan_digest"),
+  consumedNormal: integer("consumed_normal").notNull().default(0),
+  executionId: text("execution_id"),
+  startReservationId: text("start_reservation_id"),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  acceptedAt: timestamp("accepted_at", { mode: "string", withTimezone: true }),
+  deadlineAt: timestamp("deadline_at", { mode: "string", withTimezone: true }),
+  completedAt: timestamp("completed_at", { mode: "string", withTimezone: true }),
+  errorCode: text("error_code"),
+  countsJson: text("counts_json"),
+}, table => [check("managed_watch_runs_status", sql`${table.status} in ('prepared','running','completed','failed','unknown')`),
+  check("managed_watch_runs_budget", sql`${table.consumedNormal} between 0 and 41`),
+  uniqueIndex("managed_watch_runs_one_active").on(table.settingId).where(sql`${table.status} in ('prepared','running','unknown')`)]);
+
+export const managedWatchDispatches = pgTable("managed_watch_dispatches", {
+  dispatchId: serial("dispatch_id").primaryKey(),
+  runId: text("run_id").notNull().references(() => managedWatchRuns.runId, { onDelete: "cascade" }),
+  ordinal: integer("ordinal").notNull(),
+  stage: text("stage").notNull(),
+  chunkIndex: integer("chunk_index"),
+  inputDigest: text("input_digest").notNull(),
+  requestSha256: text("request_sha256").notNull(),
+  estimatedInputTokens: integer("estimated_input_tokens").notNull(),
+  maximumOutputTokens: integer("maximum_output_tokens").notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  status: text("status").notNull(),
+  resultJson: text("result_json"),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("managed_watch_dispatch_ordinal").on(table.runId, table.ordinal),
+  check("managed_watch_dispatch_status", sql`${table.status} in ('reserved','reconciled','completed')`),
+  check("managed_watch_dispatch_stage", sql`${table.stage} in ('screening','detail')`),
+  check("managed_watch_dispatch_budget", sql`${table.ordinal} between 1 and 41 and ${table.estimatedInputTokens} between 1 and 150000 and ${table.maximumOutputTokens} between 1 and 8192`)]);
+
+export const managedWatchFindings = pgTable("managed_watch_findings", {
+  findingId: serial("finding_id").primaryKey(),
+  settingId: integer("setting_id").notNull().references(() => managedWatchSettings.settingId, { onDelete: "cascade" }),
+  runId: text("run_id").notNull().references(() => managedWatchRuns.runId, { onDelete: "cascade" }),
+  baseDigest: text("base_digest").notNull(),
+  sourceKey: text("source_key").notNull(),
+  publicationNumber: text("publication_number").notNull(),
+  publicationDate: text("publication_date").notNull(),
+  periodFrom: text("period_from").notNull(),
+  periodTo: text("period_to").notNull(),
+  relation: text("relation").notNull(),
+  analysisJson: text("analysis_json").notNull(),
+  reviewStatus: text("review_status").notNull().default("unreviewed"),
+  reviewVersion: integer("review_version").notNull().default(0),
+  detectedAt: timestamp("detected_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [uniqueIndex("managed_watch_finding_source").on(table.settingId, table.baseDigest, table.sourceKey),
+  check("managed_watch_finding_review", sql`${table.reviewStatus} in ('unreviewed','reviewed')`),
+  check("managed_watch_finding_relation", sql`${table.relation} in ('own_publication','other_applicant','unknown')`)]);
+
+export const managedWatchDeliveries = pgTable("managed_watch_deliveries", {
+  deliveryId: text("delivery_id").primaryKey(),
+  settingId: integer("setting_id").notNull().references(() => managedWatchSettings.settingId, { onDelete: "cascade" }),
+  caseId: integer("case_id").notNull().references(() => cases.caseId, { onDelete: "restrict" }),
+  periodFrom: text("period_from").notNull(),
+  periodTo: text("period_to").notNull(),
+  version: integer("version").notNull(),
+  previousDeliveryId: text("previous_delivery_id"),
+  reason: text("reason").notNull(),
+  status: text("status").notNull(),
+  baseDigest: text("base_digest").notNull(),
+  distributionSha256: text("distribution_sha256").notNull().references(() => managedDistributionSnapshots.sha256, { onDelete: "restrict" }),
+  snapshotJson: text("snapshot_json").notNull(),
+  snapshotDigest: text("snapshot_digest").notNull(),
+  blobManifestJson: text("blob_manifest_json"),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  deliveredOn: text("delivered_on"),
+}, table => [uniqueIndex("managed_watch_delivery_version").on(table.settingId, table.periodFrom, table.periodTo, table.version),
+  check("managed_watch_delivery_status", sql`${table.status} in ('prepared','stored','storage_unknown','abandoned')`)]);
+
+/** Deletion intent survives case removal so failed Blob deletes can be reconciled. */
+export const managedWatchDeletions = pgTable("managed_watch_deletions", {
+  deletionId: text("deletion_id").primaryKey(),
+  caseId: integer("case_id").notNull(),
+  eligibleOn: text("eligible_on").notNull(),
+  manifestJson: text("manifest_json").notNull(),
+  manifestDigest: text("manifest_digest").notNull(),
+  status: text("status").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp("completed_at", { mode: "string", withTimezone: true }),
+}, table => [check("managed_watch_deletion_status", sql`${table.status} in ('preview','executing','complete','reconciliation_required')`)]);
+
+/** Start reservations survive case deletion; cleanup never resets release consumption. */
+export const managedWatchBackups = pgTable("managed_watch_backups", {
+  backupId: text("backup_id").primaryKey(),
+  caseId: integer("case_id").notNull().references(() => cases.caseId, { onDelete: "restrict" }),
+  sha256: text("sha256").notNull(),
+  bytes: integer("bytes").notNull(),
+  status: text("status").notNull(),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [check("managed_backup_state", sql`${table.status} in ('prepared','stored','storage_unknown','abandoned')`),
+  check("managed_backup_bytes", sql`${table.bytes} between 1 and 268435456`)]);
+
+/** Start reservations survive case deletion; cleanup never resets release consumption. */
+export const managedWatchJobStarts = pgTable("managed_watch_job_starts", {
+  operationId: text("operation_id").primaryKey(), configJson: text("config_json").notNull(), configDigest: text("config_digest").notNull(),
+  logicalStarts: integer("logical_starts").notNull(), reservedNormal: integer("reserved_normal").notNull(), reservedMinutes: integer("reserved_minutes").notNull(),
+  status: text("status").notNull(), executionId: text("execution_id"),
+  createdAt: timestamp("created_at", { mode: "string", withTimezone: true }).notNull().defaultNow(),
+}, table => [check("managed_job_start_status", sql`${table.status} in ('reserved','submitting','accepted','completed','unknown')`),
+  check("managed_job_start_bounds", sql`${table.logicalStarts} between 1 and 3 and ${table.reservedNormal} between 0 and 123 and ${table.reservedMinutes} between 1 and 95`)]);

@@ -380,6 +380,15 @@ async function parseCsvEntry(
     return { attached: null, stopReader: false };
   }
 
+  // Reject from ZIP metadata before allocating the complete decompressed entry.
+  if (entry.uncompressedSize > input.limits.csv.maxInputBytes) {
+    setManifest(manifestById, entry.id, "unreadable", failureIsFatal ? "failed" : "review_required");
+    queueIssue(issues, 4, "csv_parse_failed", failureIsFatal ? "failed" : "review_required",
+      entry.id, entry.normalizedPath, sectionFromPath(entry.normalizedPath), undefined,
+      { source: "csv", code: "input_too_large" });
+    return { attached: null, stopReader: false };
+  }
+
   let bytes: Uint8Array;
   try {
     bytes = await reader.readEntryBytes(entry.id);
@@ -486,6 +495,13 @@ async function parsePrimaryXmlEntry(
       undefined,
       entryZipCause(entry),
     );
+    return { attached: null, stopReader: false };
+  }
+
+  if (entry.uncompressedSize > input.limits.xml.maxXmlBytes) {
+    setManifest(manifestById, entry.id, "unreadable", "failed");
+    queueIssue(issues, 5, "primary_xml_parse_failed", "failed", entry.id, entry.normalizedPath,
+      sectionFromPath(entry.normalizedPath), undefined, { source: "xml", code: "xml_byte_limit_exceeded" });
     return { attached: null, stopReader: false };
   }
 

@@ -1,0 +1,2368 @@
+{
+  "id": "fdf59ac2-25e9-44c3-ab70-3881b3fd1301",
+  "prevId": "348a36ed-785f-48bf-b7f8-39dcfd9e0b98",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.case_watch_findings": {
+      "name": "case_watch_findings",
+      "schema": "",
+      "columns": {
+        "finding_id": {
+          "name": "finding_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "watch_id": {
+          "name": "watch_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "first_run_id": {
+          "name": "first_run_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "corpus_document_id": {
+          "name": "corpus_document_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "package_type": {
+          "name": "package_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_number": {
+          "name": "publication_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "invention_title": {
+          "name": "invention_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "abstract_preview": {
+          "name": "abstract_preview",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lexical_score": {
+          "name": "lexical_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "element_score": {
+          "name": "element_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "structural_score": {
+          "name": "structural_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "risk_label": {
+          "name": "risk_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "analysis_json": {
+          "name": "analysis_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "analysis_mode": {
+          "name": "analysis_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "review_status": {
+          "name": "review_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unreviewed'"
+        },
+        "first_seen_at": {
+          "name": "first_seen_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_watch_findings_watch_id_source_key_unique": {
+          "name": "case_watch_findings_watch_id_source_key_unique",
+          "columns": [
+            {
+              "expression": "watch_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_watch_findings_watch_id_case_watch_settings_watch_id_fk": {
+          "name": "case_watch_findings_watch_id_case_watch_settings_watch_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "case_watch_settings",
+          "columnsFrom": [
+            "watch_id"
+          ],
+          "columnsTo": [
+            "watch_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_watch_findings_first_run_id_case_watch_runs_run_id_fk": {
+          "name": "case_watch_findings_first_run_id_case_watch_runs_run_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "case_watch_runs",
+          "columnsFrom": [
+            "first_run_id"
+          ],
+          "columnsTo": [
+            "run_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "case_watch_findings_corpus_document_id_koho_import_documents_document_id_fk": {
+          "name": "case_watch_findings_corpus_document_id_koho_import_documents_document_id_fk",
+          "tableFrom": "case_watch_findings",
+          "tableTo": "koho_import_documents",
+          "columnsFrom": [
+            "corpus_document_id"
+          ],
+          "columnsTo": [
+            "document_id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_findings_source_key_check": {
+          "name": "case_watch_findings_source_key_check",
+          "value": "\"case_watch_findings\".\"source_key\" ~ '^[0-9a-f]{64}$'"
+        },
+        "case_watch_findings_score_check": {
+          "name": "case_watch_findings_score_check",
+          "value": "\"case_watch_findings\".\"lexical_score\" between 0 and 1 and \"case_watch_findings\".\"element_score\" between 0 and 1 and \"case_watch_findings\".\"semantic_score\" between 0 and 1 and \"case_watch_findings\".\"structural_score\" between 0 and 1"
+        },
+        "case_watch_findings_analysis_mode_check": {
+          "name": "case_watch_findings_analysis_mode_check",
+          "value": "\"case_watch_findings\".\"analysis_mode\" in ('ai', 'fallback')"
+        },
+        "case_watch_findings_review_status_check": {
+          "name": "case_watch_findings_review_status_check",
+          "value": "\"case_watch_findings\".\"review_status\" in ('unreviewed', 'reviewed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.case_watch_runs": {
+      "name": "case_watch_runs",
+      "schema": "",
+      "columns": {
+        "run_id": {
+          "name": "run_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "watch_id": {
+          "name": "watch_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "monitoring_from_date": {
+          "name": "monitoring_from_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_cursor_run_updated_at": {
+          "name": "base_cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "base_cursor_import_id": {
+          "name": "base_cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upper_cursor_run_updated_at": {
+          "name": "upper_cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "upper_cursor_import_id": {
+          "name": "upper_cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "scanned_import_run_count": {
+          "name": "scanned_import_run_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "scanned_document_count": {
+          "name": "scanned_document_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "prefiltered_count": {
+          "name": "prefiltered_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "analyzed_count": {
+          "name": "analyzed_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "new_finding_count": {
+          "name": "new_finding_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "fallback_finding_count": {
+          "name": "fallback_finding_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "analysis_mode": {
+          "name": "analysis_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'none'"
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "case_watch_runs_watch_id_case_watch_settings_watch_id_fk": {
+          "name": "case_watch_runs_watch_id_case_watch_settings_watch_id_fk",
+          "tableFrom": "case_watch_runs",
+          "tableTo": "case_watch_settings",
+          "columnsFrom": [
+            "watch_id"
+          ],
+          "columnsTo": [
+            "watch_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_runs_status_check": {
+          "name": "case_watch_runs_status_check",
+          "value": "\"case_watch_runs\".\"status\" in ('running', 'completed', 'failed')"
+        },
+        "case_watch_runs_base_cursor_pair_check": {
+          "name": "case_watch_runs_base_cursor_pair_check",
+          "value": "(\"case_watch_runs\".\"base_cursor_run_updated_at\" is null and \"case_watch_runs\".\"base_cursor_import_id\" is null) or (\"case_watch_runs\".\"base_cursor_run_updated_at\" is not null and \"case_watch_runs\".\"base_cursor_import_id\" is not null and \"case_watch_runs\".\"base_cursor_import_id\" > 0)"
+        },
+        "case_watch_runs_upper_cursor_pair_check": {
+          "name": "case_watch_runs_upper_cursor_pair_check",
+          "value": "(\"case_watch_runs\".\"upper_cursor_run_updated_at\" is null and \"case_watch_runs\".\"upper_cursor_import_id\" is null) or (\"case_watch_runs\".\"upper_cursor_run_updated_at\" is not null and \"case_watch_runs\".\"upper_cursor_import_id\" is not null and \"case_watch_runs\".\"upper_cursor_import_id\" > 0)"
+        },
+        "case_watch_runs_counts_check": {
+          "name": "case_watch_runs_counts_check",
+          "value": "\"case_watch_runs\".\"scanned_import_run_count\" >= 0 and \"case_watch_runs\".\"scanned_document_count\" >= 0 and \"case_watch_runs\".\"prefiltered_count\" >= 0 and \"case_watch_runs\".\"analyzed_count\" >= 0 and \"case_watch_runs\".\"new_finding_count\" >= 0 and \"case_watch_runs\".\"fallback_finding_count\" >= 0"
+        },
+        "case_watch_runs_analysis_mode_check": {
+          "name": "case_watch_runs_analysis_mode_check",
+          "value": "\"case_watch_runs\".\"analysis_mode\" in ('none', 'ai', 'fallback')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.case_watch_settings": {
+      "name": "case_watch_settings",
+      "schema": "",
+      "columns": {
+        "watch_id": {
+          "name": "watch_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "monitoring_from_date": {
+          "name": "monitoring_from_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cursor_run_updated_at": {
+          "name": "cursor_run_updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cursor_import_id": {
+          "name": "cursor_import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "case_watch_settings_case_id_unique": {
+          "name": "case_watch_settings_case_id_unique",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "case_watch_settings_case_id_cases_case_id_fk": {
+          "name": "case_watch_settings_case_id_cases_case_id_fk",
+          "tableFrom": "case_watch_settings",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "case_watch_settings_cursor_pair_check": {
+          "name": "case_watch_settings_cursor_pair_check",
+          "value": "(\"case_watch_settings\".\"cursor_run_updated_at\" is null and \"case_watch_settings\".\"cursor_import_id\" is null) or (\"case_watch_settings\".\"cursor_run_updated_at\" is not null and \"case_watch_settings\".\"cursor_import_id\" is not null and \"case_watch_settings\".\"cursor_import_id\" > 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.cases": {
+      "name": "cases",
+      "schema": "",
+      "columns": {
+        "case_id": {
+          "name": "case_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "base_application_mode": {
+          "name": "base_application_mode",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "base_application_number": {
+          "name": "base_application_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.comparison_results": {
+      "name": "comparison_results",
+      "schema": "",
+      "columns": {
+        "result_id": {
+          "name": "result_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "draft_claim_id": {
+          "name": "draft_claim_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prior_doc_id": {
+          "name": "prior_doc_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lexical_score": {
+          "name": "lexical_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "semantic_score": {
+          "name": "semantic_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "structural_score": {
+          "name": "structural_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "matched_elements_json": {
+          "name": "matched_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "risk_label": {
+          "name": "risk_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "comparison_results_case_id_cases_case_id_fk": {
+          "name": "comparison_results_case_id_cases_case_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk": {
+          "name": "comparison_results_prior_doc_id_prior_art_documents_doc_id_fk",
+          "tableFrom": "comparison_results",
+          "tableTo": "prior_art_documents",
+          "columnsFrom": [
+            "prior_doc_id"
+          ],
+          "columnsTo": [
+            "doc_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.draft_patents": {
+      "name": "draft_patents",
+      "schema": "",
+      "columns": {
+        "draft_id": {
+          "name": "draft_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'main'"
+        },
+        "source_file_path": {
+          "name": "source_file_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "parsed_text": {
+          "name": "parsed_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "extracted_claims_json": {
+          "name": "extracted_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "draft_patents_case_id_cases_case_id_fk": {
+          "name": "draft_patents_case_id_cases_case_id_fk",
+          "tableFrom": "draft_patents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.koho_import_documents": {
+      "name": "koho_import_documents",
+      "schema": "",
+      "columns": {
+        "document_id": {
+          "name": "document_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "import_id": {
+          "name": "import_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalized_entry_path": {
+          "name": "normalized_entry_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parse_status": {
+          "name": "parse_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_number": {
+          "name": "publication_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "application_number": {
+          "name": "application_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "registration_number": {
+          "name": "registration_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "registration_date": {
+          "name": "registration_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "invention_title": {
+          "name": "invention_title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "abstract_text": {
+          "name": "abstract_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_text": {
+          "name": "claims_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "applicants_json": {
+          "name": "applicants_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ipc_json": {
+          "name": "ipc_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fi_json": {
+          "name": "fi_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parse_issues_json": {
+          "name": "parse_issues_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_metadata_json": {
+          "name": "source_metadata_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content_sha256": {
+          "name": "content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "koho_import_documents_import_id_normalized_entry_path_unique": {
+          "name": "koho_import_documents_import_id_normalized_entry_path_unique",
+          "columns": [
+            {
+              "expression": "import_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "normalized_entry_path",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "koho_import_documents_import_id_koho_import_runs_import_id_fk": {
+          "name": "koho_import_documents_import_id_koho_import_runs_import_id_fk",
+          "tableFrom": "koho_import_documents",
+          "tableTo": "koho_import_runs",
+          "columnsFrom": [
+            "import_id"
+          ],
+          "columnsTo": [
+            "import_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.koho_import_runs": {
+      "name": "koho_import_runs",
+      "schema": "",
+      "columns": {
+        "import_id": {
+          "name": "import_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "package_type": {
+          "name": "package_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_sha256": {
+          "name": "source_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "package_status": {
+          "name": "package_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "document_count": {
+          "name": "document_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amendment_count": {
+          "name": "amendment_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "nested_st26_count": {
+          "name": "nested_st26_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "counts_json": {
+          "name": "counts_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issues_json": {
+          "name": "issues_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "koho_import_runs_package_type_source_sha256_unique": {
+          "name": "koho_import_runs_package_type_source_sha256_unique",
+          "columns": [
+            {
+              "expression": "package_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_sha256",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.managed_distribution_snapshots": {
+      "name": "managed_distribution_snapshots",
+      "schema": "",
+      "columns": {
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "source_url": {
+          "name": "source_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "csv_text": {
+          "name": "csv_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "acquired_at": {
+          "name": "acquired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.managed_import_receipts": {
+      "name": "managed_import_receipts",
+      "schema": "",
+      "columns": {
+        "import_id": {
+          "name": "import_id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "source_sha256": {
+          "name": "source_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issue_number": {
+          "name": "issue_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receipt_json": {
+          "name": "receipt_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "receipt_digest": {
+          "name": "receipt_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "managed_import_receipt_source": {
+          "name": "managed_import_receipt_source",
+          "columns": [
+            {
+              "expression": "source_sha256",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_import_receipts_import_id_koho_import_runs_import_id_fk": {
+          "name": "managed_import_receipts_import_id_koho_import_runs_import_id_fk",
+          "tableFrom": "managed_import_receipts",
+          "tableTo": "koho_import_runs",
+          "columnsFrom": [
+            "import_id"
+          ],
+          "columnsTo": [
+            "import_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.managed_publication_claims": {
+      "name": "managed_publication_claims",
+      "schema": "",
+      "columns": {
+        "document_id": {
+          "name": "document_id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "content_sha256": {
+          "name": "content_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_sha256": {
+          "name": "source_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "claims_json": {
+          "name": "claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_digest": {
+          "name": "claims_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "managed_publication_claims_document_id_koho_import_documents_document_id_fk": {
+          "name": "managed_publication_claims_document_id_koho_import_documents_document_id_fk",
+          "tableFrom": "managed_publication_claims",
+          "tableTo": "koho_import_documents",
+          "columnsFrom": [
+            "document_id"
+          ],
+          "columnsTo": [
+            "document_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_publication_claims_state": {
+          "name": "managed_publication_claims_state",
+          "value": "(\"managed_publication_claims\".\"status\" = 'complete' and \"managed_publication_claims\".\"claims_json\" is not null and \"managed_publication_claims\".\"claims_digest\" is not null and \"managed_publication_claims\".\"reason\" is null) or (\"managed_publication_claims\".\"status\" = 'review_required' and \"managed_publication_claims\".\"claims_json\" is null and \"managed_publication_claims\".\"claims_digest\" is null and \"managed_publication_claims\".\"reason\" is not null)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_backups": {
+      "name": "managed_watch_backups",
+      "schema": "",
+      "columns": {
+        "backup_id": {
+          "name": "backup_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sha256": {
+          "name": "sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "bytes": {
+          "name": "bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "managed_watch_backups_case_id_cases_case_id_fk": {
+          "name": "managed_watch_backups_case_id_cases_case_id_fk",
+          "tableFrom": "managed_watch_backups",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_backup_state": {
+          "name": "managed_backup_state",
+          "value": "\"managed_watch_backups\".\"status\" in ('prepared','stored','storage_unknown','abandoned')"
+        },
+        "managed_backup_bytes": {
+          "name": "managed_backup_bytes",
+          "value": "\"managed_watch_backups\".\"bytes\" between 1 and 268435456"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_deletions": {
+      "name": "managed_watch_deletions",
+      "schema": "",
+      "columns": {
+        "deletion_id": {
+          "name": "deletion_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "eligible_on": {
+          "name": "eligible_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest_json": {
+          "name": "manifest_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "manifest_digest": {
+          "name": "manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_watch_deletion_status": {
+          "name": "managed_watch_deletion_status",
+          "value": "\"managed_watch_deletions\".\"status\" in ('preview','executing','complete','reconciliation_required')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_deliveries": {
+      "name": "managed_watch_deliveries",
+      "schema": "",
+      "columns": {
+        "delivery_id": {
+          "name": "delivery_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "setting_id": {
+          "name": "setting_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_from": {
+          "name": "period_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_to": {
+          "name": "period_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "previous_delivery_id": {
+          "name": "previous_delivery_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_digest": {
+          "name": "base_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "distribution_sha256": {
+          "name": "distribution_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_json": {
+          "name": "snapshot_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_digest": {
+          "name": "snapshot_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blob_manifest_json": {
+          "name": "blob_manifest_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "delivered_on": {
+          "name": "delivered_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "managed_watch_delivery_version": {
+          "name": "managed_watch_delivery_version",
+          "columns": [
+            {
+              "expression": "setting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "period_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "period_to",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_watch_deliveries_setting_id_managed_watch_settings_setting_id_fk": {
+          "name": "managed_watch_deliveries_setting_id_managed_watch_settings_setting_id_fk",
+          "tableFrom": "managed_watch_deliveries",
+          "tableTo": "managed_watch_settings",
+          "columnsFrom": [
+            "setting_id"
+          ],
+          "columnsTo": [
+            "setting_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_watch_deliveries_case_id_cases_case_id_fk": {
+          "name": "managed_watch_deliveries_case_id_cases_case_id_fk",
+          "tableFrom": "managed_watch_deliveries",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_watch_deliveries_distribution_sha256_managed_distribution_snapshots_sha256_fk": {
+          "name": "managed_watch_deliveries_distribution_sha256_managed_distribution_snapshots_sha256_fk",
+          "tableFrom": "managed_watch_deliveries",
+          "tableTo": "managed_distribution_snapshots",
+          "columnsFrom": [
+            "distribution_sha256"
+          ],
+          "columnsTo": [
+            "sha256"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_watch_delivery_status": {
+          "name": "managed_watch_delivery_status",
+          "value": "\"managed_watch_deliveries\".\"status\" in ('prepared','stored','storage_unknown','abandoned')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_dispatches": {
+      "name": "managed_watch_dispatches",
+      "schema": "",
+      "columns": {
+        "dispatch_id": {
+          "name": "dispatch_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ordinal": {
+          "name": "ordinal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stage": {
+          "name": "stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "chunk_index": {
+          "name": "chunk_index",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "input_digest": {
+          "name": "input_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_sha256": {
+          "name": "request_sha256",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estimated_input_tokens": {
+          "name": "estimated_input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "maximum_output_tokens": {
+          "name": "maximum_output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "result_json": {
+          "name": "result_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_watch_dispatch_ordinal": {
+          "name": "managed_watch_dispatch_ordinal",
+          "columns": [
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ordinal",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_watch_dispatches_run_id_managed_watch_runs_run_id_fk": {
+          "name": "managed_watch_dispatches_run_id_managed_watch_runs_run_id_fk",
+          "tableFrom": "managed_watch_dispatches",
+          "tableTo": "managed_watch_runs",
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "run_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_watch_dispatch_status": {
+          "name": "managed_watch_dispatch_status",
+          "value": "\"managed_watch_dispatches\".\"status\" in ('reserved','reconciled','completed')"
+        },
+        "managed_watch_dispatch_stage": {
+          "name": "managed_watch_dispatch_stage",
+          "value": "\"managed_watch_dispatches\".\"stage\" in ('screening','detail')"
+        },
+        "managed_watch_dispatch_budget": {
+          "name": "managed_watch_dispatch_budget",
+          "value": "\"managed_watch_dispatches\".\"ordinal\" between 1 and 41 and \"managed_watch_dispatches\".\"estimated_input_tokens\" between 1 and 150000 and \"managed_watch_dispatches\".\"maximum_output_tokens\" between 1 and 8192"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_findings": {
+      "name": "managed_watch_findings",
+      "schema": "",
+      "columns": {
+        "finding_id": {
+          "name": "finding_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "setting_id": {
+          "name": "setting_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_digest": {
+          "name": "base_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_key": {
+          "name": "source_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_number": {
+          "name": "publication_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_date": {
+          "name": "publication_date",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_from": {
+          "name": "period_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_to": {
+          "name": "period_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "relation": {
+          "name": "relation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "analysis_json": {
+          "name": "analysis_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "review_status": {
+          "name": "review_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unreviewed'"
+        },
+        "detected_at": {
+          "name": "detected_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_watch_finding_source": {
+          "name": "managed_watch_finding_source",
+          "columns": [
+            {
+              "expression": "setting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "base_digest",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_watch_findings_setting_id_managed_watch_settings_setting_id_fk": {
+          "name": "managed_watch_findings_setting_id_managed_watch_settings_setting_id_fk",
+          "tableFrom": "managed_watch_findings",
+          "tableTo": "managed_watch_settings",
+          "columnsFrom": [
+            "setting_id"
+          ],
+          "columnsTo": [
+            "setting_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_watch_findings_run_id_managed_watch_runs_run_id_fk": {
+          "name": "managed_watch_findings_run_id_managed_watch_runs_run_id_fk",
+          "tableFrom": "managed_watch_findings",
+          "tableTo": "managed_watch_runs",
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "run_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_watch_finding_review": {
+          "name": "managed_watch_finding_review",
+          "value": "\"managed_watch_findings\".\"review_status\" in ('unreviewed','reviewed')"
+        },
+        "managed_watch_finding_relation": {
+          "name": "managed_watch_finding_relation",
+          "value": "\"managed_watch_findings\".\"relation\" in ('own_publication','other_applicant','unknown')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_job_starts": {
+      "name": "managed_watch_job_starts",
+      "schema": "",
+      "columns": {
+        "operation_id": {
+          "name": "operation_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "config_json": {
+          "name": "config_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config_digest": {
+          "name": "config_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "logical_starts": {
+          "name": "logical_starts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reserved_normal": {
+          "name": "reserved_normal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reserved_minutes": {
+          "name": "reserved_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_job_start_status": {
+          "name": "managed_job_start_status",
+          "value": "\"managed_watch_job_starts\".\"status\" in ('reserved','submitting','accepted','completed','unknown')"
+        },
+        "managed_job_start_bounds": {
+          "name": "managed_job_start_bounds",
+          "value": "\"managed_watch_job_starts\".\"logical_starts\" between 1 and 3 and \"managed_watch_job_starts\".\"reserved_normal\" between 0 and 123 and \"managed_watch_job_starts\".\"reserved_minutes\" between 1 and 95"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_runs": {
+      "name": "managed_watch_runs",
+      "schema": "",
+      "columns": {
+        "run_id": {
+          "name": "run_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "setting_id": {
+          "name": "setting_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_from": {
+          "name": "period_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "period_to": {
+          "name": "period_to",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_digest": {
+          "name": "base_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_json": {
+          "name": "snapshot_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "snapshot_digest": {
+          "name": "snapshot_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_document_id": {
+          "name": "source_document_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "plan_json": {
+          "name": "plan_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "plan_digest": {
+          "name": "plan_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consumed_normal": {
+          "name": "consumed_normal",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "start_reservation_id": {
+          "name": "start_reservation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "accepted_at": {
+          "name": "accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "deadline_at": {
+          "name": "deadline_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "error_code": {
+          "name": "error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "counts_json": {
+          "name": "counts_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "managed_watch_runs_one_active": {
+          "name": "managed_watch_runs_one_active",
+          "columns": [
+            {
+              "expression": "setting_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"managed_watch_runs\".\"status\" in ('prepared','running','unknown')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_watch_runs_setting_id_managed_watch_settings_setting_id_fk": {
+          "name": "managed_watch_runs_setting_id_managed_watch_settings_setting_id_fk",
+          "tableFrom": "managed_watch_runs",
+          "tableTo": "managed_watch_settings",
+          "columnsFrom": [
+            "setting_id"
+          ],
+          "columnsTo": [
+            "setting_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "managed_watch_runs_case_id_cases_case_id_fk": {
+          "name": "managed_watch_runs_case_id_cases_case_id_fk",
+          "tableFrom": "managed_watch_runs",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_watch_runs_source_document_id_prior_art_documents_doc_id_fk": {
+          "name": "managed_watch_runs_source_document_id_prior_art_documents_doc_id_fk",
+          "tableFrom": "managed_watch_runs",
+          "tableTo": "prior_art_documents",
+          "columnsFrom": [
+            "source_document_id"
+          ],
+          "columnsTo": [
+            "doc_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "managed_watch_runs_status": {
+          "name": "managed_watch_runs_status",
+          "value": "\"managed_watch_runs\".\"status\" in ('prepared','running','completed','failed','unknown')"
+        },
+        "managed_watch_runs_budget": {
+          "name": "managed_watch_runs_budget",
+          "value": "\"managed_watch_runs\".\"consumed_normal\" between 0 and 41"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.managed_watch_settings": {
+      "name": "managed_watch_settings",
+      "schema": "",
+      "columns": {
+        "setting_id": {
+          "name": "setting_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contract_signed_on": {
+          "name": "contract_signed_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "monitoring_starts_on": {
+          "name": "monitoring_starts_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "contract_ends_on": {
+          "name": "contract_ends_on",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "base_claims_json": {
+          "name": "base_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_document_id": {
+          "name": "source_document_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_json": {
+          "name": "source_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "selected_claims_json": {
+          "name": "selected_claims_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_digest": {
+          "name": "base_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "managed_watch_settings_case_unique": {
+          "name": "managed_watch_settings_case_unique",
+          "columns": [
+            {
+              "expression": "case_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "managed_watch_settings_case_id_cases_case_id_fk": {
+          "name": "managed_watch_settings_case_id_cases_case_id_fk",
+          "tableFrom": "managed_watch_settings",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "managed_watch_settings_source_document_id_prior_art_documents_doc_id_fk": {
+          "name": "managed_watch_settings_source_document_id_prior_art_documents_doc_id_fk",
+          "tableFrom": "managed_watch_settings",
+          "tableTo": "prior_art_documents",
+          "columnsFrom": [
+            "source_document_id"
+          ],
+          "columnsTo": [
+            "doc_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.prior_art_documents": {
+      "name": "prior_art_documents",
+      "schema": "",
+      "columns": {
+        "doc_id": {
+          "name": "doc_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "publication_no": {
+          "name": "publication_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "abstract": {
+          "name": "abstract",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claims_text": {
+          "name": "claims_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_csv_row_json": {
+          "name": "source_csv_row_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "normalized_elements_json": {
+          "name": "normalized_elements_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "prior_art_documents_case_id_cases_case_id_fk": {
+          "name": "prior_art_documents_case_id_cases_case_id_fk",
+          "tableFrom": "prior_art_documents",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.search_query_sets": {
+      "name": "search_query_sets",
+      "schema": "",
+      "columns": {
+        "query_set_id": {
+          "name": "query_set_id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "case_id": {
+          "name": "case_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "broad_query": {
+          "name": "broad_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "balanced_query": {
+          "name": "balanced_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "narrow_query": {
+          "name": "narrow_query",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rationale_json": {
+          "name": "rationale_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "search_query_sets_case_id_cases_case_id_fk": {
+          "name": "search_query_sets_case_id_cases_case_id_fk",
+          "tableFrom": "search_query_sets",
+          "tableTo": "cases",
+          "columnsFrom": [
+            "case_id"
+          ],
+          "columnsTo": [
+            "case_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

@@ -1,7 +1,12 @@
 import { db } from "../db";
+import { lockManagedCase } from "./managed-case-graph";
+import { isOriginalFileBlobName, parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
 import { APPLICANTS_JSON_BYTES, projectFindingBibliography } from "../lib/patent-watch/bibliography";
 import { PERIOD_RUN_LIMIT, PERIOD_FINDING_LIMIT, PeriodReportLimitError, periodBounds, periodCaseId } from "../lib/patent-watch/period";
 import type { PeriodSnapshot } from "../lib/patent-watch/period-report";
+import { validateManagedImportSources, type ManagedClaimSource } from "../lib/koho-import/managed-claim-source";
+import { validateManagedPackageReceipt, type ManagedPackageReceipt } from "../lib/koho-import/managed-package-receipt";
+import { managedDigest } from "../lib/patent-watch/managed-claims";
 import {
   cases,
   draftPatents,
@@ -13,6 +18,8 @@ import {
   caseWatchSettings,
   caseWatchRuns,
   caseWatchFindings,
+  managedPublicationClaims,
+  managedImportReceipts,
 } from "../db/schema";
 import {
   assertKohoImportDocumentPlan,
@@ -697,6 +704,23 @@ function assertNoDuplicateExistingPublicationNumbers(
   }
 }
 
+/** Read the original keys under the same upload lock as the DB removal. */
+export async function removeCaseWithOriginals(caseId: number) {
+  return db.transaction(async tx => {
+    await lockManagedCase(tx, caseId);
+    const drafts = await tx.select({ name: draftPatents.sourceFilePath }).from(draftPatents).where(eq(draftPatents.caseId, caseId));
+    const prior = await tx.select({ metadata: priorArtDocuments.sourceCsvRowJson }).from(priorArtDocuments).where(eq(priorArtDocuments.caseId, caseId));
+    const blobNames = [...new Set([...drafts.map(d => d.name), ...prior.map(d => parseUploadedOriginalFileMetadata(d.metadata)?.blobName ?? null)]
+      .filter((name): name is string => !!name && isOriginalFileBlobName(name, caseId)))];
+    await tx.delete(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+    await tx.delete(searchQuerySets).where(eq(searchQuerySets.caseId, caseId));
+    await tx.delete(draftPatents).where(eq(draftPatents.caseId, caseId));
+    await tx.delete(priorArtDocuments).where(eq(priorArtDocuments.caseId, caseId));
+    const [row] = await tx.delete(cases).where(eq(cases.caseId, caseId)).returning();
+    return { deleted: !!row, blobNames };
+  });
+}
+
 export const caseRepo: CaseRepository = {
   async findAll() {
     return db.select().from(cases).orderBy(desc(cases.createdAt));
@@ -728,15 +752,7 @@ export const caseRepo: CaseRepository = {
     return row ?? null;
   },
   async remove(caseId) {
-    return db.transaction(async (tx) => {
-      await tx.delete(comparisonResults).where(eq(comparisonResults.caseId, caseId));
-      await tx.delete(searchQuerySets).where(eq(searchQuerySets.caseId, caseId));
-      await tx.delete(draftPatents).where(eq(draftPatents.caseId, caseId));
-      await tx.delete(priorArtDocuments).where(eq(priorArtDocuments.caseId, caseId));
-
-      const [row] = await tx.delete(cases).where(eq(cases.caseId, caseId)).returning();
-      return !!row;
-    });
+    return (await removeCaseWithOriginals(caseId)).deleted;
   },
 };
 
@@ -874,10 +890,12 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
   },
   async deleteByIds(caseId, docIds) {
     if (docIds.length === 0) return 0;
+    return db.transaction(async tx=>{
+    await lockManagedCase(tx,caseId);
     // comparison_results.prior_doc_id が priorArtDocuments.docId を外部キー参照しているため、
     // 先に該当 docId を参照する分析結果を削除しないと FK 制約違反になる。
     // confirm ダイアログで「重なり分析の結果も影響を受ける」と警告済み。
-    await db
+    await tx
       .delete(comparisonResults)
       .where(
         and(
@@ -885,7 +903,7 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
           inArray(comparisonResults.priorDocId, docIds)
         )
       );
-    const deleted = await db
+    const deleted = await tx
       .delete(priorArtDocuments)
       .where(
         and(
@@ -895,6 +913,7 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
       )
       .returning();
     return deleted.length;
+    });
   },
 };
 
@@ -919,13 +938,50 @@ export async function saveKohoImportPlan(
   plan: Parameters<KohoImportRepository["savePlan"]>[0],
   reuseExisting = false,
   expectedDisposition?: "inserted" | "reused",
+  managedSources?: readonly ManagedClaimSource[],
+  managedReceipt?: ManagedPackageReceipt,
 ) {
     const validatedPlan = validatedPlanSnapshot(plan);
+    const claimSources = managedSources ? validateManagedImportSources(validatedPlan, managedSources) : null;
+    const receipt = managedReceipt ? validateManagedPackageReceipt(validatedPlan, managedReceipt) : null;
+    if (receipt && (!reuseExisting || !claimSources)) throw new Error("managed_receipt_requires_immutable_claim_sources");
 
     return database.transaction(async (tx) => {
       await tx.execute(
         sql`select pg_advisory_xact_lock(${KOHO_IMPORT_WATCH_CURSOR_LOCK_ID}::bigint)`,
       );
+      const persistClaimSources = async (importId: number) => {
+        if (receipt) {
+          const row = { importId, sourceSha256: receipt.sourceSha256, publicationDate: receipt.publicationDate, issueNumber: receipt.issueNumber,
+            receiptJson: JSON.stringify(receipt), receiptDigest: managedDigest(receipt) };
+          const [prior] = await tx.select().from(managedImportReceipts).where(eq(managedImportReceipts.importId, importId));
+          if (prior) {
+            if (Object.entries(row).some(([key, value]) => prior[key as keyof typeof prior] !== value)) throw new Error("managed_receipt_mismatch");
+          } else await tx.insert(managedImportReceipts).values(row);
+        }
+        if (!claimSources?.length) return;
+        const documents = await tx.select({ documentId: kohoImportDocuments.documentId, path: kohoImportDocuments.normalizedEntryPath })
+          .from(kohoImportDocuments).where(eq(kohoImportDocuments.importId, importId));
+        const byPath = new Map(documents.map(d => [d.path, d.documentId]));
+        const existing = await tx.select({ claim: managedPublicationClaims }).from(managedPublicationClaims)
+          .innerJoin(kohoImportDocuments, eq(kohoImportDocuments.documentId, managedPublicationClaims.documentId))
+          .where(eq(kohoImportDocuments.importId, importId));
+        const byId = new Map(existing.map(d => [d.claim.documentId, d.claim]));
+        const additions: Array<typeof managedPublicationClaims.$inferInsert> = [];
+        for (const value of claimSources) {
+          const documentId = byPath.get(value.normalizedEntryPath);
+          if (!documentId) throw new Error("managed_claim_source_mismatch");
+          const prior = byId.get(documentId);
+          const row = { documentId, contentSha256: value.contentSha256, sourceSha256: value.sourceSha256,
+            claimsJson: value.claimsJson, claimsDigest: value.claimsDigest, status: value.status, reason: value.reason };
+          if (prior) {
+            if (Object.entries(row).some(([key, val]) => prior[key as keyof typeof prior] !== val)) throw new Error("managed_claim_source_mismatch");
+          } else additions.push(row);
+        }
+        for (let offset = 0; offset < additions.length; offset += 100) {
+          await tx.insert(managedPublicationClaims).values(additions.slice(offset, offset + 100));
+        }
+      };
       if (reuseExisting) {
         const [existing] = await tx.select().from(kohoImportRuns).where(and(
           eq(kohoImportRuns.packageType, validatedPlan.packageType),
@@ -948,6 +1004,7 @@ export async function saveKohoImportPlan(
           if (canonical(stored) !== canonical(validatedPlan)) {
             throw new Error("koho_existing_import_mismatch");
           }
+          await persistClaimSources(existing.importId);
           return { run: toKohoImportRun(existing), savedDocumentCount: rows.length,
             disposition: "reused" as const };
         }
@@ -1004,11 +1061,12 @@ export async function saveKohoImportPlan(
       }
 
       let savedDocumentCount = 0;
-      if (validatedPlan.documents.length > 0) {
+      // Bound PostgreSQL bind parameters without changing package transaction atomicity.
+      for (let offset = 0; offset < validatedPlan.documents.length; offset += 500) {
         const inserted = await tx
           .insert(kohoImportDocuments)
           .values(
-            validatedPlan.documents.map((document) => ({
+            validatedPlan.documents.slice(offset, offset + 500).map((document) => ({
               importId: runRow.importId,
               normalizedEntryPath: document.normalizedEntryPath,
               parseStatus: document.parseStatus,
@@ -1030,12 +1088,13 @@ export async function saveKohoImportPlan(
             })),
           )
           .returning({ documentId: kohoImportDocuments.documentId });
-        savedDocumentCount = inserted.length;
+        savedDocumentCount += inserted.length;
       }
 
       if (savedDocumentCount !== validatedPlan.documentCount) {
         throw new Error("koho_saved_document_count_mismatch");
       }
+      await persistClaimSources(runRow.importId);
       return {
         run: toKohoImportRun(runRow),
         savedDocumentCount,

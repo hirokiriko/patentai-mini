@@ -45,6 +45,7 @@ next-env.d.ts
 data/
 /_imports/
 /.koho-ops/
+/.managed-build-sha
 
 # local config
 .claude/accounts.local.json

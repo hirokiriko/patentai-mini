@@ -4,12 +4,14 @@ import { z } from "zod";
 import { requireManual } from "./manual-cli-config";
 import { updateDate } from "./update-check-config";
 import type { KohoImportPlan } from "./types";
+import { managedBudgetBindingSchema, managedBudgetReferenceSchema, isManagedExecutionApproval } from "../patent-watch/managed-budget-contract";
 
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
 const codeSha = z.string().regex(/^[a-f0-9]{40}$/);
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const bytes = z.number().int().positive().max(2 * 1024 ** 3);
 const environment = z.string().regex(/^\/subscriptions\/[a-f0-9-]{36}\/resourceGroups\/[a-zA-Z0-9_.()-]{1,90}\/providers\/Microsoft\.App\/managedEnvironments\/[a-zA-Z0-9-]{1,60}$/);
+export const cloudEnvironmentResourceIdSchema = environment;
 const etag = z.string().regex(/^"[A-Za-z0-9]+"$/).max(128);
 export const cloudTargetSchema = z.object({ host: z.string().regex(/^[a-z0-9-]+\.postgres\.database\.azure\.com$/),
   port: z.literal(5432), database: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,62}$/),
@@ -20,7 +22,11 @@ const configSchema = z.object({ approval: z.literal("REGULAR_PRODUCTION_PILOT_V1
   managedIdentityClientId: z.uuid().optional(), expectedCodeSha: codeSha, expectedEnvironmentResourceId: environment, expectedTarget: cloudTargetSchema,
   manifest: z.object({ sha256: sha, etag, byteLength: z.number().int().positive().max(131072) }).strict(),
 }).strict();
-export type CloudConfiguration = z.infer<typeof configSchema>;
+const managedConfigSchema = configSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"),
+  serviceBudget: managedBudgetReferenceSchema.optional(), budgetBinding: managedBudgetBindingSchema.optional() });
+const standardConfigSchema = managedConfigSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_STANDARD_V1") });
+const allConfigs = z.discriminatedUnion("approval", [configSchema, managedConfigSchema, standardConfigSchema]);
+export type CloudConfiguration = z.infer<typeof allConfigs>;
 const manifestSchema = z.object({ schemaVersion: z.literal(1), approval: z.literal("REGULAR_PRODUCTION_PILOT_V1"),
   operationId: z.uuidv4(), mode: z.enum(["preview", "apply"]), codeSha,
   expiresAt: z.iso.datetime({ precision: 3 }), environmentResourceId: environment, target: cloudTargetSchema, round: z.union([z.literal(1), z.literal(2)]),
@@ -31,24 +37,64 @@ const manifestSchema = z.object({ schemaVersion: z.literal(1), approval: z.liter
     planSha256: sha, documentCount: count, expectedReviewRequired: z.boolean(), expectedDisposition: z.enum(["inserted", "reused"]),
     publicationDate: updateDate, issueNumber: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), distributionTableSha256: sha }).strict()).min(1).max(4),
 }).strict();
-export type CloudManifest = z.infer<typeof manifestSchema>;
-export function parseCloudConfiguration(value: unknown) { return configSchema.parse(value); }
+const managedManifestSchema = manifestSchema.extend({ approval: z.literal("STANDARD_MANAGED_WATCH_RELEASE_V1"), round: z.number().int().min(1).max(40),
+  // Archive one package before assembling a Job batch. No Job may execute an archive-only manifest.
+  archiveOnly: z.literal(true).optional(),
+  maxTotalBytes: z.number().int().positive().max(8 * 1024**3),
+  // These are release-wide reservations, including this batch and all unknown outcomes.
+  releaseReservation: z.object({ packageCount: z.number().int().min(1).max(64), compressedBytes: z.number().int().positive().max(96 * 1024**3),
+    jobExecutions: z.number().int().min(1).max(24), jobMinutes: z.number().int().min(1).max(48*60), ledgerDigest: sha,
+    additionalForecastYen: z.number().int().positive().max(50_000), monthlyForecastYen: z.number().int().positive().max(30_000) }).strict(),
+  packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"),
+    byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha,
+    acquiredAt: z.iso.datetime({ precision: 3 }).optional(),
+    archive: z.object({ operationId: z.uuidv4(), manifestSha256: sha, receiptSha256: sha }).strict().optional() })).min(1).max(4),
+});
+const standardManifestSchema = managedManifestSchema.omit({ releaseReservation: true }).extend({
+  approval: z.literal("STANDARD_MANAGED_WATCH_STANDARD_V1"), round: count.refine(v => v > 0) });
+const allManifests = z.discriminatedUnion("approval", [manifestSchema, managedManifestSchema, standardManifestSchema]);
+export type CloudManifest = z.infer<typeof allManifests>;
+export function parseCloudConfiguration(value: unknown) { return allConfigs.parse(value); }
+export function isManagedCloudConfiguration(c: CloudConfiguration): c is z.infer<typeof managedConfigSchema> | z.infer<typeof standardConfigSchema> {
+  return isManagedExecutionApproval(c.approval);
+}
+export function isManagedCloudManifest(m: CloudManifest): m is z.infer<typeof managedManifestSchema> | z.infer<typeof standardManifestSchema> {
+  return isManagedExecutionApproval(m.approval);
+}
+export function parseManagedCloudImportConfiguration(value: unknown) {
+  const c = parseCloudConfiguration(value);
+  requireManual(isManagedCloudConfiguration(c) && c.serviceBudget && c.budgetBinding);
+  if (!isManagedCloudConfiguration(c) || !c.serviceBudget || !c.budgetBinding) throw Error("cloud_budget_required");
+  requireManual((c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1") === (c.serviceBudget.profileDigest !== null));
+  return { ...c, serviceBudget: c.serviceBudget, budgetBinding: c.budgetBinding };
+}
 export const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 /** Independent approved digest binds every parsed field, not only the document count. */
 export function cloudPlanSha256(plan: KohoImportPlan) {
   return sha256(JSON.stringify({ ...plan, documents: [...plan.documents].sort((a, b) =>
     a.normalizedEntryPath < b.normalizedEntryPath ? -1 : a.normalizedEntryPath > b.normalizedEntryPath ? 1 : 0) }));
 }
-export function parseCloudManifest(bytes: Uint8Array, config: CloudConfiguration, now = Date.now()) {
+export function parseCloudManifest(bytes: Uint8Array, config: CloudConfiguration, now = Date.now(), requireFresh = true) {
   requireManual(bytes.byteLength === config.manifest.byteLength && sha256(bytes) === config.manifest.sha256);
-  const manifest = manifestSchema.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-  requireManual(manifest.operationId === config.operationId && manifest.mode === config.mode && manifest.codeSha === config.expectedCodeSha &&
+  const manifest = allManifests.parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  requireManual(manifest.approval === config.approval && manifest.operationId === config.operationId && manifest.mode === config.mode && manifest.codeSha === config.expectedCodeSha &&
     manifest.environmentResourceId === config.expectedEnvironmentResourceId &&
     Object.keys(config.expectedTarget).every(key => config.expectedTarget[key as keyof typeof config.expectedTarget] === manifest.target[key as keyof typeof manifest.target]));
   const expiry = Date.parse(manifest.expiresAt);
-  requireManual(expiry > now && expiry - now <= 6 * 60 * 60_000 &&
+  requireManual((!requireFresh || (expiry > now && expiry - now <= 6 * 60 * 60_000)) &&
     manifest.packages.reduce((n, p) => n + p.byteLength, 0) <= manifest.maxTotalBytes &&
     new Set(manifest.packages.map(p => p.sha256)).size === manifest.packages.length);
+  if (manifest.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") requireManual(manifest.releaseReservation.packageCount >= manifest.packages.length &&
+    manifest.releaseReservation.compressedBytes >= manifest.packages.reduce((n,p)=>n+p.byteLength,0) && manifest.releaseReservation.jobMinutes >= Math.ceil(manifest.maxElapsedMs/60_000));
+  if (isManagedCloudManifest(manifest)) {
+    const archived = manifest.packages.filter(p => p.archive);
+    requireManual(archived.length === 0 || archived.length === manifest.packages.length);
+    if (manifest.archiveOnly) requireManual(manifest.packages.length === 1 && archived.length === 0 && manifest.packages[0].acquiredAt);
+    for (const p of manifest.packages) {
+      if (p.acquiredAt) requireManual(Date.parse(p.acquiredAt) <= Date.parse(manifest.expiresAt));
+      if (p.archive) requireManual(p.acquiredAt && p.archive.operationId !== manifest.operationId);
+    }
+  }
   return manifest;
 }
 export const cloudManifestName = (config: CloudConfiguration) => `manifests/${config.operationId}.json`;

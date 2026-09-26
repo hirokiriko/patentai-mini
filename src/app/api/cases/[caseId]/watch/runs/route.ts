@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { withAiOperationBudget } from "@/lib/ai-operation-budget";
 import { screenPriorArt, analyzeOverlap } from "@/lib/analyze-overlap";
 import { createPatentWatchRunHandlers } from "@/lib/patent-watch/api";
@@ -18,4 +19,6 @@ const handlers = createPatentWatchRunHandlers({
     })),
 });
 
-export const POST = handlers.POST;
+ const handlePOST = handlers.POST;
+
+export const POST = withOwnerRoute(handlePOST);

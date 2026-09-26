@@ -672,7 +672,7 @@ function containsForbiddenFullText(
   });
 }
 
-function containsForbiddenAggregate(
+export function containsForbiddenAggregate(
   values: readonly string[],
   forbiddenFullTexts: readonly string[],
 ): boolean {

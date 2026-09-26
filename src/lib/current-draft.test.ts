@@ -1,3 +1,5 @@
+// Existing domain/renderer tests isolate authentication; owner-auth tests cover the real boundary.
+vi.mock("@/lib/owner-http", () => ({ withOwnerRoute: (handler: unknown) => handler, requireOwner: async () => undefined }));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { latestDraft } from "./current-draft";
 import { fictionalDraft, mixedDrafts } from "./current-draft-fixtures.test-support";

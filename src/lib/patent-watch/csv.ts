@@ -56,7 +56,7 @@ function parseAnalysis(value: string): PatentWatchAnalysisJson {
   }
 }
 
-function neutralizeFormula(value: string): string {
+export function neutralizeFormula(value: string): string {
   return /^[\p{White_Space}\p{Cf}\p{Cc}]*[=+\-@]/u.test(value)
     ? `'${value}`
     : value;

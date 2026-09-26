@@ -4,8 +4,9 @@ import { buildFictionalFullPublicationXml, buildFictionalAmendmentXml, fictional
 import { fictionalAbstractCsv, fictionalContents1Csv, fictionalContents2Csv } from "../src/lib/koho-package/__fixtures__/fictional-package";
 
 export function manualFixture(type: "JPA" | "JPB", count = 1, options: {
-  issue?: string; review?: boolean; unknown?: boolean; indexMismatch?: boolean; changed?: boolean;
+  issue?: string; control?: string; review?: boolean; unknown?: boolean; indexMismatch?: boolean; changed?: boolean;
   publicationDate?: string; amendment?: boolean;
+  claims?: readonly { number?: string | null; text: string }[];
 } = {}) {
   const section = type === "JPA" ? "P_A1" : "P_B1", kind = type === "JPA" ? "A1" : "B1";
   const numbers = Array.from({ length: count }, (_, n) => String((type === "JPA" ? 2099000101 : 9999901) + n));
@@ -13,6 +14,7 @@ export function manualFixture(type: "JPA" | "JPB", count = 1, options: {
   const entries = [
     { fileName: "ABSTRACT.csv", data: fictionalAbstractCsv(type)
       .replace(/FICTIONAL-ISSUE-\d+/, options.issue ?? "FICTIONAL-ISSUE-MANUAL")
+      .replace("01122", options.control ?? "01122")
       .replace(type === "JPA" ? "20990111" : "20990311", options.publicationDate?.replaceAll("-", "") ?? (type === "JPA" ? "20990111" : "20990311"))
       .replace("00001", String(count).padStart(5, "0")) },
     { fileName: "DOCUMENT_LIST.csv", data: numbers.map((num, n) =>
@@ -23,6 +25,7 @@ export function manualFixture(type: "JPA" | "JPB", count = 1, options: {
       data: options.unknown ? "<FICTIONAL-UNKNOWN/>" : buildFictionalFullPublicationXml(kind, {
         publicationNumber: num, publicationDate: dates[n],
         inventionTitle: options.changed ? "完全架空の変更された検証用発明" : "完全架空の検証用発明",
+        ...(options.claims ? { claims: options.claims } : {}),
         ...(options.review ? { abstract: null } : {}),
       }) })),
   ];

@@ -4,14 +4,16 @@ import { tmpdir } from "node:os";
 import { parseKohoPackage } from "../koho-package";
 import { buildKohoImportPlan } from "./builder";
 import { buildKohoManualImportLimits } from "./manual-api";
+import { buildManagedImportLimits } from "./managed-limits";
 import { requireManual } from "./manual-cli-config";
 import { verifyManualSnapshot } from "./manual-cli-source";
 import { projectManualResult, summarizeManualPackage, type ManualFileResult } from "./manual-cli-summary";
 import { cloudManifestName, cloudPlanSha256, cloudReceiptPrefix, cloudSourceName, parseCloudConfiguration, parseCloudManifest,
-  type CloudConfiguration } from "./cloud-config";
+  isManagedCloudConfiguration, parseManagedCloudImportConfiguration, type CloudConfiguration, type CloudManifest } from "./cloud-config";
 import type { CloudBlobBoundary } from "./cloud-blob";
 import { saveCloudPlan } from "./cloud-db";
 import { updatePackageMetadata } from "./update-check";
+import { projectManagedPackage } from "./managed-package";
 
 /** Conditional ETag updates preserve an append-only logical prefix; ambiguous ACK stops all later writes. */
 class CloudReceipt {
@@ -31,6 +33,7 @@ class CloudReceipt {
 
 export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, options: {
   password?: string; signal?: AbortSignal; save?: typeof saveCloudPlan;
+  budget?: { verify(config: CloudConfiguration, manifest: CloudManifest): Promise<{ expiresAt: string; remainingMs: number }> };
 } = {}) {
   const started = performance.now(), config = parseCloudConfiguration(value);
   let receiptAcknowledgement: "confirmed" | "unconfirmed" = "unconfirmed", cleanup: "complete" | "required" = "complete";
@@ -40,8 +43,14 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
     await blob.assertPrivate();
     const manifest = parseCloudManifest(await blob.read(cloudManifestName(config), config.manifest.byteLength, config.manifest.etag), config);
     requireManual(config.mode === "preview" || (typeof options.password === "string" && options.password.length > 0));
-    const deadline = started + manifest.maxElapsedMs;
-    const guard = () => requireManual(!options.signal?.aborted && performance.now() < deadline && Date.now() < Date.parse(manifest.expiresAt));
+    const managed = isManagedCloudConfiguration(config);
+    requireManual(!("archiveOnly" in manifest && manifest.archiveOnly));
+    if(managed){parseManagedCloudImportConfiguration(config);requireManual(options.budget);}
+    const permit=managed?await options.budget!.verify(config,manifest):undefined;
+    if(permit)requireManual(Number.isSafeInteger(permit.remainingMs)&&permit.remainingMs>0&&Number.isFinite(Date.parse(permit.expiresAt)));
+    const deadline = Math.min(started + manifest.maxElapsedMs, permit ? performance.now()+permit.remainingMs : Infinity);
+    const expiry = Math.min(Date.parse(manifest.expiresAt),permit?Date.parse(permit.expiresAt):Infinity);
+    const guard = () => requireManual(!options.signal?.aborted && performance.now() < deadline && Date.now() < expiry);
     guard();
     // A lost marker ACK still prevents replay. Never retry this operation ID automatically.
     await blob.create(cloudReceiptPrefix(config) + "started.json", Buffer.from(JSON.stringify({ schemaVersion: 1,
@@ -65,8 +74,12 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           requireManual(await blob.download(cloudSourceName(pkg.sha256), pkg.byteLength, pkg.etag, source) === pkg.sha256);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
           const parsed = await parseKohoPackage({ packageType: pkg.packageType, source: { type: "file", path: source },
-            limits: buildKohoManualImportLimits(pkg.byteLength) });
+            limits: isManagedCloudConfiguration(config)
+              ? buildManagedImportLimits(pkg.byteLength) : buildKohoManualImportLimits(pkg.byteLength) });
           const plan = buildKohoImportPlan({ packageResult: parsed, sourceSha256: pkg.sha256 });
+          const managed = isManagedCloudConfiguration(config) ? projectManagedPackage(parsed, plan) : undefined;
+          if (managed) requireManual("managedSourcesSha256" in pkg && pkg.managedSourcesSha256 === managed.managedSourcesSha256 &&
+            "managedReceiptSha256" in pkg && pkg.managedReceiptSha256 === managed.managedReceiptSha256);
           const metadata = updatePackageMetadata(parsed);
           requireManual(metadata.date === pkg.publicationDate && metadata.issue === pkg.issueNumber && metadata.notes.length === 0);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
@@ -83,11 +96,12 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           else {
             requireManual(growth < manifest.reservedGrowthBytes);
             const saved = await (options.save ?? saveCloudPlan)(config, { ...manifest, reservedGrowthBytes: manifest.reservedGrowthBytes - growth }, options.password!, plan,
-              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; });
+              () => { guard(); saving = true; result.outcome = "save_outcome_unknown"; }, undefined, managed, { deadline, signal: options.signal });
             result.outcome = saved.outcome; result.savedDocumentCount = saved.savedDocumentCount;
             result.includesReviewRequired = ["inserted", "reused"].includes(saved.outcome) && plan.packageStatus === "review_required";
             growth += saved.databaseGrowthBytes; capacityObserved = true; capacityConfirmed &&= saved.capacityConfirmed;
             if (!saved.capacityConfirmed) stopped = true;
+            guard();
           }
         } catch {
           // Receipt/capacity failures cannot retroactively change an acknowledged DB result.
@@ -111,6 +125,7 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
       }
     }
     if (!receiptFailed) {
+      try { guard(); } catch { stopped = true; }
       const status = results.some(r => r.outcome === "save_outcome_unknown") ? "reconciliation_required" : stopped ? "stopped" : "complete";
       await receipt.record("batch_finished", { status, cleanup, savedRecordCount: results.reduce((n, r) => n + (r.outcome === "inserted" ? r.savedDocumentCount : 0), 0) });
       // Both completion object and receipt remain private and conditional; a missing ACK stays explicit.

@@ -1,3 +1,5 @@
+// Existing domain/renderer tests isolate authentication; owner-auth tests cover the real boundary.
+vi.mock("@/lib/owner-http", () => ({ withOwnerRoute: (handler: unknown) => handler, requireOwner: async () => undefined }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAzure } from "@ai-sdk/azure";
 import { boundedAzureFetch } from "../ai-operation-budget";

@@ -47,7 +47,7 @@ describe("optional watch diagnostic context", () => {
     expect(parsePatentWatchDiagnostic({ ...data, [Symbol("hidden")]: "FICTIONAL_SECRET" })).toBeNull();
     expect(getter).not.toHaveBeenCalled();
   });
-  it("does not let an expired stage poison the shared budget of a live detail stage", async () => {
+  it.each([false, true])("does not let an expired stage poison a live budget (malformed headers: %s)", async malformedHeaders => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ usage: { input_tokens: 1, output_tokens: 1 } }));
     vi.stubGlobal("fetch", transport);
@@ -58,7 +58,7 @@ describe("optional watch diagnostic context", () => {
     try {
       await withPatentWatchDiagnostic(async () => withAiOperationBudget({ normal: 2, fast: 0 }, async () => {
         await withPatentWatchStage("screening", async () => {
-          const guard = boundedAzureFetch("normal"); late = () => guard(url, input);
+          const guard = boundedAzureFetch("normal"); late = () => guard(url, malformedHeaders ? { ...input, headers: { "x-fictional": "bad\nheader" } } : input);
           await guard(url, input);
         });
         await withPatentWatchStage("detail", async () => {

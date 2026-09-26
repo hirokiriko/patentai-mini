@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { parseDistributionTable, DISTRIBUTION_LIMITS, validCompactDate, type DistributionRow,
+import { parseDistributionTable, DISTRIBUTION_LIMITS, type DistributionRow,
   type DistributionTableResult } from "../koho-distribution-table";
 import { parseKohoPackage, type KohoPackageParseResult } from "../koho-package";
 import { buildKohoImportPlan } from "./builder";
@@ -11,6 +11,8 @@ import { inspectManualSource, copyManualSource, verifyManualSnapshot } from "./m
 import { summarizeManualPackage, type ManualSummary } from "./manual-cli-summary";
 import { type UpdateConfiguration } from "./update-check-config";
 import { readUpdateReceipt, type UpdateReceipt, type ReceiptEntry } from "./update-check-receipts";
+import { updatePackageMetadata } from "./package-metadata";
+export { updatePackageMetadata } from "./package-metadata";
 
 type PackageObservation = {
   packageType: "JPA" | "JPB"; name: string; sha256?: string; byteLength?: number;
@@ -24,22 +26,6 @@ type TableObservation = { name: string; packageType: "JPA" | "JPB"; result?: Dis
 export function updateCell(value: string): string {
   return value.replace(/[&<>"'`\\*_[\]{}()|!#~+=\-\r\n\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g,
     char => `&#${char.codePointAt(0)};`);
-}
-export function updatePackageMetadata(parsed: KohoPackageParseResult) {
-  const abstracts = parsed.csvResults.flatMap(c => c.result.logicalFile === "abstract" ? c.result.records : [])
-    .flatMap(r => r.semantic?.recordType === "metadata" ? [r.semantic] : []);
-  const listedDates = parsed.csvResults.flatMap(c => c.result.logicalFile === "document_list" ? c.result.records : [])
-    .flatMap(r => r.semantic ? [r.semantic.issuePublicationDate] : []);
-  const notes: string[] = [];
-  if (abstracts.length !== 1) return { notes: ["ABSTRACTの発行号が一意でない。発行号ZIPの分離/確認が必要"] };
-  const m = abstracts[0];
-  const raw = m.publicationDate.replaceAll("-", "");
-  if (!validCompactDate(raw)) return { notes: ["ABSTRACT日付を確認できない"] };
-  if (listedDates.some(d => d.replaceAll("-", "") !== raw)) notes.push("ABSTRACTとdocument_listの発行日が矛盾（要確認）");
-  if (!listedDates.length) notes.push("document_listの発行日が未確認");
-  const codeMatches = parsed.packageType === "JPA" ? /^(JPA|A_.+)$/.test(m.packageCode) : /^(JPB|B_.+)$/.test(m.packageCode);
-  if (!codeMatches) notes.push("ABSTRACTの種別が矛盾（要確認）");
-  return { date: `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`, issue: m.issueNumber, notes };
 }
 const countsText = (s: ManualSummary) => `本文（要確認含む） ${s.documentCount} / うち要確認本文 ${s.reviewDocumentCount} / 補正 ${s.amendmentCount} / 添付 ${s.attachmentCount} / ST26 ${s.nestedSt26Count} / parser ${s.packageStatus}; ` +
   `package要確認/未対応/失敗 ${s.review.packageIssues.reviewRequired}/${s.review.packageIssues.unsupported}/${s.review.packageIssues.failed}; ` +
@@ -159,10 +145,10 @@ function renderUpdateCheck(config: UpdateConfiguration, tables: TableObservation
     if (p.issue) details.push(`ABSTRACT号 ${p.issue}（年通号/総通号との対応は未確認）`);
     if (p.sha256 && (duplicateGroups.get(p.sha256) ?? 0) > 1) details.push("同一bytesの重複取得候補（別名を含む）");
     if (row && p.sections) {
-      // Daily publication counts exclude amendments and attachments. XML candidate units
-      // may still differ from the table, so record the comparison without asserting completeness.
-      const units = row.packageType === "JPA" ? [["公開", row.dailyCounts.published, p.sections.P_A1.primaryXmlCandidates],
-        ["公表", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
+      // JPA daily counts include A5/P5 amendments. Preserve the component counts;
+      // attachments are separate and a total match alone never proves parsing completeness.
+      const units = row.packageType === "JPA" ? [["公開(本文+補正)", row.dailyCounts.published, p.sections.P_A1.primaryXmlCandidates + p.sections.P_A5.primaryXmlCandidates],
+        ["公表(本文+補正)", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates + p.sections.P_P5.primaryXmlCandidates]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
       for (const [name, daily, observed] of units) details.push(`${name}: 表の日件数 ${daily} / 対応section本文XML候補 ${observed}（比較単位の一致は未確認）`);
     }
     return details.join("; ");

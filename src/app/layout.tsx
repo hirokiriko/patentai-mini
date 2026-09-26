@@ -39,6 +39,7 @@ export default function RootLayout({
           </p>
         </aside>
         {children}
+        <footer className="px-4 py-4 text-sm text-gray-600"><a href="/.auth/logout">ログアウト</a></footer>
       </body>
     </html>
   );

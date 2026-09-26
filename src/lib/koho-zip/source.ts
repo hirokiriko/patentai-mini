@@ -3,7 +3,7 @@ import { open } from "node:fs/promises";
 import { Readable } from "node:stream";
 
 import { KohoZipError } from "./errors";
-import type { KohoZipSource } from "./types";
+import type { KohoZipSource, KohoZipRangeSource } from "./types";
 
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object;
 const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
@@ -152,12 +152,63 @@ class BufferZipSource implements InternalZipSource {
   async close(): Promise<void> {}
 }
 
+class RangeZipSource implements InternalZipSource {
+  readonly type = "range" as const;
+  readonly sourceName = null;
+  readonly size: number;
+  private closed = false;
+  constructor(private readonly source: KohoZipRangeSource) { this.size = source.byteLength; }
+
+  async read(target: Uint8Array, offset: number, length: number, position: number): Promise<number> {
+    if (this.closed || ![offset, length, position].every(Number.isSafeInteger) ||
+      offset < 0 || length < 0 || position < 0 || offset + length > target.byteLength || position + length > this.size)
+      throw new KohoZipError("source_invalid");
+    // Bounded calls also cover large preflight reads; no full ZIP buffer or /tmp copy.
+    let copied = 0;
+    try {
+      while (copied < length) {
+        const count = Math.min(64 * 1024, length - copied);
+        const bytes = await this.source.readRange(position + copied, count);
+        if (this.closed || !(bytes instanceof Uint8Array) || bytes.byteLength !== count) throw Error();
+        target.set(bytes, offset + copied); copied += count;
+      }
+      return copied;
+    } catch { throw new KohoZipError("source_invalid"); }
+  }
+
+  createReadStream(start: number, end: number): Readable {
+    return Readable.from((async function* (source: RangeZipSource) {
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > source.size)
+        throw new KohoZipError("source_invalid");
+      for (let position = start; position < end;) {
+        const bytes = Buffer.allocUnsafe(Math.min(64 * 1024, end - position));
+        await source.read(bytes, 0, bytes.byteLength, position);
+        position += bytes.byteLength;
+        yield bytes;
+      }
+    })(this), { objectMode: false });
+  }
+
+  async close() {
+    if (this.closed) return;
+    this.closed = true;
+    try { await this.source.close(); } catch { throw new KohoZipError("source_invalid"); }
+  }
+}
+
 export async function openInternalSource(
   source: KohoZipSource,
   maxSourceBytes: number,
 ): Promise<InternalZipSource> {
   if (source === null || typeof source !== "object") {
     throw new KohoZipError("source_invalid");
+  }
+
+  if (source.type === "range") {
+    validateSourceSize(source.byteLength, maxSourceBytes);
+    if (typeof source.readRange !== "function" || typeof source.close !== "function")
+      throw new KohoZipError("source_invalid");
+    return new RangeZipSource(source);
   }
 
   if (source.type === "buffer") {

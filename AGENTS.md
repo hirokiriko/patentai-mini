@@ -295,6 +295,28 @@ why.
 
 ## 13. GitHub Issue Driven / Codex Operations
 
+### Issue #129: approved standard managed watch release
+
+For Issue #129 only, its current `STANDARD_MANAGED_WATCH_RELEASE_EXECUTION_V1.1`
+body and parent #128's approved D1–D11 authorize the bounded Local implementation,
+additive migrations, OWNER-only authentication, existing Azure configuration,
+real public/fictional validation, independent review, conditional squash merge,
+normal deployment, acceptance and scoped cleanup. The Local root is the sole
+writer; independent Local agents are read-only. Do not request routine approval
+again. Reuse the existing Manual Job with separate least-privilege watch and
+import credentials; never expand the import login or pass management credentials.
+
+Keep the Issue's cumulative budget/attempt ledger separate from historical
+Issues. The managed full-claims run alone may use normal41/fast0 with a 30-minute
+deadline and durable dispatch accounting; other AI budgets, 35-second requests,
+input/output guards and synchronous run recovery remain unchanged. A managed
+run must retain its publication period and immutable source/version selection;
+do not advance a global cursor past deferred publications. Use Refs #129 in PRs.
+Only verified `STANDARD_MANAGED_WATCH_PRODUCTION_GO`, including Production
+acceptance and Local-PC independence under Issue #129's current scope,
+permits closing #129/#128. This exception does not resume #75/#81/#83 or grant
+general production authority. See `ops/standard-managed-watch.md` for operation.
+
 Each implementation Issue body is the sole source of truth for its task,
 required behavior, and acceptance criteria. GitHub Issues and pull requests
 are the source of truth for progress, verification, re-verification, and

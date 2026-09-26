@@ -19,6 +19,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: patentai-mini-production-deploy
+  cancel-in-progress: false
+
 env:
   AZURE_CLIENT_ID: 4f80a510-aa15-46b2-b4fb-5dd69ce891e4
   AZURE_TENANT_ID: 43d0349b-7467-4d7f-8c04-20a93ca625e5
@@ -27,14 +31,20 @@ env:
   AZURE_RESOURCE_GROUP: rg-codex-lab-jpe
   AZURE_CONTAINER_APP_NAME: ca-patentai-mini
   IMAGE_NAME: patentai-mini
+  AZURE_MANUAL_JOB_NAME: ${{ vars.AZURE_MANUAL_JOB_NAME }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Check the fixed Manual Job binding
+        shell: bash
+        run: test -n "${AZURE_MANUAL_JOB_NAME}"
 
       - name: Azure login
         uses: azure/login@v3
@@ -53,9 +63,13 @@ jobs:
           latest_image="${login_server}/${IMAGE_NAME}:latest"
 
           az acr login --name "${AZURE_ACR_NAME}"
-          docker build --pull -t "${sha_image}" -t "${latest_image}" .
+          docker build --pull --build-arg MANAGED_BUILD_SHA="${GITHUB_SHA}" -t "${sha_image}" -t "${latest_image}" .
           docker push "${sha_image}"
           docker push "${latest_image}"
+
+          image_digest="$(az acr repository show --name "${AZURE_ACR_NAME}" --image "${IMAGE_NAME}:${GITHUB_SHA}" --query digest --output tsv --only-show-errors)"
+          [[ "${image_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "DIGEST_IMAGE=${login_server}/${IMAGE_NAME}@${image_digest}" >> "${GITHUB_ENV}"
 
           echo "Pushed ${sha_image}"
           echo "Pushed ${latest_image}"
@@ -70,7 +84,18 @@ jobs:
           az containerapp update \
             --name "${AZURE_CONTAINER_APP_NAME}" \
             --resource-group "${AZURE_RESOURCE_GROUP}" \
-            --image "${SHA_IMAGE}" \
-            --only-show-errors
+            --image "${DIGEST_IMAGE}" \
+            --only-show-errors --output none
+
+          az containerapp job update \
+            --name "${AZURE_MANUAL_JOB_NAME}" \
+            --resource-group "${AZURE_RESOURCE_GROUP}" \
+            --image "${DIGEST_IMAGE}" \
+            --only-show-errors --output none
+
+          app_image="$(az containerapp show --name "${AZURE_CONTAINER_APP_NAME}" --resource-group "${AZURE_RESOURCE_GROUP}" --query 'properties.template.containers[0].image' --output tsv --only-show-errors)"
+          job_image="$(az containerapp job show --name "${AZURE_MANUAL_JOB_NAME}" --resource-group "${AZURE_RESOURCE_GROUP}" --query 'properties.template.containers[0].image' --output tsv --only-show-errors)"
+          test "${app_image}" = "${DIGEST_IMAGE}"
+          test "${job_image}" = "${DIGEST_IMAGE}"
 
           echo "Deployed ${SHA_IMAGE} to ${AZURE_CONTAINER_APP_NAME}"

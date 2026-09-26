@@ -1,9 +1,9 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
-import { deleteOriginalFiles, isOriginalFileBlobName } from "@/lib/blob-storage";
-import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
-import { caseRepo, draftPatentRepo, priorArtDocumentRepo } from "@/repositories";
+import { deleteOriginalFiles } from "@/lib/blob-storage";
+import { caseRepo, removeCaseWithOriginals } from "@/repositories";
 
-export async function GET(
+ async function handleGET(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -13,7 +13,7 @@ export async function GET(
   return NextResponse.json(row);
 }
 
-export async function PATCH(
+ async function handlePATCH(
   request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
@@ -24,33 +24,20 @@ export async function PATCH(
   return NextResponse.json(row);
 }
 
-export async function DELETE(
+ async function handleDELETE(
   _request: Request,
   { params }: { params: Promise<{ caseId: string }> }
 ) {
   const { caseId } = await params;
   const caseIdNum = Number(caseId);
-  const [drafts, priorArts] = await Promise.all([
-    draftPatentRepo.findByCaseId(caseIdNum),
-    priorArtDocumentRepo.findByCaseId(caseIdNum),
-  ]);
-  const blobNames = [
-    ...drafts
-      .map((draft) => draft.sourceFilePath)
-      .filter((value): value is string => !!value && isOriginalFileBlobName(value, caseIdNum)),
-    ...priorArts
-      .map((doc) => parseUploadedOriginalFileMetadata(doc.sourceCsvRowJson)?.blobName ?? null)
-      .filter((value): value is string => !!value && isOriginalFileBlobName(value, caseIdNum)),
-  ];
-
-  const deleted = await caseRepo.remove(caseIdNum);
+  const { deleted, blobNames } = await removeCaseWithOriginals(caseIdNum);
   if (!deleted) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   let blobCleanup;
   try {
     blobCleanup = await deleteOriginalFiles(blobNames);
-  } catch (error) {
-    console.error(`[case-delete] Blob cleanup failed for case ${caseIdNum}:`, error);
+  } catch {
+    console.error("[case-delete] Blob cleanup failed");
     blobCleanup = {
       attempted: blobNames.length,
       deleted: 0,
@@ -61,3 +48,7 @@ export async function DELETE(
 
   return NextResponse.json({ deleted: true, blobCleanup });
 }
+
+export const GET = withOwnerRoute(handleGET);
+export const PATCH = withOwnerRoute(handlePATCH);
+export const DELETE = withOwnerRoute(handleDELETE);

@@ -21,7 +21,9 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/vendor ./vendor
 COPY . .
 
-RUN pnpm build && pnpm exec tsc -p scripts/koho-cloud-import.tsconfig.json
+ARG MANAGED_BUILD_SHA
+RUN test -n "$MANAGED_BUILD_SHA" && printf '%s' "$MANAGED_BUILD_SHA" > .managed-build-sha
+RUN pnpm build && pnpm exec tsc -p scripts/koho-cloud-import.tsconfig.json && pnpm exec tsc -p scripts/managed-watch-cloud.tsconfig.json
 
 FROM base AS runner
 

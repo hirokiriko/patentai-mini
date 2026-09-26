@@ -1,3 +1,4 @@
+import { withOwnerRoute } from "@/lib/owner-http";
 import { createPatentWatchCsvHandlers } from "@/lib/patent-watch/api";
 import { patentWatchRepo } from "@/repositories";
 
@@ -7,4 +8,6 @@ const handlers = createPatentWatchCsvHandlers({
   repository: patentWatchRepo,
 });
 
-export const GET = handlers.GET;
+ const handleGET = handlers.GET;
+
+export const GET = withOwnerRoute(handleGET);

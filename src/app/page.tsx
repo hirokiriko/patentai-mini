@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import Link from "next/link";
 import { caseRepo } from "@/repositories";
 import type { Case } from "@/repositories";
@@ -6,6 +7,7 @@ import { NewCaseForm } from "./new-case-form";
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
+  await requireOwner();
   let rows: Case[] = [];
   let dbError = false;
 
@@ -33,6 +35,7 @@ export default async function HomePage() {
     <main className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Patent Prior-Art Check</h1>
 
+      <p className="mb-6"><Link href="/admin/koho-updates" className="text-blue-700 underline">公報データを更新する</Link></p>
       <NewCaseForm />
 
       <section className="mt-8">

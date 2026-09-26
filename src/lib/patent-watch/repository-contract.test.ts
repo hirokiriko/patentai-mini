@@ -62,6 +62,7 @@ describe("PatentWatchRepository public contract", () => {
     const schema = await source(SCHEMA_URL);
     const watchSchema = schema.slice(
       schema.indexOf("export const caseWatchSettings"),
+      schema.indexOf("export const managedDistributionSnapshots"),
     );
     const watchRunSchema = schema.slice(
       schema.indexOf("export const caseWatchRuns"),

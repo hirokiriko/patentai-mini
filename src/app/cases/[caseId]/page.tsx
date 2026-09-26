@@ -1,3 +1,4 @@
+import { requireOwner } from "@/lib/owner-http";
 import Link from "next/link";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
@@ -124,6 +125,7 @@ export default async function CaseDetailPage({
 }: {
   params: Promise<{ caseId: string }>;
 }) {
+  await requireOwner();
   const { caseId } = await params;
   const caseIdNum = Number(caseId);
 
@@ -299,6 +301,7 @@ export default async function CaseDetailPage({
         ← 案件一覧に戻る
       </Link>
 
+      <Link href={`/cases/${caseIdNum}/managed-watch`} className="ml-6 text-base text-blue-700 hover:underline">標準ウォッチ・保存した納品版</Link>
       <h1 className="mt-4 text-3xl font-bold">{row.title}</h1>
       <p className="mt-1 text-base text-gray-600">
         ステータス: {row.status} ／ 作成日: {row.createdAt}

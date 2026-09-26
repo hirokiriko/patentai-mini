@@ -6,6 +6,7 @@
  *   export { caseRepo, ... } from "./firebase";
  */
 export {
+  removeCaseWithOriginals,
   caseRepo,
   draftPatentRepo,
   searchQuerySetRepo,
