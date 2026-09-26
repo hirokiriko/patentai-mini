@@ -32,7 +32,7 @@ export const managedAzureAnalysis = {
     // <= 150,000 in the shared pre-send guard; escaping/schema count there.
     if (Buffer.byteLength(prompt) > 130_000) throw new ManagedWatchError("limit");
     const { object } = await generateObject({ model: getModel(), schema: managedScreeningSchema,
-      system: SYSTEM + "全候補のcandidateIdをそれぞれ一度返し、詳しく全文比較する技術的候補を最大20件selected=trueにしてください。選別段階は全文比較ではありません。",
+      system: SYSTEM + "全候補のcandidateIdをそれぞれ一度返し、詳しく全文比較する技術的候補を最大20件selected=trueにしてください。選別段階は全文比較ではありません。claimsStatusがcompleteでない候補はselected=false、reason=needs_source_reviewとし、selected=trueは全文確認済みの技術的候補に限定してください。",
       prompt, maxRetries: 0, maxOutputTokens: 8192, abortSignal: AbortSignal.timeout(35_000) });
     return object;
   },
