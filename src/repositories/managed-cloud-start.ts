@@ -21,8 +21,9 @@ export class ManagedCloudStartRepository {
       const previousConfigs = previous.map(row => {
         const config = managedCloudConfigSchema.parse(JSON.parse(row.configJson)); check(managedDigest(config) === row.configDigest); return config;
       });
-      const cases = new Set([...previousConfigs.flatMap(c=>c.caseAllowList), ...config.caseAllowList]); check(cases.size <= 5);
       if (config.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1") {
+        const cases = new Set([...previousConfigs.filter(c => c.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1")
+          .flatMap(c => c.caseAllowList), ...config.caseAllowList]); check(cases.size <= 5);
         const release = previous.filter((_r,i) => previousConfigs[i].approval === "STANDARD_MANAGED_WATCH_RELEASE_V1");
         check(release.length + 1 <= 24);
         check(release.reduce((n,r)=>n+r.logicalStarts,0) + config.runs.length <= 40);

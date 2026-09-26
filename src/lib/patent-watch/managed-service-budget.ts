@@ -13,6 +13,10 @@ const quantity = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const yen = z.number().int().nonnegative().max(1_000_000_000);
 const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 const cases = z.array(z.number().int().positive().max(2147483647)).max(5).refine(v => new Set(v).size === v.length);
+// Audit history includes release fixtures and later signed standard profiles.
+// Each request/profile still has five slots; release fixtures never reset.
+const historicalCases = z.array(z.number().int().positive().max(2147483647)).max(10_000)
+  .refine(v => new Set(v).size === v.length);
 export const managedBudgetUnitsSchema = z.object({ jobs: quantity, minutes: quantity, starts: quantity,
   normal: quantity, fast: quantity, packages: quantity, bytes: quantity, forward: quantity, rollback: quantity }).strict();
 export type ManagedBudgetUnits = z.infer<typeof managedBudgetUnitsSchema>;
@@ -40,7 +44,7 @@ const operationSchema = managedBudgetRequestSchema.extend({ intentDigest: hash, 
 type Operation = z.infer<typeof operationSchema>;
 const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128) }).strict();
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
-  targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases, lastTrustedAt: z.iso.datetime(),
+  targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases: historicalCases, lastTrustedAt: z.iso.datetime(),
   releaseTailYen: yen, legacyUnknownYen: yen, openingEvidenceDigest: hash,
   administration: z.array(z.object({ sequence: quantity.refine(v => v > 0), digest: hash }).strict()).max(1200),
   plans: z.array(planSchema).max(1200), operations: z.array(operationSchema).max(10_000) }).strict();
@@ -84,6 +88,7 @@ function seal(value: ManagedBudgetState) {
     s.administration.every((r, i) => r.sequence === i + 1));
   check(Buffer.byteLength(JSON.stringify({ ...s, operations: [] })) <= 1024 ** 2);
   check(s.operations.length * 20 * 1024 + 1024 ** 2 <= 16 * 1024 ** 2);
+  check(new Set(s.operations.filter(o => o.scope === "release").flatMap(o => o.cases)).size <= 5);
   for (const o of s.operations) {
     check(o.intentDigest === managedDigest(intent(o)) && o.cases.every(id => s.cases.includes(id)));
     check(s.plans.some(p => p.month === o.processingMonth));
@@ -157,7 +162,7 @@ export function activateManagedBudgetProfile(value: unknown, profile: unknown, c
   const { s, month: m } = current(value, clock), p = managedBudgetProfileSchema.parse(profile);
   check(p.targetBindingHash === s.targetBindingHash && managedDigest(p) === checkedEvidence.profileDigest &&
     p.goEvidenceDigest === checkedEvidence.goEvidenceDigest && p.measurementDigest === checkedEvidence.measurementDigest && p.pricingDigest === checkedEvidence.pricingDigest);
-  s.cases = [...new Set([...s.cases, ...p.cases])].sort((a, b) => a - b); check(s.cases.length <= 5);
+  s.cases = [...new Set([...s.cases, ...p.cases])].sort((a, b) => a - b);
   s.activeProfileDigest = managedDigest(p); active(s, p); admit(s, m, p);
   return seal(s);
 }
@@ -172,7 +177,7 @@ export function reserveManagedBudget(value: unknown, request: unknown, profile: 
   const p = r.scope === "standard" ? active(s, profile) : undefined;
   if (p) check(r.profileDigest === managedDigest(p) && r.pricingDigest === p.pricingDigest && r.cases.every(id => p.cases.includes(id)));
   else check(r.profileDigest === null);
-  s.cases = [...new Set([...s.cases, ...r.cases])].sort((a, b) => a - b); check(s.cases.length <= 5);
+  s.cases = [...new Set([...s.cases, ...r.cases])].sort((a, b) => a - b);
   const plan = s.plans.find(p => p.month === m), pool = poolOf(r); check(plan);
   check(r.pricingDigest === plan.pricingDigest);
   check(poolUsed(s, m, pool) + r.reservationYen <= plan.pools[pool]);

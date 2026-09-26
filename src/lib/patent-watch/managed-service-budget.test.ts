@@ -137,6 +137,41 @@ it("records an over-cap plan for reconciliation but never treats it as permissio
   expect(() => reserveManagedBudget(over, request(), null, clock())).toThrow();
   expect(() => reserveManagedBudget({ ...state(), serviceKey: "another-wallet" }, request(), null, clock())).toThrow();
 });
+it("retains five release fixtures and their unknown costs while admitting five standard cases", () => {
+  const r = request({ cases: [1, 2, 3, 4, 5] });
+  const release = markManagedBudgetUnknown(reserveManagedBudget(state(), r, null, clock()).state, r.operationId, clock());
+  const p = { ...profile(), cases: [6, 7, 8, 9, 10] }, activated = activate(release, p);
+  expect(activated.operations).toEqual(release.operations);
+  expect(activated.releaseTailYen).toBe(release.releaseTailYen);
+  expect(activated.legacyUnknownYen).toBe(release.legacyUnknownYen);
+  expect(activated.plans).toEqual(release.plans);
+  expect(managedBudgetForecast(activated, "2026-09")).toBe(managedBudgetForecast(release, "2026-09"));
+  const standard = request({ scope: "standard", profileDigest: managedDigest(p), cases: p.cases });
+  const reserved = reserveManagedBudget(activated, standard, p, clock()).state;
+  expect(reserved.cases).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  expect(reserved.operations[0]).toEqual(release.operations[0]);
+  expect(reserved.releaseTailYen).toBe(release.releaseTailYen);
+  expect(() => reserveManagedBudget(reserved, request({ cases: [6] }), null, clock())).toThrow();
+  expect(() => reserveManagedBudget(reserved, request({ ...standard, operationId: randomUUID(), requestDigest: managedDigest(randomUUID()), cases: [1] }), p, clock())).toThrow();
+  expect(() => activate(reserved, { ...p, cases: [6, 7, 8, 9, 10, 11] })).toThrow();
+  const revised = { ...p, cases: [11, 12, 13, 14, 15], measurementDigest: digest(52) }, changed = activate(reserved, revised);
+  expect(changed.cases).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
+  expect(changed.operations).toEqual(reserved.operations);
+  expect(() => reserveManagedBudget(changed, request({ scope: "standard", profileDigest: managedDigest(revised), cases: p.cases }), revised, clock())).toThrow();
+  expect(reserveManagedBudget(changed, request({ scope: "standard", profileDigest: managedDigest(revised), cases: revised.cases }), revised, clock()).created).toBe(true);
+  expect(() => validateManagedBudgetState({ ...reserved, cases: reserved.cases.slice(1) }, digest(1))).toThrow();
+  expect(() => validateManagedBudgetState({ ...reserved, cases: Array.from({ length: 10_001 }, (_, i) => i + 1) }, digest(1))).toThrow();
+});
+it.each(["watch", "delivery", "backup", "recovery"])("retains the release case cap after %s settlement, month change and profile activation", kind => {
+  const r = request({ kind, cases: [1, 2, 3, 4, 5] }), reserved = reserveManagedBudget(state(), r, null, clock()).state;
+  const settled = settleManagedBudget(reserved, { operationId: r.operationId, requestDigest: r.requestDigest,
+    evidenceDigest: digest(61), knownUnits: r.units, actualYen: 100 }, clock());
+  const now = clock("2026-09-30T15:00:01.000Z"), p = { ...profile(), cases: [6, 7, 8, 9, 10] };
+  const changed = activate(nextMonth(settled), p, now);
+  expect(() => reserveManagedBudget(changed, request({ cases: [6] }), null, now)).toThrow();
+  expect(reserveManagedBudget(changed, request({ cases: [5] }), null, now).created).toBe(true);
+  expect(() => reserveManagedBudget(changed, request({ cases: [1, 2, 3, 4, 5, 6] }), null, now)).toThrow();
+});
 it("carries a later unsettled bill after a prior final bill, even after an administrative review", () => {
   const r = request(), reserved = reserveManagedBudget(state(), r, null, clock()).state;
   const firstProof = { operationId: r.operationId, requestDigest: r.requestDigest, evidenceDigest: digest(80), knownUnits: r.units, actualYen: 100 };

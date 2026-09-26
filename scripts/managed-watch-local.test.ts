@@ -107,6 +107,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     const starts = new ManagedCloudStartRepository(database), operationIds: string[] = [], historicalStandard:string[]=[];
     const complete = async () => {
       const prepared = await repository.prepare(caseId, period), config = managedBudgetedWatchFixture({...managedCloudFixture(caseId,prepared.runId,prepared.snapshotDigest),operationId:randomUUID(),
+        ...(operationIds.length === 1 ? { caseAllowList: [caseId, 9901] } : {}),
         approval:operationIds.length===1?"STANDARD_MANAGED_WATCH_STANDARD_V1":"STANDARD_MANAGED_WATCH_RELEASE_V1"}).config;
       if(operationIds.length===0){
         const seed=async(standard:boolean,count:number)=>{
@@ -128,7 +129,18 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
         await expect(starts.reserve(bad)).rejects.toThrow("conflict");
         expect((await environment.sql("select start_reservation_id from managed_watch_runs where run_id=$1",[prepared.runId]))[0].start_reservation_id).toBeNull();
         await starts.reserve(config);operationIds.push(config.operationId);
-      }else{await starts.reserve(config);operationIds.push(config.operationId);
+      }else{
+        if(config.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1") {
+          const release = managedBudgetedWatchFixture({ ...config, operationId: randomUUID(),
+            approval: "STANDARD_MANAGED_WATCH_RELEASE_V1", caseAllowList: [caseId, 9002, 9003, 9004, 9005] }).config;
+          await environment.sql("insert into managed_watch_job_starts(operation_id,config_json,config_digest,logical_starts,reserved_normal,reserved_minutes,status) values($1,$2,$3,1,0,95,'completed')",
+            [release.operationId, JSON.stringify(release), managedDigest(release)]);
+          historicalStandard.push(release.operationId);
+          const sixthRelease = managedBudgetedWatchFixture({ ...config, approval: "STANDARD_MANAGED_WATCH_RELEASE_V1" }).config;
+          await expect(starts.reserve(sixthRelease)).rejects.toThrow("conflict");
+          expect((await environment.sql("select start_reservation_id from managed_watch_runs where run_id=$1", [prepared.runId]))[0].start_reservation_id).toBeNull();
+        }
+        await starts.reserve(config);operationIds.push(config.operationId);
         if(config.approval==="STANDARD_MANAGED_WATCH_STANDARD_V1")await environment.sql("delete from managed_watch_job_starts where operation_id=any($1::text[])",[historicalStandard]);}
       await expect(starts.reserve({...config,operationId:randomUUID()})).rejects.toThrow("conflict");
       await expect(repository.claim(caseId,prepared.runId,"fictional-worker")).rejects.toThrow("conflict");
