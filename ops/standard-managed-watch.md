@@ -86,6 +86,8 @@ managed取込は従来のparser上限を保持し、宣言展開総量16GiB、�
 Web入口には対象を照合した `MANAGED_KOHO_UPLOAD_SETTINGS` と `MANAGED_WATCH_WEB_SETTINGS`、
 既存共通予算bindingをAppへ設定します。設定にsecret値を含めず、既存Jobの専用secretRefを参照します。
 App/Jobの実imageとbuild SHA、watch/importの異なるDB LOGIN、OWNER認証、予算期限を一致させます。
+AppのJob起動・状態照合には既存App identityを `MANAGED_ARM_IDENTITY_CLIENT_ID` で指定します。
+共通予算bindingの `MANAGED_BUDGET_IDENTITY_CLIENT_ID` はJob側のidentityを維持し、Appへ兼用しません。
 
 これはOWNERの管理手順であり、ブラウザーのログインcookieや資格情報をJSON・argvへ入れない。
 対象resource、code SHA、app/Jobのimage digest、DB LOGIN、case allowlistを照合した非公開bindingを一度用意する。

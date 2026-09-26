@@ -22,9 +22,11 @@ export function uploadManagedArm(resourceId: string, signal: AbortSignal, env = 
   requireManual(endpoint.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname) &&
     endpoint.pathname === "/msi/token" && !endpoint.username && !endpoint.password && !endpoint.search && !endpoint.hash && env.IDENTITY_HEADER);
   endpoint.searchParams.set("api-version", "2019-08-01"); endpoint.searchParams.set("resource", "https://management.azure.com/");
-  if (env.MANAGED_BUDGET_IDENTITY_CLIENT_ID) {
-    requireManual(/^[a-f0-9-]{36}$/i.test(env.MANAGED_BUDGET_IDENTITY_CLIENT_ID));
-    endpoint.searchParams.set("client_id", env.MANAGED_BUDGET_IDENTITY_CLIENT_ID);
+  // The web App starts the Job with its own identity. The budget binding's
+  // identity belongs to the worker and need not be attached to the App.
+  if (env.MANAGED_ARM_IDENTITY_CLIENT_ID) {
+    requireManual(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(env.MANAGED_ARM_IDENTITY_CLIENT_ID));
+    endpoint.searchParams.set("client_id", env.MANAGED_ARM_IDENTITY_CLIENT_ID);
   }
   return async (url, method, body) => {
     const target = new URL(url), prefix = `https://management.azure.com${resourceId}`;
