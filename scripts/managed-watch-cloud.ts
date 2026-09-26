@@ -34,7 +34,7 @@ if(require.main===module){
       const stored=await starts.get(config.operationId);
       if(JSON.stringify(stored.config)!==JSON.stringify(config)||!["submitting","unknown"].includes(stored.status)||(stored.executionId!==null&&stored.executionId!==execution))throw Error();
       try{
-        for(const run of config.runs)await executeManagedRun(repository,run.caseId,run.runId,execution,managedAzureAnalysis,{operationId:config.operationId,snapshotDigest:run.snapshotDigest,aiBudget:permit.aiBudget});
+        for(const run of config.runs)await executeManagedRun(repository,run.caseId,run.runId,execution,managedAzureAnalysis,{operationId:config.operationId,snapshotDigest:run.snapshotDigest,aiBudget:permit.aiBudget,...(run.mode?{mode:run.mode}:{})});
         if(!await starts.finish(config,execution))throw Error();
       }catch{await starts.finish(config,execution).catch(()=>undefined);throw Error();}
       printed=true;process.stdout.write('{"status":"completed"}\n');process.exitCode=0;

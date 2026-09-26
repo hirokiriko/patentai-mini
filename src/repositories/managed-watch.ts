@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../db/schema";
-import { managedBaseDigest, managedScreeningInput, parseManagedSetting, validateManagedSnapshot, ManagedWatchError,
+import { managedBaseDigest, managedScreeningInput, parseManagedSetting, validateManagedSnapshot, isUnchangedManagedSnapshot, ManagedWatchError,
   type ManagedCandidate, type ManagedRun, type ManagedRunSnapshot, type ManagedSetting } from "../lib/patent-watch/managed-types";
 import { managedClaimContext, managedDigest, planManagedComparisons, validateManagedClaims, validateManagedComparisons,
   type ManagedComparisonPlan } from "../lib/patent-watch/managed-claims";
@@ -119,7 +119,8 @@ export class ManagedWatchRepository {
   }
   async history(caseId: number) {
     return this.database.select({ runId: R.runId, status: R.status, periodFrom: R.periodFrom, periodTo: R.periodTo,
-      createdAt: R.createdAt, acceptedAt: R.acceptedAt, completedAt: R.completedAt, errorCode: R.errorCode, countsJson: R.countsJson })
+      createdAt: R.createdAt, acceptedAt: R.acceptedAt, completedAt: R.completedAt, errorCode: R.errorCode, countsJson: R.countsJson,
+      startReservationId: R.startReservationId })
       .from(R).where(eq(R.caseId, caseId)).orderBy(asc(R.createdAt)).limit(1000);
   }
   async prepare(caseId: number, period: PublicationPeriod): Promise<ManagedRun> {
@@ -197,7 +198,7 @@ export class ManagedWatchRepository {
     }, { isolationLevel: "repeatable read" });
   }
   /** Called only by the fixed Job after it starts; a second worker may not take over. */
-  async claim(caseId: number, runId: string, executionId: string, proof?: { operationId: string; snapshotDigest: string }): Promise<ManagedRun> {
+  async claim(caseId: number, runId: string, executionId: string, proof?: { operationId: string; snapshotDigest: string; mode?: "no_change_only" }): Promise<ManagedRun> {
     requireState(/^[a-zA-Z0-9_.-]{1,180}$/.test(executionId), "invalid_setting");
     return this.database.transaction(async tx => {
       const [row] = await tx.select().from(R).where(and(eq(R.caseId, caseId), eq(R.runId, runId))).for("update"); requireState(row, "not_found");
@@ -209,7 +210,8 @@ export class ManagedWatchRepository {
         requireState(start && ["submitting","accepted","unknown"].includes(start.status) && (start.executionId === null || start.executionId === executionId));
         const config = managedCloudConfigSchema.parse(JSON.parse(start.configJson));
         requireState(managedDigest(config) === start.configDigest && Date.parse(config.expiresAt) > Date.now() &&
-          config.runs.some(r=>r.caseId===caseId&&r.runId===runId&&r.snapshotDigest===row.snapshotDigest));
+          config.runs.some(r=>r.caseId===caseId&&r.runId===runId&&r.snapshotDigest===row.snapshotDigest&&r.mode===proof.mode));
+        if (proof.mode === "no_change_only") requireState(isUnchangedManagedSnapshot(runFrom(row).snapshot), "incomplete");
         await tx.update(J).set({ status:"accepted",executionId }).where(eq(J.operationId,start.operationId));
       }
       const now = Date.now();

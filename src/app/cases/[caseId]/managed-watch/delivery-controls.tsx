@@ -12,13 +12,35 @@ export function WatchPrepare({caseId}:{caseId:number}){
   async function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(busy||attempted)return;const data=new FormData(event.currentTarget);setBusy(true);setAttempted(true);
     try{await post(`/api/cases/${caseId}/managed-watch/runs`,{from:data.get("from"),to:data.get("to")});
-      setMessage("対象の選別と実行準備を保存しました。運営者の開始コマンドからクラウドJobへ渡してください。");
+      setMessage("対象の選別と実行準備を保存しました。実行履歴の「比較を開始」から進めてください。");
     }catch(error){if(error instanceof RejectedInput){setAttempted(false);setMessage("対象公開期間を確認して修正してください。準備は受け付けられていません。");}else setMessage("準備結果の照合が必要です。再送せず、下の実行履歴を確認してください。");}
     finally{setBusy(false);router.refresh();}
   }
   return <section className="space-y-3 rounded border p-5"><h2 className="text-xl font-semibold">比較の実行準備</h2><p>取得済み公報から対象を固定します。準備だけではAI比較は開始されません。</p>
     <form className="flex flex-wrap items-end gap-4" onSubmit={submit}><label>対象公開期間の開始<input className={`${control} block`} type="date" name="from" required disabled={busy||attempted}/></label>
       <label>締め日<input className={`${control} block`} type="date" name="to" required disabled={busy||attempted}/></label><button className={control} disabled={busy||attempted}>クラウドで準備</button></form><p role="status">{message}</p></section>;
+}
+export function WatchStart({ caseId, runId, reserved }: { caseId: number; runId: string; reserved: boolean }) {
+  const router = useRouter(), [busy, setBusy] = useState(false), [sent, setSent] = useState(false), [message, setMessage] = useState("");
+  async function act(action: "start" | "reconcile") {
+    if (busy || (action === "start" && sent)) return;
+    setBusy(true); if (action === "start") setSent(true);
+    try { const r = await post(`/api/cases/${caseId}/managed-watch/runs/${runId}`, { action });
+      if (["budget_reserved", "outcome_unknown"].includes(r.status)) setSent(true);
+      if (r.status === "not_started") setSent(false);
+      setMessage(r.status === "completed" ? "比較が完了しました。納品版を作成してPDF・CSVを確認してください。" :
+        r.status === "accepted" ? "比較を実行しています。実行履歴で確認できます。" :
+        r.status === "not_started" ? "比較は未実行です。「比較を開始」から進めてください。正常0件ではありません。" :
+        r.status === "budget_reserved" ? "予算予約後に処理が中断しています。比較は開始確認前です。再送せず、運用担当へこの実行の照合を依頼してください。正常0件ではありません。" :
+        r.status === "outcome_unknown" ? "開始結果が不明です。再送せず、運用担当へこの実行の照合を依頼してください。正常0件ではありません。" :
+        "開始・処理結果を確認中です。同じ処理の状態を確認してください。");
+    } catch { setMessage("結果を確認できません。開始を再送せず、状態を確認してください。"); }
+    finally { setBusy(false); router.refresh(); }
+  }
+  return <div className="mt-3 space-y-2"><div className="flex flex-wrap gap-3">
+    {!reserved && !sent && <button className={control} disabled={busy} onClick={() => void act("start")}>比較を開始</button>}
+    <button className={control} disabled={busy} onClick={() => void act("reconcile")}>比較の状態を確認</button>
+  </div><p role="status">{message}</p></div>;
 }
 export function DeliveryCreate({caseId}:{caseId:number}){
   const router=useRouter(),[busy,setBusy]=useState(false),[attempted,setAttempted]=useState(false),[message,setMessage]=useState("");

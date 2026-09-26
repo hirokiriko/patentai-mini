@@ -11,6 +11,9 @@ import type { ManagedBudgetBinding } from "./managed-budget-contract";
 import { managedCloudImportFixture } from "../../../scripts/managed-koho-cloud.test-support";
 import { archivePackageIdentity, archiveReceiptName } from "../koho-import/managed-archive";
 import { cloudManifestName, cloudSourceName, sha256 } from "../koho-import/cloud-config";
+import { uploadFixture as uploadStorageFixture } from "../koho-import/upload.test-support";
+import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
+import { managedBudgetForecast } from "./managed-service-budget";
 afterEach(()=>{vi.restoreAllMocks();vi.useRealTimers();});
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), key = `${MANAGED_BUDGET_PREFIX}state.json`;
@@ -89,6 +92,77 @@ function executionFixture(){
   f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
   return{...f,...b};
 }
+it("reads a watch reservation left before DB reserve without changing its intent or budget", async () => {
+  const f = fixture(), r = { ...request("watch"), cases: [1, 2, 3, 4, 5] };
+  expect(await f.store.inspectWebWatchReservation(r.operationId, 1, r.cases)).toBeNull();
+  await f.store.reserve(r);
+  const before = JSON.stringify(f.current()), writes = f.calls.filter(c => c.startsWith("PUT:")).length;
+  expect(await f.store.inspectWebWatchReservation(r.operationId, 1, [...r.cases].reverse())).toBe("budget_reserved");
+  await expect(f.store.inspectWebWatchReservation(r.operationId, 6, r.cases)).rejects.toThrow();
+  await expect(f.store.inspectWebWatchReservation(r.operationId, 1, [1])).rejects.toThrow();
+  expect(JSON.stringify(f.current())).toBe(before);
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
+  await f.store.markUnknown(r.operationId);
+  expect(await f.store.inspectWebWatchReservation(r.operationId, 1, r.cases)).toBe("outcome_unknown");
+});
+function uploadBudgetFixture(includePrices = true) {
+  vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
+  const b = uploadStorageFixture(1024 ** 3 + 1), f = fixture(b.binding);
+  if (!includePrices) { delete b.policy.reservations.uploadJobYen; delete b.policy.reservations.uploadGiBYen; }
+  const bytes = Buffer.from(JSON.stringify(b.policy)), pricingDigest = sha256(bytes), s = f.current();
+  s.plans[0].pricingDigest = pricingDigest; f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${pricingDigest}.json`, { bytes, etag: '"upload-policy"' });
+  const intent = kohoUploadIntentSchema.parse({ schema: 1, settings: b.settings, operationId: b.input.operationId,
+    file: { fileName: b.input.fileName, byteLength: b.input.byteLength }, receivedAt: b.input.requestedAt, sourceAcquiredAt: null,
+    expiresAt: "2026-09-23T06:00:00.000Z" });
+  return { ...f, intent, pricingDigest };
+}
+it("shares one upload reservation across staging, sealing, start and worker admission", async () => {
+  const f = uploadBudgetFixture(), c = await f.store.prepareUpload(f.intent), before = managedBudgetForecast(f.current(), "2026-09");
+  expect(await f.store.reserveUpload(c)).toEqual({ created: true });
+  expect(await f.store.reserveUpload(c)).toEqual({ created: false });
+  await f.store.beginUploadStaging(c); await f.store.beginUploadStaging(c);
+  expect(await f.store.verifyUploadStaging(c)).toMatchObject({ expiresAt: c.expiresAt });
+  await f.store.confirmUpload(c, hash(33)); await f.store.confirmUpload(c, hash(33));
+  await expect(f.store.confirmUpload(c, hash(34))).rejects.toThrow();
+  await f.store.claimUpload(c, "start"); await f.store.verifyUpload(c);
+  await expect(f.store.claimUpload(c, "start")).rejects.toThrow();
+  const s = f.current(); expect(s.operations).toHaveLength(1); expect(s.releaseTailYen).toBe(19_816);
+  expect(s.operations[0]).toMatchObject({ reservationYen: 184, actualYen: null, knownUnits: {}, stage: "done", start: "claimed",
+    units: { jobs: 1, minutes: 120, packages: 1, bytes: 1024 ** 3 + 1, starts: 0, normal: 0, fast: 0 } });
+  expect(managedBudgetForecast(s, "2026-09")).toEqual(before);
+});
+it("keeps old pricing disabled for browser upload before any write", async () => {
+  const f = uploadBudgetFixture(false); await expect(f.store.prepareUpload(f.intent)).rejects.toThrow("managed_budget_stopped");
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual([]);
+});
+it.each(["reserve", "stage", "start"] as const)("retains a lost upload %s ACK without duplicate reservations or claims", async phase => {
+  const f = uploadBudgetFixture(), c = await f.store.prepareUpload(f.intent);
+  if (phase !== "reserve") await f.store.reserveUpload(c);
+  if (phase === "start") { await f.store.beginUploadStaging(c); await f.store.confirmUpload(c, hash(33)); }
+  f.loseAck();
+  await expect(phase === "reserve" ? f.store.reserveUpload(c) : phase === "stage" ? f.store.beginUploadStaging(c) : f.store.claimUpload(c, "start")).rejects.toThrow();
+  f.restoreAck(); const writes = f.calls.filter(c => c.startsWith("PUT:")).length;
+  if (phase === "reserve") expect(await f.store.reserveUpload(c)).toEqual({ created: false });
+  else if (phase === "stage") await f.store.beginUploadStaging(c);
+  else await expect(f.store.claimUpload(c, "start")).rejects.toThrow();
+  expect(f.current().operations).toHaveLength(1); expect(f.current().releaseTailYen).toBe(19_816);
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
+});
+it("rejects upload intent, target and pricing mutation before reservations", async () => {
+  const f = uploadBudgetFixture(), c = await f.store.prepareUpload(f.intent);
+  await expect(f.store.reserveUpload({ ...c, file: { ...c.file, byteLength: 1 } })).rejects.toThrow();
+  await expect(f.store.reserveUpload({ ...c, settings: { ...c.settings, codeSha: "f".repeat(40) } })).rejects.toThrow();
+  await expect(f.store.reserveUpload({ ...c, serviceBudget: { ...c.serviceBudget, pricingDigest: hash(99) } })).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual([]);
+});
+it("rechecks upload expiry and Blob state after policy IO", async () => {
+  const f = uploadBudgetFixture(), c = await f.store.prepareUpload(f.intent);
+  await f.store.reserveUpload(c); await f.store.beginUploadStaging(c);
+  f.onRead(name => { if (name.includes("/evidence/")) f.setDate("Wed, 23 Sep 2026 05:59:00 GMT"); });
+  await expect(f.store.verifyUploadStaging(c)).rejects.toThrow();
+  expect(f.current().operations[0].start).toBe("ready"); expect(f.current().operations[0].actualYen).toBeNull();
+});
 function artifactFixture(kind: "delivery" | "backup" | "recovery") {
   const f=executionFixture(),id=randomUUID();
   const intent=kind==="delivery"?{kind,caseId:1,deliveryId:id,period:{from:"2026-07-26",to:"2026-08-25"},

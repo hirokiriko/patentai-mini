@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getModel } from "../ai-model";
 import { withManagedWatchBudget, type ManagedWatchDispatchJournal } from "../ai-operation-budget";
 import { managedComparisonSchema, managedDigest, type ManagedComparisonChunk } from "./managed-claims";
-import { managedScreeningInput, ManagedWatchError, type ManagedRun } from "./managed-types";
+import { managedScreeningInput, ManagedWatchError, isUnchangedManagedSnapshot, type ManagedRun } from "./managed-types";
 import type { ManagedWatchRepository } from "../../repositories/managed-watch";
 import { managedWatchAiBudgetSchema, type ManagedWatchAiBudget } from "./managed-watch-cost";
 
@@ -46,7 +46,7 @@ export const managedAzureAnalysis = {
 };
 /** Only called by the awaited fixed cloud worker, never detached from an HTTP route. */
 export async function executeManagedRun(repository: ManagedWatchRepository, caseId: number, runId: string, executionId: string,
-  analysis = managedAzureAnalysis, proof?: {operationId:string;snapshotDigest:string;aiBudget:ManagedWatchAiBudget}) {
+  analysis = managedAzureAnalysis, proof?: {operationId:string;snapshotDigest:string;aiBudget:ManagedWatchAiBudget;mode?:"no_change_only"}) {
   const aiBudget = Object.freeze(managedWatchAiBudgetSchema.parse(proof?.aiBudget));
   const run = await repository.claim(caseId, runId, executionId, proof);
   let journal: ManagedWatchDispatchJournal | undefined;
@@ -55,6 +55,10 @@ export async function executeManagedRun(repository: ManagedWatchRepository, case
     reconcile: entry => { if (!journal) throw new ManagedWatchError("conflict"); return journal.reconcile(entry); },
   };
   try {
+    if (proof?.mode === "no_change_only") {
+      if (!isUnchangedManagedSnapshot(run.snapshot)) throw new ManagedWatchError("incomplete");
+      return await repository.finalize(run);
+    }
     return await withManagedWatchBudget({ consumed: run.consumedNormal, deadlineAt: Date.parse(run.deadlineAt!), journal: boundary }, async () => {
       if (run.snapshot.candidates.length) {
         const input = managedScreeningInput(run.snapshot);

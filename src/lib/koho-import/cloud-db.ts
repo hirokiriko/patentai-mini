@@ -3,12 +3,17 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { saveKohoImportPlan } from "../../repositories/drizzle";
 import { requireManual } from "./manual-cli-config";
-import { isManagedCloudConfiguration, type CloudConfiguration, type CloudManifest } from "./cloud-config";
+import type { CloudConfiguration, CloudManifest } from "./cloud-config";
 import type { KohoImportPlan } from "./types";
 import type { ManualSaveOutcome } from "./manual-cli-db";
 import type { projectManagedPackage } from "./managed-package";
+import { isManagedExecutionApproval } from "../patent-watch/managed-budget-contract";
 
 export type CloudSaveResult = ManualSaveOutcome & { databaseGrowthBytes: number; capacityConfirmed: boolean };
+type SaveConfiguration = Pick<CloudConfiguration, "mode" | "approval" | "expectedTarget">;
+type SaveManifest = Pick<CloudManifest, "expiresAt" | "maxElapsedMs" | "reservedGrowthBytes" | "maxDatabaseBytes"> & {
+  packages: Array<{ packageType: "JPA" | "JPB"; sha256: string; expectedDisposition: "inserted" | "reused" }>;
+};
 const tables = ["koho_import_runs", "koho_import_documents"];
 const expectedColumns = {
   koho_import_runs: ["import_id", "package_type", "source_sha256", "package_status", "document_count", "amendment_count", "nested_st26_count", "counts_json", "issues_json", "created_at", "updated_at"],
@@ -100,8 +105,23 @@ export async function inspectCloudDatabase(client: Client, target: CloudConfigur
 export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudManifest, password: string, plan: KohoImportPlan,
   onSaving: () => void, createClient?: () => Client, managed?: ReturnType<typeof projectManagedPackage>,
   execution?: { deadline: number; signal?: AbortSignal }): Promise<CloudSaveResult> {
+  return saveCloudPlanInternal(config, manifest, password, plan, onSaving, createClient, managed, execution, false);
+}
+
+/** The Web worker accepts either immutable insert/reuse under the existing DB
+ * advisory lock. The legacy approved-manifest disposition remains strict. */
+export async function saveUploadedCloudPlan(config: SaveConfiguration, manifest: SaveManifest, password: string, plan: KohoImportPlan,
+  onSaving: () => void, createClient: (() => Client) | undefined, managed: ReturnType<typeof projectManagedPackage>,
+  execution: { deadline: number; signal?: AbortSignal }): Promise<CloudSaveResult> {
+  requireManual(isManagedExecutionApproval(config.approval) && !!managed);
+  return saveCloudPlanInternal(config, manifest, password, plan, onSaving, createClient, managed, execution, true);
+}
+
+async function saveCloudPlanInternal(config: SaveConfiguration, manifest: SaveManifest, password: string, plan: KohoImportPlan,
+  onSaving: () => void, createClient: (() => Client) | undefined, managed: ReturnType<typeof projectManagedPackage> | undefined,
+  execution: { deadline: number; signal?: AbortSignal } | undefined, acceptImmutableReuse: boolean): Promise<CloudSaveResult> {
   requireManual(config.mode === "apply" && typeof password === "string" && password.length > 0 && password.length <= 8192);
-  requireManual(isManagedCloudConfiguration(config) === !!managed);
+  requireManual(isManagedExecutionApproval(config.approval) === !!managed);
   const budget = execution ?? { deadline: performance.now() + manifest.maxElapsedMs };
   const remaining = () => Math.floor(Math.min(budget.deadline - performance.now(), Date.parse(manifest.expiresAt) - Date.now()));
   requireManual(Number.isFinite(budget.deadline) && remaining() > 0 && !budget.signal?.aborted);
@@ -146,16 +166,17 @@ export async function saveCloudPlan(config: CloudConfiguration, manifest: CloudM
     const approved = manifest.packages.find(p => p.sha256 === plan.sourceSha256 && p.packageType === plan.packageType);
     requireManual(approved);
     const existing = (await client.query("select count(*)::int as count from public.koho_import_runs where package_type=$1 and source_sha256=$2", [plan.packageType, plan.sourceSha256])).rows[0]?.count;
-    requireManual(existing === (approved.expectedDisposition === "reused" ? 1 : 0));
+    requireManual(acceptImmutableReuse ? existing === 0 || existing === 1 : existing === (approved.expectedDisposition === "reused" ? 1 : 0));
     onSaving();
-    const result = await saveKohoImportPlan(drizzle(client, { schema }), plan, true, approved.expectedDisposition, managed?.sources, managed?.receipt);
+    const result = await saveKohoImportPlan(drizzle(client, { schema }), plan, true, acceptImmutableReuse ? undefined : approved.expectedDisposition, managed?.sources, managed?.receipt);
     requireManual(result.savedDocumentCount === plan.documentCount && (result.disposition === "inserted" || result.disposition === "reused"));
     saved = { outcome: result.disposition, savedDocumentCount: result.savedDocumentCount, databaseGrowthBytes: 0, capacityConfirmed: false };
     requireManual(!broken);
     const after = Number((await client.query("select pg_database_size(current_database())::text as bytes")).rows[0]?.bytes);
     requireManual(!broken && Number.isSafeInteger(after) && after > 0);
     saved.databaseGrowthBytes = Math.max(0, after - before);
-    saved.capacityConfirmed = after <= manifest.maxDatabaseBytes && saved.databaseGrowthBytes <= manifest.reservedGrowthBytes && result.disposition === approved.expectedDisposition;
+    saved.capacityConfirmed = after <= manifest.maxDatabaseBytes && saved.databaseGrowthBytes <= manifest.reservedGrowthBytes &&
+      (acceptImmutableReuse || result.disposition === approved.expectedDisposition);
     return saved;
   } catch {
     return saved ?? { outcome: commitSubmitted || (writeAttempted && (!rollbackConfirmed || broken)) ? "save_outcome_unknown" : "failed_before_save",

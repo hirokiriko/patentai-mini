@@ -16,7 +16,7 @@ import { configuredManagedArtifactAdmission } from "../src/lib/patent-watch/mana
 import { managedDeadlineDatabase } from "../src/lib/patent-watch/managed-request-db";
 import { performance } from "node:perf_hooks";
 import { hasUnconfirmedIsolatedProcess } from "./watch-report-local.test-support";
-import { managedId, managedHash, managedSettingSchema } from "../src/lib/patent-watch/managed-types";
+import { managedId, managedHash, managedSettingSchema, isUnchangedManagedSnapshot } from "../src/lib/patent-watch/managed-types";
 import { ManagedPrivateStorage, reconcileManagedDelivery } from "../src/lib/patent-watch/managed-storage";
 import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
 const binding=managedCloudConfigSchema.omit({operationId:true,runs:true,expiresAt:true,budgetProof:true});
@@ -95,7 +95,8 @@ if(require.main===module){
           for(const runId of request.runIds){
             let found=false;
             for(const caseId of b.caseAllowList){
-              const run=await watch.run(caseId,runId).catch(()=>null);if(run){runs.push({caseId,runId,snapshotDigest:run.snapshotDigest});found=true;break;}
+              const run=await watch.run(caseId,runId).catch(()=>null);if(run){runs.push({caseId,runId,snapshotDigest:run.snapshotDigest,
+                ...(isUnchangedManagedSnapshot(run.snapshot)?{mode:"no_change_only" as const}:{})});found=true;break;}
             }
             if(!found)throw Error();
           }

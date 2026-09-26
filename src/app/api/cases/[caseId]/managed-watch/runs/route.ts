@@ -10,7 +10,7 @@ export const POST=withOwnerRoute(async(request:Request,{params}:{params:Promise<
     return await withManagedDeliveryDatabase(async db=>{
     const run=await new ManagedWatchRepository(db).prepare(caseId,period);
     // Prepared is not accepted or running. Only the fixed operator Job can claim it.
-    return Response.json({runId:run.runId,status:"prepared",message:"実行準備を保存しました。運営用コマンドからクラウド処理を開始してください。"},{status:201});
+    return Response.json({runId:run.runId,status:"prepared",message:"実行準備を保存しました。実行履歴の開始ボタンから比較できます。"},{status:201});
     });
   }catch(error){return managedApiError(error);}
 });

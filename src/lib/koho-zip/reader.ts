@@ -747,6 +747,9 @@ function snapshotSource(source: KohoZipSource): KohoZipSource {
     throw new KohoZipError("source_invalid");
   }
   const sourceType = source.type;
+  if (sourceType === "range") {
+    return { type: "range", byteLength: source.byteLength, readRange: source.readRange, close: source.close };
+  }
   if (sourceType === "buffer") {
     const bytes = source.bytes;
     const sourceName = source.sourceName;

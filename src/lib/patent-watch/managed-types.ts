@@ -95,6 +95,12 @@ export function validateManagedSnapshot(value: ManagedRunSnapshot): void {
   } catch { throw new ManagedWatchError("incomplete"); }
 }
 /** Explicit projection keeps internal setting IDs out of the strict operator-input schema. */
+export function isUnchangedManagedSnapshot(snapshot: ManagedRunSnapshot) {
+  validateManagedSnapshot(snapshot);
+  return snapshot.sourceKeys.length === 0 && snapshot.candidates.length === 0 && snapshot.scannedDocuments === 0 &&
+    snapshot.incompleteDocuments === 0 && snapshot.sourceBytes === 0;
+}
+/** Explicit projection keeps internal setting IDs out of the strict operator-input schema. */
 export function managedSettingInput(value: ManagedSetting): ManagedSettingInput {
   return parseManagedSetting({ caseId: value.caseId, contractSignedOn: value.contractSignedOn,
     monitoringStartsOn: value.monitoringStartsOn, contractEndsOn: value.contractEndsOn, enabled: value.enabled,

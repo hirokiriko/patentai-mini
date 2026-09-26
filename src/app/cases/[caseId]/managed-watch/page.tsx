@@ -7,7 +7,7 @@ import { boundedPatentWatchPublicText } from "@/lib/patent-watch/domain";
 import { MANAGED_NOTICE } from "@/lib/patent-watch/managed-delivery";
 import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
 import { isScopedOriginalName } from "@/lib/blob-storage";
-import { DeliveryCreate, DeliveryReconcile, WatchPrepare } from "./delivery-controls";
+import { DeliveryCreate, DeliveryReconcile, WatchPrepare, WatchStart } from "./delivery-controls";
 
 export const dynamic = "force-dynamic";
 const states: Record<string, string> = { prepared: "準備済み・未受理", running: "実行中", completed: "比較完了", failed: "失敗・要確認", unknown: "結果照合が必要", stored: "保存済み", storage_unknown: "保存結果の照合が必要", abandoned: "保存中断" };
@@ -55,6 +55,7 @@ export default async function ManagedWatchPage({ params }: { params: Promise<{ c
       <ul className="space-y-2">{[...runs].reverse().map(r => <li className="rounded border p-4" key={r.runId}>
         <p>{r.periodFrom} 〜 {r.periodTo} ／ {states[r.status] ?? "要確認"}</p>
         <p className="text-sm text-gray-600">準備: {r.createdAt} ／ 受理: {r.acceptedAt ?? "未受理"} ／ 完了: {r.completedAt ?? "未完了"}</p>
+        {["prepared", "running", "unknown"].includes(r.status) && <WatchStart caseId={caseId} runId={r.runId} reserved={r.startReservationId !== null} />}
       </li>)}</ul><p>比較の完了と、期間内の公報取得・納品版の完成は別々に確認します。結果不明の処理は再開始前に照合が必要です。</p>
     </section>
     {!!originals.length && <section><h2 className="text-xl font-semibold">保存した添付原本</h2><ul className="mt-3 space-y-2">{originals.map(o => <li key={`${o.kind}-${o.id}`}>

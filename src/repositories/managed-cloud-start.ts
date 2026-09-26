@@ -3,7 +3,8 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../db/schema";
 import { managedDigest } from "../lib/patent-watch/managed-claims";
 import { managedCloudConfigSchema, parseManagedCloudStartConfiguration, type ManagedCloudConfiguration } from "../lib/patent-watch/managed-cloud-config";
-import { ManagedWatchError } from "../lib/patent-watch/managed-types";
+import { ManagedWatchError, isUnchangedManagedSnapshot } from "../lib/patent-watch/managed-types";
+import { readManagedStoredRun } from "./managed-watch";
 type Database = NodePgDatabase<typeof schema>;
 const J = schema.managedWatchJobStarts, R = schema.managedWatchRuns;
 const check = (value: unknown) => { if (!value) throw new ManagedWatchError("conflict"); };
@@ -13,6 +14,7 @@ export class ManagedCloudStartRepository {
   constructor(private readonly database: Database) {}
   async reserve(value: unknown) {
     const config = parseManagedCloudStartConfiguration(value);
+    const normal = config.runs.filter(r => r.mode !== "no_change_only").length * 41;
     return this.database.transaction(async tx => {
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
       const previous = await tx.select().from(J).limit(1001); check(previous.length < 1000);
@@ -25,17 +27,19 @@ export class ManagedCloudStartRepository {
         check(release.length + 1 <= 24);
         check(release.reduce((n,r)=>n+r.logicalStarts,0) + config.runs.length <= 40);
         check(release.reduce((n,r)=>n+r.reservedMinutes,0) + 95 <= 48*60);
-        check(release.reduce((n,r)=>n+r.reservedNormal,0) + config.runs.length*41 <= 900);
+        check(release.reduce((n,r)=>n+r.reservedNormal,0) + normal <= 900);
       }
       for (const input of config.runs) {
         const [run] = await tx.select().from(R).where(and(eq(R.runId,input.runId),eq(R.caseId,input.caseId))).for("update");
         check(run && run.status === "prepared" && run.startReservationId === null && run.snapshotDigest === input.snapshotDigest);
+        const validated = readManagedStoredRun(run);
+        if (input.mode === "no_change_only") check(isUnchangedManagedSnapshot(validated.snapshot));
         await tx.update(R).set({ startReservationId: config.operationId }).where(eq(R.runId,input.runId));
       }
       await tx.insert(J).values({ operationId:config.operationId, configJson:JSON.stringify(config), configDigest:managedDigest(config),
         // This existing DB column records the 95-minute worker bound. The shared
         // service ledger separately reserves the full 120-minute Job allocation.
-        logicalStarts:config.runs.length, reservedNormal:config.runs.length*41, reservedMinutes:95, status:"reserved" });
+        logicalStarts:config.runs.length, reservedNormal:normal, reservedMinutes:95, status:"reserved" });
       return config;
     });
   }

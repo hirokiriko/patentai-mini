@@ -63,7 +63,9 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     } finally {
       await environment.sql("delete from koho_import_runs where source_sha256=$1", [sourceSha256]);
     }
-  }, 60_000);
+  // The 4,000-document parser/rollback fixture can exceed a minute on the
+  // Windows Local runner. This test bound does not change any production deadline.
+  }, 180_000);
   it("cancels a real server query at the request deadline and rolls back the transaction",async()=>{
     const database=managedDeadlineDatabase(environment.watchClient,250),started=Date.now();
     await expect(database.transaction(async tx=>{await tx.execute(sql`select pg_sleep(5)`);})).rejects.toThrow();

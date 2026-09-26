@@ -25,6 +25,15 @@ it("refuses a watch policy without reviewed token rates",()=>{
   const f=managedBudgetedWatchFixture();delete f.policy.watchAiRates;
   expect(()=>managedWatchBudgetRequest(f.config,f.policy,f.binding,f.pricingDigest,null)).toThrow();
 });
+it("reserves no AI for constrained unchanged runs while retaining Job/time/start units", () => {
+  const f = managedBudgetedWatchFixture(), c = structuredClone(f.config);
+  const first = { ...c.runs[0], mode: "no_change_only" as const };
+  c.runs = [first];
+  const r = () => managedWatchBudgetRequest(c, f.policy, f.binding, f.pricingDigest, null);
+  expect(r()).toMatchObject({ reservationYen: 10, units: { jobs: 1, minutes: 120, starts: 1, normal: 0, fast: 0 } });
+  c.caseAllowList.push(8); c.runs.push({ caseId: 8, runId: randomUUID(), snapshotDigest: "b".repeat(64) });
+  expect(r()).toMatchObject({ reservationYen: 410, units: { jobs: 1, minutes: 120, starts: 2, normal: 41 } });
+});
 it.each(["code","image","job","db","ai","secret"])("rejects replacement of the reviewed watch %s",field=>{
   const f=managedBudgetedWatchFixture(),c=structuredClone(f.config);
   if(field==="code")c.codeSha="e".repeat(40);

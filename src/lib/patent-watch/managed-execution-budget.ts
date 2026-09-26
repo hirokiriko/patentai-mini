@@ -6,6 +6,7 @@ import { managedBudgetPolicySchema, managedBudgetTargetDigest, type ManagedBudge
 import { managedBudgetBindingSchema, type ManagedBudgetBinding } from "./managed-budget-contract";
 import { emptyManagedBudgetUnits, managedBudgetRequestSchema, ManagedBudgetError } from "./managed-service-budget";
 import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
+import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
 
 export const managedImportJobSchema = z.object({ resourceId: managedCloudConfigSchema.shape.jobResourceId,
   name: managedCloudConfigSchema.shape.jobName, image: managedCloudConfigSchema.shape.image,
@@ -24,6 +25,24 @@ function reference(approval: string, profileDigest: string | null) {
   const standard = approval === "STANDARD_MANAGED_WATCH_STANDARD_V1";
   check(standard ? profileDigest !== null : profileDigest === null);
   return { scope: standard ? "standard" as const : "release" as const, profileDigest };
+}
+
+/** Web upload prices include bounded chunk traffic, abandoned upload retention,
+ * full verification and the one fixed import Job. Old policies stay disabled. */
+export function managedUploadBudgetRequest(value: unknown, approvedPolicy: ManagedBudgetPolicy, binding: ManagedBudgetBinding,
+  pricingDigest: string, profileDigest: string | null) {
+  binding = managedBudgetBindingSchema.parse(binding);
+  const c = kohoUploadIntentSchema.parse(value), s = c.settings, p = policy(approvedPolicy, binding);
+  check(s.codeSha === p.codeSha && s.job.image === p.image && s.job.resourceId === p.targets.jobResourceId &&
+    s.job.databaseSecretRef === p.targets.importDatabaseSecretRef && s.environmentResourceId === p.targets.environmentResourceId &&
+    same(s.target, p.targets.importTarget) && same(s.budgetBinding, binding) &&
+    p.reservations.uploadJobYen !== undefined && p.reservations.uploadGiBYen !== undefined);
+  const { serviceBudget, ...intent } = c; void serviceBudget;
+  return managedBudgetRequestSchema.parse({ operationId: c.operationId,
+    requestDigest: managedDigest({ schema: 1, kind: "koho-web-upload", intent }),
+    ...reference(s.approval, profileDigest), kind: "import", pricingDigest, cases: [],
+    reservationYen: p.reservations.uploadJobYen! + Math.ceil(c.file.byteLength / 1024 ** 3) * p.reservations.uploadGiBYen!,
+    units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, packages: 1, bytes: c.file.byteLength } });
 }
 /** Fixed reservations include the existing maximum output/read sizes. The DB
  * still seals the exact artifact hashes; a result never rewrites this intent. */
@@ -55,10 +74,11 @@ export function managedWatchBudgetRequest(value: unknown, approvedPolicy: Manage
   const { budgetProof, serviceBudget, budgetBinding, ...business } = c;
   void budgetProof; void serviceBudget; void budgetBinding;
   const requestDigest = managedDigest({ schema: 1, kind: "watch", configuration: business, budgetBinding: binding });
+  const normalRuns = c.runs.filter(r => r.mode !== "no_change_only").length;
   return managedBudgetRequestSchema.parse({ operationId: c.operationId, requestDigest, ...reference(c.approval, profileDigest),
     kind: "watch", pricingDigest, cases: c.caseAllowList,
-    reservationYen: p.reservations.watchJobYen + c.runs.length * p.reservations.watchRunYen,
-    units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, starts: c.runs.length, normal: 41 * c.runs.length } });
+    reservationYen: p.reservations.watchJobYen + normalRuns * p.reservations.watchRunYen,
+    units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, starts: c.runs.length, normal: 41 * normalRuns } });
 }
 export function managedImportBudgetRequest(value: unknown, manifestValue: unknown, jobValue: unknown,
   approvedPolicy: ManagedBudgetPolicy, binding: ManagedBudgetBinding, pricingDigest: string, profileDigest: string | null) {

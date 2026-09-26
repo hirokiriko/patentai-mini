@@ -1,6 +1,15 @@
 export type KohoZipSource =
   | { type: "file"; path: string }
-  | { type: "buffer"; bytes: Uint8Array; sourceName?: string };
+  | { type: "buffer"; bytes: Uint8Array; sourceName?: string }
+  | KohoZipRangeSource;
+
+/** Server-created immutable source. No URL or credentials are accepted by the parser. */
+export interface KohoZipRangeSource {
+  readonly type: "range";
+  readonly byteLength: number;
+  readonly readRange: (offset: number, length: number) => Promise<Uint8Array>;
+  readonly close: () => Promise<void>;
+}
 
 export interface KohoZipLimits {
   maxSourceBytes: number;

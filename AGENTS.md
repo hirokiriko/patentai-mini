@@ -312,7 +312,8 @@ deadline and durable dispatch accounting; other AI budgets, 35-second requests,
 input/output guards and synchronous run recovery remain unchanged. A managed
 run must retain its publication period and immutable source/version selection;
 do not advance a global cursor past deferred publications. Use Refs #129 in PRs.
-Only verified `STANDARD_MANAGED_WATCH_PRODUCTION_GO`, including actual PC_OFF,
+Only verified `STANDARD_MANAGED_WATCH_PRODUCTION_GO`, including Production
+acceptance and Local-PC independence under Issue #129's current scope,
 permits closing #129/#128. This exception does not resume #75/#81/#83 or grant
 general production authority. See `ops/standard-managed-watch.md` for operation.
 

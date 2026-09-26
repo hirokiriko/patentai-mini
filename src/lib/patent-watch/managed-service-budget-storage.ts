@@ -5,13 +5,14 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage, markManagedBudgetUnknown,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
-  type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
+  managedBudgetForecast, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, managedReleaseBudgetRequest, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
-import { managedWatchBudgetRequest, managedImportBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
+import { managedWatchBudgetRequest, managedImportBudgetRequest, managedUploadBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
+import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
 import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
-import { parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
+import { managedCloudConfigSchema, parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
 import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256 } from "../koho-import/cloud-config";
 import { readVerifiedArchive } from "../koho-import/managed-archive";
 import { isAzureBlobNotFound } from "../azure-blob-errors";
@@ -135,6 +136,19 @@ export class ManagedServiceBudgetStorage {
     return { config: parseManagedCloudImportConfiguration({ ...c, serviceBudget, budgetBinding: this.binding }), request, policy: p, profile,
       executionExpiresAt:(manifest as {expiresAt:string}).expiresAt };
   }
+  private async uploadRequest(value: unknown, saved: ReadState, worker = false) {
+    const c = kohoUploadIntentSchema.parse(value);
+    const op = worker ? saved.state.operations.find(o => o.operationId === c.operationId) : undefined;
+    if (worker) check(op);
+    const pricingDigest = worker ? op!.pricingDigest : this.currentPricing(saved);
+    const profileDigest = worker ? op!.profileDigest : c.settings.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" ? saved.state.activeProfileDigest : null;
+    const p = await this.executionPolicy(saved, pricingDigest, 120);
+    const request = managedUploadBudgetRequest(c, p, this.binding, pricingDigest, profileDigest);
+    const serviceBudget = { serviceKey: MANAGED_SERVICE_KEY, requestDigest: request.requestDigest, profileDigest, pricingDigest };
+    if (c.serviceBudget) check(managedDigest(c.serviceBudget) === managedDigest(serviceBudget));
+    const profile = await this.executionProfile(saved, profileDigest, p);
+    return { config: kohoUploadIntentSchema.parse({ ...c, serviceBudget }), request, policy: p, profile, executionExpiresAt: c.expiresAt };
+  }
   private async verifyArchiveReference(saved: ReadState, config: Parameters<typeof readVerifiedArchive>[1], pkg: Parameters<typeof readVerifiedArchive>[2]) {
     check(pkg.archive);
     const archive = await readVerifiedArchive(this.container,config,pkg), recorded = saved.state.operations.find(o => o.operationId === pkg.archive!.operationId);
@@ -181,7 +195,7 @@ export class ManagedServiceBudgetStorage {
     });
   }
   private async commitExecution(saved: ReadState, context: Awaited<ReturnType<ManagedServiceBudgetStorage["watchRequest"]>> |
-    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>, phase?: "stage" | "start") {
+    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>> | Awaited<ReturnType<ManagedServiceBudgetStorage["uploadRequest"]>>, phase?: "stage" | "start") {
     const fresh = await this.read(); check(fresh.etag === saved.etag);
     // In addition to bounded Blob IO, a start retains a minute for the marker
     // and ARM request. Worker admission rechecks any subsequent scheduling delay.
@@ -203,10 +217,82 @@ export class ManagedServiceBudgetStorage {
   async prepareWatch(value: unknown) { return this.guarded(async () => {
     const c = parseManagedCloudConfiguration(value); return (await this.watchRequest(c, await this.read())).config;
   }); }
+  /** Browser operations cannot supply prices or a fabricated compatibility
+   * proof. Derive it from the installed shared ledger and its trusted Date. */
+  async prepareWebWatch(value: unknown) { return this.guarded(async () => {
+    const c = managedCloudConfigSchema.omit({ budgetProof: true, serviceBudget: true }).parse(value);
+    const saved = await this.read(), s = saved.state, month = new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7);
+    const release = s.operations.filter(o => o.scope === "release"), external = release.filter(o => o.kind !== "watch");
+    const total = (key: "jobs" | "minutes" | "normal" | "fast") => external.reduce((n, o) => n + (o.knownUnits[key] ?? o.units[key]), 0);
+    const budgetProof = { ledgerDigest: managedDigest(s), checkedAt: saved.date.toISOString(),
+      additionalForecastYen: s.releaseTailYen + release.reduce((n, o) => n + Math.max(o.actualYen ?? o.reservationYen, o.observedYen ?? 0), 0),
+      monthlyForecastYen: managedBudgetForecast(s, month), externalJobExecutions: total("jobs"), externalJobReservedMinutes: total("minutes"),
+      externalNormalSends: total("normal"), externalFastSends: total("fast") };
+    return (await this.watchRequest(parseManagedCloudConfiguration({ ...c, budgetProof }), saved)).config;
+  }); }
   async prepareImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
     return this.guarded(async () => {
       const c = parseCloudConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job);
       return (await this.importRequest(c, m, j, await this.read())).config;
+    });
+  }
+  async prepareUpload(value: unknown) { return this.guarded(async () => {
+    const c = kohoUploadIntentSchema.parse(value); return (await this.uploadRequest(c, await this.read())).config;
+  }); }
+  async reserveUpload(value: unknown) {
+    return this.guarded(async () => { const c = kohoUploadIntentSchema.parse(value), saved = await this.read(); return this.commitExecution(saved, await this.uploadRequest(c, saved)); });
+  }
+  async claimUpload(value: unknown, phase: "stage" | "start") {
+    return this.guarded(async () => { const c = kohoUploadIntentSchema.parse(value), saved = await this.read(); await this.commitExecution(saved, await this.uploadRequest(c, saved), phase); });
+  }
+  async beginUploadStaging(value: unknown) {
+    return this.guarded(async () => {
+      const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
+      const op = saved.state.operations.find(o => o.operationId === c.request.operationId);
+      check(op?.intentDigest === managedDigest(c.request) && op.start === "ready" && !op.unknown && op.actualYen === null);
+      if (op!.stage === "ready") await this.commitExecution(saved, c, "stage");
+      else { check(op!.stage === "claimed"); await this.verifyUploadStaging(input); }
+    });
+  }
+  async verifyUploadStaging(value: unknown) {
+    return this.guarded(async () => {
+      const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
+      const fresh = await this.read(); check(fresh.etag === saved.etag);
+      const op = fresh.state.operations.find(o => o.operationId === c.request.operationId);
+      const expiry = Math.min(Date.parse(op?.expiresAt ?? ""), Date.parse(c.executionExpiresAt));
+      check(op?.intentDigest === managedDigest(c.request) && op.stage === "claimed" && op.start === "ready" &&
+        !op.unknown && op.actualYen === null && fresh.date.getTime() + 6 * IO_MS + 1000 < expiry &&
+        op.processingMonth === new Date(fresh.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
+      return { expiresAt: new Date(expiry).toISOString(), remainingMs: expiry - fresh.date.getTime() - 4 * IO_MS - 1000 };
+    });
+  }
+  async confirmUpload(value: unknown, stageDigest: string) {
+    return this.guarded(async () => {
+      check(/^[a-f0-9]{64}$/.test(stageDigest));
+      const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
+      const fresh = await this.read(); check(fresh.etag === saved.etag);
+      const op = fresh.state.operations.find(o => o.operationId === c.request.operationId);
+      check(op?.intentDigest === managedDigest(c.request));
+      if (op!.stage === "done") { check(op!.stageDigest === stageDigest); return; }
+      await this.replace(fresh, confirmManagedBudgetStage(fresh.state, c.request.operationId, c.request.requestDigest, stageDigest, this.clock(fresh, 1)));
+    });
+  }
+  async verifyUpload(value: unknown) {
+    return this.guarded(async () => {
+      const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
+      return this.verifyExecution(c, c.executionExpiresAt);
+    });
+  }
+  /** Historical reservation reads do not require current pricing or a new
+   * expiry. They never release money, mutate a run or grant execution. */
+  async inspectWebWatchReservation(operationId: string, caseId: number, caseAllowList: number[]) {
+    return this.guarded(async () => {
+      check(z.string().uuid().safeParse(operationId).success && Number.isSafeInteger(caseId) && caseId > 0);
+      const operation = (await this.read()).state.operations.find(o => o.operationId === operationId);
+      if (!operation) return null;
+      check(operation.kind === "watch" && operation.cases.includes(caseId) &&
+        managedDigest([...operation.cases].sort((a,b) => a-b)) === managedDigest([...caseAllowList].sort((a,b) => a-b)));
+      return operation.unknown || operation.start === "claimed" ? "outcome_unknown" as const : "budget_reserved" as const;
     });
   }
   async reserveWatch(value: unknown) {
@@ -276,7 +362,7 @@ export class ManagedServiceBudgetStorage {
     });
   }
   private async verifyExecution(context: Awaited<ReturnType<ManagedServiceBudgetStorage["watchRequest"]>> |
-    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>, executionExpiresAt: string) {
+    Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>> | Awaited<ReturnType<ManagedServiceBudgetStorage["uploadRequest"]>>, executionExpiresAt: string) {
     const saved = await this.read(), r = context.request, o = saved.state.operations.find(o => o.operationId === r.operationId);
     check(o && o.intentDigest === managedDigest({ ...r, cases: [...r.cases].sort((a,b) => a-b) }) &&
       o.start === "claimed" && o.actualYen === null && (o.kind === "watch" ? o.stage === "unused" : o.stage === "done"));
