@@ -6,6 +6,7 @@ import { managedComparisonSchema, managedDigest, type ManagedComparisonChunk } f
 import { managedScreeningInput, ManagedWatchError, isUnchangedManagedSnapshot, type ManagedRun } from "./managed-types";
 import type { ManagedWatchRepository } from "../../repositories/managed-watch";
 import { managedWatchAiBudgetSchema, type ManagedWatchAiBudget } from "./managed-watch-cost";
+import { managedFailureCode, type ManagedFailurePhase } from "./managed-failure";
 
 export const managedScreeningSchema = z.object({ decisions: z.array(z.object({ candidateId: z.number().int().positive(),
   selected: z.boolean(), reason: z.enum(["technical_overlap", "limited_overlap", "needs_source_review"]) }).strict()).max(100) }).strict();
@@ -50,6 +51,7 @@ export async function executeManagedRun(repository: ManagedWatchRepository, case
   const aiBudget = Object.freeze(managedWatchAiBudgetSchema.parse(proof?.aiBudget));
   const run = await repository.claim(caseId, runId, executionId, proof);
   let journal: ManagedWatchDispatchJournal | undefined;
+  let phase: ManagedFailurePhase = "no_change";
   const boundary: ManagedWatchDispatchJournal = {
     reserve: entry => { if (!journal) throw new ManagedWatchError("conflict"); return journal.reserve(entry); },
     reconcile: entry => { if (!journal) throw new ManagedWatchError("conflict"); return journal.reconcile(entry); },
@@ -57,28 +59,37 @@ export async function executeManagedRun(repository: ManagedWatchRepository, case
   try {
     if (proof?.mode === "no_change_only") {
       if (!isUnchangedManagedSnapshot(run.snapshot)) throw new ManagedWatchError("incomplete");
+      phase = "finalize";
       return await repository.finalize(run);
     }
     return await withManagedWatchBudget({ consumed: run.consumedNormal, deadlineAt: Date.parse(run.deadlineAt!), journal: boundary }, async () => {
       if (run.snapshot.candidates.length) {
+        phase = "screening_input";
         const input = managedScreeningInput(run.snapshot);
         journal = repository.journal(run, "screening", null, managedDigest(input), aiBudget);
+        phase = "screening_request";
         const value = await analysis.screening(input);
+        phase = "screening_selection";
         const selected = validateManagedScreening(run, value);
+        phase = "screening_save";
         run.plan = await repository.saveScreening(run, selected);
         for (let index = 0; index < run.plan.chunks.length; index++) {
+          phase = "detail_request";
           const chunk = run.plan.chunks[index];
           journal = repository.journal(run, "detail", index, managedDigest(chunk), aiBudget);
-          await repository.saveDetail(run, index, await analysis.detail(chunk));
+          const result = await analysis.detail(chunk);
+          phase = "detail_save";
+          await repository.saveDetail(run, index, result);
         }
       }
+      phase = "finalize";
       return repository.finalize(run);
     });
-  } catch {
+  } catch (error) {
     // Any unacknowledged reservation remains unknown and blocks a new run.
     // A failed reconciliation read is not authority to clear that reservation.
     const unknown = await repository.hasUnknownDispatch(run);
-    await repository.fail(run, unknown);
+    await repository.fail(run, unknown, unknown ? undefined : managedFailureCode(phase, error));
     throw new ManagedWatchError(unknown ? "outcome_unknown" : "incomplete");
   }
 }

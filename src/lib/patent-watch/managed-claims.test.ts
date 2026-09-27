@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { planManagedComparisons, validateManagedClaims, validateManagedComparisons, managedDigest,
-  MANAGED_CHUNK_BYTES, type ManagedClaimSet } from "./managed-claims";
+  MANAGED_CHUNK_BYTES, ManagedClaimsError, type ManagedClaimSet } from "./managed-claims";
 
 const base: ManagedClaimSet = { publicationNumber: "JP-FICTIONAL-BASE", version: "published-A1",
   claims: [{ claimNo: 1, text: "架空の検出装置。", dependsOn: [] }, { claimNo: 2, text: "請求項1に記載の検出装置であって架空の制御部を備える。", dependsOn: [1] }] };
@@ -78,5 +78,30 @@ describe("bounded full claim planning", () => {
       { results: [{ ...result().results[0], candidateEvidence: { claimNo: 9, start: 0, end: 1 } }] },
       { results: [{ ...result().results[0], baseEvidence: { ...result().results[0].baseEvidence, quote: "原文にない補造" } }] },
     ]) expect(() => validateManagedComparisons(chunk, invalid)).toThrow("coverage_invalid");
+  });
+  it("classifies rejected output without weakening exact coverage or source evidence checks", () => {
+    const row = result().results[0];
+    const invalid = [
+      ["schema", { results: [{ ...row, riskLabel: "not-a-label" }] }],
+      ["pair_missing", { results: [] }],
+      ["pair_duplicate", { results: [row, row] }],
+      ["pair_unknown", { results: [{ ...row, candidateClaimNo: 999 }] }],
+      ["evidence_claim", { results: [{ ...row, candidateEvidence: { ...row.candidateEvidence, claimNo: 999 } }] }],
+      ["evidence_bounds", { results: [{ ...row, candidateEvidence: { ...row.candidateEvidence, end: 99999 } }] }],
+      ["evidence_quote", { results: [{ ...row, candidateEvidence: { ...row.candidateEvidence, quote: "原文にない補造" } }] }],
+    ] as const;
+    for (const [reason, value] of invalid) {
+      let error: unknown;
+      try { validateManagedComparisons(plan().chunks[0], value); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(ManagedClaimsError);
+      expect(error).toMatchObject({ code: "coverage_invalid", reason, message: "coverage_invalid" });
+    }
+    const unicodeCandidate = { ...candidate, claims: [{ claimNo: 3, text: "架空😀装置", dependsOn: [] }] };
+    const chunk = planManagedComparisons(base, [2], [{ candidateId: 8, source: unicodeCandidate }]).chunks[0];
+    expect(() => validateManagedComparisons(chunk, { results: [{ ...row,
+      candidateEvidence: { claimNo: 3, start: 2, end: 3, quote: "\ud83d" } }] })).toThrowError(
+      expect.objectContaining({ code: "coverage_invalid", reason: "surrogate_boundary" }));
+    expect(validateManagedComparisons(chunk, { results: [{ ...row,
+      candidateEvidence: { claimNo: 3, start: 2, end: 4, quote: "😀" } }] })).toHaveLength(1);
   });
 });
