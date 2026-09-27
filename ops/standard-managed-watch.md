@@ -62,6 +62,17 @@ OWNER認証と非公開保存の確認前に本番試験案件を作らない。
 （目標20,000円）。不明費用を0にせず、各有料工程前に残工程・保存・復旧を予約。
 8割で内部再見積し、収まらない場合は新しい有料処理を停止する。
 
+Issue #129の追加承認に限り、2026年9月のrelease月次planには独立レビュー・
+署名済みの`releaseMonthlyCapYen`を保持できる。金額の原本は非公開の承認・台帳で照合し、
+通常profile、指定月外、省略時の月3万円、追加累計・回数・期限は維持する。
+互換コードのApp/Job配備前は旧plan形式を維持し、承認された全残工程の非公開見積と
+既存pool内の段階release許可を照合する。配備確認後に新形式の月次planをCAS適用する。
+旧imageへ戻せるのは、月3万円を超えるforecastを持つ設定・manifestの保存前に限る。
+新規処理を停止し、元snapshotを基に当該optional項目だけを省略した署名month planへ
+戻してから配備する。保存後は、当該形式を読める互換imageで引用修正を戻すか修正配備する。
+費用・消費・不明予約を削らず、旧上限を超える間は業務開始が停止することを確認する。
+認証・原本・保存結果や保存済み設定を削除・改変して復旧扱いにしない。
+
 本リリース累計上限は架空case5、watch開始40、normal900/fast80、Job24実行/48時間、
 package64/合計96GiB、forward deploy8/rollback2。1package8GiB、1Job120分/2vCPU/4GiB、
 parallelism1/completionCount1/retry0。全文watchだけnormal41/fast0・30分、
@@ -362,6 +373,10 @@ workflowのCI20分・deploy40分timeoutを予約へ織り込む。初回操作�
 これはLocalの実行手順による制御であり、キューや請求遅延を含む厳密な請求上限の機械保証ではない。
 
 証拠収集/署名・create-only配置の手順、予約枠確定、本番統合受入は未完了。
+詳細比較のAI出力には、根拠の請求項番号と原文どおりの短い引用だけを要求する。
+位置は、その請求項または許可済み参照請求項内で引用が一度だけ一致するときにサーバーがUTF-16で計算する。
+原文にない引用、複数箇所への一致、空白等の補正を要する引用、surrogateの分断は拒否する。
+保存時の番号・組合せcoverage・位置・原文一致の検証は維持し、過去の保存結果を補正・上書きしない。
 定例運用が成立したとは扱わず、残工程と本番GOを確認するまで標準profileの有効化は行わない。
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、

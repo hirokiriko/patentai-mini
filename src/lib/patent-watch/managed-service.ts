@@ -2,7 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { getModel } from "../ai-model";
 import { withManagedWatchBudget, type ManagedWatchDispatchJournal } from "../ai-operation-budget";
-import { managedComparisonSchema, managedDigest, type ManagedComparisonChunk } from "./managed-claims";
+import { managedComparisonQuoteSchema, resolveManagedComparisonQuotes, managedDigest, type ManagedComparisonChunk } from "./managed-claims";
 import { managedScreeningInput, ManagedWatchError, isUnchangedManagedSnapshot, type ManagedRun } from "./managed-types";
 import type { ManagedWatchRepository } from "../../repositories/managed-watch";
 import { managedWatchAiBudgetSchema, type ManagedWatchAiBudget } from "./managed-watch-cost";
@@ -39,10 +39,10 @@ export const managedAzureAnalysis = {
   },
   async detail(chunk: ManagedComparisonChunk) {
     if (process.env.AI_PROVIDER !== "azure") throw new ManagedWatchError("unavailable");
-    const { object } = await generateObject({ model: getModel(), schema: managedComparisonSchema,
-      system: SYSTEM + "pairsの各組合せを漏れなく一度ずつ比較してください。base/candidateの請求項全文と参照請求項が入力です。根拠は原文中の短い連続文字列quoteと、0始まりUTF-16のstart/end（end除外）、そのclaimNoで示してください。説明は原文全文を反復せず、技術的要素と相違を日本語で簡潔に整理してください。",
+    const { object } = await generateObject({ model: getModel(), schema: managedComparisonQuoteSchema,
+      system: SYSTEM + "pairsの各組合せを漏れなく一度ずつ比較してください。base/candidateの請求項全文と参照請求項が入力です。根拠は該当請求項内に一度だけ現れる原文そのままの短い連続文字列quoteと、そのclaimNoで示してください。空白や句読点も変えず、位置の数値は出力しないでください。説明は原文全文を反復せず、技術的要素と相違を日本語で簡潔に整理してください。",
       prompt: JSON.stringify(chunk), maxRetries: 0, maxOutputTokens: 8192, abortSignal: AbortSignal.timeout(35_000) });
-    return object;
+    return resolveManagedComparisonQuotes(chunk, object);
   },
 };
 /** Only called by the awaited fixed cloud worker, never detached from an HTTP route. */
