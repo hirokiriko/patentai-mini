@@ -16,6 +16,7 @@ import { parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata
 import { verifyManagedBaseOriginal, MANAGED_BASE_XML_BYTES } from "../lib/patent-watch/managed-base-source";
 import { lockManagedCase } from "./managed-case-graph";
 import { managedWatchAiBudgetSchema, requireManagedWatchCost, type ManagedWatchAiBudget } from "../lib/patent-watch/managed-watch-cost";
+import { isManagedFailureCode } from "../lib/patent-watch/managed-failure";
 
 type Database = NodePgDatabase<typeof schema>;
 const S = schema.managedWatchSettings, R = schema.managedWatchRuns, D = schema.managedWatchDispatches, F = schema.managedWatchFindings;
@@ -276,8 +277,9 @@ export class ManagedWatchRepository {
       requireState(saved.length === 1);
     });
   }
-  async fail(run: ManagedRun, unknown: boolean) {
-    await this.database.update(R).set({ status: unknown ? "unknown" : "failed", errorCode: unknown ? "outcome_unknown" : "incomplete", completedAt: new Date().toISOString() })
+  async fail(run: ManagedRun, unknown: boolean, diagnostic?: string) {
+    const errorCode = unknown ? "outcome_unknown" : diagnostic && isManagedFailureCode(diagnostic) ? diagnostic : "incomplete";
+    await this.database.update(R).set({ status: unknown ? "unknown" : "failed", errorCode, completedAt: new Date().toISOString() })
       .where(and(eq(R.caseId, run.caseId), eq(R.runId, run.runId), eq(R.executionId, run.executionId!), eq(R.status, "running")));
   }
   /** Read-after-restart never sends AI. Only wholly persisted results can finalize. */

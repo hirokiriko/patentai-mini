@@ -9,7 +9,8 @@ export type ManagedClaimSet = Readonly<{
   claims: readonly ManagedClaim[];
 }>;
 export class ManagedClaimsError extends Error {
-  constructor(readonly code: "claims_missing" | "claims_invalid" | "reference_missing" | "coverage_invalid" | "split_limit") { super(code); }
+  constructor(readonly code: "claims_missing" | "claims_invalid" | "reference_missing" | "coverage_invalid" | "split_limit",
+    readonly reason?: "schema" | "pair_unknown" | "pair_duplicate" | "pair_missing" | "evidence_claim" | "evidence_bounds" | "evidence_quote" | "surrogate_boundary") { super(code); }
 }
 const MAX_CLAIMS = 1_000;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
@@ -144,7 +145,7 @@ export type ManagedComparison = z.infer<typeof managedComparisonSchema>["results
 /** Every requested pair exactly once; quoted locations must exist in the exact input. */
 export function validateManagedComparisons(chunk: ManagedComparisonChunk, value: unknown): ManagedComparison[] {
   const parsed = managedComparisonSchema.safeParse(value);
-  if (!parsed.success) throw new ManagedClaimsError("coverage_invalid");
+  if (!parsed.success) throw new ManagedClaimsError("coverage_invalid", "schema");
   const key = (p: ManagedPair) => `${p.baseClaimNo}:${p.candidateClaimNo}`;
   const expected = new Set(chunk.pairs.map(key));
   const seen = new Set<string>();
@@ -153,18 +154,19 @@ export function validateManagedComparisons(chunk: ManagedComparisonChunk, value:
     const claim = allowed.find(c => c.claimNo === evidence.claimNo);
     const splitsSurrogate = (at: number) => claim && at > 0 && at < claim.text.length &&
       /[\uD800-\uDBFF]/.test(claim.text[at - 1]) && /[\uDC00-\uDFFF]/.test(claim.text[at]);
-    if (!claim || evidence.start >= evidence.end || evidence.end > claim.text.length || !evidence.quote.trim() ||
-        claim.text.slice(evidence.start, evidence.end) !== evidence.quote || splitsSurrogate(evidence.start) || splitsSurrogate(evidence.end)) {
-      throw new ManagedClaimsError("coverage_invalid");
-    }
+    if (!claim) throw new ManagedClaimsError("coverage_invalid", "evidence_claim");
+    if (evidence.start >= evidence.end || evidence.end > claim.text.length) throw new ManagedClaimsError("coverage_invalid", "evidence_bounds");
+    if (splitsSurrogate(evidence.start) || splitsSurrogate(evidence.end)) throw new ManagedClaimsError("coverage_invalid", "surrogate_boundary");
+    if (!evidence.quote.trim() || claim.text.slice(evidence.start, evidence.end) !== evidence.quote) throw new ManagedClaimsError("coverage_invalid", "evidence_quote");
   };
   for (const result of parsed.data.results) {
     const id = key(result);
-    if (!expected.has(id) || seen.has(id)) throw new ManagedClaimsError("coverage_invalid");
+    if (!expected.has(id)) throw new ManagedClaimsError("coverage_invalid", "pair_unknown");
+    if (seen.has(id)) throw new ManagedClaimsError("coverage_invalid", "pair_duplicate");
     seen.add(id);
     validateEvidence(chunk.base, result.baseClaimNo, result.baseEvidence);
     validateEvidence(chunk.candidate, result.candidateClaimNo, result.candidateEvidence);
   }
-  if (seen.size !== expected.size) throw new ManagedClaimsError("coverage_invalid");
+  if (seen.size !== expected.size) throw new ManagedClaimsError("coverage_invalid", "pair_missing");
   return parsed.data.results;
 }

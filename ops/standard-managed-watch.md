@@ -68,6 +68,12 @@ parallelism1/completionCount1/retry0。全文watchだけnormal41/fast0・30分�
 1要求35秒・保守的入力見積normal150,000/fast50,000・出力8,192tokens。
 結果不明のwrite/AI/Job startを再送せず、保存済み対応情報で照合する。
 
+比較が失敗した場合は、保存されたrunのerror_codeとdispatchの段階・status・usageを限定読取する。
+`incomplete:<段階>:<固定理由>`は原因区間の記録であり、成功した比較結果ではない。
+`unclassified`はその段階で分類未確定を意味し、引用位置の誤りやDB障害と断定しない。
+不明dispatchがあれば従来どおり`outcome_unknown`を優先し、追加AI・別runの盲目的な再送を止める。
+例外本文・SDK応答・請求項・秘密は診断コードに保存しない。旧runへ後から理由を推定追記しない。
+
 2026-09-23の追加承認は圧縮ZIPの各8GiB/累計96GiBだけ。旧pilotの各2GiBを変更しない。
 managed取込は従来のparser上限を保持し、宣言展開総量16GiB、実読取展開総量8GiB、
 1entry2GiB、directory128MiB/25万件、CSV128MiB/XML64MiBを超えれば未完了として停止する。

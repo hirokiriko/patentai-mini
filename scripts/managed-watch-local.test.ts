@@ -334,14 +334,21 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     expect((await repository.finalize(zeroRunning)).normalCalls).toBe(0);
     const next = await repository.prepare(c1, { from: "2026-08-26", to: "2026-09-25" });
     expect(next.snapshot.candidates).toHaveLength(1); expect(next.snapshot.candidates[0].publicationDate).toBe("2026-08-26");
-    const nextRunning = await repository.claim(c1, next.runId, "fictional-next"); await repository.fail(nextRunning, false);
+    const nextRunning = await repository.claim(c1, next.runId, "fictional-next");
+    await repository.fail({ ...nextRunning, executionId: "different-worker" }, false, "incomplete:detail_save:evidence_quote");
+    expect((await repository.run(c1, next.runId)).status).toBe("running");
+    await repository.fail(nextRunning, false, "incomplete:detail_save:evidence_quote");
+    expect((await environment.sql("select status,error_code from managed_watch_runs where run_id=$1", [next.runId]))[0])
+      .toMatchObject({ status: "failed", error_code: "incomplete:detail_save:evidence_quote" });
     await addPackage("2026-08-13", "FICTIONAL-LATE", true);
     const late = await repository.prepare(c1, period); expect(late.snapshot.candidates).toHaveLength(1);
     expect(late.snapshot.candidates[0].publicationDate).toBe("2026-08-13");
     const lateRunning = await repository.claim(c1, late.runId, "fictional-late");
     await repository.journal(lateRunning, "screening", null, managedDigest(managedScreeningInput(lateRunning.snapshot)), aiBudget).reserve(request(1));
     expect(await repository.hasUnknownDispatch(lateRunning)).toBe(true);
-    await repository.fail(lateRunning, true);
+    await repository.fail(lateRunning, true, "incomplete:detail_save:evidence_quote");
+    expect((await environment.sql("select status,error_code from managed_watch_runs where run_id=$1", [late.runId]))[0])
+      .toMatchObject({ status: "unknown", error_code: "outcome_unknown" });
     await expect(repository.prepare(c1, period)).rejects.toThrow("in_progress");
     expect((await repository.run(c1, late.runId)).consumedNormal).toBe(1);
     const finding = (await environment.sql("select finding_id from managed_watch_findings where setting_id=$1", [setting.settingId]))[0];
