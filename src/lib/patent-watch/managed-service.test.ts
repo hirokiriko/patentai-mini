@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedAzureAnalysis, validateManagedScreening } from "./managed-service";
 import { managedBaseDigest, type ManagedRun, type managedScreeningInput } from "./managed-types";
-import { managedClaimContext } from "./managed-claims";
+import { managedClaimContext, planManagedComparisons, validateManagedComparisons, type ManagedComparisonChunk } from "./managed-claims";
 import { isAiOperationStopped, withManagedWatchBudget, type ManagedWatchDispatchJournal } from "../ai-operation-budget";
 const run = { snapshot: { candidates: [{ candidateId: 1 }, { candidateId: 2 }] } } as ManagedRun;
 describe("managed screening completeness", () => {
@@ -28,18 +28,20 @@ describe("managed screening real SDK input boundary", () => {
     candidates: Array.from({ length: 100 }, (_, i) => ({ candidateId: i + 1, inventionTitle: "架空の検証候補",
       abstract: "説明文".repeat(100), lexicalScore: 0.1, claimsStatus: "complete" as const })),
   });
-  function fixture() {
+  function fixture(output?: unknown) {
     for (const [name, value] of Object.entries({ AI_PROVIDER: "azure", AZURE_OPENAI_BASE_URL: "https://example.invalid/openai",
       AZURE_API_KEY: "fictional", AZURE_OPENAI_API_VERSION: "v1", AZURE_OPENAI_DEPLOYMENT_NAME: "fictional" })) vi.stubEnv(name, value);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     const decisions = Array.from({ length: 100 }, (_, i) => ({ candidateId: i + 1, selected: false, reason: "limited_overlap" }));
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ id: "resp_fixture", created_at: 0,
       model: "fictional", status: "completed", output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
-        content: [{ type: "output_text", text: JSON.stringify({ decisions }), annotations: [] }] }],
+        content: [{ type: "output_text", text: JSON.stringify(output ?? { decisions }), annotations: [] }] }],
       usage: { input_tokens: 1000, output_tokens: 1000 } }));
     vi.stubGlobal("fetch", transport);
     const journal: ManagedWatchDispatchJournal = { reserve: vi.fn(async () => undefined), reconcile: vi.fn(async () => undefined) };
-    return { decisions, transport, journal, run: (value: ReturnType<typeof managedScreeningInput>) =>
+    return { decisions, transport, journal, detail: (chunk: ManagedComparisonChunk) =>
+      withManagedWatchBudget({ consumed: 0, deadlineAt: Date.now() + 60_000, journal }, () => managedAzureAnalysis.detail(chunk)),
+      run: (value: ReturnType<typeof managedScreeningInput>) =>
       withManagedWatchBudget({ consumed: 0, deadlineAt: Date.now() + 60_000, journal }, () => managedAzureAnalysis.screening(value)) };
   }
   it("screens all 100 Japanese candidates above 90k without truncation under the approved request limit", async () => {
@@ -66,5 +68,22 @@ describe("managed screening real SDK input boundary", () => {
     const error = await f.run(value).catch(e => e);
     expect(isAiOperationStopped(error)).toBe(true);
     expect(f.journal.reserve).not.toHaveBeenCalled(); expect(f.transport).not.toHaveBeenCalled();
+  });
+  it("uses the actual SDK for quote-only detail output and derives persisted positions without another request", async () => {
+    const base = input().base;
+    const candidate = { ...base, publicationNumber: "JP-FICTIONAL-CANDIDATE", claims: [{ claimNo: 1, text: "架空😀の検出部。", dependsOn: [] }] };
+    const chunk = planManagedComparisons(base, [1], [{ candidateId: 2, source: candidate }]).chunks[0];
+    const output = { results: [{ baseClaimNo: 1, candidateClaimNo: 1, lexicalScore: 0.1, elementScore: 0.2, semanticScore: 0.3,
+      structuralScore: 0.4, riskLabel: "Low", explanation: "架空の相違を原文で確認してください。",
+      baseEvidence: { claimNo: 1, quote: "装置" }, candidateEvidence: { claimNo: 1, quote: "検出部" } }] };
+    const f = fixture(output), result = await f.detail(chunk);
+    expect(result.results[0].candidateEvidence).toEqual({ claimNo: 1, quote: "検出部", start: 5, end: 8 });
+    expect(validateManagedComparisons(chunk, result)).toEqual(result.results);
+    expect(f.transport).toHaveBeenCalledTimes(1); expect(f.journal.reserve).toHaveBeenCalledTimes(1); expect(f.journal.reconcile).toHaveBeenCalledTimes(1);
+    const request = JSON.parse(f.transport.mock.calls[0][1]!.body as string);
+    const schema = request.text.format.schema.properties.results.items.properties.baseEvidence;
+    expect(Object.keys(schema.properties).sort()).toEqual(["claimNo", "quote"]);
+    const sent = request.input.find((entry: { role: string }) => entry.role === "user").content[0].text;
+    expect(JSON.parse(sent)).toEqual(chunk);
   });
 });

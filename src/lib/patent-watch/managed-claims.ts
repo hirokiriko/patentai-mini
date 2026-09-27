@@ -142,6 +142,30 @@ export const managedComparisonSchema = z.object({ results: z.array(z.object({
   explanation: z.string().min(1).max(1_500),
 }).strict()).max(MAX_PAIRS_PER_CHUNK) }).strict();
 export type ManagedComparison = z.infer<typeof managedComparisonSchema>["results"][number];
+// The model supplies exact source quotes; character counting belongs to the server.
+const quotedClaim = position.omit({ start: true, end: true });
+export const managedComparisonQuoteSchema = managedComparisonSchema.extend({ results: z.array(
+  managedComparisonSchema.shape.results.element.extend({ baseEvidence: quotedClaim, candidateEvidence: quotedClaim }),
+).max(MAX_PAIRS_PER_CHUNK) });
+/** Resolve only unique, verbatim quotes within the declared claim and its allowed context. */
+export function resolveManagedComparisonQuotes(chunk: ManagedComparisonChunk, value: unknown): { results: ManagedComparison[] } {
+  const parsed = managedComparisonQuoteSchema.safeParse(value);
+  if (!parsed.success) throw new ManagedClaimsError("coverage_invalid", "schema");
+  const resolve = (source: ManagedClaimSet, no: number, evidence: z.infer<typeof quotedClaim>) => {
+    const claim = closure(source, [no]).find(c => c.claimNo === evidence.claimNo);
+    if (!claim) throw new ManagedClaimsError("coverage_invalid", "evidence_claim");
+    const start = claim.text.indexOf(evidence.quote);
+    if (!evidence.quote.trim() || start < 0 || claim.text.indexOf(evidence.quote, start + 1) !== -1) {
+      throw new ManagedClaimsError("coverage_invalid", "evidence_quote");
+    }
+    return { ...evidence, start, end: start + evidence.quote.length };
+  };
+  const results = parsed.data.results.map(result => ({ ...result,
+    baseEvidence: resolve(chunk.base, result.baseClaimNo, result.baseEvidence),
+    candidateEvidence: resolve(chunk.candidate, result.candidateClaimNo, result.candidateEvidence),
+  }));
+  return { results: validateManagedComparisons(chunk, { results }) };
+}
 /** Every requested pair exactly once; quoted locations must exist in the exact input. */
 export function validateManagedComparisons(chunk: ManagedComparisonChunk, value: unknown): ManagedComparison[] {
   const parsed = managedComparisonSchema.safeParse(value);
