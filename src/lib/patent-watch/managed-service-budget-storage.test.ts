@@ -92,6 +92,24 @@ function executionFixture(){
   f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
   return{...f,...b};
 }
+it.each([true, false])("requires a signed ledger allowance for a larger Web watch forecast: %s", async allowed => {
+  const f = executionFixture(), s = f.current();
+  s.plans[0].baseYen = 26_000;
+  if (allowed) s.plans[0].releaseMonthlyCapYen = 31_000;
+  f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  const c = managedCloudFixture();
+  const { budgetProof: _proof, ...web } = c;
+  void _proof;
+  const prepared = await f.store.prepareWebWatch(web);
+  expect(prepared.budgetProof.monthlyForecastYen).toBe(31_000);
+  if (allowed) {
+    await f.store.reserveWatch(prepared); await f.store.claimWatch(prepared);
+    expect(await f.store.verifyWatch(prepared)).toMatchObject({ processingMonth: "2026-09" });
+  } else {
+    await expect(f.store.reserveWatch(prepared)).rejects.toThrow();
+    expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual([]);
+  }
+});
 it("reads a watch reservation left before DB reserve without changing its intent or budget", async () => {
   const f = fixture(), r = { ...request("watch"), cases: [1, 2, 3, 4, 5] };
   expect(await f.store.inspectWebWatchReservation(r.operationId, 1, r.cases)).toBeNull();
@@ -289,6 +307,29 @@ it("shares the reviewed import reservation across ETag sealing, stage confirmati
   await expect(f.store.claimImport(sealed,b.manifest,b.job,"start")).rejects.toThrow();
   await expect(f.store.verifyImport(sealed,{...b.manifest,packages:[{...b.manifest.packages[0],managedSourcesSha256:hash(70)}]},b.job)).rejects.toThrow();
 });
+it.each([true, false])("does not use a larger import manifest forecast as its release allowance: %s", async allowed => {
+  vi.spyOn(Date,"now").mockReturnValue(Date.parse("2026-09-23T00:00:00Z"));
+  const b=await managedCloudImportFixture(), f=fixture(b.binding), s=f.current();
+  s.plans[0].pricingDigest=b.pricingDigest; s.plans[0].baseYen=26_000;
+  if (allowed) s.plans[0].releaseMonthlyCapYen=31_000;
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${b.pricingDigest}.json`,{bytes:Buffer.from(JSON.stringify(b.policy)),etag:'"policy"'});
+  if (b.manifest.approval !== "STANDARD_MANAGED_WATCH_RELEASE_V1") throw Error();
+  b.manifest.releaseReservation.monthlyForecastYen=31_000;
+  delete b.config.serviceBudget;
+  await b.publish();
+  const c=await f.store.prepareImport(b.config,b.manifest,b.job);
+  if (allowed) {
+    await f.store.reserveImport(c,b.manifest,b.job);
+    await f.store.claimImport(c,b.manifest,b.job,"stage");
+    await f.store.confirmImport(c,b.manifest,b.job);
+    await f.store.claimImport(c,b.manifest,b.job,"start");
+    expect(await f.store.verifyImport(c,b.manifest,b.job)).toMatchObject({processingMonth:"2026-09"});
+  } else {
+    await expect(f.store.reserveImport(c,b.manifest,b.job)).rejects.toThrow();
+    expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
+  }
+});
 async function archivedExecutionFixture(){
   vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
   const b=await managedCloudImportFixture(),f=fixture(b.binding);
@@ -408,6 +449,25 @@ function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseSt
     remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
     ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
 }
+it("binds a month allowance to the signed review and rejects tampering before any write", async () => {
+  const f = fixture();
+  const action = { kind: "month" as const, processingMonth: "2026-09", baseYen: 26_000,
+    pools: { remaining: 1000, storage: 1000, recovery: 1000 }, pricingDigest: hash(4),
+    releaseTailYen: f.current().releaseTailYen, reviewedOperationIds: [], releaseMonthlyCapYen: 31_000 };
+  const p = adminReviewed(f, action), reviewKey = `${MANAGED_BUDGET_PREFIX}administration-reviews/${p.digest}.json`;
+  const original = f.files.get(reviewKey)!.bytes;
+  const tampered = structuredClone(p.envelope);
+  if (tampered.review.action.kind !== "month") throw Error();
+  tampered.review.action.releaseMonthlyCapYen = 31_001;
+  f.files.get(reviewKey)!.bytes = Buffer.from(JSON.stringify(tampered));
+  await expect(f.store.applyReviewedAdministration(p.digest, p.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual([]);
+  f.files.get(reviewKey)!.bytes = original;
+  await f.store.applyReviewedAdministration(p.digest, p.pins);
+  expect(f.current().plans[0].releaseMonthlyCapYen).toBe(31_000);
+  expect(f.current().operations).toEqual([]);
+  expect(() => adminReviewed(f, { ...action, processingMonth: "2026-10" })).toThrow();
+});
 it.each(["validation","forward","rollback"] as const)("admits a signed Local %s step only from a new atomic CAS ACK",async kind=>{
   const f=executionFixture(),step=releaseStep(f,kind),p=adminReviewed(f,{kind:"release-start",step});
   expect(await f.store.applyReviewedAdministration(p.digest,p.pins,true)).toEqual({status:"not_applied"});

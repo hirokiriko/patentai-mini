@@ -14,7 +14,9 @@ export const managedCloudConfigSchema = z.object({ approval: managedExecutionApp
     apiVersion: z.string().regex(/^(?:v1|\d{4}-\d{2}-\d{2}(?:-preview)?)$/) }).strict(),
   secrets: z.object({ database: z.string().regex(/^[a-z0-9-]{1,64}$/), ai: z.string().regex(/^[a-z0-9-]{1,64}$/) }).strict(),
   budgetProof: z.object({ ledgerDigest: managedHash, checkedAt: z.iso.datetime(), additionalForecastYen: z.number().int().positive().max(50_000),
-    monthlyForecastYen: z.number().int().positive().max(30_000), externalJobExecutions: z.number().int().nonnegative().max(24),
+    // Compatibility proof only: the installed signed ledger is authoritative
+    // at both reservation and worker admission, including the Standard cap.
+    monthlyForecastYen: z.number().int().positive().max(50_000), externalJobExecutions: z.number().int().nonnegative().max(24),
     externalJobReservedMinutes: z.number().int().nonnegative().max(48*60), externalNormalSends: z.number().int().nonnegative().max(900),
     externalFastSends: z.number().int().nonnegative().max(80) }).strict(),
   // No defaults: historical serialized configurations and template hashes remain unchanged.
@@ -24,6 +26,9 @@ export const managedCloudConfigSchema = z.object({ approval: managedExecutionApp
 export type ManagedCloudConfiguration = z.infer<typeof managedCloudConfigSchema>;
 export function parseManagedCloudConfiguration(value: unknown, now = Date.now(), requireFreshBudget = true): ManagedCloudConfiguration {
   const c = managedCloudConfigSchema.parse(value);
+  if (c.budgetProof.monthlyForecastYen > 30_000 && (c.approval !== "STANDARD_MANAGED_WATCH_RELEASE_V1" ||
+    (c.serviceBudget && c.serviceBudget.profileDigest !== null) ||
+    new Date(Date.parse(c.budgetProof.checkedAt) + 9*60*60_000).toISOString().slice(0,7) !== "2026-09")) throw new ManagedWatchError("invalid_setting");
   if (!c.jobResourceId.endsWith(`/jobs/${c.jobName}`) || new Set(c.caseAllowList).size !== c.caseAllowList.length ||
     new Set(c.runs.map(r=>r.caseId)).size !== c.runs.length || new Set(c.runs.map(r=>r.runId)).size !== c.runs.length ||
     c.runs.some(r=>!c.caseAllowList.includes(r.caseId)) || Date.parse(c.expiresAt) <= now || Date.parse(c.expiresAt) - now > 6*60*60_000 ||

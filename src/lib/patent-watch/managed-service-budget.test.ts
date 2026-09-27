@@ -32,6 +32,27 @@ function nextMonth(s: ManagedBudgetState, date = "2026-09-30T15:00:01.000Z") {
   return setManagedMonthPlan(s, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
     pricingDigest: digest(4), evidenceDigest: digest(8), releaseTailYen: s.releaseTailYen }, clock(date));
 }
+it("confines the reviewed release allowance to its month without changing Standard or historical plans", () => {
+  const original = state(), serialized = JSON.stringify(original);
+  expect(JSON.stringify(managedBudgetStateSchema.parse(original))).toBe(serialized);
+  const input = { baseYen: 19_000, pools: original.plans[0].pools, pricingDigest: digest(4),
+    evidenceDigest: digest(91), releaseTailYen: original.releaseTailYen };
+  const without = setManagedMonthPlan(original, input, clock());
+  expect(managedBudgetForecast(without, "2026-09")).toBe(31_000);
+  expect(() => reserveManagedBudget(without, request(), null, clock())).toThrow();
+  const allowed = setManagedMonthPlan(original, { ...input, releaseMonthlyCapYen: 31_000 }, clock());
+  const r = request(), reserved = reserveManagedBudget(allowed, r, null, clock()).state;
+  expect(claimManagedBudgetPhase(reserved, r.operationId, "stage", null, clock()).operations[0].stage).toBe("claimed");
+  expect(() => reserveManagedBudget({ ...allowed, legacyUnknownYen: 2001 }, request(), null, clock())).toThrow();
+  expect(() => activate(allowed, profile())).toThrow();
+  expect(() => reserveManagedBudget(without, request({ releaseMonthlyCapYen: 31_000 }), null, clock())).toThrow();
+  expect(() => setManagedMonthPlan(original, { ...input, releaseMonthlyCapYen: 31_000 }, clock("2026-09-30T15:00:01.000Z"))).toThrow();
+  expect(() => reserveManagedBudget(setManagedMonthPlan(original, input, clock("2026-09-30T15:00:01.000Z")), request(), null,
+    clock("2026-09-30T15:00:01.000Z"))).toThrow();
+  expect(() => reserveManagedBudget({ ...allowed, releaseTailYen: 50_001 }, request(), null, clock())).toThrow();
+  expect(() => reserveManagedBudget(allowed, request({ units: { ...emptyManagedBudgetUnits(), jobs: 25 } }), null, clock())).toThrow();
+  expect(original).toEqual(JSON.parse(serialized));
+});
 it("allocates one import reservation across stage/start without adding it to its pool again", () => {
   const original = state(), r = request(); const reserved = reserveManagedBudget(original, r, null, clock()).state;
   expect(original.operations).toHaveLength(0); expect(managedBudgetForecast(reserved, "2026-09")).toBe(22_000);

@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { z } from "zod";
 import { managedDigest } from "./managed-claims";
-import { ManagedBudgetError, managedBudgetStateSchema, managedBudgetUnitsSchema, emptyManagedBudgetUnits, managedBudgetRequestSchema } from "./managed-service-budget";
+import { ManagedBudgetError, managedBudgetStateSchema, managedBudgetUnitsSchema, emptyManagedBudgetUnits, managedBudgetRequestSchema, managedReleaseMonthlyCapSchema } from "./managed-service-budget";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), quantity = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const yen = z.number().int().nonnegative().max(1_000_000_000);
@@ -61,7 +61,9 @@ export const managedAdministrationReviewSchema = z.object({ schema: z.literal(1)
     z.object({ kind: z.literal("open"), state: managedBudgetStateSchema }).strict(),
     z.object({ kind: z.literal("month"), processingMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
       baseYen: yen, pools: z.object({ remaining: yen, storage: yen, recovery: yen }).strict(), pricingDigest: hash, releaseTailYen: yen,
-      reviewedOperationIds: z.array(z.uuidv4()).max(768).refine(ids => new Set(ids).size === ids.length) }).strict(),
+      reviewedOperationIds: z.array(z.uuidv4()).max(768).refine(ids => new Set(ids).size === ids.length),
+      releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional() }).strict()
+      .refine(a => a.releaseMonthlyCapYen === undefined || a.processingMonth === "2026-09"),
     z.object({ kind: z.literal("activate"), profileDigest: hash, goEvidenceDigest: hash, measurementDigest: hash, pricingDigest: hash }).strict(),
     z.object({ kind: z.literal("release-start"), step: managedReleaseStepSchema }).strict(),
   ]),

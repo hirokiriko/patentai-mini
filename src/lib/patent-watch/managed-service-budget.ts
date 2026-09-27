@@ -42,7 +42,14 @@ const operationSchema = managedBudgetRequestSchema.extend({ intentDigest: hash, 
   evidenceChainDigest: hash, lastProofSequence: quantity,
   settlements: z.array(z.object({ sequence: quantity.refine(v => v > 0), evidenceDigest: hash, proofDigest: hash }).strict()).max(64) }).strict();
 type Operation = z.infer<typeof operationSchema>;
-const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128) }).strict();
+// The separately signed Issue #129 release allowance is confined to its
+// approved processing month. Omission preserves historical plan digests.
+// The schema ceiling is the existing public release ceiling, not authority to
+// spend it: the exact OWNER allowance is in the signed private month review.
+export const managedReleaseMonthlyCapSchema = z.number().int().min(30_000).max(50_000);
+const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128),
+  releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional() }).strict()
+  .refine(p => p.releaseMonthlyCapYen === undefined || p.month === "2026-09");
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases: historicalCases, lastTrustedAt: z.iso.datetime(),
   releaseTailYen: yen, legacyUnknownYen: yen, openingEvidenceDigest: hash,
@@ -128,7 +135,8 @@ function active(s: ManagedBudgetState, value: unknown) {
 }
 function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile) {
   check(!s.operations.some(o => o.reviewRequired));
-  check(managedBudgetForecast(s, m) <= (profile?.monthlyCapYen ?? 30_000));
+  const releaseCap = s.plans.find(p => p.month === m)?.releaseMonthlyCapYen ?? 30_000;
+  check(managedBudgetForecast(s, m) <= (profile?.monthlyCapYen ?? releaseCap));
   check(sum([s.releaseTailYen, ...s.operations.filter(o => o.scope === "release").map(cost)]) <= 50_000);
   const release = totals(s, "release", m);
   for (const k of unitKeys) check(release[k] <= managedReleaseCaps[k]);
@@ -146,9 +154,11 @@ function evidence(o: Operation, digest: string) {
 
 /** Administrative evidence must be checked by the adapter before these transitions. */
 export function setManagedMonthPlan(value: unknown, input: { baseYen: number; pools: z.infer<typeof pools>;
-  pricingDigest: string; evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[] }, clock: ManagedBudgetClock) {
+  pricingDigest: string; evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[];
+  releaseMonthlyCapYen?: number }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
   const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
+    ...(input.releaseMonthlyCapYen === undefined ? {} : { releaseMonthlyCapYen: input.releaseMonthlyCapYen }),
     evidenceDigests: [...new Set([...(old?.evidenceDigests ?? []), hash.parse(input.evidenceDigest)])] });
   if (old) s.plans[s.plans.indexOf(old)] = plan; else s.plans.push(plan);
   s.releaseTailYen = yen.parse(input.releaseTailYen);

@@ -44,7 +44,7 @@ const managedManifestSchema = manifestSchema.extend({ approval: z.literal("STAND
   // These are release-wide reservations, including this batch and all unknown outcomes.
   releaseReservation: z.object({ packageCount: z.number().int().min(1).max(64), compressedBytes: z.number().int().positive().max(96 * 1024**3),
     jobExecutions: z.number().int().min(1).max(24), jobMinutes: z.number().int().min(1).max(48*60), ledgerDigest: sha,
-    additionalForecastYen: z.number().int().positive().max(50_000), monthlyForecastYen: z.number().int().positive().max(30_000) }).strict(),
+    additionalForecastYen: z.number().int().positive().max(50_000), monthlyForecastYen: z.number().int().positive().max(50_000) }).strict(),
   packages: z.array(manifestSchema.shape.packages.element.extend({ packageType: z.literal("JPA"),
     byteLength: z.number().int().positive().max(8 * 1024**3), managedSourcesSha256: sha, managedReceiptSha256: sha,
     acquiredAt: z.iso.datetime({ precision: 3 }).optional(),
@@ -81,6 +81,12 @@ export function parseCloudManifest(bytes: Uint8Array, config: CloudConfiguration
     manifest.environmentResourceId === config.expectedEnvironmentResourceId &&
     Object.keys(config.expectedTarget).every(key => config.expectedTarget[key as keyof typeof config.expectedTarget] === manifest.target[key as keyof typeof manifest.target]));
   const expiry = Date.parse(manifest.expiresAt);
+  // The compatibility forecast cannot authorize an exception: managed stage
+  // and worker start independently claim the installed, signed ledger plan.
+  if (manifest.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1" && manifest.releaseReservation.monthlyForecastYen > 30_000) {
+    requireManual(isManagedCloudConfiguration(config) && (!config.serviceBudget || config.serviceBudget.profileDigest === null) &&
+      new Date(expiry - 1 + 9*60*60_000).toISOString().slice(0,7) === "2026-09");
+  }
   requireManual((!requireFresh || (expiry > now && expiry - now <= 6 * 60 * 60_000)) &&
     manifest.packages.reduce((n, p) => n + p.byteLength, 0) <= manifest.maxTotalBytes &&
     new Set(manifest.packages.map(p => p.sha256)).size === manifest.packages.length);

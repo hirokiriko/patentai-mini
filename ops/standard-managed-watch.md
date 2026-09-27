@@ -62,6 +62,17 @@ OWNER認証と非公開保存の確認前に本番試験案件を作らない。
 （目標20,000円）。不明費用を0にせず、各有料工程前に残工程・保存・復旧を予約。
 8割で内部再見積し、収まらない場合は新しい有料処理を停止する。
 
+Issue #129の追加承認に限り、2026年9月のrelease月次planには独立レビュー・
+署名済みの`releaseMonthlyCapYen`を保持できる。金額の原本は非公開の承認・台帳で照合し、
+通常profile、指定月外、省略時の月3万円、追加累計・回数・期限は維持する。
+互換コードのApp/Job配備前は旧plan形式を維持し、承認された全残工程の非公開見積と
+既存pool内の段階release許可を照合する。配備確認後に新形式の月次planをCAS適用する。
+旧imageへ戻せるのは、月3万円を超えるforecastを持つ設定・manifestの保存前に限る。
+新規処理を停止し、元snapshotを基に当該optional項目だけを省略した署名month planへ
+戻してから配備する。保存後は、当該形式を読める互換imageで引用修正を戻すか修正配備する。
+費用・消費・不明予約を削らず、旧上限を超える間は業務開始が停止することを確認する。
+認証・原本・保存結果や保存済み設定を削除・改変して復旧扱いにしない。
+
 本リリース累計上限は架空case5、watch開始40、normal900/fast80、Job24実行/48時間、
 package64/合計96GiB、forward deploy8/rollback2。1package8GiB、1Job120分/2vCPU/4GiB、
 parallelism1/completionCount1/retry0。全文watchだけnormal41/fast0・30分、
