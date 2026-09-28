@@ -18,6 +18,47 @@ function boundary(){
   return{config,repository,arm,budget,order};
 }
 describe("fixed cloud dispatch and unknown-start reconciliation",()=>{
+  async function terminalBoundary(status:string){
+    const b=boundary(),name=b.config.jobName+"-fixture",observed=await b.repository.get(b.config.operationId);
+    observed.executionId=name;observed.status="unknown";
+    observed.runs=[{...b.config.runs[0],status:"prepared",executionId:null,consumedNormal:0}];
+    vi.spyOn(b.repository,"get").mockImplementation(async()=>structuredClone(observed));
+    b.repository.failUnstarted=vi.fn(async()=>{observed.runs[0].status="failed";return 1;});
+    const body={id:`${b.config.jobResourceId}/executions/${name}`,name,properties:{status,template:managedWatchJobTemplate(b.config)}};
+    b.arm.mockResolvedValue({status:200,body});return{...b,body};
+  }
+  it.each(["Failed","Stopped"])("fails only proven unstarted reservations after an exact %s execution without another start",async status=>{
+    const b=await terminalBoundary(status);
+    expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({status:"unknown",executionStatus:status,runs:[{status:"failed",consumedNormal:0}]});
+    expect(b.repository.failUnstarted).toHaveBeenCalledExactlyOnceWith(b.config,b.body.name);
+    await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm);
+    expect(b.repository.failUnstarted).toHaveBeenCalledTimes(1);
+    expect(b.arm.mock.calls.every(c=>c[1]==="GET")).toBe(true);expect(b.budget.reserveWatch).not.toHaveBeenCalled();
+  });
+  it.each(["Running","Processing","Unknown","Succeeded"])("does not fail unstarted reservations for %s",async status=>{
+    const b=await terminalBoundary(status);
+    expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({runs:[{status:"prepared"}]});
+    expect(b.repository.failUnstarted).not.toHaveBeenCalled();
+  });
+  it("can reconcile the exact terminal template after its dispatch permit expires",async()=>{
+    const b=await terminalBoundary("Failed");b.config.expiresAt=new Date(Date.now()-60_000).toISOString();
+    b.body.properties.template=managedWatchJobTemplate(b.config,false);
+    expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({runs:[{status:"failed"}]});
+    expect(b.repository.failUnstarted).toHaveBeenCalledOnce();expect(b.budget.reserveWatch).not.toHaveBeenCalled();
+  });
+  it.each(["id","name","image","command","env","init","http","lost"])("keeps reservations unchanged when failed execution evidence differs: %s",async field=>{
+    const b=await terminalBoundary("Failed");
+    if(field==="id")b.body.id+="-other";
+    if(field==="name")b.body.name+="-other";
+    if(field==="image")b.body.properties.template.containers[0].image+="-other";
+    if(field==="command")b.body.properties.template.containers[0].command=["other"];
+    if(field==="env")b.body.properties.template.containers[0].env=[];
+    if(field==="init")Object.assign(b.body.properties.template,{initContainers:[{}]});
+    if(field==="http")b.arm.mockResolvedValue({status:503,body:null});
+    if(field==="lost")b.arm.mockRejectedValue(Error("read unavailable"));
+    await expect(reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).rejects.toThrow();
+    expect(b.repository.failUnstarted).not.toHaveBeenCalled();expect(b.arm.mock.calls.every(c=>c[1]==="GET")).toBe(true);
+  });
   it("preserves the existing Azure v1 version through the fixed Job template and dispatch",async()=>{
     const b=boundary();b.config.ai.apiVersion="v1";
     expect(parseManagedCloudConfiguration(b.config).ai.apiVersion).toBe("v1");

@@ -91,6 +91,13 @@ export async function reconcileManagedWatchStart(starts:ManagedCloudStartReposit
     const response=await arm(`${url(observed.config)}/executions/${observed.executionId}?api-version=${VERSION}`,"GET");
     if(response.status!==200)throw new ManagedWatchError("unavailable");
     const status=(response.body as {properties?:{status?:unknown}})?.properties?.status;
+    if(["Failed","Stopped"].includes(String(status)) && observed.runs.some(r=>r.status==="prepared")){
+      const execution=response.body as {id?:unknown;name?:unknown;properties?:{template?:unknown}};
+      if(execution.id!==`${observed.config.jobResourceId}/executions/${observed.executionId}` ||
+        execution.name!==observed.executionId || !templateMatches(execution.properties?.template,observed.config))throw new ManagedWatchError("incomplete");
+      await starts.failUnstarted(observed.config,observed.executionId);
+      observed.runs=(await starts.get(operationId)).runs;
+    }
     return {operationId,status:observed.status,executionStatus:["Running","Succeeded","Failed","Stopped","Processing","Unknown"].includes(String(status))?String(status):"Unknown",
       runs:observed.runs.map(r=>({runId:r.runId,caseId:r.caseId,status:r.status,consumedNormal:r.consumedNormal}))};
   }
