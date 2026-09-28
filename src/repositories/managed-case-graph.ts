@@ -35,11 +35,15 @@ export async function lockManagedCase(database: ManagedDatabase, caseId: number)
   managedId.parse(caseId);
   await database.execute(sql`select pg_advisory_xact_lock(129, ${caseId}::integer)`);
 }
-export async function readManagedCaseGraph(database: ManagedDatabase, caseId: number, lock = false): Promise<CaseGraph> {
+export async function readManagedCaseGraph(database: ManagedDatabase, caseId: number, lock: boolean | "backup" = false): Promise<CaseGraph> {
   managedId.parse(caseId);
   const graph = {} as CaseGraph; let bytes = 0;
   for (const [table, key, kind] of MANAGED_CASE_TABLES) {
-    if (lock) {
+    // Backup has SELECT, but no UPDATE privilege on these append/replace-only
+    // tables. The cases FOR UPDATE lock blocks their FK inserts; deletes can
+    // only reduce the bounded read. Retention still locks every table.
+    const lockRows = lock && !(lock === "backup" && (table === "search_query_sets" || table === "comparison_results"));
+    if (lockRows) {
       const ids = await database.execute(sql`select ${sql.identifier(key)} from ${sql.identifier("public")}.${sql.identifier(table)} t
         where ${caseTableScope(kind, caseId)} order by ${sql.identifier(key)} limit 20001 for update`);
       archiveCheck(ids.rows.length <= 20_000);
@@ -50,7 +54,7 @@ export async function readManagedCaseGraph(database: ManagedDatabase, caseId: nu
     bytes += Number(size.rows[0].bytes);
     archiveCheck(Number(size.rows[0].n) <= 20_000 && bytes <= 64 * 1024**2);
     const result = await database.execute(sql`select to_jsonb(t) as row from ${sql.identifier("public")}.${sql.identifier(table)} t
-      where ${caseTableScope(kind, caseId)} order by ${sql.identifier(key)} limit 20001 ${lock ? sql`for update` : sql``}`);
+      where ${caseTableScope(kind, caseId)} order by ${sql.identifier(key)} limit 20001 ${lockRows ? sql`for update` : sql``}`);
     const rows = result.rows.map(r => r.row as Record<string, unknown>);
     archiveCheck(rows.length <= 20_000);
     graph[table] = rows;

@@ -9,7 +9,7 @@ import { ManagedBackupRepository, parseManagedCaseBackup } from "../src/reposito
 import { ManagedArchiveStorage, archiveSha, type ArchiveBlob } from "../src/lib/patent-watch/managed-archive-storage";
 import { restoreManagedBackup, verifyManagedBackupRestore } from "./managed-watch-restore";
 import { artifactAdmissionFixture } from "../src/lib/patent-watch/managed-artifact.test-support";
-import { withManagedOriginalUpload, type ManagedDatabase } from "../src/repositories/managed-case-graph";
+import { MANAGED_CASE_TABLES, withManagedOriginalUpload, type ManagedDatabase } from "../src/repositories/managed-case-graph";
 import { addFictionalManagedOriginal } from "./managed-base.test-support";
 import { managedArtifactName } from "../src/lib/patent-watch/managed-storage";
 import { managedDeliveryFixture } from "../src/lib/patent-watch/managed-delivery.test-support";
@@ -77,6 +77,49 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("managed retention
     const retention=new ManagedRetentionRepository(database,s.storage),preview=await retention.preview(f.caseId);
     expect(preview.blobs).toBe(3);await retention.execute(f.caseId,preview.deletionId,preview.manifestDigest);
     expect(s.blobs.size).toBe(0);expect((await environment.sql("select backup_id from managed_watch_backups where case_id=$1",[f.caseId])).length).toBe(0);
+  },120_000);
+  it("backs up existing query and comparison rows without granting their UPDATE privilege",async()=>{
+    const s=memoryStorage(),f=await fixture(s),role=String((await environment.watchClient.query("select current_user as role")).rows[0].role);
+    expect(role).toMatch(/^watch_test_[a-f0-9]{16}$/);
+    for(const [table] of MANAGED_CASE_TABLES){
+      const privileges=table==="search_query_sets"||table==="comparison_results"?"SELECT":"SELECT, UPDATE";
+      await environment.sql(`GRANT ${privileges} ON public.${table} TO ${role}`);
+    }
+    await environment.sql(`GRANT SELECT, INSERT, UPDATE ON public.managed_watch_backups TO ${role}`);
+    await environment.sql(`GRANT SELECT ON public.koho_import_runs, public.koho_import_documents, public.managed_distribution_snapshots TO ${role}`);
+    for(const table of ["search_query_sets","comparison_results"]){
+      expect((await environment.watchClient.query("select has_table_privilege(current_user,$1,'SELECT') as readable,has_any_column_privilege(current_user,$1,'UPDATE') as mutable",[`public.${table}`])).rows[0]).toEqual({readable:true,mutable:false});
+    }
+    await environment.sql("insert into search_query_sets(case_id,broad_query) values($1,'FICTIONAL BACKUP QUERY')",[f.caseId]);
+    const prior=(await environment.sql("select doc_id from prior_art_documents where case_id=$1",[f.caseId]))[0].doc_id;
+    await environment.sql("insert into comparison_results(case_id,prior_doc_id,risk_label) values($1,$2,'Low')",[f.caseId,prior]);
+    const beforeQuery=await environment.sql("select to_jsonb(t) as row from search_query_sets t where case_id=$1",[f.caseId]);
+    const beforeComparison=await environment.sql("select to_jsonb(t) as row from comparison_results t where case_id=$1",[f.caseId]);
+    const backups=new ManagedBackupRepository(drizzle(environment.watchClient,{schema}),s.storage,artifactAdmissionFixture().admit),backupId=randomUUID();
+    const read=s.storage.read.bind(s.storage);
+    let release!:()=>void,reading!:()=>void;
+    const held=new Promise<void>(resolve=>{release=resolve;}),reached=new Promise<void>(resolve=>{reading=resolve;});
+    s.storage.read=async(caseId,name)=>{reading();await held;return read(caseId,name);};
+    const creating=backups.create(f.caseId,backupId);
+    try {
+      await Promise.race([reached,creating.then(()=>{throw Error("backup_did_not_read_original");})]);
+      await environment.admin.query("set lock_timeout='250ms'");
+      // The parent case stays locked even though these two child tables are read-only.
+      await expect(environment.admin.query("insert into search_query_sets(case_id,broad_query) values($1,'FICTIONAL CONCURRENT QUERY')",[f.caseId])).rejects.toMatchObject({code:"55P03"});
+      await expect(environment.admin.query("insert into comparison_results(case_id,prior_doc_id,risk_label) values($1,$2,'Low')",[f.caseId,prior])).rejects.toMatchObject({code:"55P03"});
+    } finally {
+      release();await environment.admin.query("set lock_timeout=0");
+      await creating;
+    }
+    expect((await creating).status).toBe("stored");
+    const saved=await backups.read(f.caseId,backupId);
+    expect(saved.archive.graph.search_query_sets).toEqual(beforeQuery.map(r=>r.row));
+    expect(saved.archive.graph.comparison_results).toEqual(beforeComparison.map(r=>r.row));
+    expect(await environment.sql("select to_jsonb(t) as row from search_query_sets t where case_id=$1",[f.caseId])).toEqual(beforeQuery);
+    expect(await environment.sql("select to_jsonb(t) as row from comparison_results t where case_id=$1",[f.caseId])).toEqual(beforeComparison);
+    expect(await verifyManagedBackupRestore(saved.bytes,saved.row.sha256,f.caseId,backupId)).toMatchObject({verified:true,caseId:f.caseId,artifacts:2});
+    expect((await environment.admin.query("insert into search_query_sets(case_id,broad_query) values($1,'FICTIONAL AFTER BACKUP')",[f.caseId])).rowCount).toBe(1);
+    expect((await environment.admin.query("insert into comparison_results(case_id,prior_doc_id,risk_label) values($1,$2,'Low')",[f.caseId,prior])).rowCount).toBe(1);
   },120_000);
   it("retains abandoned deliveries, records only permitted missing artifacts, and verifies the bound original",async()=>{
     const s=memoryStorage(),f=await fixture(s),backups=new ManagedBackupRepository(database,s.storage,artifactAdmissionFixture().admit);

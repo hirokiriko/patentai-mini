@@ -89,7 +89,7 @@ export class ManagedBackupRepository {
       const existing = await tx.select().from(B).where(eq(B.backupId, backupId));
       if (existing.length) throw new ManagedWatchError("conflict");
       const count = await tx.select({ id: B.backupId }).from(B).where(eq(B.caseId, caseId)).limit(32); archiveCheck(count.length < 32);
-      const graph = await readManagedCaseGraph(d, caseId, true);
+      const graph = await readManagedCaseGraph(d, caseId, "backup");
       if (graph.managed_watch_runs.some(r => ["prepared", "running", "unknown"].includes(String(r.status))) ||
         graph.managed_watch_deliveries.some(r => !["stored", "abandoned"].includes(String(r.status))) || graph.case_watch_runs.some(r => r.status === "running")) throw new ManagedWatchError("in_progress");
       let referenceBytes = Buffer.byteLength(JSON.stringify(graph));
