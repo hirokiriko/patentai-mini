@@ -85,6 +85,11 @@ parallelism1/completionCount1/retry0。全文watchだけnormal41/fast0・30分�
 不明dispatchがあれば従来どおり`outcome_unknown`を優先し、追加AI・別runの盲目的な再送を止める。
 例外本文・SDK応答・請求項・秘密は診断コードに保存しない。旧runへ後から理由を推定追記しない。
 
+まとめ比較が途中で失敗した場合も、まず同じ処理の状態を照合する。固定実行ID・templateが
+一致したAzureのFailed/Stopped終端を確認した場合だけ、未着手の予約済みrunを失敗確定する。
+実行開始・AI送信・保存結果のあるrunはこの処理で変更しない。旧runと費用・回数予約は保持し、
+未着手分の再比較は新しい実行準備と新しい有限予約から行う。状態照合はJobを再開始しない。
+
 2026-09-23の追加承認は圧縮ZIPの各8GiB/累計96GiBだけ。旧pilotの各2GiBを変更しない。
 managed取込は従来のparser上限を保持し、宣言展開総量16GiB、実読取展開総量8GiB、
 1entry2GiB、directory128MiB/25万件、CSV128MiB/XML64MiBを超えれば未完了として停止する。

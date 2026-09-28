@@ -250,6 +250,84 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     expect((await saveKohoImportPlan(database, plan, true, "reused")).disposition).toBe("reused");
     expect((await environment.sql("select count(*)::int as n from koho_import_documents"))[0].n).toBe(1);
   }, 30_000);
+  it("recovers only unstarted members of a terminal batch without releasing reservations or changing prior outcomes",async()=>{
+    const watcher=(await environment.watchClient.query("select current_user as name")).rows[0].name as string;
+    if(!/^watch_test_[a-f0-9]{16}$/.test(watcher))throw Error("fictional_role_mismatch");
+    await environment.sql(`GRANT SELECT,INSERT,UPDATE ON managed_watch_settings,managed_watch_runs,managed_watch_dispatches,managed_watch_findings,managed_watch_job_starts TO ${watcher}`);
+    await environment.sql(`GRANT SELECT ON managed_publication_claims TO ${watcher}`);
+    await environment.sql(`GRANT USAGE ON SEQUENCE managed_watch_settings_setting_id_seq,managed_watch_dispatches_dispatch_id_seq,managed_watch_findings_finding_id_seq TO ${watcher}`);
+    const database=drizzle(environment.watchClient,{schema}),watch=new ManagedWatchRepository(database,readOriginal),starts=new ManagedCloudStartRepository(database);
+    const caseIds:number[]=[],prepared:Awaited<ReturnType<typeof watch.prepare>>[]=[],period={from:"2098-07-26",to:"2098-08-25"};
+    for(let n=0;n<3;n++){
+      const caseId=(await environment.sql("insert into cases(title) values('FICTIONAL TERMINAL BATCH') returning case_id"))[0].case_id as number;
+      caseIds.push(caseId);const original=await addFictionalManagedOriginal(caseId,environment.sql,originals);
+      await watch.saveSetting({caseId,contractSignedOn:period.from,monitoringStartsOn:period.from,contractEndsOn:null,enabled:true,
+        base:original.base,source:original.source,selectedClaimNos:[1]});
+      prepared.push(await watch.prepare(caseId,period));
+    }
+    const config=managedBudgetedWatchFixture({...managedCloudFixture(caseIds[0],prepared[0].runId,prepared[0].snapshotDigest),operationId:randomUUID(),
+      caseAllowList:caseIds,runs:prepared.map(r=>({caseId:r.caseId,runId:r.runId,snapshotDigest:r.snapshotDigest}))}).config;
+    const execution=config.jobName+"-terminal-fixture";
+    await starts.reserve(config);await starts.submitting(config);await starts.recordExecution(config,execution);
+    const proof=(i:number)=>({operationId:config.operationId,snapshotDigest:prepared[i].snapshotDigest});
+    const complete=await watch.claim(caseIds[0],prepared[0].runId,execution,proof(0));await watch.finalize(complete);
+    const failed=await watch.claim(caseIds[1],prepared[1].runId,execution,proof(1));await watch.fail(failed,false);
+    expect(await starts.finish(config,execution)).toBe(false);
+    const allRows=()=>environment.sql("select to_jsonb(r) as row from managed_watch_runs r where start_reservation_id=$1 order by run_id",[config.operationId]);
+    const before=await allRows(),reservation=await environment.sql("select to_jsonb(j) as row from managed_watch_job_starts j where operation_id=$1",[config.operationId]);
+    await expect(watch.prepare(caseIds[2],period)).rejects.toThrow("in_progress");
+    await expect(starts.failUnstarted(config,execution+"-other")).rejects.toThrow("conflict");
+    expect(await allRows()).toEqual(before);
+    for(const [column,value] of [["execution_id","fictional-other"],["accepted_at","2098-01-01T00:00:00Z"],
+      ["deadline_at","2098-01-01T00:00:00Z"],["completed_at","2098-01-01T00:00:00Z"],["error_code","incomplete"],
+      ["consumed_normal",1],["plan_json","{}"],["plan_digest","f".repeat(64)]] as const){
+      await environment.sql(`update managed_watch_runs set ${column}=$1 where run_id=$2`,[value,prepared[2].runId]);
+      await expect(starts.failUnstarted(config,execution)).rejects.toThrow();
+      expect((await watch.history(caseIds[2]))[0].status).toBe("prepared");
+      await environment.sql(`update managed_watch_runs set ${column}=$1 where run_id=$2`,[column==="consumed_normal"?0:null,prepared[2].runId]);
+    }
+    await environment.sql("insert into managed_watch_dispatches(run_id,ordinal,stage,chunk_index,input_digest,request_sha256,estimated_input_tokens,maximum_output_tokens,status) values($1,1,'screening',null,$2,$2,1,1,'reserved')",[prepared[2].runId,"c".repeat(64)]);
+    await expect(starts.failUnstarted(config,execution)).rejects.toThrow("conflict");
+    await environment.sql("delete from managed_watch_dispatches where run_id=$1",[prepared[2].runId]);
+    // A claim winning the row lock must remain running. Recovery locks R before J.
+    const pid=(await environment.watchClient.query("select pg_backend_pid() as pid")).rows[0].pid;
+    await environment.admin.query("begin");
+    await environment.admin.query("select run_id from managed_watch_runs where run_id=$1 for update",[prepared[2].runId]);
+    const concurrent=starts.failUnstarted(config,execution);
+    try{
+      let waiting=false;
+      for(let n=0;n<200&&!waiting;n++){
+        const observed=await environment.admin.query("select wait_event_type from pg_stat_activity where pid=$1",[pid]);
+        waiting=observed.rows[0]?.wait_event_type==="Lock";
+        if(!waiting)await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      expect(waiting).toBe(true);
+      await environment.admin.query("update managed_watch_runs set status='running',execution_id=$1,accepted_at=now(),deadline_at=now()+interval '30 minutes' where run_id=$2",[execution,prepared[2].runId]);
+      await environment.admin.query("update managed_watch_job_starts set status='accepted' where operation_id=$1",[config.operationId]);
+      await environment.admin.query("commit");
+    }catch(error){await environment.admin.query("rollback");await concurrent.catch(()=>undefined);throw error;}
+    expect(await concurrent).toBe(0);expect((await watch.run(caseIds[2],prepared[2].runId)).status).toBe("running");
+    await environment.sql("update managed_watch_runs set status='unknown' where run_id=$1",[prepared[2].runId]);
+    expect(await starts.failUnstarted(config,execution)).toBe(0);
+    await environment.sql("update managed_watch_runs set status='prepared',execution_id=null,accepted_at=null,deadline_at=null where run_id=$1",[prepared[2].runId]);
+    await environment.sql("update managed_watch_job_starts set status='unknown' where operation_id=$1",[config.operationId]);
+    expect(await starts.failUnstarted(config,execution)).toBe(1);
+    const after=await allRows();
+    for(const entry of before){
+      const prior=entry.row as Record<string,unknown>,current=after.find(x=>(x.row as Record<string,unknown>).run_id===prior.run_id)!.row as Record<string,unknown>;
+      if(prior.run_id!==prepared[2].runId)expect(current).toEqual(prior);
+      else{expect(current).toMatchObject({...prior,status:"failed",error_code:"incomplete",completed_at:expect.any(String)});}
+    }
+    expect(await starts.failUnstarted(config,execution)).toBe(0);expect(await allRows()).toEqual(after);
+    expect(await environment.sql("select to_jsonb(j) as row from managed_watch_job_starts j where operation_id=$1",[config.operationId])).toEqual(reservation);
+    await expect(starts.reserve({...config,operationId:randomUUID()})).rejects.toThrow("conflict");
+    const retry=await watch.prepare(caseIds[2],period);expect(retry.runId).not.toBe(prepared[2].runId);expect(retry.snapshotDigest).toBe(prepared[2].snapshotDigest);
+    expect((await starts.get(config.operationId)).runs.map(r=>r.status).sort()).toEqual(["completed","failed","failed"]);
+    await environment.sql("delete from managed_watch_settings where case_id=any($1::int[])",[caseIds]);
+    await environment.sql("delete from prior_art_documents where case_id=any($1::int[])",[caseIds]);
+    await environment.sql("delete from cases where case_id=any($1::int[])",[caseIds]);
+    await environment.sql("delete from managed_watch_job_starts where operation_id=$1",[config.operationId]);
+  },30_000);
   it("keeps period/source identity and atomic finalization through late imports, duplicate starts, unknown sends and restart", async () => {
     const watcher = (await environment.watchClient.query("select current_user as name")).rows[0].name as string;
     if (!/^watch_test_[a-f0-9]{16}$/.test(watcher)) throw Error("fictional_role_mismatch");

@@ -1,4 +1,4 @@
-import { and, eq, inArray, or, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, or, isNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../db/schema";
 import { managedDigest } from "../lib/patent-watch/managed-claims";
@@ -68,6 +68,34 @@ export class ManagedCloudStartRepository {
       const complete=runs.length===config.runs.length&&runs.every(r=>r.status==="completed"&&r.executionId===executionId);
       await tx.update(J).set({status:complete?"completed":"unknown",...(complete?{reservedNormal:runs.reduce((n,r)=>n+r.consumed,0)}:{})}).where(eq(J.operationId,config.operationId));
       return complete;
+    });
+  }
+  /** Only after ARM proves this exact execution has failed or stopped. Preserve
+   * reservations and history; a later retry needs a new prepared run and budget. */
+  async failUnstarted(config:ManagedCloudConfiguration,executionId:string) {
+    return this.database.transaction(async tx=>{
+      await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
+      // claim() locks R before J. Keep that order while excluding new reservations.
+      const runs=await tx.select().from(R).where(eq(R.startReservationId,config.operationId)).orderBy(asc(R.runId)).for("update");
+      const [start]=await tx.select().from(J).where(eq(J.operationId,config.operationId)).for("update");
+      check(start && start.configDigest===managedDigest(config) && start.executionId===executionId &&
+        ["submitting","accepted","unknown"].includes(start.status));
+      check(managedDigest(managedCloudConfigSchema.parse(JSON.parse(start.configJson)))===start.configDigest);
+      check(runs.length===config.runs.length && config.runs.every(input=>runs.some(run=>
+        run.runId===input.runId && run.caseId===input.caseId && run.snapshotDigest===input.snapshotDigest)));
+      const pending=runs.filter(run=>run.status==="prepared");
+      if(!pending.length)return 0;
+      for(const run of pending){
+        readManagedStoredRun(run);
+        check(run.executionId===null && run.acceptedAt===null && run.completedAt===null && run.deadlineAt===null &&
+          run.consumedNormal===0 && run.planJson===null && run.planDigest===null && run.errorCode===null);
+      }
+      const ids=pending.map(run=>run.runId),D=schema.managedWatchDispatches,F=schema.managedWatchFindings;
+      check(!(await tx.select({id:D.dispatchId}).from(D).where(inArray(D.runId,ids)).limit(1)).length);
+      check(!(await tx.select({id:F.findingId}).from(F).where(inArray(F.runId,ids)).limit(1)).length);
+      const changed=await tx.update(R).set({status:"failed",errorCode:"incomplete",completedAt:new Date().toISOString()})
+        .where(inArray(R.runId,ids)).returning({runId:R.runId});
+      check(changed.length===ids.length);return changed.length;
     });
   }
   async markUnknown(config:ManagedCloudConfiguration) {
