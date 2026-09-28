@@ -40,6 +40,42 @@ describe("fixed cloud dispatch and unknown-start reconciliation",()=>{
     expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({runs:[{status:"prepared"}]});
     expect(b.repository.failUnstarted).not.toHaveBeenCalled();
   });
+  function differentReferences(template:ReturnType<typeof managedWatchJobTemplate>){
+    for(const e of template.containers[0].env)if("secretRef" in e)e.secretRef="fictional-api-reference";
+  }
+  it.each(["Failed","Stopped"])("requires a locked worker claim for differing reference names on a known %s execution",async status=>{
+    const b=await terminalBoundary(status);differentReferences(b.body.properties.template);
+    expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({runs:[{status:"failed"}]});
+    expect(b.repository.failUnstarted).toHaveBeenCalledExactlyOnceWith(b.config,b.body.name,true);
+    expect(b.arm.mock.calls.every(c=>c[1]==="GET")).toBe(true);expect(b.budget.reserveWatch).not.toHaveBeenCalled();
+  });
+  it("does not accept a reference projection when the locked claim proof is unavailable",async()=>{
+    const b=await terminalBoundary("Failed");differentReferences(b.body.properties.template);
+    vi.mocked(b.repository.failUnstarted).mockRejectedValue(Error("claim proof absent"));
+    await expect(reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).rejects.toThrow("claim proof absent");
+    expect((await b.repository.get(b.config.operationId)).runs[0].status).toBe("prepared");
+  });
+  it.each(["missing","duplicate","value","empty","null","extra","config","ordinary"])("rejects altered environment evidence even with projected references: %s",async field=>{
+    const b=await terminalBoundary("Failed"),container=b.body.properties.template.containers[0];differentReferences(b.body.properties.template);
+    const env=container.env as Array<Record<string,unknown>>,secret=env.find(e=>e.name==="AZURE_API_KEY")!;
+    if(field==="missing")env.splice(env.indexOf(secret),1);
+    if(field==="duplicate")env.push({...secret});
+    if(field==="value")secret.value="fictional-inline";
+    if(field==="empty")secret.secretRef="";
+    if(field==="null")secret.secretRef=null;
+    if(field==="extra")secret.unexpected=true;
+    if(field==="config")env.find(e=>e.name==="MANAGED_WATCH_CONFIG_JSON")!.value="{}";
+    if(field==="ordinary")env.find(e=>e.name==="AI_PROVIDER")!.value="other";
+    await expect(reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).rejects.toThrow();
+    expect(b.repository.failUnstarted).not.toHaveBeenCalled();
+  });
+  it("never uses projected secret references to discover an execution after a lost acknowledgement",async()=>{
+    const b=boundary(),name=b.config.jobName+"-fixture",template=managedWatchJobTemplate(b.config);differentReferences(template);
+    const record=vi.spyOn(b.repository,"recordExecution");b.repository.failUnstarted=vi.fn();
+    b.arm.mockResolvedValue({status:200,body:{value:[{id:`${b.config.jobResourceId}/executions/${name}`,name,properties:{status:"Failed",template}}]}});
+    expect(await reconcileManagedWatchStart(b.repository,b.config.operationId,b.arm)).toMatchObject({executionStatus:"Unknown",runs:[]});
+    expect(record).not.toHaveBeenCalled();expect(b.repository.failUnstarted).not.toHaveBeenCalled();
+  });
   it("can reconcile the exact terminal template after its dispatch permit expires",async()=>{
     const b=await terminalBoundary("Failed");b.config.expiresAt=new Date(Date.now()-60_000).toISOString();
     b.body.properties.template=managedWatchJobTemplate(b.config,false);

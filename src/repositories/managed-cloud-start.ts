@@ -72,7 +72,7 @@ export class ManagedCloudStartRepository {
   }
   /** Only after ARM proves this exact execution has failed or stopped. Preserve
    * reservations and history; a later retry needs a new prepared run and budget. */
-  async failUnstarted(config:ManagedCloudConfiguration,executionId:string) {
+  async failUnstarted(config:ManagedCloudConfiguration,executionId:string,requireWorkerClaim=false) {
     return this.database.transaction(async tx=>{
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
       // claim() locks R before J. Keep that order while excluding new reservations.
@@ -85,6 +85,19 @@ export class ManagedCloudStartRepository {
         run.runId===input.runId && run.caseId===input.caseId && run.snapshotDigest===input.snapshotDigest)));
       const pending=runs.filter(run=>run.status==="prepared");
       if(!pending.length)return 0;
+      if(requireWorkerClaim){
+        // Recheck under the same R/J locks: an ARM reference-name projection
+        // alone never authorizes recovery. claim() bound this worker to the
+        // immutable reservation/config and snapshot before any business work.
+        const claimed=runs.filter(run=>run.status!=="prepared");
+        check(claimed.length>0);
+        for(const run of claimed){
+          readManagedStoredRun(run);
+          check(["completed","failed"].includes(run.status)&&run.executionId===executionId&&
+            run.acceptedAt!==null&&run.deadlineAt!==null&&run.completedAt!==null&&
+            Date.parse(run.acceptedAt)<=Date.parse(run.deadlineAt));
+        }
+      }
       for(const run of pending){
         readManagedStoredRun(run);
         check(run.executionId===null && run.acceptedAt===null && run.completedAt===null && run.deadlineAt===null &&
