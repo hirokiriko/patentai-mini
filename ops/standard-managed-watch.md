@@ -110,7 +110,12 @@ managed取込は従来のparser上限を保持し、宣言展開総量16GiB、�
 無変更AI0、本番PDF/CSV全頁全文、固定Production URLの主要操作とLocal PC非依存、費用、限定cleanup、正式資材保持、
 製品経路の架空サンプルと納品セットをすべて照合する。実行結果はIssue/PRと
 非公開Local証跡に記録し、全成立時だけSTANDARD_MANAGED_WATCH_PRODUCTION_GOとする。
-実際のPC停止中の観測と、クラウド構成・別接続からの確認範囲は区別して記録する。
+2026-09-29のOWNER決定に従い、現行Productionの固定URL・App/Job/image/build・DB/Storage設定を、
+本番受理→クラウド終端→永続保存→OWNER認証付き再取得の記録へ対応付ける。
+同一build・設定・対象の有効な証拠を再利用する。HTTP200だけを業務完了の根拠にしない。
+ローカルトンネル・ローカルサーバー・常駐workerを本番経路に使わない。
+PC実停止・別端末・OSログ提出や、代替のブラウザー終了・通信切断試験は要求しない。
+未実施のPC停止をPASSにせず、未実施を停止理由にもしない。#137はnot_plannedで依存から外す。
 
 ## 初回準備と標準コマンド
 
@@ -184,7 +189,8 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    plan/Sources/Receiptのhash、A1/P1/A5/P5件数、未解析、補正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
 3. まず1 packageだけの`archiveOnly:true` manifestを作り、`acquiredAt`も固定する。
    import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
-   configはSTANDARD_MANAGED_WATCH_RELEASE_V1、manifestは配布一覧hash・preview結果・8GiB以内の各package・
+   通常運用のconfigは有効な標準profileのSTANDARD_MANAGED_WATCH_STANDARD_V1を使う。
+   過去のリリース試験記録はRELEASE_V1のまま保持する。manifestは配布一覧hash・preview結果・8GiB以内の各package・
    6時間以内の期限・累計予約を固定。sourcesは各`sha256/path`。先にread-onlyの`prepare`で
    料金表・固定対象に結合したconfig/manifestを取得し、Localへ保存してから`stage`に渡す。
    `stage`の返すETag付きconfig/manifestと`archive`参照も保管する。これは原本保存でありJobを開始しない。
@@ -252,8 +258,8 @@ CLI batchでは小さいZIPを既存batchへまとめられる。旧21 ZIP計画
 画面経路はwatch 1回ごとにJobを開始するため、5対象2巡・無変更確認・復旧を含む実際の起動数を
 累計24回以内で予約する。CLIの1 Job最大3 runsを画面経路の起動数へ流用しない。
 
-LocalのZIP削除後にworkerが完了する試験だけでは、固定Production URLの主要操作と
-クラウド構成の確認を代用しない。物理的なPC停止を観測したかは別に記録する。
+Localの転送一時コピー解放は、Azure非公開正本のhash・size・source identity・処理receiptと対応付ける。
+主要操作とクラウド構成は上記「リリース判定」で照合し、PC停止・別端末試験を追加しない。
 
 ## 終了・削除・復旧
 
@@ -273,7 +279,7 @@ deletion-previewの所属・期限・件数・完全な対象digestを確認し�
 現行Blobの削除だけでbackup内も物理消去済みとは説明しない。復元した環境では、保持期限済み対象の削除監査を先に照合し再適用する。
 全本番DBの災害復旧は、この対象限定の復元試験とは別である。
 
-## 費用記録と提供開始前の未確定事項
+## 費用記録と通常運用の開始条件
 
 各有料工程前の台帳には、operation、対象hash、事前予約、実消費、結果不明予約、残工程、保存/backup/転送/log、復旧予約を残す。
 不明usageは最大予約を維持し、過去Issueの費用と基礎月額は分ける。正常終了のreceipt/usageがある分だけ精算する。
@@ -332,7 +338,7 @@ app/Jobに秘密署名鍵を渡さず、別のLocal管理・独立確認後に�
 競合した古い計画を再適用せず、現状を再確認して新reviewを作る。適用済みdigestは永続historyから照合し二重反映しない。
 1200管理変更・768 operationを越える前に容量確認が必要で、履歴を削除して枠を再開しない。
 
-証拠の収集・独立判定・署名発行とcreate-only配置は、検証済みのLocal管理手順として確定する必要がある。
+証拠の収集・独立判定・署名発行とcreate-only配置は、Local管理手順で原本hash・対象・連番を照合して行う。
 watch/import operatorとworkerには共通予算adapterを接続した。watchは共通予約→DB予約→submitting ACK→
 共通start claim→ARM POST、importは共通予約→stage claim→保存済みmanifest照合→stage確認→start claim→ARM POSTの順。
 新規startは当月planのraw pricing SHAと現profileを使い、受理済みworkerは元のimmutable policy/profileを検証する。
@@ -384,12 +390,29 @@ workflowのCI20分・deploy40分timeoutを予約へ織り込む。初回操作�
 20分以内に開始しない実行は既知IDの取消・結果確認へ進む。自動rerunや別triggerへの迂回はせず、取消成功でも不明費用を0にしない。
 これはLocalの実行手順による制御であり、キューや請求遅延を含む厳密な請求上限の機械保証ではない。
 
-証拠収集/署名・create-only配置の手順、予約枠確定、本番統合受入は未完了。
+証拠収集/署名・create-only配置、予約枠、本番統合受入の実行状態はIssue #129の最新記録を正本とする。
 詳細比較のAI出力には、根拠の請求項番号と原文どおりの短い引用だけを要求する。
 位置は、その請求項または許可済み参照請求項内で引用が一度だけ一致するときにサーバーがUTF-16で計算する。
 原文にない引用、複数箇所への一致、空白等の補正を要する引用、surrogateの分断は拒否する。
 保存時の番号・組合せcoverage・位置・原文一致の検証は維持し、過去の保存結果を補正・上書きしない。
-定例運用が成立したとは扱わず、残工程と本番GOを確認するまで標準profileの有効化は行わない。
+標準profileは、独立受入の根拠・通常月額計画・現行価格と数量を照合して有効化する。
+設定切替とreadback、限定cleanupを終えた最終GOと、切替前の受入証拠を区別して記録する。
+
+### 月次の有限枠と更新
+
+週4〜5回は配布一覧と取得不足を確認する回数であり、ZIP本数や比較回数ではない。
+締め時の最大5監視元の比較、各ZIPの実圧縮bytes・Job数、納品版・backup・復旧・保持を別々に計上する。
+通常profileは税込月30,000円以内と署名済み全9単位の上限を持ち、当月のrelease消費も含める。
+1 ZIPは8GiB以下、Jobは120分/2vCPU/4GiB、各watchの全文・AI制限は上記のまま。
+profile改版や月替わりで過去台帳、未精算額、不明usage、予約、原本を消さない。
+
+料金表の有効期間は最大32日。開始時に有効な価格と当月planが必要で、月替わりだけでは開始できない。
+通常更新は既存の管理CLIへ、現行target/build/image・実測/保守数量・未精算繰越・保存/復旧を含む
+レビュー済みmonth/profile証拠を渡す。独立確認後に既存管理鍵で署名し、非公開原本のcreate-only配置と読戻し、
+連続sequenceと現state digestのCASで反映する。期限切れのrelease枠を延長・復活させない。
+未知のZIP量や新しい比較snapshotへ過去サンプルの費用・全量性能を保証しない。
+当月残枠に収まらなければ新規有料処理を止め、不足表示と既存データの取得経路を保持する。
+この定型管理に新Issue・新環境・新規開発を必須としない。個別の費用・数量原本は非公開の運用引継ぎに保持する。
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、
 他顧客/基盤モデル学習への提供とは区別し、abuse monitoringやGlobal処理場所の条件も記録する。保持0を未確認のまま表示しない。
