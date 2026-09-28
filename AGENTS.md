@@ -317,6 +317,13 @@ acceptance and Local-PC independence under Issue #129's current scope,
 permits closing #129/#128. This exception does not resume #75/#81/#83 or grant
 general production authority. See `ops/standard-managed-watch.md` for operation.
 
+Apply the 2026-09-29 OWNER decision: match the deployed App/Job/build and cloud
+DB/Storage configuration to accepted, terminal, persisted and authenticated-readback
+evidence. Reuse valid evidence. Do not require OWNER shutdown/restart, OS logs,
+another device, or a substitute client-disconnection test. Issue #137 is withdrawn
+as not_planned and is not a completion dependency. Existing paid limits, deadlines,
+authentication, unknown-write reconciliation and rollback remain in force.
+
 Each implementation Issue body is the sole source of truth for its task,
 required behavior, and acceptance criteria. GitHub Issues and pull requests
 are the source of truth for progress, verification, re-verification, and

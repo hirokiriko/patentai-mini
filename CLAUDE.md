@@ -20,7 +20,10 @@ patentability, validity, infringement, or rejection outcomes.
 Issue #129's approved standard managed watch release follows its current Issue
 body and the scoped exception in AGENTS.md. The same Local root continues through
 implementation, independent read-only review, conditional merge/deploy, production
-acceptance, actual PC_OFF and handoff. Routine phases are already authorized.
+acceptance, cloud-completion verification and handoff. Routine phases are already authorized.
+The 2026-09-29 OWNER decision reuses matching Production configuration and execution
+evidence; physical PC shutdown and another-device tests are not required. Issue #137
+is withdrawn as not_planned and is not a completion dependency.
 Historical one-time budgets are not reused. The OWNER-only authentication scope
 is separate from #66's future customer/enterprise login design. Operation is
 documented in `ops/standard-managed-watch.md`; documentation is not release proof.
