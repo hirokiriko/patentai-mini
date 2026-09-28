@@ -6,17 +6,25 @@ import { ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 const VERSION="2025-07-01";
 const url=(config:ManagedCloudConfiguration)=>`https://management.azure.com${config.jobResourceId}`;
 type Arm = (url:string,method:"GET"|"POST",body?:unknown)=>Promise<{status:number;body:unknown}>;
-function templateMatches(actual:unknown,config:ManagedCloudConfiguration){
+function templateMatches(actual:unknown,config:ManagedCloudConfiguration,workerClaimRequired=false){
   if(!actual||typeof actual!=="object")return false;
   const t=actual as {containers?:Array<{name?:unknown;image?:unknown;command?:unknown;args?:unknown;resources?:unknown;env?:unknown;volumeMounts?:unknown}>;initContainers?:unknown};
   if(!Array.isArray(t.containers)||t.containers.length!==1||(t.initContainers!==undefined&&t.initContainers!==null&&JSON.stringify(t.initContainers)!=="[]"))return false;
   const c=t.containers[0],expected=managedWatchJobTemplate(config,false).containers[0];
   if(c.volumeMounts!==undefined&&c.volumeMounts!==null&&JSON.stringify(c.volumeMounts)!=="[]")return false;
-  const normalizeEnv=(value:unknown)=>{
+  const references=new Map(expected.env.filter(e=>"secretRef" in e).map(e=>[e.name,e.secretRef]));
+  const normalizeEnv=(value:unknown,projectReferences=false)=>{
     if(!Array.isArray(value))return null;
+    if(new Set(value.map(e=>e?.name)).size!==value.length)return null;
     return value.map(e=>{
       if(!e||typeof e!=="object"||Object.keys(e).some(k=>!["name","value","secretRef"].includes(k)))return null;
       const {name,value,secretRef}=e;
+      // A recorded worker claim can prove the batch identity when ARM returns
+      // different reference names. This does not establish secret equivalence.
+      if(projectReferences&&references.has(name)){
+        if(Object.hasOwn(e,"value")||typeof secretRef!=="string"||!secretRef.length)return null;
+        return {name,secretRef:references.get(name)};
+      }
       return {name,...(value!==null&&value!==undefined?{value}:{}),...(secretRef!==null&&secretRef!==undefined?{secretRef}:{})};
     })
       .sort((a,b)=>String(a?.name).localeCompare(String(b?.name)));
@@ -24,7 +32,7 @@ function templateMatches(actual:unknown,config:ManagedCloudConfiguration){
   const resources=c.resources as {cpu?:unknown;memory?:unknown}|undefined;
   return c.name===expected.name&&c.image===expected.image&&managedDigest(c.command??[])===managedDigest(expected.command)&&
     managedDigest(c.args??[])===managedDigest(expected.args)&&resources?.cpu===2&&resources.memory==="4Gi"&&
-    managedDigest(normalizeEnv(c.env))===managedDigest(normalizeEnv(expected.env));
+    managedDigest(normalizeEnv(c.env,workerClaimRequired))===managedDigest(normalizeEnv(expected.env));
 }
 export type ManagedWatchDispatchBudget = Pick<ManagedServiceBudgetStorage, "reserveWatch" | "claimWatch" | "markUnknown">;
 /** Shared money/units are reserved before DB writes. A start POST needs both
@@ -94,8 +102,11 @@ export async function reconcileManagedWatchStart(starts:ManagedCloudStartReposit
     if(["Failed","Stopped"].includes(String(status)) && observed.runs.some(r=>r.status==="prepared")){
       const execution=response.body as {id?:unknown;name?:unknown;properties?:{template?:unknown}};
       if(execution.id!==`${observed.config.jobResourceId}/executions/${observed.executionId}` ||
-        execution.name!==observed.executionId || !templateMatches(execution.properties?.template,observed.config))throw new ManagedWatchError("incomplete");
-      await starts.failUnstarted(observed.config,observed.executionId);
+        execution.name!==observed.executionId)throw new ManagedWatchError("incomplete");
+      const exact=templateMatches(execution.properties?.template,observed.config);
+      if(!exact&&!templateMatches(execution.properties?.template,observed.config,true))throw new ManagedWatchError("incomplete");
+      if(exact)await starts.failUnstarted(observed.config,observed.executionId);
+      else await starts.failUnstarted(observed.config,observed.executionId,true);
       observed.runs=(await starts.get(operationId)).runs;
     }
     return {operationId,status:observed.status,executionStatus:["Running","Succeeded","Failed","Stopped","Processing","Unknown"].includes(String(status))?String(status):"Unknown",

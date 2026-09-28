@@ -269,6 +269,8 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
       caseAllowList:caseIds,runs:prepared.map(r=>({caseId:r.caseId,runId:r.runId,snapshotDigest:r.snapshotDigest}))}).config;
     const execution=config.jobName+"-terminal-fixture";
     await starts.reserve(config);await starts.submitting(config);await starts.recordExecution(config,execution);
+    await expect(starts.failUnstarted(config,execution,true)).rejects.toThrow("conflict");
+    expect((await starts.get(config.operationId)).runs.every(r=>r.status==="prepared")).toBe(true);
     const proof=(i:number)=>({operationId:config.operationId,snapshotDigest:prepared[i].snapshotDigest});
     const complete=await watch.claim(caseIds[0],prepared[0].runId,execution,proof(0));await watch.finalize(complete);
     const failed=await watch.claim(caseIds[1],prepared[1].runId,execution,proof(1));await watch.fail(failed,false);
@@ -278,6 +280,14 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     await expect(watch.prepare(caseIds[2],period)).rejects.toThrow("in_progress");
     await expect(starts.failUnstarted(config,execution+"-other")).rejects.toThrow("conflict");
     expect(await allRows()).toEqual(before);
+    for(const [column,value] of [["execution_id",execution+"-other"],["accepted_at",null],["deadline_at",null],
+      ["completed_at",null],["snapshot_digest","f".repeat(64)],["status","unknown"]] as const){
+      const prior=(await environment.sql(`select ${column} as value from managed_watch_runs where run_id=$1`,[prepared[0].runId]))[0].value;
+      await environment.sql(`update managed_watch_runs set ${column}=$1 where run_id=$2`,[value,prepared[0].runId]);
+      await expect(starts.failUnstarted(config,execution,true)).rejects.toThrow();
+      expect((await watch.history(caseIds[2]))[0].status).toBe("prepared");
+      await environment.sql(`update managed_watch_runs set ${column}=$1 where run_id=$2`,[prior,prepared[0].runId]);
+    }
     for(const [column,value] of [["execution_id","fictional-other"],["accepted_at","2098-01-01T00:00:00Z"],
       ["deadline_at","2098-01-01T00:00:00Z"],["completed_at","2098-01-01T00:00:00Z"],["error_code","incomplete"],
       ["consumed_normal",1],["plan_json","{}"],["plan_digest","f".repeat(64)]] as const){
@@ -293,7 +303,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     const pid=(await environment.watchClient.query("select pg_backend_pid() as pid")).rows[0].pid;
     await environment.admin.query("begin");
     await environment.admin.query("select run_id from managed_watch_runs where run_id=$1 for update",[prepared[2].runId]);
-    const concurrent=starts.failUnstarted(config,execution);
+    const concurrent=starts.failUnstarted(config,execution,true);
     try{
       let waiting=false;
       for(let n=0;n<200&&!waiting;n++){
@@ -311,14 +321,14 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1")("managed watch i
     expect(await starts.failUnstarted(config,execution)).toBe(0);
     await environment.sql("update managed_watch_runs set status='prepared',execution_id=null,accepted_at=null,deadline_at=null where run_id=$1",[prepared[2].runId]);
     await environment.sql("update managed_watch_job_starts set status='unknown' where operation_id=$1",[config.operationId]);
-    expect(await starts.failUnstarted(config,execution)).toBe(1);
+    expect(await starts.failUnstarted(config,execution,true)).toBe(1);
     const after=await allRows();
     for(const entry of before){
       const prior=entry.row as Record<string,unknown>,current=after.find(x=>(x.row as Record<string,unknown>).run_id===prior.run_id)!.row as Record<string,unknown>;
       if(prior.run_id!==prepared[2].runId)expect(current).toEqual(prior);
       else{expect(current).toMatchObject({...prior,status:"failed",error_code:"incomplete",completed_at:expect.any(String)});}
     }
-    expect(await starts.failUnstarted(config,execution)).toBe(0);expect(await allRows()).toEqual(after);
+    expect(await starts.failUnstarted(config,execution,true)).toBe(0);expect(await allRows()).toEqual(after);
     expect(await environment.sql("select to_jsonb(j) as row from managed_watch_job_starts j where operation_id=$1",[config.operationId])).toEqual(reservation);
     await expect(starts.reserve({...config,operationId:randomUUID()})).rejects.toThrow("conflict");
     const retry=await watch.prepare(caseIds[2],period);expect(retry.runId).not.toBe(prepared[2].runId);expect(retry.snapshotDigest).toBe(prepared[2].snapshotDigest);
