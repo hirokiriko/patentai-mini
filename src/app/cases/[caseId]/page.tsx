@@ -1,4 +1,5 @@
 import { requireOwner } from "@/lib/owner-http";
+import { comparisonExplanation, comparePublicationNumbers } from "../../../lib/comparison-display";
 import Link from "next/link";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
@@ -1122,13 +1123,13 @@ export default async function CaseDetailPage({
         </section>
       )}
 
-      {/* ── Step 5: 重なり分析・リスクレポート ── */}
+      {/* ── Step 5: 重なり比較レポート ── */}
       {priorArts.length > 0 && extracted && (
         <section
           id="step-5"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(5)}`}
         >
-          <h2 className="text-xl font-bold">5. 重なり分析・リスクレポート</h2>
+          <h2 className="text-xl font-bold">5. 重なり比較レポート</h2>
           <div className="mt-4">
             <AnalyzeButton
               caseId={caseIdNum}
@@ -1144,11 +1145,7 @@ export default async function CaseDetailPage({
 
               {analysisResults
                 .sort((a, b) => {
-                  const order = { High: 0, Medium: 1, Low: 2, Unknown: 3 };
-                  return (
-                    (order[a.riskLabel as keyof typeof order] ?? 3) -
-                    (order[b.riskLabel as keyof typeof order] ?? 3)
-                  );
+                  return comparePublicationNumbers(docMap.get(a.priorDocId ?? 0)?.publicationNo ?? "", docMap.get(b.priorDocId ?? 0)?.publicationNo ?? "") || comparePublicationNumbers(a.draftClaimId ?? "", b.draftClaimId ?? "") || a.resultId - b.resultId;
                 })
                 .map((r) => {
                   const doc = docMap.get(r.priorDocId ?? 0);
@@ -1163,12 +1160,6 @@ export default async function CaseDetailPage({
                     0.35 * (detail?.elementScore ?? 0) +
                     0.2 * (r.semanticScore ?? 0) +
                     0.15 * (r.structuralScore ?? 0);
-                  const riskColor = {
-                    High: "bg-red-100 text-red-800 border-red-300",
-                    Medium: "bg-yellow-100 text-yellow-800 border-yellow-300",
-                    Low: "bg-green-100 text-green-800 border-green-300",
-                    Unknown: "bg-gray-100 text-gray-600 border-gray-300",
-                  }[r.riskLabel ?? "Unknown"];
 
                   return (
                     <div
@@ -1176,11 +1167,6 @@ export default async function CaseDetailPage({
                       className="rounded-lg border border-gray-200 px-4 py-3 space-y-2"
                     >
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className={`rounded border px-2.5 py-1 text-sm font-bold ${riskColor}`}
-                        >
-                          {r.riskLabel}
-                        </span>
                         <span className="text-base font-medium">
                           請求項 {r.draftClaimId}
                         </span>
@@ -1206,7 +1192,7 @@ export default async function CaseDetailPage({
 
                       {detail?.explanation && (
                         <p className="text-base text-gray-700">
-                          {detail.explanation}
+                          {comparisonExplanation(detail.explanation)}
                         </p>
                       )}
 
@@ -1217,7 +1203,7 @@ export default async function CaseDetailPage({
                               key={i}
                               className="rounded bg-red-50 px-2.5 py-1 text-sm text-red-700 border border-red-200"
                             >
-                              一致: {m}
+                              一致: {comparisonExplanation(m)}
                             </span>
                           ))}
                         </div>
@@ -1230,7 +1216,7 @@ export default async function CaseDetailPage({
                               key={i}
                               className="rounded bg-green-50 px-2.5 py-1 text-sm text-green-700 border border-green-200"
                             >
-                              差分: {u}
+                              差分: {comparisonExplanation(u)}
                             </span>
                           ))}
                         </div>

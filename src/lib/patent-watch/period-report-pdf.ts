@@ -39,7 +39,7 @@ function* blocks(report: PeriodReportModel, origin: PeriodPdfOrigin, generatedAt
   if (report.summary.ai) {
     yield h("AI比較の範囲");
     yield p("分析がaiの候補について、現行の比較方法を説明しています。自案の独立請求項（独立請求項が抽出されていない場合は全請求項）と、公報の要約および請求項テキストの先頭最大2,000文字を比較します。明細書全文や請求項の残りは比較範囲に含みません。");
-    yield p("差分候補は入力範囲で一致を確認できない内容です。公報全体に記載がないという意味ではありません。Lowでも原文を確認してください。");
+    yield p("差分候補は入力範囲で一致を確認できない内容です。公報全体に記載がないという意味ではありません。比較結果にかかわらず原文を確認してください。");
     yield p("各結果の実際の入力文字数や切断の有無を示す記録ではありません。fallback候補はAI詳細比較の結果ではありません。");
   }
   if (!report.runs.length) yield p("実行記録なし：この期間に開始した保存済みの監視実行はありません。公報の取得状況や比較結果は判断できません。");
@@ -48,7 +48,7 @@ function* blocks(report: PeriodReportModel, origin: PeriodPdfOrigin, generatedAt
   for (const f of report.findings) {
     yield h(`候補 #${f.findingId}: ${f.publicationNumber} · ${f.inventionTitle}`);
     yield p(`公開日: ${f.publicationDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1/$2/$3")} ／ 初回検出: ${periodDateTimeLabel(f.firstSeenAt)} ／ 初検出run #${f.firstRunId}`);
-    yield p(`risk label（AI比較の参考）: ${f.riskLabel} ／ 分析: ${f.analysisMode} ／ 確認状態: ${f.reviewStatus === "reviewed" ? "確認済み" : "未確認"}`);
+    yield p(`分析: ${f.analysisMode} ／ 確認状態: ${f.reviewStatus === "reviewed" ? "確認済み" : "未確認"}`);
     yield p(`語彙 ${Math.round(f.lexicalScore * 100)}% ／ 要素 ${Math.round(f.elementScore * 100)}% ／ 意味 ${Math.round(f.semanticScore * 100)}% ／ 構造 ${Math.round(f.structuralScore * 100)}%`);
     yield h("一致候補");
     for (const text of f.matchedElements.length ? f.matchedElements : ["明示された候補はありません"]) yield p(`・${text}`);
@@ -63,7 +63,7 @@ function* blocks(report: PeriodReportModel, origin: PeriodPdfOrigin, generatedAt
   }
   yield h("レポートの範囲と原文確認");
   yield p("対象は各実行時の取り込み済み公報です。対象期間の全公開公報の取得完了や全件のAI精読は保証しません。");
-  yield p("本レポートは確認候補を整理するもので、法的判断ではありません。risk labelはAI比較の参考であり、法的危険度・対応義務・専門家の確定所見を示しません。人による原文確認が必要です。");
+  yield p("本レポートは確認候補を整理するもので、法的判断ではありません。比較説明は専門家の確定所見を示しません。人による原文確認が必要です。");
   yield p("自己案件の除外や「他社」の判定は保証しません。公開番号を使ってJ-PlatPat等で原文を確認してください。専門家の所見は印刷物や既存の単一run CSVへ外部で追記できます。");
 }
 

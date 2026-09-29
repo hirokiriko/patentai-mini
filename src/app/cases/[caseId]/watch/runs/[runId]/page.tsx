@@ -1,3 +1,4 @@
+import { comparisonAnalysisDisplay } from "../../../../../../lib/comparison-display";
 import { requireOwner } from "@/lib/owner-http";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -74,7 +75,7 @@ function scoreLabel(value: number): string {
 }
 
 function FindingReport({ caseId, finding }: { caseId: number; finding: CaseWatchFinding }) {
-  const analysis = parseAnalysis(finding.analysisJson);
+  const analysis = comparisonAnalysisDisplay(parseAnalysis(finding.analysisJson));
 
   return (
     <article id={`finding-${finding.findingId}`} className="break-inside-avoid rounded-lg border border-gray-300 p-4">
@@ -85,9 +86,6 @@ function FindingReport({ caseId, finding }: { caseId: number; finding: CaseWatch
         <span>{publicationDateLabel(finding.publicationDate)}</span>
         <span className="rounded border border-gray-300 px-2 py-0.5 text-xs">
           {finding.kind}
-        </span>
-        <span className="rounded border border-rose-300 bg-rose-50 px-2 py-0.5 text-xs font-bold">
-          {finding.riskLabel}
         </span>
         <span className="rounded border border-indigo-300 bg-indigo-50 px-2 py-0.5 text-xs">
           {finding.analysisMode}

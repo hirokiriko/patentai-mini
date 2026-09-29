@@ -1,3 +1,4 @@
+import { comparisonAnalysisDisplay } from "../comparison-display";
 import { z } from "zod";
 import { boundedPatentWatchPublicText, comparePatentWatchTimestamps, isValidPatentWatchDate, isValidPatentWatchTimestamp, sanitizePatentWatchAnalysis } from "./domain";
 import { PERIOD_FINDING_LIMIT, PERIOD_READ_TIMEOUT_MS, PERIOD_RUN_LIMIT, PeriodReportLimitError, periodBounds, periodCaseId, type WatchPeriod } from "./period";
@@ -60,7 +61,7 @@ export function buildPeriodReport(caseId: number, period: WatchPeriod, input: Pe
     const runCounts = counts.get(finding.firstRunId) ?? { total: 0, fallback: 0 };
     runCounts.total++; if (finding.analysisMode === "fallback") runCounts.fallback++;
     counts.set(finding.firstRunId, runCounts);
-    const analysis = sanitizePatentWatchAnalysis(analysisSchema.parse(JSON.parse(finding.analysisJson)));
+    const analysis = comparisonAnalysisDisplay(sanitizePatentWatchAnalysis(analysisSchema.parse(JSON.parse(finding.analysisJson))));
     return {
       findingId: finding.findingId, firstRunId: finding.firstRunId, firstSeenAt: finding.firstSeenAt,
       publicationNumber: boundedPatentWatchPublicText(finding.publicationNumber, 100),

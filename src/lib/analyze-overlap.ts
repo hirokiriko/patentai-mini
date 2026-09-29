@@ -148,6 +148,8 @@ overall = 0.30 * lexical + 0.35 * element + 0.20 * semantic + 0.15 * structural
 - Low: 語彙類似はあるが構造差が大きい
 - Unknown: 解析不能、または原文不足
 
+riskLabelは内部互換用の構造化項目です。explanation・matchedElements・unmatchedElementsにはHigh/Medium/Low/Unknownや高・中・低リスク等の段階評価を記載せず、技術的な一致・相違と未確認の理由を説明してください。原文引用は変えないでください。
+
 ## 必須の説明内容
 - どの構成要素が一致したか
 - どの制約が一致しなかったか

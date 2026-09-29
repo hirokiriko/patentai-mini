@@ -122,7 +122,7 @@ exact body `{ "reviewStatus": "reviewed" | "unreviewed" }`だけを受理する�
 
 ### `GET /api/cases/[caseId]/watch/report.csv?runId=<positive integer>`
 
-指定runで初めて保存されたfindingをUTF-8 CSVで返す。列は公開番号、公開日、kind、発明名称、risk label、4 score、一致候補、差分候補、説明、分析mode、確認状態だけとする。comma、quote、改行をRFC 4180形式でescapeし、先頭の`=`, `+`, `-`, `@`およびcontrol prefixはformulaとして評価されないよう無害化する。
+指定runで初めて保存されたfindingをUTF-8 CSVで返す。列は公開番号、公開日、kind、発明名称、4 score、一致候補、差分候補、説明、分析mode、確認状態だけとする。comma、quote、改行をRFC 4180形式でescapeし、先頭の`=`, `+`, `-`, `@`およびcontrol prefixはformulaとして評価されないよう無害化する。
 
 共通stable error codeは`invalid_watch_setting`、`invalid_watch_review_status`、`invalid_watch_run_request`、`case_not_found`、`watch_not_configured`、`watch_disabled`、`watch_claims_not_ready`、`watch_run_in_progress`、`watch_run_not_found`、`watch_finding_not_found`、`watch_corpus_unavailable`、`watch_unavailable`、`watch_analysis_failed`、`watch_ai_stopped`、`watch_internal_error`とする。`invalid_watch_review_status`はPATCH exact body、`invalid_watch_run_request`はPOST runの非0-byte bodyの入力不正へ400で使用する。response messageへ入力本文、請求項、公報本文、DB／AI error、path、hash、secretを含めない。
 
@@ -162,7 +162,7 @@ Issue #93では今回の実行結果（完了、fallback、前提不足、AI保�
 
 browser印刷ではnavigationとbuttonをprint CSSで除く。アプリ内でPDF binaryを生成、保存、送信しない。
 
-Issue #112では、watch一覧・単一run・期間レポートに表示する保存候補に`analysisMode=ai`がある場合だけ「AI比較の範囲」を画面と印刷へ表示する。現行の詳細比較は自案の独立請求項（抽出済み独立請求項が0件なら全請求項）、公報の要約、請求項テキストの先頭最大2,000文字を使い、明細書全文とそれを超える請求項を含まない。差分候補は入力範囲の一致未確認であり、公報全体の不存在を意味しない。Lowでも原文確認を要する。注記は現行方式の説明であり、過去の各結果の実送信文字数・切断有無を記録したものではない。fallbackのみ・候補0件では表示せず、混在時はai候補への説明と明示する。AI本文・分類・保存値・CSVは変えない。
+Issue #112では、watch一覧・単一run・期間レポートに表示する保存候補に`analysisMode=ai`がある場合だけ「AI比較の範囲」を画面と印刷へ表示する。現行の詳細比較は自案の独立請求項（抽出済み独立請求項が0件なら全請求項）、公報の要約、請求項テキストの先頭最大2,000文字を使い、明細書全文とそれを超える請求項を含まない。差分候補は入力範囲の一致未確認であり、公報全体の不存在を意味しない。比較結果にかかわらず原文確認を要する。注記は現行方式の説明であり、過去の各結果の実送信文字数・切断有無を記録したものではない。fallbackのみ・候補0件では表示せず、混在時はai候補への説明と明示する。AI本文・分類・保存値・CSVは変えない。
 
 ### 現在の比較資料（Issue #117）
 
@@ -188,7 +188,7 @@ Issue #93のrollbackは同修正のrevert PRと通常deployで行う。既存DB�
 
 案件はnumeric IDだけで示し、期間・作成日時JST・完了/失敗/実行中件数・保存findingから求めた新規候補数・確認状態・AI/fallback内訳・対象runを表示する。件数矛盾や不正row、DB失敗/timeoutは取得不能とし、0件へ補完しない。確認状態はレポート作成時点の保存状態であり履歴や専門家の所見ではない。失敗/実行中は不完全警告を見出しと印刷に残し、実行記録なし・完了runの新規候補0・取得不能・上限超過を区別する。
 
-候補は既存文字上限とサニタイズを再利用する。原文は公開番号からJ-PlatPat等で人が確認する。対象は各実行時の取り込み済み公報であり、全公開公報の取得完了・全件AI精読・自己案件除外・「他社」判定を保証しない。risk labelはAI比較の参考で、法的判断や対応義務、専門家の確定所見ではない。長い候補は印刷時にページ間分割を許可し、期間・状態・件数・注意文・候補を残す。PDFはbrowserの印刷保存を使う。所見は印刷物や既存単一run CSVへ外部追記できる。期間CSV・所見editor・メール配信は追加しない。
+候補は既存文字上限とサニタイズを再利用する。原文は公開番号からJ-PlatPat等で人が確認する。対象は各実行時の取り込み済み公報であり、全公開公報の取得完了・全件AI精読・自己案件除外・「他社」判定を保証しない。比較説明は法的判断や対応義務、専門家の確定所見ではない。長い候補は印刷時にページ間分割を許可し、期間・状態・件数・注意文・候補を残す。PDFはbrowserの印刷保存を使う。所見は印刷物や既存単一run CSVへ外部追記できる。期間CSV・所見editor・メール配信は追加しない。
 
 段階Aは運営者の手動取得による定期レポート試用、段階Bは取得・定期実行・通知の自動化とする。リアルタイムは別需要である。本変更の受入は期間レポートの実装までで、手動公報の期間分取得・正規取込運用、Issue #93の原障害、実AI/実DBの全体試用、専門家の品質評価、実顧客受入は別残件。Issue #89の公開・完全架空データ限定受入は維持する。
 
@@ -209,3 +209,7 @@ CSVはcompletedだけを出力する。未完了はHTTP409とJSON `{"error":"wat
 取得はcase→watch→findingの所属とその参照公報1件に限定したread-only snapshot。番号・kind・内容由来のsource identityが一致しなければ書誌全体を未確認にする。出願人は既存serializerのshapeを検証し、JSON 64KiB、100件、各名称500文字を上限として記載順の名称だけを投影する。超過・不正・redaction時は省略名を表示せず原文確認を案内し、null/未記載と区別する。SQL timeoutと応答待ち上限は期間レポートと同じ有限設定を使う。
 
 印刷には書誌・出典状態・注意文を残す。取り込み済み公報の記載であり、最新権利者や審査経過、自社/他社の判定、自己案件除外、法的結論ではない。公式J-PlatPat入口と番号から人が原文を確認する。既存CSV・case snapshot・schema・AI・cursor・確認状態は変更しない。本番機能受入や実案件提供許可は未確認のまま維持する。
+
+## Issue #140: 段階表示の廃止
+
+画面・印刷・新規生成PDF/CSVにriskLabelの段階・色・列を出さない。内部保存値と旧PDF/CSV原本は保持する。保存済み比較の自由記述は表示時に評価文脈だけを中立化し、技術表現・原文引用・未確認理由を残す。新しい説明にも段階評価を出さない。旧原本の再取得と新形式の別版納品を区別し、表示変更のために再AI実行しない。

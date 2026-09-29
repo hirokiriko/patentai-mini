@@ -40,9 +40,10 @@ describe("patent watch CSV", () => {
     const csv = buildPatentWatchReportCsv([finding()]);
     expect(csv.charCodeAt(0)).toBe(0xfeff);
     expect(csv.slice(1).split("\r\n")[0]).toBe(
-      "公開番号,公開日,kind,発明名称,risk label,lexical score,element score,semantic score,structural score,一致候補,差分候補,説明,分析mode,確認状態",
+      "公開番号,公開日,kind,発明名称,lexical score,element score,semantic score,structural score,一致候補,差分候補,説明,分析mode,確認状態",
     );
     expect(csv).toContain("架空の光学装置");
+    expect(csv).not.toMatch(/risk label|Medium/);
   });
 
   it("escapes commas, quotes, and line breaks", () => {

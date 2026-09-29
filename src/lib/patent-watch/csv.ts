@@ -1,3 +1,4 @@
+import { comparisonAnalysisDisplay, comparePublicationNumbers } from "../comparison-display";
 import {
   boundedPatentWatchPublicText,
   sanitizePatentWatchAnalysis,
@@ -13,7 +14,6 @@ export const PATENT_WATCH_CSV_COLUMNS = [
   "公開日",
   "kind",
   "発明名称",
-  "risk label",
   "lexical score",
   "element score",
   "semantic score",
@@ -73,13 +73,12 @@ function csvCell(value: string | number): string {
 }
 
 function findingRow(finding: CaseWatchFinding): Array<string | number> {
-  const analysis = parseAnalysis(finding.analysisJson);
+  const analysis = comparisonAnalysisDisplay(parseAnalysis(finding.analysisJson));
   return [
     boundedPatentWatchPublicText(finding.publicationNumber, 100),
     finding.publicationDate,
     finding.kind,
     boundedPatentWatchPublicText(finding.inventionTitle, 500),
-    finding.riskLabel,
     finding.lexicalScore,
     finding.elementScore,
     finding.semanticScore,
@@ -98,7 +97,7 @@ export function buildPatentWatchReportCsv(
 ): string {
   const rows = [
     PATENT_WATCH_CSV_COLUMNS.map(csvCell).join(","),
-    ...findings.map((finding) => findingRow(finding).map(csvCell).join(",")),
+    ...[...findings].sort((a, b) => comparePublicationNumbers(a.publicationNumber, b.publicationNumber) || a.findingId - b.findingId).map((finding) => findingRow(finding).map(csvCell).join(",")),
   ];
   return `\uFEFF${rows.join("\r\n")}\r\n`;
 }

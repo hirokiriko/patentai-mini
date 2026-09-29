@@ -20,7 +20,8 @@ export default async function ManagedDeliveryPage({ params }: { params: Promise<
   if (saved.status !== "stored") notFound();
   return <main className="mx-auto max-w-5xl space-y-5 px-6 py-8">
     <Link className="text-blue-700 underline" href={`/cases/${caseId}/managed-watch`}>納品版の一覧に戻る</Link>
-    <div className="flex gap-5">{(["pdf", "csv"] as const).map(format => <a key={format} className="text-blue-700 underline" href={`/api/cases/${caseId}/managed-watch/deliveries/${id}/${format}`}>{format.toUpperCase()}を取得</a>)}</div>
+    <div className="flex gap-5">{(["pdf", "csv"] as const).map(format => <a key={format} className="text-blue-700 underline" href={`/api/cases/${caseId}/managed-watch/deliveries/${id}/${format}`}>保存原本の{format.toUpperCase()}を取得</a>)}</div>
+    <p className="text-sm">この画面は現在の表示形式です。保存原本は生成当時の内容を保持しており、旧形式の評価表示を含む場合があります。現在の表示形式でのPDF・CSVは、一覧から新しい納品版を作成してください。保存済みの比較結果を再利用し、表示変更のための再比較は不要です。</p>
     <article className="space-y-3 rounded border p-6">{[...managedDeliveryBlocks(saved.report)].map((block, index) => block.heading
       ? index === 0 ? <h1 className="text-2xl font-bold" key={index}>{block.text}</h1> : <h2 className="pt-5 text-xl font-semibold" key={index}>{block.text}</h2>
       : <p className="whitespace-pre-wrap break-words" key={index}>{block.text}</p>)}</article>
