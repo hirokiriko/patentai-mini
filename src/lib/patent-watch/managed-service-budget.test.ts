@@ -4,6 +4,7 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, managedReleaseCaps, emptyManagedBudgetUnits, managedBudgetStateSchema,
   managedBudgetForecast, reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage,
   markManagedBudgetUnknown, settleManagedBudget as settleSequence, setManagedMonthPlan, activateManagedBudgetProfile,
+  managedCompletionAllowanceSchema, checkManagedCompletionBudget,
   type ManagedBudgetState, type ManagedBudgetProfile } from "./managed-service-budget";
 import { validateManagedBudgetState } from "./managed-service-budget";
 
@@ -32,6 +33,76 @@ function nextMonth(s: ManagedBudgetState, date = "2026-09-30T15:00:01.000Z") {
   return setManagedMonthPlan(s, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
     pricingDigest: digest(4), evidenceDigest: digest(8), releaseTailYen: s.releaseTailYen }, clock(date));
 }
+function completionFixture() {
+  const p = profile(), now = clock("2026-10-01T00:00:00.000Z");
+  const old = request({ kind: "deploy", reservationYen: 100,
+    units: { ...emptyManagedBudgetUnits(), jobs: 24, minutes: 2880, forward: 8 } });
+  const reserved = reserveManagedBudget(state(), old, null, clock()).state;
+  const september = settleManagedBudget(reserved, { operationId: old.operationId, requestDigest: old.requestDigest,
+    evidenceDigest: digest(300), knownUnits: { forward: 8 } }, clock());
+  const s = activate(nextMonth(september), p, now);
+  const allowance = managedCompletionAllowanceSchema.parse({ scope: "ISSUE140_COMPLETION_V2", issue: 140, month: "2026-10",
+    ownerApprovalDigest: digest(301), profileDigest: managedDigest(p), monthlyCapYen: 32_000,
+    cumulativeUnits: { ...managedReleaseCaps, jobs: 26, minutes: 3120, forward: 10 }, validUntil: "2026-10-31T15:00:00.000Z" });
+  const input = { baseYen: 19_000, pools: { remaining: 9000, storage: 1000, recovery: 100 }, pricingDigest: p.pricingDigest,
+    evidenceDigest: digest(302), releaseTailYen: s.releaseTailYen, completionAllowance: allowance };
+  const allowed = setManagedMonthPlan(s, input, now);
+  const r = request({ scope: "standard", profileDigest: managedDigest(p), cases: [1] });
+  return { p, now, september, s, allowance, input, allowed, r };
+}
+it("uses the signed completion allowance for the whole history while retaining ordinary profiles and old plans", () => {
+  const f = completionFixture(), before = structuredClone(f.allowed);
+  const first = reserveManagedBudget(f.allowed, f.r, f.p, f.now).state;
+  expect(managedBudgetForecast(first, "2026-10")).toBe(31_200);
+  expect(first.operations[0]).toEqual(f.september.operations[0]);
+  expect(first.plans[0]).toEqual(f.september.plans[0]);
+  expect(first.legacyUnknownYen).toBe(f.september.legacyUnknownYen);
+  expect(first.releaseTailYen).toBe(f.allowed.releaseTailYen);
+  expect(f.p.monthlyCapYen).toBe(30_000);
+  const second = reserveManagedBudget(first, { ...f.r, operationId: randomUUID(), requestDigest: managedDigest(randomUUID()) }, f.p, f.now).state;
+  expect(() => reserveManagedBudget(second, { ...f.r, operationId: randomUUID(), requestDigest: managedDigest(randomUUID()) }, f.p, f.now)).toThrow();
+  expect(claimManagedBudgetPhase(first, f.r.operationId, "stage", f.p, f.now).operations[1].stage).toBe("claimed");
+  expect(f.allowed).toEqual(before);
+});
+it.each(["missing", "wrong-profile", "expiry", "scope", "month", "over-cost", "review-required"])(
+  "refuses invalid completion %s and does not erase prior reservations", reason => {
+    const f = completionFixture();
+    if (reason === "missing") delete f.allowed.plans[1].completionAllowance;
+    if (reason === "wrong-profile") f.allowed.plans[1].completionAllowance!.profileDigest = digest(999);
+    if (reason === "expiry") f.allowed.plans[1].completionAllowance!.validUntil = "2026-10-01T01:00:00.000Z";
+    if (reason === "scope") Object.assign(f.allowed.plans[1].completionAllowance!, { scope: "OTHER" });
+    if (reason === "month") Object.assign(f.allowed.plans[1].completionAllowance!, { month: "2026-11" });
+    if (reason === "over-cost") f.allowed.legacyUnknownYen += 1000;
+    if (reason === "review-required") f.allowed.operations[0].reviewRequired = true;
+    const before = structuredClone(f.allowed);
+    expect(() => reserveManagedBudget(f.allowed, f.r, f.p, f.now)).toThrow();
+    expect(f.allowed).toEqual(before);
+  });
+it("rejects an allowance copied to November and returns to the normal cap without dropping history", () => {
+  const f = completionFixture(), november = clock("2026-11-01T00:00:00.000Z");
+  expect(() => setManagedMonthPlan(f.allowed, f.input, november)).toThrow();
+  const input = { ...f.input, completionAllowance: undefined };
+  const restored = setManagedMonthPlan(f.allowed, input, november);
+  expect(restored.operations).toEqual(f.allowed.operations);
+  expect(restored.plans[1]).toEqual(f.allowed.plans[1]);
+  expect(restored.plans[2].completionAllowance).toBeUndefined();
+  expect(() => reserveManagedBudget(restored, f.r, f.p, november)).toThrow();
+  const normal = setManagedMonthPlan(restored, { ...input, baseYen: 10_000 }, november);
+  const noJobs = { ...f.r, kind: "validation", units: emptyManagedBudgetUnits() };
+  expect(reserveManagedBudget(normal, noJobs, f.p, november).created).toBe(true);
+  expect(() => checkManagedCompletionBudget(normal, f.allowance, november)).toThrow();
+});
+it("limits a signed bootstrap step cumulatively without adding a new plan field", () => {
+  const f = completionFixture();
+  const r = { ...f.r, kind: "deploy", units: { ...emptyManagedBudgetUnits(), forward: 1 } };
+  const reserved = reserveManagedBudget(f.s, r, f.p, f.now).state;
+  checkManagedCompletionBudget(reserved, f.allowance, f.now);
+  expect(reserved.operations[0]).toEqual(f.september.operations[0]);
+  expect(reserved.operations[1].scope).toBe("standard");
+  expect(reserved.plans.every(p => p.completionAllowance === undefined)).toBe(true);
+  expect(() => checkManagedCompletionBudget(reserved, { ...f.allowance,
+    cumulativeUnits: { ...f.allowance.cumulativeUnits, forward: 8 } }, f.now)).toThrow();
+});
 it("confines the reviewed release allowance to its month without changing Standard or historical plans", () => {
   const original = state(), serialized = JSON.stringify(original);
   expect(JSON.stringify(managedBudgetStateSchema.parse(original))).toBe(serialized);

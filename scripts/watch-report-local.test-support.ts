@@ -38,7 +38,7 @@ export async function isolatedCommand(file: string, args: string[], input = "", 
     child.stdin.on("error", () => undefined); child.stdin.end(input);
   });
 }
-export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101, deadline?: AbortSignal) {
+export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 | 140 = 101, deadline?: AbortSignal) {
   deadline?.throwIfAborted();
   if (process.env.WATCH_REPORT_LOCAL_DB_TEST !== "1" || process.env.DATABASE_URL || process.env.PGHOST || process.env.PGSERVICE) {
     throw Error("isolated_database_opt_in_required");
@@ -82,7 +82,7 @@ export async function isolatedPg16(issue: 101 | 103 | 123 | 125 | 129 = 101, dea
     }
     createAttempted = true;
     const created = await docker(["create", "--name", container, "--label", `patentai.issue=${issue}`, "--label", `patentai.owner=${suffix}`,
-      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...([123, 125, 129].includes(issue) ? ["--pull", "never"] : []), "postgres:16"],
+      "--publish", "127.0.0.1::5432", "--env", "POSTGRES_PASSWORD", "--env", "POSTGRES_DB", ...([123, 125, 129, 140].includes(issue) ? ["--pull", "never"] : []), "postgres:16"],
     { POSTGRES_PASSWORD: password, POSTGRES_DB: database });
     if (created.code !== 0) throw Error();
     createAcknowledged = true;

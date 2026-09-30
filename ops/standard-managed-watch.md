@@ -1,5 +1,19 @@
 # 標準特許ウォッチ運用
 
+## Issue #140 の月限定完遂承認
+
+`ISSUE140_COMPLETION_V2` のOWNER原本は非公開で保持し、原本digest、対象月、期限、
+有効profile、全履歴の累計枠を既存の署名reviewへ拘束する。具体値は公開しない。
+通常profileの月額上限と従来のrelease履歴を変更・リセットしない。
+互換コードの初回配備は、署名済み `release-start` のIssue140専用stepで行う。
+このstepは既存Standard profileと通常月planにも通る予約に限定し、全履歴累計を追加照合する。
+保存stateは旧形式のままとし、fresh CAS ACKだけを一度限りの実行許可とする。
+App/Job/image/buildの対応確認後、署名month reviewで10月限定 `completionAllowance` を
+適用・読戻しする。業務は当該profileの通常入口を使い、workerやstage再開でも期限を検証する。
+11月には例外を使わず通常月額と月枠へ戻すが、全履歴・予約・不明usageは保持する。
+新形式適用後は非互換imageへ戻さず、承認内で互換コードまたは正規設定復帰を使用する。
+この手順の記載やLocalテストだけでは、配備・帳票引渡しの完了にならない。
+
 仕様・実行承認の正本は [Issue #129](https://github.com/hirokiriko/patentai-mini/issues/129)、
 承認済みサービス契約は [親 #128](https://github.com/hirokiriko/patentai-mini/issues/128)。
 本書は運用手順を記録する。実装中の手順を本番受入済みとは扱わない。
@@ -32,6 +46,9 @@ Issue #140の表示方針では、画面・印刷・新規生成PDF/CSVのリス
 本番受入成立後の「OWNERによる実運用用差分ZIP投入待ち」は正常な完了状態です。
 
 対象は1社・監視元最大5件の公開/登録済み日本特許、運営者はOWNER1名。
+同時に有効な監視設定を5件までとし、無効化済み設定と過去の結果・原本は保持できます。
+対象を入れ替える場合は既存設定を無効化し、署名済みprofileとallowlistも正規手順で対応させます。
+設定を無効化しても、実行履歴・費用・予約・releaseの累積上限はリセットされません。
 受入試験の最大5件と、署名済み標準運用profileの最大5件は別枠です。試験履歴・費用・
 未確定予約は台帳に残します。OWNERが事前設定した公開サンプルを引き続き使う場合は、
 その原本と設定を保持して標準運用profileへ含めます。不要な試験用設定だけを限定cleanupします。
