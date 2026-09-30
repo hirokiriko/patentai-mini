@@ -15,6 +15,14 @@ vi.mock("next/navigation", () => ({ notFound: () => { throw new Error("NOT_FOUND
 const render = (snapshot = periodFixture()) => renderToStaticMarkup(<PeriodReportView caseId={7} period={fixturePeriod} result={{ kind: "ready", report: buildPeriodReport(7, fixturePeriod, snapshot) }} />);
 beforeEach(() => { vi.clearAllMocks(); seam.read.mockResolvedValue(periodFixture()); });
 describe("period server page and print view", () => {
+  it.each(["High", "Medium", "Low", "Unknown"] as const)("omits saved tier %s from the print view", riskLabel => {
+    const snapshot = periodFixture(1, 1);
+    snapshot.findings[0].riskLabel = riskLabel;
+    snapshot.findings[0].analysisJson = JSON.stringify({ matchedElements: ["架空光学部は一致"], unmatchedElements: ["温度条件は未確認"], explanation: `リスク: ${riskLabel}。原文不足は未確認。` });
+    const html = render(snapshot);
+    expect(html).not.toMatch(/High|Medium|Low|Unknown/);
+    for (const text of [snapshot.findings[0].publicationNumber, "架空光学部は一致", "温度条件は未確認", "原文不足は未確認"]) expect(html).toContain(text);
+  });
   it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("prints a scope notice only when there are AI findings: %j", ({ modes }) => {
     const snapshot = periodFixture(1, modes.length);
     snapshot.findings.forEach((finding, index) => { finding.analysisMode = modes[index]; });

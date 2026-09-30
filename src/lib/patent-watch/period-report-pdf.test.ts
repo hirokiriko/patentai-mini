@@ -46,8 +46,8 @@ describe("actual searchable period PDFs", () => {
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
     const pages = await extract(bytes), text = normalize(pages.join("\n"));
     expect(pages.length).toBeGreaterThan(2);
-    for (const expected of ["案件 #7", "2096-03-01 〜 2096-03-31", "実行件数: 3件", "完了 2件", "失敗 1件", "新規候補数: 4件", "未確認 2件", "確認済み 2件", "AI 2件", "fallback 2件", "不完全なレポート", "法的判断ではありません", "先頭最大2,000文字", "明細書全文や請求項の残り", "Lowでも原文を確認", "自己案件の除外", explanation]) expect(text).toContain(normalize(expected));
-    for (const f of report.findings) for (const expected of [f.publicationNumber, f.inventionTitle, f.riskLabel, f.analysisMode, f.explanation, ...f.matchedElements, ...f.unmatchedElements, `候補 #${f.findingId}`, `初検出run #${f.firstRunId}`, "2096/02/29", "2096/04/01 9:01 JST", "語彙 50%", "要素 40%", "意味 30%", "構造 20%"]) expect(text).toContain(normalize(expected));
+    for (const expected of ["案件 #7", "2096-03-01 〜 2096-03-31", "実行件数: 3件", "完了 2件", "失敗 1件", "新規候補数: 4件", "未確認 2件", "確認済み 2件", "AI 2件", "fallback 2件", "不完全なレポート", "法的判断ではありません", "先頭最大2,000文字", "明細書全文や請求項の残り", "比較結果にかかわらず原文を確認", "自己案件の除外", explanation]) expect(text).toContain(normalize(expected));
+    for (const f of report.findings) for (const expected of [f.publicationNumber, f.inventionTitle, f.analysisMode, f.explanation, ...f.matchedElements, ...f.unmatchedElements, `候補 #${f.findingId}`, `初検出run #${f.firstRunId}`, "2096/02/29", "2096/04/01 9:01 JST", "語彙 50%", "要素 40%", "意味 30%", "構造 20%"]) expect(text).toContain(normalize(expected));
     expect(text.indexOf("候補#1")).toBeLessThan(text.indexOf("候補#4"));
     for (const [index, page] of pages.entries()) expect(normalize(page)).toContain(`${index + 1}/${pages.length}`);
     expect(text).not.toContain(SECRET_SENTINEL); expect(text).not.toContain(RAW_SENTINEL);

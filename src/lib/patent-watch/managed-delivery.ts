@@ -1,3 +1,4 @@
+import { comparisonExplanation, comparePublicationNumbers } from "../comparison-display";
 import { z } from "zod";
 import { managedDate, managedDeliveryDueOn, managedPeriodForPublication, JAPAN_HOLIDAYS } from "./managed-period";
 import { managedId, ManagedWatchError } from "./managed-types";
@@ -62,12 +63,12 @@ export function managedExplanations(texts: readonly string[], fullClaims: readon
 export function projectManagedDeliveryDisplay(value: ManagedDelivery): ManagedDelivery {
   const report = validateManagedDelivery(value);
   return { ...report, base: { ...report.base, publicationNumber: boundedPatentWatchPublicText(report.base.publicationNumber, 100),
-    version: boundedPatentWatchPublicText(report.base.version, 100) }, findings: report.findings.map(f => ({ ...f,
+    version: boundedPatentWatchPublicText(report.base.version, 100) }, findings: [...report.findings].sort((a, b) => comparePublicationNumbers(a.publicationNumber, b.publicationNumber) || a.findingId - b.findingId).map(f => ({ ...f,
     publicationNumber: boundedPatentWatchPublicText(f.publicationNumber, 100), inventionTitle: boundedPatentWatchPublicText(f.inventionTitle, 1000),
-    comparisons: f.comparisons.map(c => ({ ...c, explanation: managedExplanation(c.explanation, []) })) })) };
+    comparisons: [...f.comparisons].sort((a, b) => a.baseClaimNo - b.baseClaimNo || a.candidateClaimNo - b.candidateClaimNo).map(c => ({ ...c, explanation: comparisonExplanation(managedExplanation(c.explanation, [])) })) })) };
 }
 export const MANAGED_NOTICE = "指定した監視元請求項の全文と必要な参照請求項を、採用候補の請求項全文と比較しています。語彙選別は最大100件、AI詳細採用は最大20件です。対象外を全文AI比較済みとは扱いません。法的判断ではなく、人による原文確認が必要です。";
-export const MANAGED_SOURCE_NOTICE = "公開番号を用いてJ-PlatPat等の正規原文を確認してください。自社公報は番号・出願対応で確認できたものだけを区別し、出願人不明を他社確定にしません。Lowでも記載不存在・権利非侵害を意味しません。";
+export const MANAGED_SOURCE_NOTICE = "公開番号を用いてJ-PlatPat等の正規原文を確認してください。自社公報は番号・出願対応で確認できたものだけを区別し、出願人不明を他社確定にしません。比較結果は記載不存在・権利非侵害を示すものではなく、人による原文確認が必要です。";
 export function managedIncompleteMessage(value:ManagedDelivery):string|null{
   const r=validateManagedDelivery(value);if(r.coverage.complete)return null;
   return `対象公開期間 ${r.period.from}〜${r.period.to} の定例報告について、取得・解析・比較の確認が完了していないため、候補の有無は確定していません。`+
@@ -100,7 +101,7 @@ export function* managedDeliveryBlocks(value: ManagedDelivery): Generator<Report
     yield text(`公開日: ${f.publicationDate} ／ 検出日時: ${f.detectedAt}`);
     yield text(`区分: ${{ own_publication: "自社公報", other_applicant: "他社出願確認済み", unknown: "出願対応未確認" }[f.relation]} ／ ${f.reviewStatus === "reviewed" ? "確認済み" : "未確認"}`);
     for (const c of f.comparisons) {
-      yield text(`監視元請求項${c.baseClaimNo} × 候補請求項${c.candidateClaimNo} ／ ${c.riskLabel}`);
+      yield text(`監視元請求項${c.baseClaimNo} × 候補請求項${c.candidateClaimNo}`);
       yield text(`語彙 ${Math.round(c.lexicalScore*100)}% ／ 要素 ${Math.round(c.elementScore*100)}% ／ 意味 ${Math.round(c.semanticScore*100)}% ／ 構造 ${Math.round(c.structuralScore*100)}%`);
       yield text(`根拠位置（UTF-16、0始まり・末尾除外）: 監視元請求項${c.baseEvidence.claimNo} ${c.baseEvidence.start}〜${c.baseEvidence.end} ／ 候補請求項${c.candidateEvidence.claimNo} ${c.candidateEvidence.start}〜${c.candidateEvidence.end}`);
       yield text(c.explanation);
@@ -113,13 +114,13 @@ export const generateManagedDeliveryPdf = (report: ManagedDelivery) => generateR
 const cell = (value: unknown) => `"${neutralizeFormula(String(value ?? "")).replaceAll('"','""')}"`;
 export function managedDeliveryCsv(value: ManagedDelivery): Buffer {
   const r = projectManagedDeliveryDisplay(value);
-  const header = ["案件", "納品版", "公開期間開始", "公開期間終了", "生成日時", "処理状態", "公開番号", "公開日", "検出日時", "区分", "確認状態", "監視元請求項", "候補請求項", "risk", "語彙", "要素", "意味", "構造", "監視元根拠位置", "候補根拠位置", "説明", "注意文"];
+  const header = ["案件", "納品版", "公開期間開始", "公開期間終了", "生成日時", "処理状態", "公開番号", "公開日", "検出日時", "区分", "確認状態", "監視元請求項", "候補請求項", "語彙", "要素", "意味", "構造", "監視元根拠位置", "候補根拠位置", "説明", "注意文"];
   const rows: unknown[][] = [];
   const common = [r.caseId,r.version,r.period.from,r.period.to,r.generatedAt,r.coverage.complete ? "処理確認済み" : "未完了・要確認"];
   for (const f of r.findings) for (const c of f.comparisons) rows.push([...common,f.publicationNumber,f.publicationDate,f.detectedAt,f.relation,f.reviewStatus,
-    c.baseClaimNo,c.candidateClaimNo,c.riskLabel,c.lexicalScore,c.elementScore,c.semanticScore,c.structuralScore,
+    c.baseClaimNo,c.candidateClaimNo,c.lexicalScore,c.elementScore,c.semanticScore,c.structuralScore,
     `${c.baseEvidence.claimNo}:${c.baseEvidence.start}-${c.baseEvidence.end}`, `${c.candidateEvidence.claimNo}:${c.candidateEvidence.start}-${c.candidateEvidence.end}`,c.explanation,MANAGED_NOTICE]);
-  if (!rows.length) rows.push([...common,...Array(14).fill(""),r.coverage.complete ? "詳細比較候補0件" : "未完了のため候補の有無は未確定",MANAGED_NOTICE]);
+  if (!rows.length) rows.push([...common,...Array(13).fill(""),r.coverage.complete ? "詳細比較候補0件" : "未完了のため候補の有無は未確定",MANAGED_NOTICE]);
   header.push("監視元公開番号","監視元版","指定請求項","契約日","監視開始日","契約終了日","取得確認日時","比較確認日時","納品期限","納品日",
     "配布一覧対象号数","保存確認号数","取込文献数","選別候補数","全文比較候補数","全文不足数","取得補正数","未解決補正数","完了run数","失敗run数","未完了run数","原文確認方法","不足連絡用文案");
   const metadata=[r.base.publicationNumber,r.base.version,r.base.selectedClaimNos.join("、"),r.contractSignedOn,r.monitoringStartsOn,r.contractEndsOn,r.coverage.acquiredAt,r.coverage.comparedAt,r.deliveryDueOn,r.deliveredOn,

@@ -5,7 +5,7 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage, markManagedBudgetUnknown,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
-  managedBudgetForecast, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
+  managedBudgetForecast, checkManagedCompletionBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, managedReleaseBudgetRequest, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
@@ -259,7 +259,10 @@ export class ManagedServiceBudgetStorage {
       const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
       const fresh = await this.read(); check(fresh.etag === saved.etag);
       const op = fresh.state.operations.find(o => o.operationId === c.request.operationId);
-      const expiry = Math.min(Date.parse(op?.expiresAt ?? ""), Date.parse(c.executionExpiresAt));
+      const completion = fresh.state.plans.find(p => p.month === op?.processingMonth)?.completionAllowance;
+      const expiry = Math.min(Date.parse(op?.expiresAt ?? ""), Date.parse(c.executionExpiresAt),
+        completion ? Date.parse(completion.validUntil) : Infinity);
+      if (completion) checkManagedCompletionBudget(fresh.state, completion, this.clock(fresh, 65));
       check(op?.intentDigest === managedDigest(c.request) && op.stage === "claimed" && op.start === "ready" &&
         !op.unknown && op.actualYen === null && fresh.date.getTime() + 6 * IO_MS + 1000 < expiry &&
         op.processingMonth === new Date(fresh.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
@@ -329,6 +332,8 @@ export class ManagedServiceBudgetStorage {
       const o = saved.state.operations.find(o => o.operationId === c.operationId);
       check(o?.intentDigest === managedDigest(context.request) && (o.stage === "claimed" || o.stage === "done") && o.start === "ready" && o.actualYen === null && !o.unknown);
       const maximum = this.clock(saved, 65).maximumActionMs;
+      const completion = saved.state.plans.find(p => p.month === o!.processingMonth)?.completionAllowance;
+      if (completion) checkManagedCompletionBudget(saved.state, completion, this.clock(saved, 65));
       check(saved.date.getTime() + maximum < Math.min(Date.parse(o!.expiresAt), Date.parse(context.executionExpiresAt)) &&
         o!.processingMonth === new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
       validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximum);
@@ -368,8 +373,11 @@ export class ManagedServiceBudgetStorage {
       o.start === "claimed" && o.actualYen === null && (o.kind === "watch" ? o.stage === "unused" : o.stage === "done"));
     const now = saved.date.getTime(), month = new Date(now + 9 * 60 * 60_000).toISOString().slice(0,7);
     const maximumActionMs = this.clock(saved, o!.kind === "watch" ? 95 : 120).maximumActionMs;
+    const completion = saved.state.plans.find(p => p.month === month)?.completionAllowance;
+    if (completion) checkManagedCompletionBudget(saved.state, completion, { blobDate: saved.date, maximumActionMs });
     const policy = validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximumActionMs);
-    const expiry = Math.min(Date.parse(o!.expiresAt), Date.parse(executionExpiresAt), Date.parse(policy.validUntil));
+    const expiry = Math.min(Date.parse(o!.expiresAt), Date.parse(executionExpiresAt), Date.parse(policy.validUntil),
+      completion ? Date.parse(completion.validUntil) : Infinity);
     check(o!.processingMonth === month && now + maximumActionMs < expiry);
     if (context.profile) check(context.profile.pricingDigest === o!.pricingDigest && o!.cases.every(id => context.profile!.cases.includes(id)));
     return { processingMonth: month, expiresAt: new Date(expiry).toISOString(), remainingMs: expiry - now - 4 * IO_MS - 1000 };
@@ -504,6 +512,10 @@ export class ManagedServiceBudgetStorage {
         p = managedBudgetProfileSchema.parse((await this.readJson(`${MANAGED_BUDGET_PREFIX}profiles/${r.action.profileDigest}.json`, 64 * 1024)).value);
         check(managedDigest(p) === r.action.profileDigest && p.ownerBindingHash === pins.ownerBindingHash);
       }
+      if (r.action.kind === "release-start" && r.action.step.completionAllowance) {
+        const profile = await this.profile(saved!.state, r.action.step.completionAllowance.profileDigest);
+        check(profile); p = profile!;
+      }
       saved = await readOptional();
       if (applied(saved)) return { status: "already_applied" as const };
       check(matches(saved));
@@ -524,8 +536,11 @@ export class ManagedServiceBudgetStorage {
         const request = managedReleaseBudgetRequest(r.action.step, pins.targetBindingHash, pins.ownerBindingHash);
         const executionClock = this.clock(saved!, 90);
         validateManagedBudgetPolicy(releasePolicy, this.binding, date, executionClock.maximumActionMs);
-        const reserved = reserveManagedBudget(saved!.state, request, null, executionClock); check(reserved.created);
-        state = claimManagedBudgetPhase(reserved.state, request.operationId, "start", null, executionClock);
+        const reserved = reserveManagedBudget(saved!.state, request, p ?? null, executionClock); check(reserved.created);
+        state = claimManagedBudgetPhase(reserved.state, request.operationId, "start", p ?? null, executionClock);
+        // Bootstrap writes only the historical state format. The signed exact
+        // step adds a cumulative check; it never overrides normal admission.
+        if (r.action.step.completionAllowance) checkManagedCompletionBudget(state, r.action.step.completionAllowance, executionClock);
       }
       state.administration.push({ sequence: r.sequence, digest: evidenceDigest });
       state = validateManagedBudgetState(state, this.binding.targetBindingHash);

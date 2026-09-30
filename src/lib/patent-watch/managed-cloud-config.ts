@@ -26,9 +26,14 @@ export const managedCloudConfigSchema = z.object({ approval: managedExecutionApp
 export type ManagedCloudConfiguration = z.infer<typeof managedCloudConfigSchema>;
 export function parseManagedCloudConfiguration(value: unknown, now = Date.now(), requireFreshBudget = true): ManagedCloudConfiguration {
   const c = managedCloudConfigSchema.parse(value);
-  if (c.budgetProof.monthlyForecastYen > 30_000 && (c.approval !== "STANDARD_MANAGED_WATCH_RELEASE_V1" ||
-    (c.serviceBudget && c.serviceBudget.profileDigest !== null) ||
-    new Date(Date.parse(c.budgetProof.checkedAt) + 9*60*60_000).toISOString().slice(0,7) !== "2026-09")) throw new ManagedWatchError("invalid_setting");
+  const month = new Date(Date.parse(c.budgetProof.checkedAt) + 9*60*60_000).toISOString().slice(0,7);
+  // Compatibility parsing grants no spending authority. Reservation and worker
+  // admission still require the installed, signed month plan and active profile.
+  const releaseForecast = c.approval === "STANDARD_MANAGED_WATCH_RELEASE_V1" && month === "2026-09" &&
+    (!c.serviceBudget || c.serviceBudget.profileDigest === null);
+  const completionForecast = c.approval === "STANDARD_MANAGED_WATCH_STANDARD_V1" && month === "2026-10" &&
+    (!c.serviceBudget || c.serviceBudget.profileDigest !== null);
+  if (c.budgetProof.monthlyForecastYen > 30_000 && !releaseForecast && !completionForecast) throw new ManagedWatchError("invalid_setting");
   if (!c.jobResourceId.endsWith(`/jobs/${c.jobName}`) || new Set(c.caseAllowList).size !== c.caseAllowList.length ||
     new Set(c.runs.map(r=>r.caseId)).size !== c.runs.length || new Set(c.runs.map(r=>r.runId)).size !== c.runs.length ||
     c.runs.some(r=>!c.caseAllowList.includes(r.caseId)) || Date.parse(c.expiresAt) <= now || Date.parse(c.expiresAt) - now > 6*60*60_000 ||

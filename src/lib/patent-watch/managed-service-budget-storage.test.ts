@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { Readable } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedDigest } from "./managed-claims";
-import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema, settleManagedBudget, setManagedMonthPlan } from "./managed-service-budget";
+import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema, managedCompletionAllowanceSchema, managedReleaseCaps, settleManagedBudget, setManagedMonthPlan } from "./managed-service-budget";
 import { MANAGED_BUDGET_PREFIX, ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 import { managedAdministrationReviewSchema, type ManagedAdministrationReview, type ManagedSettlementReview, type ManagedReleaseStep } from "./managed-budget-evidence";
 import { managedBudgetedWatchFixture } from "./managed-execution-budget.test-support";
@@ -431,6 +431,9 @@ function adminReviewed(f: ReturnType<typeof fixture>, action?: ManagedAdministra
   }
   const sources = [{ digest: factDigest, bytes: fact.length }];
   if (action.kind === "release-start") sources.push({ digest: action.step.pricingDigest, bytes: f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${action.step.pricingDigest}.json`)!.bytes.length });
+  const completion = action.kind === "month" ? action.completionAllowance : action.kind === "release-start" ? action.step.completionAllowance : undefined;
+  if (completion) sources.push({ digest: completion.ownerApprovalDigest,
+    bytes: f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${completion.ownerApprovalDigest}.json`)!.bytes.length });
   const review = managedAdministrationReviewSchema.parse({ schema: 1, purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1", targetBindingHash: pins.targetBindingHash, ownerBindingHash: pins.ownerBindingHash,
     sequence: action.kind === "open" ? 1 : current.administration.length + 1,
     previousReviewDigest: action.kind === "open" ? null : current.administration.at(-1)?.digest ?? null,
@@ -449,6 +452,127 @@ function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseSt
     remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
     ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
 }
+async function completionExecutionFixture() {
+  const f = executionFixture();
+  await f.store.reserve({ ...request("watch"), kind: "deploy", pricingDigest: f.pricingDigest,
+    units: { ...emptyManagedBudgetUnits(), forward: 8 } });
+  const old = f.current(), operation = old.operations[0];
+  const before = settleManagedBudget(old, { operationId: operation.operationId, requestDigest: operation.requestDigest,
+    sequence: 1, evidenceDigest: hash(800), knownUnits: { forward: 8 } },
+  { blobDate: new Date("2026-09-23T00:00:00Z"), maximumActionMs: 60_000 });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z")); f.setDate("Thu, 01 Oct 2026 00:00:00 GMT");
+  const policy = { ...f.policy, validFrom: "2026-10-01T00:00:00Z", validUntil: "2026-10-31T15:00:00Z" };
+  const pricingDigest = sha256(JSON.stringify(policy));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${pricingDigest}.json`, { bytes: Buffer.from(JSON.stringify(policy)), etag: '"october-policy"' });
+  const profile = managedBudgetProfileSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY,
+    targetBindingHash: f.binding.targetBindingHash, ownerBindingHash: f.binding.ownerBindingHash,
+    companyKey: "FICTIONAL_COMPANY", cases: [1], monthlyCapYen: 30_000, monthlyUnits: { ...managedReleaseCaps },
+    pricingDigest, measurementDigest: policy.measurementDigest, goEvidenceDigest: hash(802) });
+  const profileDigest = managedDigest(profile);
+  f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${profileDigest}.json`, { bytes: Buffer.from(JSON.stringify(profile)), etag: '"october-profile"' });
+  const s = setManagedMonthPlan(before, { baseYen: 10_000, pools: { remaining: 8000, storage: 1000, recovery: 1000 },
+    pricingDigest, evidenceDigest: hash(803), releaseTailYen: before.releaseTailYen },
+  { blobDate: new Date("2026-10-01T00:00:00Z"), maximumActionMs: 60_000 });
+  s.activeProfileDigest = profileDigest;
+  f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  const owner = Buffer.from(JSON.stringify({ kind: "FICTIONAL_COMPLETION_AUTHORITY" })), ownerApprovalDigest = sha256(owner);
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${ownerApprovalDigest}.json`, { bytes: owner, etag: '"owner"' });
+  const completionAllowance = managedCompletionAllowanceSchema.parse({ scope: "ISSUE140_COMPLETION_V2", issue: 140, month: "2026-10",
+    ownerApprovalDigest, profileDigest, monthlyCapYen: 32_000,
+    cumulativeUnits: { ...managedReleaseCaps, jobs: 26, minutes: 3120, forward: 10 }, validUntil: "2026-10-31T15:00:00Z" });
+  const step: ManagedReleaseStep = { ...releaseStep(f, "forward"), issue: 140, pricingDigest, completionAllowance };
+  return { ...f, policy, pricingDigest, before, profile, completionAllowance, step,
+    reviewClock: { issuedAt: "2026-10-01T00:00:00Z", validUntil: "2026-10-01T00:15:00Z" } };
+}
+it("admits the signed completion bootstrap with an old-format ledger and no release counter reset", async () => {
+  const f = await completionExecutionFixture(), p = adminReviewed(f, { kind: "release-start", step: f.step }, f.reviewClock);
+  expect(await f.store.applyReviewedAdministration(p.digest, p.pins)).toMatchObject({ status: "admitted" });
+  const s = f.current();
+  expect(s.operations[0]).toEqual(f.before.operations[0]);
+  expect(s.operations[1]).toMatchObject({ scope: "standard", start: "claimed", profileDigest: managedDigest(f.profile), units: { forward: 1 } });
+  expect(s.releaseTailYen).toBe(f.before.releaseTailYen);
+  expect(s.plans.every(p => p.completionAllowance === undefined)).toBe(true);
+  expect(await f.store.applyReviewedAdministration(p.digest, p.pins)).toEqual({ status: "already_applied" });
+});
+it("reconciles a lost completion bootstrap ACK without granting another execution permit", async () => {
+  const f = await completionExecutionFixture(), p = adminReviewed(f, { kind: "release-start", step: f.step }, f.reviewClock);
+  f.loseAck(); await expect(f.store.applyReviewedAdministration(p.digest, p.pins)).rejects.toThrow();
+  f.restoreAck(); expect(await f.store.applyReviewedAdministration(p.digest, p.pins, true)).toEqual({ status: "already_applied" });
+  const retry = adminReviewed(f, { kind: "release-start", step: f.step }, f.reviewClock);
+  await expect(f.store.applyReviewedAdministration(retry.digest, retry.pins)).rejects.toThrow();
+  expect(f.current().operations).toHaveLength(2);
+});
+it.each(["signature", "source", "source-binding", "month", "expiry", "cumulative", "normal-cap", "profile"])(
+  "rejects invalid completion bootstrap %s before a write", async reason => {
+    const f = await completionExecutionFixture();
+    if (reason === "expiry") f.step.completionAllowance!.validUntil = "2026-10-01T01:00:00Z";
+    if (reason === "cumulative") f.step.completionAllowance!.cumulativeUnits.forward = 8;
+    if (reason === "normal-cap") { const s = f.current(); s.plans[1].baseYen = 20_000; f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s)); }
+    const p = adminReviewed(f, { kind: "release-start", step: f.step }, f.reviewClock);
+    if (reason === "signature" || reason === "source-binding") {
+      if (p.envelope.review.action.kind !== "release-start") throw Error();
+      if (reason === "signature") p.envelope.review.action.step.completionAllowance!.monthlyCapYen++;
+      else p.envelope.review.action.step.completionAllowance!.ownerApprovalDigest = hash(999);
+      f.files.get(`${MANAGED_BUDGET_PREFIX}administration-reviews/${p.digest}.json`)!.bytes = Buffer.from(JSON.stringify(p.envelope));
+    }
+    if (reason === "source") f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${f.completionAllowance.ownerApprovalDigest}.json`)!.bytes = Buffer.from("{}");
+    if (reason === "month") f.setDate("Sun, 01 Nov 2026 00:00:00 GMT");
+    if (reason === "profile") f.files.delete(`${MANAGED_BUDGET_PREFIX}profiles/${managedDigest(f.profile)}.json`);
+    const beforeWrites = f.calls.filter(c => c.startsWith("PUT:")).length;
+    await expect(f.store.applyReviewedAdministration(p.digest, p.pins)).rejects.toThrow();
+    expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(beforeWrites);
+  });
+it("applies the signed completion month once while preserving previous plans and unknown costs", async () => {
+  const f = await completionExecutionFixture(), before = f.current();
+  const action = { kind: "month" as const, processingMonth: "2026-10", baseYen: 19_000,
+    pools: { remaining: 8000, storage: 1000, recovery: 1000 }, pricingDigest: f.pricingDigest,
+    releaseTailYen: before.releaseTailYen, reviewedOperationIds: [], completionAllowance: f.completionAllowance };
+  const p = adminReviewed(f, action, f.reviewClock);
+  expect(await f.store.applyReviewedAdministration(p.digest, p.pins)).toEqual({ status: "applied" });
+  expect(f.current().plans[1].completionAllowance).toEqual(f.completionAllowance);
+  expect(f.current().plans[0]).toEqual(before.plans[0]);
+  expect(f.current().operations).toEqual(before.operations);
+  expect(f.current().legacyUnknownYen).toBe(before.legacyUnknownYen);
+  expect(await f.store.applyReviewedAdministration(p.digest, p.pins)).toEqual({ status: "already_applied" });
+  expect(() => adminReviewed(f, { ...action, processingMonth: "2026-11" }, f.reviewClock)).toThrow();
+});
+it("rejects a validly signed bootstrap whose OWNER approval source is absent", async () => {
+  const f = await completionExecutionFixture(), first = adminReviewed(f, { kind: "release-start", step: f.step }, f.reviewClock);
+  const p = adminReviewed(f, { kind: "release-start", step: f.step }, { ...f.reviewClock,
+    sources: first.envelope.review.sources.filter(s => s.digest !== f.completionAllowance.ownerApprovalDigest) });
+  const writes = f.calls.filter(c => c.startsWith("PUT:")).length;
+  await expect(f.store.applyReviewedAdministration(p.digest, p.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
+});
+it.each([true, false])("requires the installed completion plan for a larger Standard watch forecast: %s", async allowed => {
+  const f = await completionExecutionFixture(), s = f.current();
+  s.plans[1].baseYen = 19_000;
+  if (allowed) s.plans[1].completionAllowance = f.completionAllowance;
+  f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  const { budgetProof: _proof, ...web } = { ...managedCloudFixture(1), approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" };
+  void _proof;
+  const c = await f.store.prepareWebWatch(web);
+  expect(c.budgetProof.monthlyForecastYen).toBeGreaterThan(30_000);
+  if (allowed) {
+    await f.store.reserveWatch(c); await f.store.claimWatch(c);
+    expect(await f.store.verifyWatch(c)).toMatchObject({ processingMonth: "2026-10" });
+  } else {
+    const before = f.current(); await expect(f.store.reserveWatch(c)).rejects.toThrow();
+    expect(f.current()).toEqual(before);
+  }
+});
+it("narrows the worker permit to the completion deadline and rejects delayed starts", async () => {
+  const f = await completionExecutionFixture(), s = f.current();
+  s.plans[1].completionAllowance = { ...f.completionAllowance, validUntil: "2026-10-01T02:30:00Z" };
+  f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  const c = await f.store.prepareWatch({ ...managedCloudFixture(1), approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" });
+  await f.store.reserveWatch(c); await f.store.claimWatch(c);
+  expect(await f.store.verifyWatch(c)).toMatchObject({ expiresAt: "2026-10-01T02:30:00.000Z" });
+  f.setDate("Thu, 01 Oct 2026 01:00:00 GMT"); vi.setSystemTime(new Date("2026-10-01T01:00:00Z"));
+  const writes = f.calls.filter(c => c.startsWith("PUT:")).length;
+  await expect(f.store.verifyWatch(c)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
+});
 it("binds a month allowance to the signed review and rejects tampering before any write", async () => {
   const f = fixture();
   const action = { kind: "month" as const, processingMonth: "2026-09", baseYen: 26_000,

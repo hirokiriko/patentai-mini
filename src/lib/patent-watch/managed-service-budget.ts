@@ -20,6 +20,17 @@ const historicalCases = z.array(z.number().int().positive().max(2147483647)).max
 export const managedBudgetUnitsSchema = z.object({ jobs: quantity, minutes: quantity, starts: quantity,
   normal: quantity, fast: quantity, packages: quantity, bytes: quantity, forward: quantity, rollback: quantity }).strict();
 export type ManagedBudgetUnits = z.infer<typeof managedBudgetUnitsSchema>;
+// Private signed values, confined to the approved completion scope and month.
+// Absence preserves all historical serialized plans and profile digests.
+export const managedCompletionAllowanceSchema = z.object({
+  scope: z.literal("ISSUE140_COMPLETION_V2"), issue: z.literal(140), month: z.literal("2026-10"),
+  ownerApprovalDigest: hash, profileDigest: hash,
+  monthlyCapYen: z.number().int().min(30_000).max(50_000), cumulativeUnits: managedBudgetUnitsSchema,
+  validUntil: z.iso.datetime(),
+}).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-09-30T15:00:00Z") &&
+  Date.parse(a.validUntil) <= Date.parse("2026-10-31T15:00:00Z") &&
+  unitKeys.every(k => ["jobs", "minutes", "forward"].includes(k) || a.cumulativeUnits[k] <= managedReleaseCaps[k]));
+export type ManagedCompletionAllowance = z.infer<typeof managedCompletionAllowanceSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
   fast: 0, packages: 0, bytes: 0, forward: 0, rollback: 0 });
 const pools = z.object({ remaining: yen, storage: yen, recovery: yen }).strict();
@@ -48,8 +59,9 @@ type Operation = z.infer<typeof operationSchema>;
 // spend it: the exact OWNER allowance is in the signed private month review.
 export const managedReleaseMonthlyCapSchema = z.number().int().min(30_000).max(50_000);
 const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128),
-  releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional() }).strict()
-  .refine(p => p.releaseMonthlyCapYen === undefined || p.month === "2026-09");
+  releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional(), completionAllowance: managedCompletionAllowanceSchema.optional() }).strict()
+  .refine(p => (p.releaseMonthlyCapYen === undefined || p.month === "2026-09") &&
+    (!p.completionAllowance || (p.month === p.completionAllowance.month && p.releaseMonthlyCapYen === undefined)));
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases: historicalCases, lastTrustedAt: z.iso.datetime(),
   releaseTailYen: yen, legacyUnknownYen: yen, openingEvidenceDigest: hash,
@@ -85,6 +97,16 @@ function totals(s: ManagedBudgetState, scope: "release" | "month", m: string) {
     (o.scope === "release" ? used(o, k) : 0) : o.processingMonth === m ? used(o, k) :
       o.processingMonth < m && !closed(o) && o.knownUnits[k] === undefined ? o.units[k] : 0));
   return result;
+}
+/** Called only with the installed plan or an independently verified admin review.
+ * Counts every historical operation, including unresolved reservations, once. */
+export function checkManagedCompletionBudget(s: ManagedBudgetState, value: unknown, clock: ManagedBudgetClock) {
+  const a = managedCompletionAllowanceSchema.parse(value), at = clock.blobDate.getTime();
+  check(new Date(at + 9 * 60 * 60_000).toISOString().slice(0, 7) === a.month &&
+    at + clock.maximumActionMs < Date.parse(a.validUntil));
+  check(s.activeProfileDigest === a.profileDigest && managedBudgetForecast(s, a.month) <= a.monthlyCapYen);
+  for (const k of unitKeys) check(sum(s.operations.map(o => used(o, k))) <= a.cumulativeUnits[k]);
+  return a;
 }
 function seal(value: ManagedBudgetState) {
   const s = managedBudgetStateSchema.parse(value);
@@ -133,15 +155,19 @@ function active(s: ManagedBudgetState, value: unknown) {
   for (const k of unitKeys) check(p.monthlyUnits[k] <= managedReleaseCaps[k]);
   return p;
 }
-function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile) {
+function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile, maximumActionMs = 1) {
   check(!s.operations.some(o => o.reviewRequired));
-  const releaseCap = s.plans.find(p => p.month === m)?.releaseMonthlyCapYen ?? 30_000;
-  check(managedBudgetForecast(s, m) <= (profile?.monthlyCapYen ?? releaseCap));
+  const plan = s.plans.find(p => p.month === m);
+  const completion = plan?.completionAllowance;
+  if (completion) checkManagedCompletionBudget(s, completion, { blobDate: new Date(s.lastTrustedAt), maximumActionMs });
+  const releaseCap = plan?.releaseMonthlyCapYen ?? 30_000;
+  check(managedBudgetForecast(s, m) <= (profile && completion ? completion.monthlyCapYen : profile?.monthlyCapYen ?? releaseCap));
   check(sum([s.releaseTailYen, ...s.operations.filter(o => o.scope === "release").map(cost)]) <= 50_000);
   const release = totals(s, "release", m);
   for (const k of unitKeys) check(release[k] <= managedReleaseCaps[k]);
   if (profile) { check(profile.pricingDigest === s.plans.find(p => p.month === m)?.pricingDigest);
-    const total = totals(s, "month", m); for (const k of unitKeys) check(total[k] <= profile.monthlyUnits[k]); }
+    const total = totals(s, "month", m); for (const k of unitKeys)
+      if (!completion || !["jobs", "minutes", "forward"].includes(k)) check(total[k] <= profile.monthlyUnits[k]); }
 }
 function find(s: ManagedBudgetState, id: string) { const o = s.operations.find(o => o.operationId === id); check(o); return o; }
 function evidence(o: Operation, digest: string) {
@@ -155,10 +181,11 @@ function evidence(o: Operation, digest: string) {
 /** Administrative evidence must be checked by the adapter before these transitions. */
 export function setManagedMonthPlan(value: unknown, input: { baseYen: number; pools: z.infer<typeof pools>;
   pricingDigest: string; evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[];
-  releaseMonthlyCapYen?: number }, clock: ManagedBudgetClock) {
+  releaseMonthlyCapYen?: number; completionAllowance?: ManagedCompletionAllowance }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
   const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
     ...(input.releaseMonthlyCapYen === undefined ? {} : { releaseMonthlyCapYen: input.releaseMonthlyCapYen }),
+    ...(input.completionAllowance === undefined ? {} : { completionAllowance: input.completionAllowance }),
     evidenceDigests: [...new Set([...(old?.evidenceDigests ?? []), hash.parse(input.evidenceDigest)])] });
   if (old) s.plans[s.plans.indexOf(old)] = plan; else s.plans.push(plan);
   s.releaseTailYen = yen.parse(input.releaseTailYen);
@@ -173,7 +200,7 @@ export function activateManagedBudgetProfile(value: unknown, profile: unknown, c
   check(p.targetBindingHash === s.targetBindingHash && managedDigest(p) === checkedEvidence.profileDigest &&
     p.goEvidenceDigest === checkedEvidence.goEvidenceDigest && p.measurementDigest === checkedEvidence.measurementDigest && p.pricingDigest === checkedEvidence.pricingDigest);
   s.cases = [...new Set([...s.cases, ...p.cases])].sort((a, b) => a - b);
-  s.activeProfileDigest = managedDigest(p); active(s, p); admit(s, m, p);
+  s.activeProfileDigest = managedDigest(p); active(s, p); admit(s, m, p, clock.maximumActionMs);
   return seal(s);
 }
 export function reserveManagedBudget(value: unknown, request: unknown, profile: unknown, clock: ManagedBudgetClock) {
@@ -196,7 +223,7 @@ export function reserveManagedBudget(value: unknown, request: unknown, profile: 
     expiresAt: new Date(Math.min(ms + 6 * 60 * 60_000, end)).toISOString(), stage: r.kind === "import" ? "ready" : "unused",
     start: "ready", unknown: false, actualYen: null, observedYen: null, reviewRequired: false, knownUnits: {}, evidenceDigests: [],
     evidenceChainDigest: managedDigest(r), lastProofSequence: 0, settlements: [] });
-  admit(s, m, p); return { state: seal(s), created: true };
+  admit(s, m, p, clock.maximumActionMs); return { state: seal(s), created: true };
 }
 export function claimManagedBudgetPhase(value: unknown, id: string, phase: "stage" | "start", profile: unknown, clock: ManagedBudgetClock) {
   const { s, ms, month: m, end } = current(value, clock), o = find(s, id);
@@ -204,7 +231,7 @@ export function claimManagedBudgetPhase(value: unknown, id: string, phase: "stag
   check(o.pricingDigest === s.plans.find(p => p.month === m)?.pricingDigest);
   const p = o.scope === "standard" ? active(s, profile) : undefined;
   if (p) check(o.profileDigest === managedDigest(p));
-  admit(s, m, p);
+  admit(s, m, p, clock.maximumActionMs);
   if (phase === "stage") { check(o.kind === "import" && o.stage === "ready"); o.stage = "claimed"; }
   else { check(o.start === "ready" && (o.stage === "unused" || o.stage === "done")); o.start = "claimed"; }
   return seal(s);

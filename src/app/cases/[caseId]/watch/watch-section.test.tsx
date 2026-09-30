@@ -93,6 +93,12 @@ function renderWatchState(
 }
 
 describe("patent watch UI contract", () => {
+  it.each(["High", "Medium", "Low", "Unknown"] as const)("omits saved tier %s while retaining the candidate and incomplete explanation", riskLabel => {
+    const finding = { ...findingFixture(), riskLabel, explanation: `リスク: ${riskLabel}。原文不足は未確認。` };
+    const html = renderWatchState("ready", run("completed"), [finding]);
+    expect(html).not.toMatch(/High|Medium|Low|Unknown/);
+    expect(html).toContain(finding.publicationNumber); expect(html).toContain("原文不足は未確認");
+  });
   it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("explains the input scope only for saved AI candidates: %j", ({ modes }) => {
     const findings = modes.map((analysisMode, index) => ({ ...findingFixture(), findingId: index + 1, analysisMode }));
     const html = renderWatchState("ready", run("completed"), findings);
@@ -100,7 +106,7 @@ describe("patent watch UI contract", () => {
     if (modes.includes("ai")) {
       expect(html).toContain("先頭最大2,000文字");
       expect(html).toContain("公報全体に記載がないという意味ではありません");
-      expect(html).toContain("Lowでも原文を確認");
+      expect(html).toContain("比較結果にかかわらず原文を確認");
       expect(html).toContain("実際の入力文字数や切断の有無を示す記録ではありません");
     }
   });

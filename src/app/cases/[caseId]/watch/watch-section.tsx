@@ -1,4 +1,5 @@
 "use client";
+import { comparisonExplanation } from "../../../../lib/comparison-display";
 import { BibliographyLink } from "./bibliography-link";
 import { ComparisonScopeNotice } from "./comparison-scope-notice";
 
@@ -603,7 +604,6 @@ export function PatentWatchSectionView({
                 <span className="font-mono text-sm font-semibold">{finding.publicationNumber}</span>
                 <span className="text-sm text-gray-500">{publicationDateLabel(finding.publicationDate)}</span>
                 <span className="rounded bg-gray-100 px-2 py-0.5 text-xs">{finding.kind}</span>
-                <span className="rounded border border-rose-200 bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-800">{finding.riskLabel}</span>
                 <span className="rounded border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-800">{finding.analysisMode}</span>
                 <span className="ml-auto text-xs font-medium text-gray-600">{finding.reviewStatus === "reviewed" ? "確認済み" : "未確認"}</span>
               </div>
@@ -614,7 +614,7 @@ export function PatentWatchSectionView({
                 <span>意味 {percent(finding.semanticScore)}</span>
                 <span>構造 {percent(finding.structuralScore)}</span>
               </div>
-              <p className="mt-2 text-sm text-gray-700">{finding.explanation}</p>
+              <p className="mt-2 text-sm text-gray-700">{comparisonExplanation(finding.explanation)}</p>
               <BibliographyLink caseId={caseId} findingId={finding.findingId} />
               <button
                 type="button"

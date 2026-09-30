@@ -32,6 +32,12 @@ beforeEach(() => {
   seam.getRun.mockResolvedValue({ ...run }); seam.listFindings.mockResolvedValue([{ ...finding }]);
 });
 describe("single run report states", () => {
+  it.each(["High", "Medium", "Low", "Unknown"] as const)("hides saved assessment %s without hiding evidence or work state", async riskLabel => {
+    seam.listFindings.mockResolvedValue([{ ...finding, riskLabel, analysisJson: JSON.stringify({ matchedElements: ["架空光学部は一致"], unmatchedElements: ["温度条件は未確認"], explanation: `リスク: ${riskLabel}。原文不足は未確認。` }) }]);
+    const html = await render();
+    expect(html).not.toMatch(/High|Medium|Low|Unknown/);
+    for (const text of [finding.publicationNumber, "架空光学部は一致", "温度条件は未確認", "原文不足は未確認", "確認済み"]) expect(html).toContain(text);
+  });
   it.each(([[], ["ai"], ["fallback"], ["ai", "fallback"]] as Array<Array<"ai" | "fallback">>).map(modes => ({ modes })))("limits the scope notice to actual AI findings: %j", async ({ modes }) => {
     seam.getRun.mockResolvedValue({ ...run, newFindingCount: modes.length,
       fallbackFindingCount: modes.filter(mode => mode === "fallback").length });

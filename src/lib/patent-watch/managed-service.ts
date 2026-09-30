@@ -40,7 +40,7 @@ export const managedAzureAnalysis = {
   async detail(chunk: ManagedComparisonChunk) {
     if (process.env.AI_PROVIDER !== "azure") throw new ManagedWatchError("unavailable");
     const { object } = await generateObject({ model: getModel(), schema: managedComparisonQuoteSchema,
-      system: SYSTEM + "pairsの各組合せを漏れなく一度ずつ比較してください。base/candidateの請求項全文と参照請求項が入力です。根拠は該当請求項内に一度だけ現れる原文そのままの短い連続文字列quoteと、そのclaimNoで示してください。空白や句読点も変えず、位置の数値は出力しないでください。説明は原文全文を反復せず、技術的要素と相違を日本語で簡潔に整理してください。",
+      system: SYSTEM + "pairsの各組合せを漏れなく一度ずつ比較してください。base/candidateの請求項全文と参照請求項が入力です。根拠は該当請求項内に一度だけ現れる原文そのままの短い連続文字列quoteと、そのclaimNoで示してください。空白や句読点も変えず、位置の数値は出力しないでください。説明は原文全文を反復せず、技術的要素と相違を日本語で簡潔に整理してください。riskLabelは内部互換用です。explanationにはHigh/Medium/Low/Unknownや高・中・低リスク等の段階評価を含めず、未確認の理由は残してください。原文quoteは変えないでください。",
       prompt: JSON.stringify(chunk), maxRetries: 0, maxOutputTokens: 8192, abortSignal: AbortSignal.timeout(35_000) });
     return resolveManagedComparisonQuotes(chunk, object);
   },

@@ -23,7 +23,7 @@ function Finding({ caseId, finding }: { caseId: number; finding: PeriodFindingVi
   return <article className="rounded-lg border border-gray-300 p-4" data-finding-id={finding.findingId}>
     <h3 className="text-lg font-semibold">{finding.publicationNumber} · {finding.inventionTitle}</h3>
     <p className="mt-2 text-sm">公開日: {finding.publicationDate.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1/$2/$3")} ／ 初回検出: {periodDateTimeLabel(finding.firstSeenAt)}</p>
-    <p className="mt-2 text-sm">risk label（AI比較の参考）: <strong>{finding.riskLabel}</strong> ／ 分析: {finding.analysisMode} ／ 確認状態: {finding.reviewStatus === "reviewed" ? "確認済み" : "未確認"}</p>
+    <p className="mt-2 text-sm">分析: {finding.analysisMode} ／ 確認状態: {finding.reviewStatus === "reviewed" ? "確認済み" : "未確認"}</p>
     <dl className="mt-3 flex flex-wrap gap-5 text-sm">
       <div><dt>語彙</dt><dd>{scoreLabel(finding.lexicalScore)}</dd></div><div><dt>要素</dt><dd>{scoreLabel(finding.elementScore)}</dd></div>
       <div><dt>意味</dt><dd>{scoreLabel(finding.semanticScore)}</dd></div><div><dt>構造</dt><dd>{scoreLabel(finding.structuralScore)}</dd></div>
@@ -88,7 +88,7 @@ export function PeriodReportView({ caseId, period, invalidQuery = false, result 
     <aside className="mt-6 space-y-2 rounded border border-amber-300 bg-amber-50 p-4 text-sm leading-6">
       <h2 className="font-bold">レポートの範囲と原文確認</h2>
       <p>対象は各実行時の取り込み済み公報です。対象期間の全公開公報の取得完了や全件のAI精読は保証しません。</p>
-      <p>本レポートは確認候補を整理するもので、法的判断ではありません。risk labelはAI比較の参考であり、法的危険度・対応義務・専門家の確定所見を示しません。人による原文確認が必要です。</p>
+      <p>本レポートは確認候補を整理するもので、法的判断ではありません。比較説明は専門家の確定所見を示しません。人による原文確認が必要です。</p>
       <p>自己案件の除外や「他社」の判定は保証しません。公開番号を使ってJ-PlatPat等で原文を確認してください。専門家の所見は印刷物や既存の単一run CSVへ外部で追記できます。</p>
     </aside>
   </main>;

@@ -83,7 +83,8 @@ export class ManagedWatchRepository {
       try{verifyManagedBaseOriginal(originalSaved.bytes,input.source,input.base);}catch{throw new ManagedWatchError("invalid_setting");}
       const settings = await tx.select().from(S);
       const old = settings.find(s => s.caseId === input.caseId);
-      requireState(old || settings.length < 5, "limit");
+      // Retained settings are history; only enabled monitors occupy a slot.
+      requireState(!input.enabled || settings.filter(s => s.enabled && s.caseId !== input.caseId).length < 5, "limit");
       const active = await tx.select({ runId: R.runId }).from(R).where(and(eq(R.caseId, input.caseId), inArray(R.status, ACTIVE))).limit(1);
       requireState(!active.length, "in_progress");
       if (old && old.baseDigest !== baseDigest) {
