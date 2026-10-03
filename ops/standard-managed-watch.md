@@ -220,6 +220,10 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    Azure正本の完全性と台帳のstage完了を確認した`release-transfer`だけで転送slotを解放し、次の1 packageへ進む。
 4. 保存済み`archive`参照を各packageへ付け、`archiveOnly`なしのJob manifestを作る。
    1〜4 package・合計8GiB以内でまとめ、各ZIPの原本identityは保持する。Local ZIPは不要、`sources:[]`とする。
+   取込Jobの全量ZIP取得は、短いmetadata処理のserver timeoutを流用せず、Blobのサイズ別既定値を使う。
+   転送中もJob停止signalとmanifest・予算permitの最短残期限で中断する。SDK/body再試行なし、
+   ETag・全量SHA・既存解析上限は維持する。保存前の失敗でも同じ実行を再起動せず、正式receiptと
+   非稼働を確認して旧予約を保持し、原因解消後に既存archiveを参照する新しい通常取込を予約する。
    このmanifestも`prepare`→`stage`で固定し、`start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
