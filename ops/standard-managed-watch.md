@@ -270,6 +270,17 @@ ZIPの再uploadとJob startは行わず、確認済み保存物の不足marker�
 Blob不在、検証失敗、両slot不明、期限切れは一時コピーと予約を保持して停止し、別UUIDで再送しない。
 
 `release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
+
+Localの同期ソフト等によるmetadata変更を検出した場合も、原因を推定して所有記録を書き換えない。
+ctimeだけが異なるときは、独立レビュー済みの新Local buildから明示的な`reconcile-transfer`を使用できる。
+歴史archiveのconfig/manifest・job・transferId・`sources:[]`に、
+`transferRecovery: { localCodeSha, projectRoot }`を加え、Local build SHAと元の転送枠のproject rootを固定する。
+新Local SHAと歴史archive SHAを区別し、本番App/Jobや旧build markerは変更しない。
+台帳と非公開Azure原本の確定証跡を再照合し、元のinode・device・size・mtime・単一link・全量SHAが一致し、
+検証中のctimeが不変の場合だけ追加証跡`metadata-reconciled.json`をcreate-onlyで保存して解放する。
+owner/copied記録は不変。さらにmetadataが変わった場合、原本/台帳不一致、別inode、hardlink、
+照合不能時は停止する。中断時は同じLocal SHA・同じ転送枠で結果照合し、新しい所有記録を作らない。
+このLocal cleanupは配備・Job開始・新規の予算予約を行わない。必要なPRのmerge/deployは別途、既存の累計枠に従う。
 期限後も歴史receiptと共通台帳のstage=doneを読戻し、固定slotの所有ID・inode・SHA一致を確認した1ファイルだけunlinkする。
 小さい所有/削除記録はtransferId名で保持し、削除完了応答が失われても同IDを照合できる。新しいslotや既存原本へcleanupを広げない。
 

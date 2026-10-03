@@ -111,7 +111,8 @@ export async function copyManagedTransfer(value: unknown, projectRoot = process.
 /** Called only after confirmed archive+budget stage. Rechecks Azure proof and
  * exact owned inode before deleting one fixed file. No recursive deletion. */
 export async function releaseManagedTransfer(value: { transferId: string; config: CloudConfiguration;
-  package: Extract<CloudManifest,{approval:"STANDARD_MANAGED_WATCH_RELEASE_V1"}>["packages"][number] }, container: ContainerClient,
+  package: Extract<CloudManifest,{approval:"STANDARD_MANAGED_WATCH_RELEASE_V1"}>["packages"][number];
+  metadataRecoveryCodeSha?: string }, container: ContainerClient,
   projectRoot = process.cwd()) {
   z.uuidv4().parse(value.transferId);
   const config = parseManagedCloudImportConfiguration(value.config),pointer=slot(projectRoot),completed=join(dirname(pointer),`released-${value.transferId}`);
@@ -130,10 +131,14 @@ export async function releaseManagedTransfer(value: { transferId: string; config
     issueNumber:value.package.issueNumber,publicationDate:value.package.publicationDate,distributionTableSha256:value.package.distributionTableSha256})));
   const archive = await readVerifiedArchive(container, config, value.package);
   requireManual(value.package.archive?.operationId === config.operationId && archive.receipt.requestDigest === config.serviceBudget.requestDigest);
+  // Historical ownership evidence is immutable. Explicit recovery can bind a
+  // metadata-only ctime change after rehashing the same owned file; subsequent
+  // changes still fail closed. No original or replacement inode is accepted.
+  let expectedCtime = copied.ctimeMs;
   const source = join(path,"source.zip"), same = async () => {
     await inspectOwned(path); const s = await lstat(source);
     requireManual(s.isFile() && !s.isSymbolicLink() && s.nlink === 1 && s.dev === copied.dev && s.ino === copied.ino &&
-      s.size === copied.size && s.mtimeMs === copied.mtimeMs && s.ctimeMs === copied.ctimeMs);
+      s.size === copied.size && s.mtimeMs === copied.mtimeMs && s.ctimeMs === expectedCtime);
   };
   const release = { transferId: owner.transferId, archive: value.package.archive, sha256: owner.sha256, byteLength: owner.byteLength };
   let approved: unknown;
@@ -145,6 +150,27 @@ export async function releaseManagedTransfer(value: { transferId: string; config
     try { await lstat(source); throw Error("transfer_not_released"); }
     catch(e) { if (!(e && typeof e === "object" && "code" in e && e.code === "ENOENT")) throw e; }
     return {status:"released",transferId:owner.transferId,archive:value.package.archive};
+  }
+  if (value.metadataRecoveryCodeSha !== undefined) {
+    const localCodeSha = z.string().regex(/^[a-f0-9]{40}$/).parse(value.metadataRecoveryCodeSha);
+    const expected = { schema:1, transferId:owner.transferId, localCodeSha, ownerDigest:managedDigest(owner),
+      copiedDigest:managedDigest(copied), archive:value.package.archive, sha256:owner.sha256 };
+    const schema = z.object({schema:z.literal(1),transferId:z.uuidv4(),localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),
+      ownerDigest:digest,copiedDigest:digest,archive:z.unknown(),sha256:digest,ctimeMs:z.number().finite()}).strict();
+    let evidence:unknown;
+    try { evidence = await readRecord(path,"metadata-reconciled.json"); }
+    catch(e) { if (!(e && typeof e === "object" && "code" in e && e.code === "ENOENT")) throw e; }
+    if (evidence) {
+      const {ctimeMs,...recorded} = schema.parse(evidence);
+      requireManual(managedDigest(recorded) === managedDigest(expected)); expectedCtime = ctimeMs;
+    } else {
+      requireManual(!approved);
+      const observed = await lstat(source); expectedCtime = observed.ctimeMs;
+      await same(); await verifyManualSnapshot(source,owner.byteLength,owner.sha256); await same();
+      const record = schema.parse({...expected,ctimeMs:expectedCtime});
+      await writeFile(join(path,"metadata-reconciled.json"),JSON.stringify(record),{flag:"wx",mode:0o600});
+      requireManual(managedDigest(await readRecord(path,"metadata-reconciled.json")) === managedDigest(record));
+    }
   }
   if (!approved) { await same(); await verifyManualSnapshot(source,owner.byteLength,owner.sha256); await same();
     await writeFile(join(path,"release.json"),JSON.stringify(release),{flag:"wx",mode:0o600}); }

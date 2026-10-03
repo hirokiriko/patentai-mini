@@ -14,12 +14,13 @@ import { archiveRead, archiveReceiptName, confirmArchiveReceipt, readVerifiedArc
 import { releaseManagedTransfer } from "./managed-koho-transfer";
 import { isAzureBlobNotFound } from "../src/lib/azure-blob-errors";
 
-const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","release-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
+const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","release-transfer","reconcile-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
     databaseSecretRef:z.string().regex(/^[a-z0-9-]{1,64}$/)}).strict(),
   sources:z.array(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),path:z.string().max(4096).refine(isAbsolute)}).strict()).max(4).default([]),
   transferId:z.uuidv4().optional(),
-}).strict();
+  transferRecovery:z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),projectRoot:z.string().max(4096).refine(isAbsolute)}).strict().optional(),
+}).strict().refine(v=>(v.command==="reconcile-transfer")===(v.transferRecovery!==undefined));
 function canonical(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
   if(value&&typeof value==="object")return `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
@@ -40,18 +41,18 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
   const input=inputSchema.parse(value),config=input.command==="status"||input.command==="prepare"?parseCloudConfiguration(input.config):parseManagedCloudImportConfiguration(input.config);
   requireManual(isManagedCloudConfiguration(config)&&input.job.resourceId.endsWith(`/jobs/${input.job.name}`));
   const bytes=Buffer.from(JSON.stringify(input.manifest)),validationConfig:CloudConfiguration={...config,manifest:{...config.manifest,sha256:sha256(bytes),byteLength:bytes.length}};
-  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),!["status","release-transfer"].includes(input.command));
+  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),!["status","release-transfer","reconcile-transfer"].includes(input.command));
   if(input.command==="start")requireManual(sha256(bytes)===config.manifest.sha256);
   requireManual(isManagedCloudManifest(manifest) && container.url===`https://${config.storageAccount}.blob.core.windows.net/${config.container}`);
   if(input.command==="start")requireManual(!manifest.archiveOnly);
   if(input.command==="prepare")return{status:"prepared",config:await (budgetDependency??ManagedServiceBudgetStorage.configured()).prepareImport(config,manifest,input.job),manifest};
   requireManual(!(await container.getProperties({abortSignal:AbortSignal.timeout(20_000)})).blobPublicAccess);
-  if(input.command==="release-transfer"){
+  if(input.command==="release-transfer"||input.command==="reconcile-transfer"){
     requireManual(manifest.archiveOnly&&input.transferId&&input.sources.length===0&&sha256(bytes)===config.manifest.sha256);
     const receipt=await archiveRead(container,archiveReceiptName(config.operationId));requireManual(receipt);
     await (budgetDependency??ManagedServiceBudgetStorage.configured()).verifyArchiveRelease(config,manifest,sha256(receipt.data));
     return releaseManagedTransfer({transferId:input.transferId,config,package:{...manifest.packages[0],archive:{operationId:config.operationId,
-      manifestSha256:config.manifest.sha256,receiptSha256:sha256(receipt.data)}}},container);
+      manifestSha256:config.manifest.sha256,receiptSha256:sha256(receipt.data)}},metadataRecoveryCodeSha:input.transferRecovery?.localCodeSha},container,input.transferRecovery?.projectRoot);
   }
   const fresh=()=>requireManual(Date.parse(manifest.expiresAt)>Date.now()&&Date.parse(manifest.expiresAt)-Date.now()<=6*60*60_000);
   const marker=async(name:string,data:Buffer)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
@@ -164,7 +165,7 @@ if(require.main===module){
     requireManual(process.argv.length===2);let size=0;const chunks:Buffer[]=[];
     for await(const chunk of process.stdin){size+=chunk.length;requireManual(size<=256*1024);chunks.push(Buffer.from(chunk));}
     const input=inputSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))),config=parseCloudConfiguration(input.config);
-    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===config.expectedCodeSha);
+    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??config.expectedCodeSha));
     const connection=process.env.AZURE_STORAGE_CONNECTION_STRING;requireManual(connection);
     const container=BlobServiceClient.fromConnectionString(connection,{retryOptions:{maxTries:1,tryTimeoutInMs:20_000}}).getContainerClient(config.container);
     const output=await operateManagedKoho(input,container,await operatorArm(input.job.resourceId));process.stdout.write(JSON.stringify(output)+"\n");

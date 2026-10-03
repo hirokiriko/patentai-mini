@@ -1,4 +1,4 @@
-import { link, lstat, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, readFile, rename, rm, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -11,6 +11,7 @@ import { managedImportBudgetRequest } from "../src/lib/patent-watch/managed-exec
 import { managedDigest } from "../src/lib/patent-watch/managed-claims";
 import { allocateManagedDownload, completeManagedDownload, copyManagedTransfer, managedTransferStatus, releaseManagedTransfer } from "./managed-koho-transfer";
 import { copyManualSource } from "../src/lib/koho-import/manual-cli-source";
+import * as manualSource from "../src/lib/koho-import/manual-cli-source";
 import { archiveReceiptName } from "../src/lib/koho-import/managed-archive";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
 const temporary:string[]=[];
@@ -241,6 +242,78 @@ it("refuses a hard-linked download and does not retry direct-import full reads",
   const g=await fixture();await operateManagedKoho(g.input,g.container,g.arm,g.budget);const calls=[...g.calls];
   await expect(operateManagedKoho({...g.input,command:"reconcile-stage",sources:[]},g.container,g.arm,g.budget)).rejects.toThrow();
   expect(g.calls.slice(calls.length).filter(c=>c.startsWith("GET:inputs/"))).toHaveLength(0);
+});
+async function metadataRecoveryFixture() {
+  const f=await fixture(true),pkg=f.manifest.packages[0];
+  const transfer=await copyManagedTransfer({sourcePath:f.sourcePath,byteLength:pkg.byteLength,sha256:pkg.sha256,acquiredAt:pkg.acquiredAt},f.path);
+  const sealed=await operateManagedKoho({...f.input,sources:[{sha256:pkg.sha256,path:transfer.sourcePath}]},f.container,f.arm,f.budget);
+  if(!("archive"in sealed)||!sealed.archive||!("config"in sealed)||!sealed.config||!("manifest"in sealed)||!sealed.manifest)throw Error();
+  const dir=dirname(transfer.sourcePath),ownedBefore=await readFile(join(dir,"owner.json")),copiedBefore=await readFile(join(dir,"copied.json"));
+  const changeCtime=async()=>{await new Promise(r=>setTimeout(r,20));const alias=join(f.path,"metadata-link");await link(transfer.sourcePath,alias);await unlink(alias);};
+  await changeCtime();
+  expect((await lstat(transfer.sourcePath)).ctimeMs).not.toBe(JSON.parse(copiedBefore.toString()).ctimeMs);
+  const input={...f.input,command:"reconcile-transfer",transferId:transfer.transferId,sources:[],config:sealed.config,manifest:sealed.manifest,
+    transferRecovery:{localCodeSha:"f".repeat(40),projectRoot:f.path}};
+  return{...f,transfer,dir,ownedBefore,copiedBefore,changeCtime,input,archive:sealed.archive};
+}
+async function recordInterruptedMetadataRecovery(f:Awaited<ReturnType<typeof metadataRecoveryFixture>>) {
+  const owner=JSON.parse(f.ownedBefore.toString()),copied=JSON.parse(f.copiedBefore.toString());
+  await writeFile(join(f.dir,"metadata-reconciled.json"),JSON.stringify({schema:1,transferId:f.transfer.transferId,
+    localCodeSha:f.input.transferRecovery.localCodeSha,ownerDigest:managedDigest(owner),copiedDigest:managedDigest(copied),
+    archive:f.archive,sha256:owner.sha256,ctimeMs:(await lstat(f.transfer.sourcePath)).ctimeMs}),{flag:"wx"});
+}
+it.each(["metadata-recorded","release-recorded","zip-deleted"])("resumes metadata recovery after %s without rewriting its proof",async(point)=>{
+  const f=await metadataRecoveryFixture();await recordInterruptedMetadataRecovery(f);
+  const evidence=await readFile(join(f.dir,"metadata-reconciled.json"));
+  if(point!=="metadata-recorded")await writeFile(join(f.dir,"release.json"),JSON.stringify({transferId:f.transfer.transferId,archive:f.archive,
+    sha256:f.transfer.sha256,byteLength:f.transfer.byteLength}),{flag:"wx"});
+  if(point==="zip-deleted")await unlink(f.transfer.sourcePath);
+  expect((await operateManagedKoho(f.input,f.container,f.arm,f.budget)).status).toBe("released");
+  expect(await readFile(join(f.dir,"metadata-reconciled.json"))).toEqual(evidence);expect(await readFile(join(f.dir,"copied.json"))).toEqual(f.copiedBefore);
+  expect(await readFile(f.sourcePath)).toEqual(f.data);expect(f.arm).not.toHaveBeenCalled();
+});
+it.each(["ctime","local-code","archive"])("refuses changes to %s after metadata reconciliation",async(kind)=>{
+  const f=await metadataRecoveryFixture();await recordInterruptedMetadataRecovery(f);
+  if(kind==="ctime")await f.changeCtime();
+  if(kind==="local-code")f.input.transferRecovery.localCodeSha="e".repeat(40);
+  if(kind==="archive")f.files.delete(archiveReceiptName(f.config.operationId));
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(await readFile(f.transfer.sourcePath)).toEqual(f.data);await expect(readFile(join(f.dir,"release.json"))).rejects.toMatchObject({code:"ENOENT"});
+});
+it("explicitly reconciles only ctime drift using historical archive proof and immutable ownership",async()=>{
+  const f=await metadataRecoveryFixture(),writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  vi.spyOn(process,"cwd").mockReturnValue(f.path);
+  await expect(operateManagedKoho({...f.input,command:"release-transfer",transferRecovery:undefined},f.container,f.arm,f.budget)).rejects.toThrow();
+  expect((await operateManagedKoho(f.input,f.container,f.arm,f.budget)).status).toBe("released");
+  expect(await readFile(join(f.dir,"owner.json"))).toEqual(f.ownedBefore);expect(await readFile(join(f.dir,"copied.json"))).toEqual(f.copiedBefore);
+  expect(JSON.parse((await readFile(join(f.dir,"metadata-reconciled.json"))).toString())).toMatchObject({localCodeSha:"f".repeat(40),copiedDigest:managedDigest(JSON.parse(f.copiedBefore.toString()))});
+  expect(await readFile(f.sourcePath)).toEqual(f.data);await expect(lstat(f.transfer.sourcePath)).rejects.toMatchObject({code:"ENOENT"});
+  expect((await operateManagedKoho(f.input,f.container,f.arm,f.budget)).status).toBe("released");
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);expect(f.arm).not.toHaveBeenCalled();
+});
+it.each(["corrupt","replacement","hardlink","mtime"])("refuses metadata recovery for %s and retains the owned file",async(kind)=>{
+  const f=await metadataRecoveryFixture();
+  if(kind==="corrupt"){const bad=Buffer.from(f.data);bad[0]^=1;await writeFile(f.transfer.sourcePath,bad);}
+  if(kind==="replacement"){await rename(f.transfer.sourcePath,join(f.dir,"previous.zip"));await writeFile(f.transfer.sourcePath,f.data);}
+  if(kind==="hardlink")await link(f.transfer.sourcePath,join(f.dir,"another-link"));
+  if(kind==="mtime")await utimes(f.transfer.sourcePath,new Date(),new Date(Date.now()+10000));
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect((await lstat(f.transfer.sourcePath)).isFile()).toBe(true);await expect(readFile(join(f.dir,"metadata-reconciled.json"))).rejects.toMatchObject({code:"ENOENT"});
+  expect(await readFile(join(f.dir,"copied.json"))).toEqual(f.copiedBefore);expect(await readFile(f.sourcePath)).toEqual(f.data);expect(f.arm).not.toHaveBeenCalled();
+});
+it("refuses metadata recovery when metadata changes during the full hash read",async()=>{
+  const f=await metadataRecoveryFixture(),original=manualSource.verifyManualSnapshot;
+  vi.spyOn(manualSource,"verifyManualSnapshot").mockImplementationOnce(async(...args)=>{await original(...args);await f.changeCtime();});
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  await expect(readFile(join(f.dir,"metadata-reconciled.json"))).rejects.toMatchObject({code:"ENOENT"});expect(await readFile(f.transfer.sourcePath)).toEqual(f.data);
+});
+it("requires historical budget proof and confines the local code binding to metadata recovery",async()=>{
+  const f=await metadataRecoveryFixture();
+  vi.mocked(f.budget.verifyArchiveRelease).mockRejectedValueOnce(Error("FICTIONAL_UNCONFIRMED_ARCHIVE"));
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  await expect(readFile(join(f.dir,"metadata-reconciled.json"))).rejects.toMatchObject({code:"ENOENT"});
+  for(const command of ["prepare","stage","start","release-transfer","status"])await expect(operateManagedKoho({...f.input,command},f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.arm).not.toHaveBeenCalled();
 });
 it("continues a ready reservation after a lost reserve ACK using a new stage claim only",async()=>{
   const f=await fixture(true),reserve=vi.mocked(f.budget.reserveImport),original=reserve.getMockImplementation()!;
