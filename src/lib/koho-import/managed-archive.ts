@@ -27,7 +27,7 @@ export async function archiveRead(container: ContainerClient, name: string, maxi
 }
 /** Verify the exact committed Azure bytes without making a second Local ZIP. */
 export async function verifyArchiveBytes(container: ContainerClient, pkg: Pick<Package, "sha256" | "byteLength" | "etag">, maximumMs=15*60_000) {
-  requireManual(Number.isSafeInteger(maximumMs)&&maximumMs>0&&maximumMs<=15*60_000);
+  requireManual(Number.isSafeInteger(maximumMs)&&maximumMs>0&&maximumMs<=30*60_000);
   const signal = AbortSignal.timeout(maximumMs), blob = container.getBlobClient(cloudSourceName(pkg.sha256));
   const props = await blob.getProperties({ conditions: { ifMatch: pkg.etag }, abortSignal: signal });
   requireManual(props.etag === pkg.etag && props.contentLength === pkg.byteLength && !props.contentEncoding);
@@ -64,7 +64,12 @@ export async function readVerifiedArchive(container: ContainerClient, config: Cl
 }
 export const archiveVerificationContinuationSchema=z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),
   priorFailureSha256:z.string().regex(/^[a-f0-9]{64}$/),priorSenderTerminated:z.literal(true),markerSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
-export async function confirmArchiveReceipt(container: ContainerClient, config: CloudConfiguration, pkg: Package, reconcile = false, guard = () => {}, continuation?:z.infer<typeof archiveVerificationContinuationSchema>) {
+const evidenceHash=z.string().regex(/^[a-f0-9]{64}$/);
+export const archiveVerificationRecoverySchema=z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),ownerApprovalSha256:evidenceHash,
+  priorEvidenceSha256:evidenceHash,priorSenderTerminated:z.literal(true),priorMarkerSha256:z.tuple([evidenceHash,evidenceHash,evidenceHash]),
+  maxElapsedMs:z.number().int().positive().max(30*60_000)}).strict();
+export async function confirmArchiveReceipt(container: ContainerClient, config: CloudConfiguration, pkg: Package, reconcile = false, guard = () => {}, continuation?:z.infer<typeof archiveVerificationContinuationSchema>, recovery?:z.infer<typeof archiveVerificationRecoverySchema>) {
+  requireManual(!continuation||!recovery);
   requireManual("serviceBudget" in config && config.serviceBudget && pkg.acquiredAt);
   requireManual(Date.parse(pkg.acquiredAt) <= Date.now());
   const identity = archivePackageIdentity(pkg), name = archiveReceiptName(config.operationId);
@@ -76,7 +81,23 @@ export async function confirmArchiveReceipt(container: ContainerClient, config: 
     // or concurrent attempts. Existing verified receipts only need metadata reads.
     const slot = Buffer.from(JSON.stringify({ operationId: config.operationId, identityDigest: expected.identityDigest, etag: pkg.etag }));
     let maximumMs=15*60_000;
-    if(continuation){
+    if(recovery){
+      const proof=archiveVerificationRecoverySchema.parse(recovery);requireManual(reconcile);
+      const names=['archive-verification-started.json','archive-verification-recovery-started.json','archive-verification-continuation-started.json'];
+      for(let n=0;n<names.length;n++){
+        const prior=await archiveRead(container,`receipts/${config.operationId}/${names[n]}`);
+        requireManual(prior&&sha256(prior.data)===proof.priorMarkerSha256[n]);
+        if(n<2)requireManual(prior.data.equals(slot));
+        else{const v=prior.value as {operationId?:unknown;identityDigest?:unknown;etag?:unknown;markerSha256?:unknown;verifyNotAfter?:unknown};
+          requireManual(v.operationId===config.operationId&&v.identityDigest===expected.identityDigest&&v.etag===pkg.etag&&v.markerSha256===proof.priorMarkerSha256[1]&&
+            typeof v.verifyNotAfter==='string'&&Number.isFinite(Date.parse(v.verifyNotAfter))&&Date.parse(v.verifyNotAfter)<=Date.now());}
+      }
+      const deadline=Date.now()+proof.maxElapsedMs;
+      guard();await container.getBlockBlobClient(`receipts/${config.operationId}/archive-verification-owner-recovery-started.json`).uploadData(Buffer.from(JSON.stringify({
+        ...proof,operationId:config.operationId,identityDigest:expected.identityDigest,etag:pkg.etag,verifyNotAfter:new Date(deadline).toISOString()})),{
+        conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
+      maximumMs=deadline-Date.now();
+    }else if(continuation){
       const proof=archiveVerificationContinuationSchema.parse(continuation);requireManual(reconcile);
       const prior=await archiveRead(container,`receipts/${config.operationId}/archive-verification-recovery-started.json`);
       requireManual(prior&&sha256(prior.data)===proof.markerSha256&&prior.data.equals(slot)&&prior.props.createdOn instanceof Date);

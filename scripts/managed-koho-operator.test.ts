@@ -104,6 +104,79 @@ it.each(["expired","future","hash","identity","absent","already-claimed"])("refu
   await expect(confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},f.proof)).rejects.toThrow();
   expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);
 });
+async function verificationRecoveryFixture(){
+  const f=await verificationContinuationFixture(),prefix=cloudReceiptPrefix(f.config),slot=f.files.get(f.name)!;
+  f.files.set(prefix+"archive-verification-started.json",Buffer.from(slot));
+  const last=Buffer.from(JSON.stringify({...JSON.parse(slot.toString()),markerSha256:sha256(slot),verifyNotAfter:new Date(Date.now()-60_000).toISOString()}));
+  f.files.set(prefix+"archive-verification-continuation-started.json",last);
+  const recovery={localCodeSha:"e".repeat(40),ownerApprovalSha256:"a".repeat(64),priorEvidenceSha256:"b".repeat(64),priorSenderTerminated:true as const,
+    priorMarkerSha256:[sha256(slot),sha256(slot),sha256(last)] as [string,string,string],maxElapsedMs:30*60_000};
+  return{...f,prefix,recovery};
+}
+it("performs one explicitly evidenced recovery while preserving all previous verification markers",async()=>{
+  const f=await verificationRecoveryFixture(),before=new Map([...f.files].map(([k,v])=>[k,Buffer.from(v)]));
+  await confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},undefined,f.recovery);
+  for(const [k,v] of before)expect(f.files.get(k)).toEqual(v);
+  const marker=JSON.parse(f.files.get(f.prefix+"archive-verification-owner-recovery-started.json")!.toString());
+  expect(marker.maxElapsedMs).toBe(f.recovery.maxElapsedMs);expect(Date.parse(marker.verifyNotAfter)).toBeLessThanOrEqual(Date.now()+f.recovery.maxElapsedMs);
+  await confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},undefined,f.recovery);
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(1);
+});
+it.each(["hash","slot-identity","last-etag","last-link","not-ended","limit","already-claimed","normal","mixed"])("rejects unsafe explicit verification recovery %s",async(kind)=>{
+  const f=await verificationRecoveryFixture();
+  if(kind==="hash")f.recovery.priorMarkerSha256[0]="0".repeat(64);
+  if(kind==="slot-identity"){const b=Buffer.from("{}");f.files.set(f.prefix+"archive-verification-started.json",b);f.recovery.priorMarkerSha256[0]=sha256(b);}
+  if(["last-etag","last-link","not-ended"].includes(kind)){
+    const name=f.prefix+"archive-verification-continuation-started.json",v=JSON.parse(f.files.get(name)!.toString());
+    if(kind==="last-etag")v.etag='"other"';if(kind==="last-link")v.markerSha256="0".repeat(64);if(kind==="not-ended")v.verifyNotAfter=new Date(Date.now()+60_000).toISOString();
+    const b=Buffer.from(JSON.stringify(v));f.files.set(name,b);f.recovery.priorMarkerSha256[2]=sha256(b);
+  }
+  if(kind==="limit")f.recovery.maxElapsedMs++;
+  if(kind==="already-claimed")f.files.set(f.prefix+"archive-verification-owner-recovery-started.json",Buffer.from("{}"));
+  await expect(confirmArchiveReceipt(f.container,f.config,f.pkg,kind!=="normal",()=>{},kind==="mixed"?f.proof:undefined,f.recovery)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);
+});
+it("does not replay explicit verification after a lost claim acknowledgement",async()=>{
+  const f=await verificationRecoveryFixture(),name=f.prefix+"archive-verification-owner-recovery-started.json";f.lose(name);
+  await expect(confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},undefined,f.recovery)).rejects.toThrow();f.lose("");
+  const first=Buffer.from(f.files.get(name)!);
+  await expect(confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},undefined,f.recovery)).rejects.toThrow();
+  expect(f.files.get(name)).toEqual(first);expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);
+});
+async function verificationRecoveryOperatorFixture(){
+  const f=await verificationRecoveryFixture();f.manifest.maxElapsedMs=65*60_000;f.rebind();
+  f.lose(f.prefix+"staging-started.json");await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  const now=Date.parse(f.manifest.expiresAt)+1;vi.spyOn(Date,"now").mockReturnValue(now);
+  const reference={sha256:"8".repeat(64),localCodeSha:"9".repeat(40),executionCodeSha:f.recovery.localCodeSha};
+  const permit={sha256:reference.sha256,expiresAt:new Date(now+3*60*60_000).toISOString()};
+  const original=vi.mocked(f.budget.verifyImportStaging).getMockImplementation()!;
+  vi.mocked(f.budget.verifyImportStaging).mockImplementation(async(...args)=>{await original(...args);expect(args[3]).toEqual(reference);return permit;});
+  f.calls.length=0;
+  return{...f,reference,permit,input:{...f.input,command:"reconcile-stage",sources:[] as typeof f.input.sources,renewalReference:reference,verificationRecovery:f.recovery}};
+}
+it("seals explicitly recovered archive bytes through the operator with its original claim and renewed reference",async()=>{
+  const f=await verificationRecoveryOperatorFixture(),before=structuredClone(f.manifest),history=Buffer.from(f.files.get(f.prefix+"staging-started.json")!);
+  const result=await operateManagedKoho(f.input,f.container,f.arm,f.budget);
+  expect(result).toMatchObject({status:"staged",manifest:{expiresAt:before.expiresAt},archive:{operationId:f.config.operationId,
+    manifestSha256:sha256(f.files.get(cloudManifestName(f.config))!),receiptSha256:sha256(f.files.get(archiveReceiptName(f.config.operationId))!)}});
+  expect(f.files.has(f.prefix+"staged.json")).toBe(true);expect(f.files.get(f.prefix+"staging-started.json")).toEqual(history);expect(f.manifest).toEqual(before);
+  expect(f.budget.verifyImportStaging).toHaveBeenCalledWith(expect.anything(),expect.anything(),f.job,f.reference);
+  expect(f.budget.confirmImport).toHaveBeenCalledWith(expect.anything(),expect.anything(),f.job,f.reference);
+  expect(f.budget.reserveImport).toHaveBeenCalledOnce();expect(f.budget.claimImport).toHaveBeenCalledOnce();
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(1);
+  expect(f.calls.filter(c=>c===`PUT:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);expect(f.arm).not.toHaveBeenCalled();
+});
+it.each(["sources","executor-sha","manifest-time","effective-expiry"])("rejects explicit verification recovery at the operator boundary: %s",async(kind)=>{
+  const f=await verificationRecoveryOperatorFixture();
+  if(kind==="sources")f.input.sources=[{sha256:f.pkg.sha256,path:f.sourcePath}];
+  if(kind==="executor-sha")f.input.renewalReference.executionCodeSha="0".repeat(40);
+  if(kind==="manifest-time")f.manifest.maxElapsedMs=f.recovery.maxElapsedMs+60_000;
+  if(kind==="effective-expiry")f.permit.expiresAt=new Date(Date.now()+f.recovery.maxElapsedMs+60_000).toISOString();
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.budget.verifyImportStaging).toHaveBeenCalledTimes(kind==="effective-expiry"?1:0);expect(f.budget.confirmImport).not.toHaveBeenCalled();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(0);expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);
+  expect(f.files.has(archiveReceiptName(f.config.operationId))).toBe(false);expect(f.files.has(cloudManifestName(f.config))).toBe(false);expect(f.arm).not.toHaveBeenCalled();
+});
 it.each(["manifest","staged"])("recovers lost %s ACK from original approved input, without writes or ARM calls",async(which)=>{
   const f=await fixture();f.lose(which==="manifest"?cloudManifestName(f.config):cloudReceiptPrefix(f.config)+"staged.json");
   await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
