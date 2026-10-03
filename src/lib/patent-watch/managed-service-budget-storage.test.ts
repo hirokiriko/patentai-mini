@@ -14,6 +14,7 @@ import { cloudManifestName, cloudSourceName, sha256 } from "../koho-import/cloud
 import { uploadFixture as uploadStorageFixture } from "../koho-import/upload.test-support";
 import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
 import { managedBudgetForecast } from "./managed-service-budget";
+import { archiveRenewalName } from "../koho-import/archive-expiry-renewal";
 afterEach(()=>{vi.restoreAllMocks();vi.useRealTimers();});
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), key = `${MANAGED_BUDGET_PREFIX}state.json`;
@@ -47,7 +48,7 @@ function fixture(binding:ManagedBudgetBinding = { storageAccount: "fictional", c
           if (createState) expect(req.headers.get("if-match")).toBeUndefined();
           else { expect(req.headers.get("if-match")).toBeTruthy(); expect(req.headers.get("if-none-match")).toBeUndefined(); }
         }
-        else { if (name !== openedKey && name !== openingIntentKey) expect(name).toMatch(new RegExp(`^${MANAGED_BUDGET_PREFIX}settlements/[a-f0-9-]+/[1-9][0-9]*\\.json$`));
+        else { if (name !== openedKey && name !== openingIntentKey) expect(name).toMatch(new RegExp(`^(?:${MANAGED_BUDGET_PREFIX}settlements/[a-f0-9-]+/[1-9][0-9]*|receipts/[a-f0-9-]+/archive-expiry-renewal)\\.json$`));
           expect(req.headers.get("if-match")).toBeUndefined(); expect(req.headers.get("if-none-match")).toBe("*"); }
         if (name === key ? (rejectStateWrite || (createState ? files.has(name) : req.headers.get("if-match") !== files.get(name)?.etag)) : files.has(name)) status = 412;
         else { const etag = `"v${++counter}"`; files.set(name, { bytes: Buffer.from(req.body as Uint8Array), etag });
@@ -368,6 +369,114 @@ it("requires confirmed original archive accounting before cleanup or a zero-pack
   const id=randomUUID();const duplicate=await f.store.prepareImport({...f.b.config,operationId:id},{...f.b.manifest,operationId:id},f.b.job);
   await expect(f.store.reserveImport(duplicate,{...f.b.manifest,operationId:id},f.b.job)).rejects.toThrow();
   expect(f.current().operations).toHaveLength(2);
+});
+async function expiredArchiveFixture(){
+  const f=await archivedExecutionFixture(),names=[cloudSourceName(f.b.manifest.packages[0].sha256),cloudManifestName(f.sealed),archiveReceiptName(f.sealed.operationId)];
+  const archiveFiles=names.map(n=>[n,f.files.get(n)!] as const);for(const n of names)f.files.delete(n);
+  f.setDate("Wed, 23 Sep 2026 07:00:00 GMT");vi.setSystemTime(new Date("2026-09-23T07:00:00Z"));
+  const authorization={localCodeSha:"a".repeat(40),ownerApprovalSha256:hash(401),priorEvidenceSha256:hash(402),originalOperationDigest:managedDigest(f.current().operations[0]),windowMs:6*60*60_000};
+  return{...f,authorization,archiveFiles};
+}
+it("renews an expired archive without changing the old ledger, then seals for historical readers and a new Job",async()=>{
+  const f=await expiredArchiveFixture(),before=f.current(),manifest=structuredClone(f.b.manifest);
+  await expect(f.store.verifyImportStaging(f.sealed,manifest,f.b.job)).rejects.toThrow();
+  const renewal=await f.store.renewArchiveStaging(f.sealed,manifest,f.b.job,f.authorization);
+  expect(f.current()).toEqual(before);expect(f.b.manifest).toEqual(manifest);expect(renewal.record.expiresAt).toBe("2026-09-23T13:00:00.000Z");
+  expect(await f.store.verifyImportStaging(f.sealed,manifest,f.b.job,renewal.reference)).toMatchObject({expiresAt:renewal.record.expiresAt});
+  for(const [name,file] of f.archiveFiles)f.files.set(name,file);
+  await f.store.confirmImport(f.sealed,manifest,f.b.job,renewal.reference);
+  await f.store.verifyArchiveRelease(f.sealed,manifest,f.receiptSha256);
+  const after=f.current(),o=after.operations[0],prior=before.operations[0];
+  expect({...o,stage:prior.stage,stageDigest:undefined,evidenceDigests:prior.evidenceDigests,evidenceChainDigest:prior.evidenceChainDigest}).toEqual({...prior,stageDigest:undefined});
+  expect(after.releaseTailYen).toBe(before.releaseTailYen);expect(after.plans).toEqual(before.plans);
+  const next={...f.manifest,expiresAt:"2026-09-23T10:00:00.000Z"},prepared=await f.store.prepareImport(f.batchConfig,next,f.b.job);
+  await f.store.reserveImport(prepared,next,f.b.job);expect(f.current().operations[0]).toEqual(o);
+  await f.store.claimImport(prepared,next,f.b.job,"stage");await f.store.confirmImport(prepared,next,f.b.job);
+  await f.store.claimImport(prepared,next,f.b.job,"start");await f.store.verifyImport(prepared,next,f.b.job);
+});
+it.each(["not-expired","too-long","digest","unknown","review","settled","source","non-archive","other-job","month"])("refuses unsafe archive renewal %s without writes",async(kind)=>{
+  const f=await expiredArchiveFixture(),state=f.current();
+  if(kind==="not-expired"){f.setDate("Wed, 23 Sep 2026 01:00:00 GMT");vi.setSystemTime(new Date("2026-09-23T01:00:00Z"));}
+  if(kind==="too-long")f.authorization.windowMs++;
+  if(kind==="digest")f.authorization.originalOperationDigest=hash(900);
+  if(kind==="unknown")state.operations[0].unknown=true;
+  if(kind==="review")state.operations[0].reviewRequired=true;
+  if(kind==="settled")state.operations[0].actualYen=1;
+  if(["unknown","review","settled"].includes(kind)){f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));f.authorization.originalOperationDigest=managedDigest(state.operations[0]);}
+  if(kind==="source")f.files.set(f.archiveFiles[0][0],f.archiveFiles[0][1]);
+  if(kind==="non-archive")delete f.b.manifest.archiveOnly;
+  if(kind==="other-job")f.b.job.databaseSecretRef="fictional-other";
+  if(kind==="month"){f.setDate("Thu, 01 Oct 2026 00:00:00 GMT");vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));}
+  const writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  await expect(f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);
+});
+it("does not recreate a renewal after lost ACK or grant source sending by reading it",async()=>{
+  const f=await expiredArchiveFixture(),name=archiveRenewalName(f.sealed.operationId),before=f.current();f.loseAck(name);
+  await expect(f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization)).rejects.toThrow();f.restoreAck();
+  const raw=f.files.get(name)!.bytes,writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  await expect(f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);expect(f.files.get(name)!.bytes).toEqual(raw);expect(f.current()).toEqual(before);
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,{sha256:sha256(raw),localCodeSha:f.authorization.localCodeSha})).toBeTruthy();
+  expect(f.files.has(cloudSourceName(f.b.manifest.packages[0].sha256))).toBe(false);
+});
+it("has one concurrent renewal winner and never changes the ledger",async()=>{
+  const f=await expiredArchiveFixture(),before=f.current();
+  const results=await Promise.allSettled([1,2].map(()=>f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization)));
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);expect(f.current()).toEqual(before);
+});
+it("keeps a usable renewal after slow preflight reads, using the final trusted timestamp",async()=>{
+  const f=await expiredArchiveFixture();
+  f.onRead(name=>{if(name.includes("/evidence/")){f.setDate("Wed, 23 Sep 2026 07:03:00 GMT");vi.setSystemTime(new Date("2026-09-23T07:03:00Z"));}});
+  const r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  expect(r.record.renewedAt).toBe("2026-09-23T07:03:00.000Z");
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,r.reference)).toBeTruthy();
+});
+it("reconciles a lost final CAS acknowledgement without renewing or reserving again",async()=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  for(const [name,file] of f.archiveFiles)f.files.set(name,file);
+  f.loseAck(key);await expect(f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,r.reference)).rejects.toThrow();f.restoreAck();
+  const state=f.current(),writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,r.reference);
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);expect(f.current()).toEqual(state);expect(state.operations[0].stage).toBe("done");
+});
+it("clamps a new renewal when the final Blob Date moves backwards",async()=>{
+  const f=await expiredArchiveFixture(),before=f.current();
+  f.onRead(name=>{if(name.includes("/evidence/"))f.setDate("Wed, 23 Sep 2026 06:59:59 GMT");});
+  const r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  expect(r.record.renewedAt).toBe("2026-09-23T06:59:59.000Z");
+  expect(r.record.expiresAt).toBe("2026-09-23T12:59:59.000Z");
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,r.reference)).toMatchObject({expiresAt:r.record.expiresAt});
+  expect(f.current()).toEqual(before);
+});
+it("uses the earlier deadline of an existing clock-regressed record without rewriting it",async()=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  const file=f.files.get(archiveRenewalName(f.sealed.operationId))!,record=JSON.parse(file.bytes.toString());
+  record.renewedAt="2026-09-23T06:59:59.000Z";file.bytes=Buffer.from(JSON.stringify(record));
+  const reference={...r.reference,sha256:sha256(file.bytes),executionCodeSha:"b".repeat(40)},raw=Buffer.from(file.bytes),before=f.current(),writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,reference)).toMatchObject({expiresAt:"2026-09-23T12:59:59.000Z"});
+  expect(file.bytes).toEqual(raw);expect(f.current()).toEqual(before);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);
+  f.setDate("Wed, 23 Sep 2026 12:59:59 GMT");vi.setSystemTime(new Date("2026-09-23T12:59:59Z"));
+  await expect(f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,reference)).rejects.toThrow();
+});
+it("rejects a recorded deadline beyond the Blob creation window even when clamping could hide it",async()=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  const file=f.files.get(archiveRenewalName(f.sealed.operationId))!,record=JSON.parse(file.bytes.toString());
+  record.expiresAt="2026-09-23T13:00:01.000Z";file.bytes=Buffer.from(JSON.stringify(record));
+  await expect(f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,{...r.reference,sha256:sha256(file.bytes)})).rejects.toThrow();
+});
+it.each(["reference","local-code","expired","manifest","record","operation","createdAt"])("rejects changed renewed staging %s",async(kind)=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  if(kind==="reference")r.reference.sha256=hash(900);
+  if(kind==="local-code")r.reference.localCodeSha="b".repeat(40);
+  if(kind==="expired"){f.setDate("Wed, 23 Sep 2026 13:00:00 GMT");vi.setSystemTime(new Date("2026-09-23T13:00:00Z"));}
+  if(kind==="manifest")f.b.manifest.expiresAt="2026-09-23T02:00:00.000Z";
+  if(kind==="record")f.files.get(archiveRenewalName(f.sealed.operationId))!.bytes=Buffer.from("{}");
+  if(kind==="operation"){const s=f.current();s.operations[0].unknown=true;f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));}
+  if(kind==="createdAt")f.created.set(archiveRenewalName(f.sealed.operationId),"Wed, 23 Sep 2026 06:00:00 GMT");
+  await expect(f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,r.reference)).rejects.toThrow();
+  await expect(f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,r.reference)).rejects.toThrow();
+  expect(f.current().operations[0].stage).toBe("claimed");
 });
 it.each(["receipt","source-etag","source-size","source-identity","manifest","ledger"])("rejects changed archive %s before Job reservation",async change=>{
   const f=await archivedExecutionFixture();await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job);

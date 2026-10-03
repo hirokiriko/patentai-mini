@@ -220,6 +220,10 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    Azure正本の完全性と台帳のstage完了を確認した`release-transfer`だけで転送slotを解放し、次の1 packageへ進む。
 4. 保存済み`archive`参照を各packageへ付け、`archiveOnly`なしのJob manifestを作る。
    1〜4 package・合計8GiB以内でまとめ、各ZIPの原本identityは保持する。Local ZIPは不要、`sources:[]`とする。
+   取込Jobの全量ZIP取得は、短いmetadata処理のserver timeoutを流用せず、Blobのサイズ別既定値を使う。
+   転送中もJob停止signalとmanifest・予算permitの最短残期限で中断する。SDK/body再試行なし、
+   ETag・全量SHA・既存解析上限は維持する。保存前の失敗でも同じ実行を再起動せず、正式receiptと
+   非稼働を確認して旧予約を保持し、原因解消後に既存archiveを参照する新しい通常取込を予約する。
    このmanifestも`prepare`→`stage`で固定し、`start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
@@ -269,7 +273,69 @@ ZIPの再uploadとJob startは行わず、確認済み保存物の不足marker�
 全量検証には初回と明示的reconcile各1回のslotがあり、並行・再実行で増やさない。料金表は両方の最大読出しを含める。
 Blob不在、検証失敗、両slot不明、期限切れは一時コピーと予約を保持して停止し、別UUIDで再送しない。
 
+部分upload失敗について追加のOWNER承認が記録された場合だけ、Localの明示的な
+`recover-archive-upload`で同operationのarchive-only単一原本を一度だけ再転送できる。
+元のstage intent・予約・本番code SHAを保持し、`uploadRecovery`に別の`localCodeSha`、
+`ownerApprovalSha256`、`priorFailureSha256`、`priorSenderTerminated:true`と非公開承認内の
+`maxUploadElapsedMs`を渡す。実行adapterは承認原本と実際の失敗・終了証拠・対象原本を照合する。
+通常stageの上限は変えず、復旧も元manifestの期限と全体上限内に収める。
+確定Blob、seal、検証開始、Job開始がなく、元台帳の照合に成功した場合だけ、
+create-only `upload-recovery-started.json`の成功ACKを得た呼出しが送信できる。
+SDKは新しいblock IDで全量を送り、旧未commit blocksを再利用せず、条件付きcommit後に
+ETag固定全量SHAを照合する。旧転送量・不明usage・予約をリセットしない。
+復旧markerのACK不明、競合、再失敗は同じ全量再送を認めない。状態を読戻し、確定Blobがあれば
+既存`reconcile-stage`で照合する。原本を分割せず、既存Blobの上書き・削除も行わない。
+
+安全な部分再開が既に承認され、送信processの終了と同じ原本のSDK block一覧を確定できた場合、
+`recover-archive-tail`で残部だけを送信できる。これは新しい送信時間枠を発行しない。
+adapterは前回開始より前の時刻と終了確認後の時刻、その原証拠hashを照合し、区間全体を保守的に既使用時間へ計上する。
+`tailRecovery`は元の承認hash・復旧marker hash・失敗/終了証拠hash・全block一覧hash・選択prefix・
+元送信上限・開始/終了確認時刻を固定する。元markerの上限と一致し、残時間がある場合だけ、
+create-only `upload-tail-started.json`へ既使用/残時間/固定deadlineを保存する。
+選択したSDK prefixの連番と各8MiB blockを照合し、残部のみを同じSDKで送る。
+全chunkと条件付きcommitは同じ残時間期限を使用する。commit一覧は選択prefixだけとし、
+旧prefixを混ぜない。正常commitにより不要なuncommitted blocksはAzure側で破棄される。
+前後の全block集合、Local原本、条件付きcommit、従来のETag固定全量SHAを照合してからsealする。
+未知ACK、競合、再失敗では同tailを再送せず、確定状態を読戻す。予約・不明usage・旧失敗履歴は維持する。
+
+元のarchive処理と予約が期限切れの場合、同一処理の有限期限更新がOWNERから明示承認されているときだけ、
+Localの`renew-archive-expiry`を使う。`expiryRenewal`へLocal code SHA、OWNER承認/失敗確定証拠のhash、
+元operation全体digestと承認内のwindowを渡す。現行policy・profile・月・未精算予約・元staging bindingを照合し、
+固定名`archive-expiry-renewal.json`をcreate-onlyで作る。期限は実行直前のBlob trusted Dateから上限内とし、
+元のmanifest・台帳・旧期限・予約値は変更しない。台帳schemaや旧本番の読み方も変えない。
+ACK不明や同記録の存在を新しい期限発行へ使わず、同じ保存記録を読戻す。
+以後は`renewalReference`のraw SHAとLocal code SHAを明示したtail/reconcileだけが新期限を利用できる。
+Blob応答時刻が読み取り間で戻る場合も、発行時と読取時の期限を短い側に制限する。既存記録は
+書き換えず、作成時刻窓と記録期限を照合したうえで`renewedAt + windowMs`までに限定する。
+レビュー済みの修正buildで既存記録を使う場合は、`renewalReference.executionCodeSha`を明示する。
+発行時の`localCodeSha`とraw SHAを保持し、実行SHAをtail入力と実buildの両方で照合する。
+commit済みZIPの全量検証だけが通信中断した場合も、ZIPを再送しない。既存recovery検証markerの
+作成から元の検証上限内であること、停止済みsenderと失敗証拠、marker原文/hashとETagを照合できれば、
+`reconcile-stage`の`verificationContinuation`で同じ期限の残時間だけ検証できる。Local code SHA・
+失敗hash・停止確認・marker hashを明示し、専用create-only markerで一度に限定する。
+大容量streamの通信設定を短いserver timeoutで上書きせず、元の検証AbortSignalで全体を制限する。
+既存検証枠で完了しない場合、期限経過だけを再実行の権限にしない。OWNERが承認した復旧範囲と
+保持中の復旧予約へ追加通信の保守上界が収まることを非公開で確認できるときだけ、
+`verificationRecovery`で追加の全量読出し1回を明示できる。承認/失敗確定証拠のhash・停止確認・
+旧3markerのhash・Local code SHA・有限時間を指定し、manifestと有効期限内にseal用の余裕を残す。
+旧markerは保持し、別のcreate-only markerでACK不明と重複を止める。通常の検証時間は変えない。
+失敗読出しの未計測通信を0とせず全量上界で保持し、正式receiptがある場合は再読出しを省く。
+送信残量は従来のtail証拠から差し引き、通常stage/start・別operation・新規予約へ更新期限を流用しない。
+保存確定時も同記録と現在台帳を再照合し、従来CASでstage証跡だけを追加する。期限更新はJob起動や配備ではない。
+旧期限を保った正式archiveは、従来の歴史receipt読取りにより後続の通常Jobと限定cleanupで利用できる。
+
 `release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
+
+Localの同期ソフト等によるmetadata変更を検出した場合も、原因を推定して所有記録を書き換えない。
+ctimeだけが異なるときは、独立レビュー済みの新Local buildから明示的な`reconcile-transfer`を使用できる。
+歴史archiveのconfig/manifest・job・transferId・`sources:[]`に、
+`transferRecovery: { localCodeSha, projectRoot }`を加え、Local build SHAと元の転送枠のproject rootを固定する。
+新Local SHAと歴史archive SHAを区別し、本番App/Jobや旧build markerは変更しない。
+台帳と非公開Azure原本の確定証跡を再照合し、元のinode・device・size・mtime・単一link・全量SHAが一致し、
+検証中のctimeが不変の場合だけ追加証跡`metadata-reconciled.json`をcreate-onlyで保存して解放する。
+owner/copied記録は不変。さらにmetadataが変わった場合、原本/台帳不一致、別inode、hardlink、
+照合不能時は停止する。中断時は同じLocal SHA・同じ転送枠で結果照合し、新しい所有記録を作らない。
+このLocal cleanupは配備・Job開始・新規の予算予約を行わない。必要なPRのmerge/deployは別途、既存の累計枠に従う。
 期限後も歴史receiptと共通台帳のstage=doneを読戻し、固定slotの所有ID・inode・SHA一致を確認した1ファイルだけunlinkする。
 小さい所有/削除記録はtransferId名で保持し、削除完了応答が失われても同IDを照合できる。新しいslotや既存原本へcleanupを広げない。
 

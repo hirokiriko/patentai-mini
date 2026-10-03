@@ -3,6 +3,31 @@ import { managedCloudImportFixture } from "./managed-koho-cloud.test-support";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
 import { parseCloudManifest, cloudManifestName, cloudReceiptPrefix, sha256 } from "../src/lib/koho-import/cloud-config";
 import type { saveCloudPlan } from "../src/lib/koho-import/cloud-db";
+import type { CloudBlobBoundary } from "../src/lib/koho-import/cloud-blob";
+
+it.each(["elapsed", "expiry", "manifest_elapsed", "manifest_expiry", "job"])("interrupts a stalled source within the %s deadline before any DB save", async kind => {
+  const f = await managedCloudImportFixture(), save = vi.fn<typeof saveCloudPlan>(), controller = new AbortController();
+  if (kind === "manifest_elapsed") f.manifest.maxElapsedMs = 1000;
+  if (kind === "manifest_expiry") f.manifest.expiresAt = new Date(Date.now() + 1000).toISOString();
+  await f.publish();
+  const boundary: CloudBlobBoundary = f.blob;
+  const download = vi.spyOn(boundary, "download").mockImplementation(async (_name, _bytes, _etag, _path, signal) => {
+    expect(signal).toBeDefined();
+    if (kind === "job") controller.abort();
+    await new Promise<void>((_resolve, reject) => {
+      if (signal!.aborted) reject(Error("FICTIONAL_ABORT"));
+      else signal!.addEventListener("abort", () => reject(Error("FICTIONAL_ABORT")), { once: true });
+    });
+    throw Error("FICTIONAL_UNREACHABLE");
+  });
+  const verify = vi.fn(async () => ({
+    remainingMs: kind === "elapsed" ? 100 : 60_000,
+    expiresAt: new Date(Date.now() + (kind === "expiry" ? 100 : 60_000)).toISOString(),
+  }));
+  const result = await runCloudImport(f.config, boundary, { password: "FICTIONAL", signal: controller.signal, save, budget: { verify } });
+  expect(result.results[0].outcome).toBe("failed_before_save");
+  expect(result.cleanup).toBe("complete"); expect(download).toHaveBeenCalledOnce(); expect(save).not.toHaveBeenCalled();
+});
 it("binds exact full numbered claims and official receipt into the dedicated corpus save", async () => {
   const f = await managedCloudImportFixture();
   const save = vi.fn<typeof saveCloudPlan>(async (_config,_manifest,_password,plan,begin,_client,managed) => {
