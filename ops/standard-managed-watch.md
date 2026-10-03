@@ -294,6 +294,17 @@ create-only `upload-tail-started.json`へ既使用/残時間/固定deadlineを�
 前後の全block集合、Local原本、条件付きcommit、従来のETag固定全量SHAを照合してからsealする。
 未知ACK、競合、再失敗では同tailを再送せず、確定状態を読戻す。予約・不明usage・旧失敗履歴は維持する。
 
+元のarchive処理と予約が期限切れの場合、同一処理の有限期限更新がOWNERから明示承認されているときだけ、
+Localの`renew-archive-expiry`を使う。`expiryRenewal`へLocal code SHA、OWNER承認/失敗確定証拠のhash、
+元operation全体digestと承認内のwindowを渡す。現行policy・profile・月・未精算予約・元staging bindingを照合し、
+固定名`archive-expiry-renewal.json`をcreate-onlyで作る。期限は実行直前のBlob trusted Dateから上限内とし、
+元のmanifest・台帳・旧期限・予約値は変更しない。台帳schemaや旧本番の読み方も変えない。
+ACK不明や同記録の存在を新しい期限発行へ使わず、同じ保存記録を読戻す。
+以後は`renewalReference`のraw SHAとLocal code SHAを明示したtail/reconcileだけが新期限を利用できる。
+送信残量は従来のtail証拠から差し引き、通常stage/start・別operation・新規予約へ更新期限を流用しない。
+保存確定時も同記録と現在台帳を再照合し、従来CASでstage証跡だけを追加する。期限更新はJob起動や配備ではない。
+旧期限を保った正式archiveは、従来の歴史receipt読取りにより後続の通常Jobと限定cleanupで利用できる。
+
 `release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
 
 Localの同期ソフト等によるmetadata変更を検出した場合も、原因を推定して所有記録を書き換えない。

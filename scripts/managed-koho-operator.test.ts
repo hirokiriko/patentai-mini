@@ -65,7 +65,7 @@ async function fixture(archiveOnly=false){
     claimImport:vi.fn(async(c,m,j,phase)=>{check(c,m,j);calls.push(`budget:${phase}`);if(!reserved)throw Error();
       if(phase==="stage"){if(stage!=="ready")throw Error();stage="claimed";}else{if(stage!=="done"||start)throw Error();start=true;}}),
     confirmImport:vi.fn(async(c,m,j)=>{check(c,m,j);calls.push("budget:confirm");if(stage!=="claimed"&&stage!=="done")throw Error();stage="done";}),markUnknown:vi.fn(async()=>{}),
-    verifyImportStaging:vi.fn(async(c,m,j)=>{check(c,m,j);if(!reserved||start||!["claimed","done"].includes(stage))throw Error();}),
+    verifyImportStaging:vi.fn(async(c,m,j)=>{check(c,m,j);if(!reserved||start||!["claimed","done"].includes(stage))throw Error();return null;}),
     verifyArchiveRelease:vi.fn(async()=>{if(stage!=="done")throw Error();})};
   const input={schema:1,command:"stage",config:f.config,manifest:f.manifest,job,sources:[{sha256:f.manifest.packages[0].sha256,path:sourcePath}]};
   const arm=vi.fn(async(_url:string,method:"GET"|"POST",body?:unknown):Promise<{status:number;body:unknown}>=>{
@@ -348,6 +348,36 @@ it.each(["operation","source","bytes","expiry","committed","normal-command"])("r
   if(kind==="normal-command")f.input.command="stage";
   await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();expect(tail).not.toHaveBeenCalled();
   expect(f.budget.reserveImport).toHaveBeenCalledOnce();expect(f.arm).not.toHaveBeenCalled();
+});
+it("uses an explicit renewed expiry for tail and lost-ACK reconciliation while preserving the old manifest",async()=>{
+  const f=await tailArchive(),old=structuredClone(f.manifest),now=Date.parse(f.manifest.expiresAt)+1;
+  vi.spyOn(Date,"now").mockReturnValue(now);
+  const reference={sha256:"8".repeat(64),localCodeSha:"e".repeat(40)},expiresAt=new Date(now+3*60*60_000).toISOString();
+  vi.mocked(f.budget.verifyImportStaging).mockImplementation(async(_c,_m,_j,ref)=>{if(ref?.sha256!==reference.sha256)throw Error();return{...reference,expiresAt};});
+  const tail=vi.spyOn(tailOperator,"resumeArchiveTail").mockImplementation(async()=>{f.files.set(f.source,f.data);});
+  const input={...f.input,renewalReference:reference};f.lose(cloudReceiptPrefix(f.config)+"staged.json");
+  await expect(operateManagedKoho(input,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  expect(f.manifest).toEqual(old);
+  const {tailRecovery,...plain}=input;void tailRecovery;
+  const result=await operateManagedKoho({...plain,command:"reconcile-stage",sources:[]},f.container,f.arm,f.budget);
+  expect(result).toMatchObject({status:"staged",manifest:{expiresAt:old.expiresAt}});expect(tail).toHaveBeenCalledOnce();
+  expect(f.budget.confirmImport).toHaveBeenCalledWith(expect.anything(),expect.anything(),f.job,reference);expect(f.arm).not.toHaveBeenCalled();
+  await expect(operateManagedKoho({...plain,command:"stage"},f.container,f.arm,f.budget)).rejects.toThrow();
+});
+it("dispatches explicit expiry renewal with the old staging binding, without sending a source",async()=>{
+  const f=await partialArchive(),now=Date.parse(f.manifest.expiresAt)+1;vi.spyOn(Date,"now").mockReturnValue(now);
+  f.budget.renewArchiveStaging=vi.fn(async()=>({reference:{sha256:"8".repeat(64),localCodeSha:"e".repeat(40)},record:{} as never}));
+  const input={...f.input,command:"renew-archive-expiry",sources:[],expiryRenewal:{localCodeSha:"e".repeat(40),ownerApprovalSha256:"a".repeat(64),
+    priorEvidenceSha256:"b".repeat(64),originalOperationDigest:"c".repeat(64),windowMs:3*60*60_000}};
+  expect(await operateManagedKoho(input,f.container,f.arm,f.budget)).toMatchObject({status:"expiry_renewed"});
+  expect(f.budget.renewArchiveStaging).toHaveBeenCalledOnce();expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);expect(f.arm).not.toHaveBeenCalled();
+  await expect(operateManagedKoho({...input,manifest:{...input.manifest,round:99}},f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.budget.renewArchiveStaging).toHaveBeenCalledOnce();
+});
+it("rejects a tail build different from the renewal reference before dispatch",async()=>{
+  const f=await tailArchive(),tail=vi.spyOn(tailOperator,"resumeArchiveTail");
+  await expect(operateManagedKoho({...f.input,renewalReference:{sha256:"8".repeat(64),localCodeSha:"9".repeat(40)}},f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(tail).not.toHaveBeenCalled();
 });
 async function metadataRecoveryFixture() {
   const f=await fixture(true),pkg=f.manifest.packages[0];

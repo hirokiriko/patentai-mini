@@ -14,8 +14,9 @@ import { archiveRead, archiveReceiptName, confirmArchiveReceipt, readVerifiedArc
 import { releaseManagedTransfer } from "./managed-koho-transfer";
 import { isAzureBlobNotFound } from "../src/lib/azure-blob-errors";
 import { resumeArchiveTail, tailRecoverySchema } from "./managed-koho-tail";
+import { archiveRenewalInputSchema, archiveRenewalReferenceSchema } from "../src/lib/koho-import/archive-expiry-renewal";
 
-const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","recover-archive-upload","recover-archive-tail","release-transfer","reconcile-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
+const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","recover-archive-upload","recover-archive-tail","renew-archive-expiry","release-transfer","reconcile-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
     databaseSecretRef:z.string().regex(/^[a-z0-9-]{1,64}$/)}).strict(),
   sources:z.array(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),path:z.string().max(4096).refine(isAbsolute)}).strict()).max(4).default([]),
@@ -24,9 +25,13 @@ const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage
   uploadRecovery:z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),ownerApprovalSha256:z.string().regex(/^[a-f0-9]{64}$/),
     priorFailureSha256:z.string().regex(/^[a-f0-9]{64}$/),priorSenderTerminated:z.literal(true),maxUploadElapsedMs:z.number().int().positive()}).strict().optional(),
   tailRecovery:tailRecoverySchema.optional(),
+  expiryRenewal:archiveRenewalInputSchema.optional(),renewalReference:archiveRenewalReferenceSchema.optional(),
 }).strict().refine(v=>(v.command==="reconcile-transfer")===(v.transferRecovery!==undefined))
   .refine(v=>(v.command==="recover-archive-upload")===(v.uploadRecovery!==undefined))
-  .refine(v=>(v.command==="recover-archive-tail")===(v.tailRecovery!==undefined));
+  .refine(v=>(v.command==="recover-archive-tail")===(v.tailRecovery!==undefined))
+  .refine(v=>(v.command==="renew-archive-expiry")===(v.expiryRenewal!==undefined))
+  .refine(v=>!v.renewalReference||["recover-archive-tail","reconcile-stage"].includes(v.command))
+  .refine(v=>!v.tailRecovery||!v.renewalReference||v.tailRecovery.localCodeSha===v.renewalReference.localCodeSha);
 function canonical(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
   if(value&&typeof value==="object")return `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
@@ -42,12 +47,12 @@ async function existing(container:ContainerClient,name:string){
 }
 /** A conditional marker precedes every batch of external writes. A ready
  * reservation can receive its first fresh stage claim; claimed writes cannot replay. */
-export type ManagedKohoBudget = Pick<ManagedServiceBudgetStorage,"prepareImport"|"reserveImport"|"claimImport"|"confirmImport"|"verifyImportStaging"|"verifyArchiveRelease"|"markUnknown">;
+export type ManagedKohoBudget = Pick<ManagedServiceBudgetStorage,"prepareImport"|"reserveImport"|"claimImport"|"confirmImport"|"verifyImportStaging"|"verifyArchiveRelease"|"markUnknown"> & Partial<Pick<ManagedServiceBudgetStorage,"renewArchiveStaging">>;
 export async function operateManagedKoho(value:unknown,container:ContainerClient,arm:Awaited<ReturnType<typeof operatorArm>>,budgetDependency?:ManagedKohoBudget){
   const input=inputSchema.parse(value),config=input.command==="status"||input.command==="prepare"?parseCloudConfiguration(input.config):parseManagedCloudImportConfiguration(input.config);
   requireManual(isManagedCloudConfiguration(config)&&input.job.resourceId.endsWith(`/jobs/${input.job.name}`));
   const bytes=Buffer.from(JSON.stringify(input.manifest)),validationConfig:CloudConfiguration={...config,manifest:{...config.manifest,sha256:sha256(bytes),byteLength:bytes.length}};
-  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),!["status","release-transfer","reconcile-transfer"].includes(input.command));
+  const manifest=parseCloudManifest(bytes,validationConfig,Date.now(),!input.renewalReference&&!["status","release-transfer","reconcile-transfer","renew-archive-expiry"].includes(input.command));
   if(input.command==="start")requireManual(sha256(bytes)===config.manifest.sha256);
   requireManual(isManagedCloudManifest(manifest) && container.url===`https://${config.storageAccount}.blob.core.windows.net/${config.container}`);
   if(input.command==="start")requireManual(!manifest.archiveOnly);
@@ -60,7 +65,8 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
     return releaseManagedTransfer({transferId:input.transferId,config,package:{...manifest.packages[0],archive:{operationId:config.operationId,
       manifestSha256:config.manifest.sha256,receiptSha256:sha256(receipt.data)}},metadataRecoveryCodeSha:input.transferRecovery?.localCodeSha},container,input.transferRecovery?.projectRoot);
   }
-  const fresh=()=>requireManual(Date.parse(manifest.expiresAt)>Date.now()&&Date.parse(manifest.expiresAt)-Date.now()<=6*60*60_000);
+  let effectiveExpiry=manifest.expiresAt;
+  const fresh=()=>requireManual(Date.parse(effectiveExpiry)>Date.now()&&Date.parse(effectiveExpiry)-Date.now()<=6*60*60_000);
   const marker=async(name:string,data:Buffer,signal?:AbortSignal)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:signal??AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
   const binding={operationId:config.operationId,approvalDigest:approvalDigest(manifest),configurationDigest:configurationDigest(config),jobDigest:sha256(canonical(input.job))};
   const readJson=async(name:string,maxBytes=131072)=>{
@@ -90,6 +96,12 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       databaseGrowthBytes:Number.isSafeInteger(report.databaseGrowthBytes)?report.databaseGrowthBytes:null};
   }
   const budget=budgetDependency??ManagedServiceBudgetStorage.configured();
+  if(input.command==="renew-archive-expiry"){
+    requireManual(manifest.archiveOnly&&manifest.packages.length===1&&!manifest.packages[0].archive&&input.sources.length===0&&budget.renewArchiveStaging);
+    const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
+    requireManual(beginning&&Object.entries(binding).every(([key,v])=>beginning.value[key]===v));
+    return{status:"expiry_renewed",...await budget.renewArchiveStaging(config,manifest,input.job,input.expiryRenewal)};
+  }
   if(input.command==="stage"||input.command==="reconcile-stage"||input.command==="recover-archive-upload"||input.command==="recover-archive-tail"){
     const reconcile=input.command==="reconcile-stage",recover=input.command==="recover-archive-upload",tail=input.command==="recover-archive-tail",fromArchives=manifest.packages.every(p=>p.archive);
     if(reconcile)requireManual(manifest.archiveOnly||fromArchives);
@@ -106,7 +118,8 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
     if(reconcile||recover||tail){
       const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
       requireManual(beginning&&Object.entries(binding).every(([key,v])=>beginning.value[key]===v));
-      await budget.verifyImportStaging(config,manifest,input.job);
+      const permit=await budget.verifyImportStaging(config,manifest,input.job,input.renewalReference);
+      if(input.renewalReference){requireManual(manifest.archiveOnly&&permit&&permit.sha256===input.renewalReference.sha256);effectiveExpiry=permit.expiresAt;fresh();}
     }else{
       await budget.reserveImport(config,manifest,input.job);
       // A lost reserve ACK may have left stage=ready, before any upload. Only a
@@ -122,7 +135,7 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
         archiveReceiptName(config.operationId),...['start-requested.json','staged.json',
           'archive-verification-started.json','archive-verification-recovery-started.json'].map(n=>cloudReceiptPrefix(config)+n)])
         requireManual(!await existing(container,name));
-      requireManual(Date.now()+manifest.maxElapsedMs<Date.parse(manifest.expiresAt));
+      requireManual(Date.now()+manifest.maxElapsedMs<Date.parse(effectiveExpiry));
       if(recover)await marker("upload-recovery-started.json",Buffer.from(JSON.stringify({...binding,...input.uploadRecovery,
         sourceSha256:manifest.packages[0].sha256,sourceBytes:manifest.packages[0].byteLength})));
       else{
@@ -159,12 +172,12 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       stored=await archiveRead(container,cloudManifestName(config));}
     requireManual(stored&&stored.data.equals(finalBytes));
     const finalConfig:CloudConfiguration={...config,manifest:{sha256:sha256(finalBytes),byteLength:finalBytes.length,etag:stored.props.etag!}};
-    parseCloudManifest(stored.data,finalConfig);
+    parseCloudManifest(stored.data,finalConfig,Date.now(),!input.renewalReference);fresh();
     const stageRecord={config:finalConfig,manifestDigest:sha256(finalBytes)};
     const previous=await readJson(cloudReceiptPrefix(config)+"staged.json",65536);
     if(previous)requireManual(canonical(previous.value)===canonical(stageRecord));
     else await marker("staged.json",Buffer.from(JSON.stringify(stageRecord)));
-    await budget.confirmImport(finalConfig,manifest,input.job);
+    await budget.confirmImport(finalConfig,manifest,input.job,input.renewalReference);
     return {status:"staged",config:finalConfig,manifest,...(archiveReceiptSha256?{archive:{operationId:config.operationId,manifestSha256:finalConfig.manifest.sha256,receiptSha256:archiveReceiptSha256}}:{})};
   }
   const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
@@ -200,7 +213,7 @@ if(require.main===module){
     requireManual(process.argv.length===2);let size=0;const chunks:Buffer[]=[];
     for await(const chunk of process.stdin){size+=chunk.length;requireManual(size<=256*1024);chunks.push(Buffer.from(chunk));}
     const input=inputSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))),config=parseCloudConfiguration(input.config);
-    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??input.tailRecovery?.localCodeSha??config.expectedCodeSha));
+    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??input.tailRecovery?.localCodeSha??input.expiryRenewal?.localCodeSha??input.renewalReference?.localCodeSha??config.expectedCodeSha));
     const connection=process.env.AZURE_STORAGE_CONNECTION_STRING;requireManual(connection);
     const container=BlobServiceClient.fromConnectionString(connection,{retryOptions:{maxTries:1,tryTimeoutInMs:20_000}}).getContainerClient(config.container);
     const output=await operateManagedKoho(input,container,await operatorArm(input.job.resourceId));process.stdout.write(JSON.stringify(output)+"\n");
