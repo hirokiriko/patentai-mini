@@ -23,13 +23,19 @@ async function fixture(archiveOnly=false){
     f.request=managedImportBudgetRequest(f.config,f.manifest,f.job,f.policy,f.binding,f.pricingDigest,null);f.config.serviceBudget!.requestDigest=f.request.requestDigest;}
   const sourcePath=join(path,"fictional.zip");await writeFile(sourcePath,f.data);
   const files=new Map<string,Buffer>([[cloudSourceName(f.manifest.packages[0].sha256),f.data]]),calls:string[]=[];
-  let loseAck="",expireAfter="";
+  let loseAck="",expireAfter="",headFailure="";
   const pipeline=newPipeline(new AnonymousCredential(),{retryOptions:{maxTries:1},httpClient:{async sendRequest(request){
     const url=new URL(request.url),name=url.pathname.slice(`/${f.config.container}/`.length),headers=request.headers.clone();
     for(const key of headers.headerNames())headers.remove(key);
     headers.set("x-ms-request-id","fictional");headers.set("x-ms-version","2025-11-05");headers.set("etag",'"sealed"');calls.push(`${request.method}:${name}`);
     let status=200,data=Buffer.alloc(0),bodyAsText:string|undefined;
     if(url.searchParams.get("restype")==="container"){}
+    else if(request.method==="HEAD"&&name===cloudSourceName(f.manifest.packages[0].sha256)&&headFailure){
+      if(headFailure==="timeout")throw Error("FICTIONAL_TIMEOUT");
+      status=headFailure==="AuthorizationPermissionMismatch"?403:404;
+      if(headFailure!=="bare404")headers.set("x-ms-error-code",headFailure);
+      bodyAsText="";
+    }
     else if(request.method==="PUT"){
       expect(request.headers.get("if-none-match")).toBe("*");
       if(files.has(name))status=412;
@@ -68,7 +74,7 @@ async function fixture(archiveOnly=false){
   });
   return{...f,path,sourcePath,input,container,arm,files,calls,budget,
     rebind:()=>{f.request=managedImportBudgetRequest(f.config,f.manifest,f.job,f.policy,f.binding,f.pricingDigest,null);f.config.serviceBudget!.requestDigest=f.request.requestDigest;},
-    lose:(name:string)=>{loseAck=name;},expire:(name:string)=>{expireAfter=name;}};
+    lose:(name:string)=>{loseAck=name;},expire:(name:string)=>{expireAfter=name;},failHead:(code:string)=>{headFailure=code;}};
 }
 it.each(["manifest","staged"])("recovers lost %s ACK from original approved input, without writes or ARM calls",async(which)=>{
   const f=await fixture();f.lose(which==="manifest"?cloudManifestName(f.config):cloudReceiptPrefix(f.config)+"staged.json");
@@ -242,6 +248,69 @@ it("refuses a hard-linked download and does not retry direct-import full reads",
   const g=await fixture();await operateManagedKoho(g.input,g.container,g.arm,g.budget);const calls=[...g.calls];
   await expect(operateManagedKoho({...g.input,command:"reconcile-stage",sources:[]},g.container,g.arm,g.budget)).rejects.toThrow();
   expect(g.calls.slice(calls.length).filter(c=>c.startsWith("GET:inputs/"))).toHaveLength(0);
+});
+async function partialArchive(){
+  const f=await fixture(true),source=cloudSourceName(f.manifest.packages[0].sha256);
+  f.manifest.maxElapsedMs=65*60_000;f.rebind();
+  f.files.delete(source);f.lose(cloudReceiptPrefix(f.config)+"staging-started.json");
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  const recovery={...f.input,command:"recover-archive-upload",uploadRecovery:{localCodeSha:"f".repeat(40),ownerApprovalSha256:"a".repeat(64),
+    priorFailureSha256:"b".repeat(64),priorSenderTerminated:true,maxUploadElapsedMs:60_000}};
+  return{...f,source,recovery};
+}
+it("recovers one missing archive without reserving, claiming or starting again",async()=>{
+  const f=await partialArchive(),history=Buffer.from(f.files.get(cloudReceiptPrefix(f.config)+"staging-started.json")!);
+  const result=await operateManagedKoho(f.recovery,f.container,f.arm,f.budget);
+  expect(result).toMatchObject({status:"staged",archive:{operationId:f.config.operationId},config:{expectedCodeSha:f.config.expectedCodeSha}});
+  expect(f.budget.reserveImport).toHaveBeenCalledOnce();expect(f.budget.claimImport).toHaveBeenCalledOnce();expect(f.budget.verifyImportStaging).toHaveBeenCalledOnce();
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(1);expect(f.calls.filter(c=>c===`GET:${f.source}`)).toHaveLength(1);
+  expect(f.files.get(cloudReceiptPrefix(f.config)+"staging-started.json")).toEqual(history);expect(f.arm).not.toHaveBeenCalled();
+  expect(await readFile(f.sourcePath)).toEqual(f.data);
+});
+it("allows only one concurrent recovery and never replays a lost recovery marker ACK",async()=>{
+  const f=await partialArchive();f.lose(cloudReceiptPrefix(f.config)+"upload-recovery-started.json");
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);
+  const g=await partialArchive();const results=await Promise.allSettled([1,2].map(()=>operateManagedKoho(g.recovery,g.container,g.arm,g.budget)));
+  expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);expect(g.calls.filter(c=>c===`PUT:${g.source}`)).toHaveLength(1);
+});
+it("uses ordinary reconciliation after recovery upload ACK loss, with no second source send",async()=>{
+  const f=await partialArchive();f.lose(f.source);
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(await operateManagedKoho({...f.input,command:"reconcile-stage",sources:[]},f.container,f.arm,f.budget)).toMatchObject({status:"staged"});
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(1);expect(f.budget.reserveImport).toHaveBeenCalledOnce();
+});
+it.each(["source","binding","approval","sender","deadline","expiry","sealed"])("rejects unsafe recovery %s before a source write",async(kind)=>{
+  const f=await partialArchive();
+  if(kind==="source"){const bad=Buffer.from(f.data);bad[0]^=1;await writeFile(f.sourcePath,bad);}
+  if(kind==="binding")f.recovery.manifest.round++;
+  if(kind==="approval")f.recovery.uploadRecovery.ownerApprovalSha256="";
+  if(kind==="sender")f.recovery.uploadRecovery.priorSenderTerminated=false;
+  if(kind==="deadline")f.recovery.uploadRecovery.maxUploadElapsedMs=f.manifest.maxElapsedMs;
+  if(kind==="expiry")vi.spyOn(Date,"now").mockReturnValue(Date.parse(f.manifest.expiresAt)-60_000);
+  if(kind==="sealed")f.files.set(f.source,f.data);
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);expect(f.arm).not.toHaveBeenCalled();
+});
+it("does not accept recovery parameters on normal stage or recovery on a non-archive import",async()=>{
+  const f=await partialArchive();
+  await expect(operateManagedKoho({...f.recovery,command:"stage"},f.container,f.arm,f.budget)).rejects.toThrow();
+  delete f.recovery.manifest.archiveOnly;
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);
+});
+it.each(["AuthorizationPermissionMismatch","ContainerNotFound","bare404","timeout"])("does not upload on unknown source HEAD: %s",async(code)=>{
+  const f=await partialArchive();f.failHead(code);
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.files.has(cloudReceiptPrefix(f.config)+"upload-recovery-started.json")).toBe(false);
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);
+});
+it("stops after expiry during recovery marker acknowledgement without uploading",async()=>{
+  const f=await partialArchive();f.expire(cloudReceiptPrefix(f.config)+"upload-recovery-started.json");
+  await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);
 });
 async function metadataRecoveryFixture() {
   const f=await fixture(true),pkg=f.manifest.packages[0];

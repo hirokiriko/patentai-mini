@@ -269,6 +269,19 @@ ZIPの再uploadとJob startは行わず、確認済み保存物の不足marker�
 全量検証には初回と明示的reconcile各1回のslotがあり、並行・再実行で増やさない。料金表は両方の最大読出しを含める。
 Blob不在、検証失敗、両slot不明、期限切れは一時コピーと予約を保持して停止し、別UUIDで再送しない。
 
+部分upload失敗について追加のOWNER承認が記録された場合だけ、Localの明示的な
+`recover-archive-upload`で同operationのarchive-only単一原本を一度だけ再転送できる。
+元のstage intent・予約・本番code SHAを保持し、`uploadRecovery`に別の`localCodeSha`、
+`ownerApprovalSha256`、`priorFailureSha256`、`priorSenderTerminated:true`と非公開承認内の
+`maxUploadElapsedMs`を渡す。実行adapterは承認原本と実際の失敗・終了証拠・対象原本を照合する。
+通常stageの上限は変えず、復旧も元manifestの期限と全体上限内に収める。
+確定Blob、seal、検証開始、Job開始がなく、元台帳の照合に成功した場合だけ、
+create-only `upload-recovery-started.json`の成功ACKを得た呼出しが送信できる。
+SDKは新しいblock IDで全量を送り、旧未commit blocksを再利用せず、条件付きcommit後に
+ETag固定全量SHAを照合する。旧転送量・不明usage・予約をリセットしない。
+復旧markerのACK不明、競合、再失敗は追加再送を認めない。状態を読戻し、確定Blobがあれば
+既存`reconcile-stage`で照合する。原本を分割せず、既存Blobの上書き・削除も行わない。
+
 `release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
 
 Localの同期ソフト等によるmetadata変更を検出した場合も、原因を推定して所有記録を書き換えない。
