@@ -367,7 +367,7 @@ export class ManagedServiceBudgetStorage {
       const fresh=await this.read();check(fresh.etag===saved.etag&&fresh.date.getTime()+this.clock(fresh,65).maximumActionMs<expiry);
       const record=archiveRenewalRecordSchema.parse({...input,schema:1,operationId:c.operationId,requestDigest:context.request.requestDigest,
         ...archiveRenewalBinding(c,m,job),stableOperationDigest:stableArchiveOperationDigest(o!),targetBindingHash:this.binding.targetBindingHash,ownerBindingHash:this.binding.ownerBindingHash,
-        originalManifestExpiresAt:m.expiresAt,originalOperationExpiresAt:o!.expiresAt,renewedAt:fresh.date.toISOString(),expiresAt:new Date(expiry).toISOString()});
+        originalManifestExpiresAt:m.expiresAt,originalOperationExpiresAt:o!.expiresAt,renewedAt:fresh.date.toISOString(),expiresAt:new Date(Math.min(expiry,fresh.date.getTime()+input.windowMs)).toISOString()});
       await this.createJson(archiveRenewalName(c.operationId),record,32768);
       const result=await this.readJson(archiveRenewalName(c.operationId),32768);check(managedDigest(result.value)===managedDigest(record));
       check((await this.read()).etag===saved.etag);
@@ -380,19 +380,22 @@ export class ManagedServiceBudgetStorage {
     check(raw.sha256===ref.sha256);const r=archiveRenewalRecordSchema.parse(raw.value),bytes=Buffer.from(JSON.stringify(manifest));check(r.localCodeSha===ref.localCodeSha);
     const m=parseCloudManifest(bytes,{...c,manifest:{...c.manifest,sha256:sha256(bytes),byteLength:bytes.length}},Date.now(),false);
     check(isManagedCloudManifest(m)&&m.archiveOnly&&m.packages.length===1&&!m.packages[0].archive);
-    const o=saved.state.operations.find(o=>o.operationId===c.operationId),at=saved.date.getTime(),issued=Date.parse(r.renewedAt),expires=Date.parse(r.expiresAt);
+    const o=saved.state.operations.find(o=>o.operationId===c.operationId),at=saved.date.getTime(),issued=Date.parse(r.renewedAt);
+    // Blob response clocks can move backwards between reads. Preserve the
+    // immutable record, but never use more than its earlier bounded deadline.
+    const recordedExpiry=Date.parse(r.expiresAt),expires=Math.min(recordedExpiry,issued+r.windowMs);
     check(o&&o.intentDigest===managedDigest(context.request)&&!o.unknown&&!o.reviewRequired&&o.actualYen===null&&o.start==="ready"&&
       ["claimed","done"].includes(o.stage)&&o.units.jobs===0&&o.units.minutes===0&&r.stableOperationDigest===stableArchiveOperationDigest(o)&&
       r.operationId===c.operationId&&r.requestDigest===context.request.requestDigest&&r.originalManifestExpiresAt===m.expiresAt&&r.originalOperationExpiresAt===o.expiresAt);
     check(Object.entries(archiveRenewalBinding(c,m,job)).every(([k,v])=>r[k as keyof typeof r]===v)&&
       r.targetBindingHash===this.binding.targetBindingHash&&r.ownerBindingHash===this.binding.ownerBindingHash);
     check(Date.parse(o!.expiresAt)<=issued&&Date.parse(m.expiresAt)<=issued&&issued<=at&&at+this.clock(saved,minutes).maximumActionMs<expires&&
-      expires<=issued+r.windowMs&&raw.createdAt instanceof Date&&raw.createdAt.getTime()>=issued&&raw.createdAt.getTime()<=issued+6*IO_MS+1000&&
+      raw.createdAt instanceof Date&&raw.createdAt.getTime()>=issued&&raw.createdAt.getTime()<=issued+6*IO_MS+1000&&recordedExpiry<=raw.createdAt.getTime()+r.windowMs&&
       o!.processingMonth===new Date(at+9*60*60_000).toISOString().slice(0,7)&&new Date(expires-1+9*60*60_000).toISOString().slice(0,7)===o!.processingMonth);
     validateManagedBudgetPolicy(context.policy,this.binding,saved.date,expires-at);
     const completion=saved.state.plans.find(p=>p.month===o!.processingMonth)?.completionAllowance;
     if(completion)checkManagedCompletionBudget(saved.state,completion,{...this.clock(saved,minutes),maximumActionMs:expires-at-1});
-    return{expiresAt:r.expiresAt,sha256:raw.sha256};
+    return{expiresAt:new Date(expires).toISOString(),sha256:raw.sha256};
   }
   async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob,renewal?:z.infer<typeof archiveRenewalReferenceSchema>) {
     return this.guarded(async () => {

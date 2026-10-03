@@ -31,7 +31,7 @@ const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage
   .refine(v=>(v.command==="recover-archive-tail")===(v.tailRecovery!==undefined))
   .refine(v=>(v.command==="renew-archive-expiry")===(v.expiryRenewal!==undefined))
   .refine(v=>!v.renewalReference||["recover-archive-tail","reconcile-stage"].includes(v.command))
-  .refine(v=>!v.tailRecovery||!v.renewalReference||v.tailRecovery.localCodeSha===v.renewalReference.localCodeSha);
+  .refine(v=>!v.tailRecovery||!v.renewalReference||v.tailRecovery.localCodeSha===(v.renewalReference.executionCodeSha??v.renewalReference.localCodeSha));
 function canonical(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
   if(value&&typeof value==="object")return `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
@@ -213,7 +213,7 @@ if(require.main===module){
     requireManual(process.argv.length===2);let size=0;const chunks:Buffer[]=[];
     for await(const chunk of process.stdin){size+=chunk.length;requireManual(size<=256*1024);chunks.push(Buffer.from(chunk));}
     const input=inputSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))),config=parseCloudConfiguration(input.config);
-    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??input.tailRecovery?.localCodeSha??input.expiryRenewal?.localCodeSha??input.renewalReference?.localCodeSha??config.expectedCodeSha));
+    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??input.tailRecovery?.localCodeSha??input.expiryRenewal?.localCodeSha??input.renewalReference?.executionCodeSha??input.renewalReference?.localCodeSha??config.expectedCodeSha));
     const connection=process.env.AZURE_STORAGE_CONNECTION_STRING;requireManual(connection);
     const container=BlobServiceClient.fromConnectionString(connection,{retryOptions:{maxTries:1,tryTimeoutInMs:20_000}}).getContainerClient(config.container);
     const output=await operateManagedKoho(input,container,await operatorArm(input.job.resourceId));process.stdout.write(JSON.stringify(output)+"\n");

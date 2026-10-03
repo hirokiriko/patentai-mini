@@ -301,6 +301,10 @@ Localの`renew-archive-expiry`を使う。`expiryRenewal`へLocal code SHA、OWN
 元のmanifest・台帳・旧期限・予約値は変更しない。台帳schemaや旧本番の読み方も変えない。
 ACK不明や同記録の存在を新しい期限発行へ使わず、同じ保存記録を読戻す。
 以後は`renewalReference`のraw SHAとLocal code SHAを明示したtail/reconcileだけが新期限を利用できる。
+Blob応答時刻が読み取り間で戻る場合も、発行時と読取時の期限を短い側に制限する。既存記録は
+書き換えず、作成時刻窓と記録期限を照合したうえで`renewedAt + windowMs`までに限定する。
+レビュー済みの修正buildで既存記録を使う場合は、`renewalReference.executionCodeSha`を明示する。
+発行時の`localCodeSha`とraw SHAを保持し、実行SHAをtail入力と実buildの両方で照合する。
 送信残量は従来のtail証拠から差し引き、通常stage/start・別operation・新規予約へ更新期限を流用しない。
 保存確定時も同記録と現在台帳を再照合し、従来CASでstage証跡だけを追加する。期限更新はJob起動や配備ではない。
 旧期限を保った正式archiveは、従来の歴史receipt読取りにより後続の通常Jobと限定cleanupで利用できる。

@@ -440,6 +440,31 @@ it("reconciles a lost final CAS acknowledgement without renewing or reserving ag
   await f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,r.reference);
   expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);expect(f.current()).toEqual(state);expect(state.operations[0].stage).toBe("done");
 });
+it("clamps a new renewal when the final Blob Date moves backwards",async()=>{
+  const f=await expiredArchiveFixture(),before=f.current();
+  f.onRead(name=>{if(name.includes("/evidence/"))f.setDate("Wed, 23 Sep 2026 06:59:59 GMT");});
+  const r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  expect(r.record.renewedAt).toBe("2026-09-23T06:59:59.000Z");
+  expect(r.record.expiresAt).toBe("2026-09-23T12:59:59.000Z");
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,r.reference)).toMatchObject({expiresAt:r.record.expiresAt});
+  expect(f.current()).toEqual(before);
+});
+it("uses the earlier deadline of an existing clock-regressed record without rewriting it",async()=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  const file=f.files.get(archiveRenewalName(f.sealed.operationId))!,record=JSON.parse(file.bytes.toString());
+  record.renewedAt="2026-09-23T06:59:59.000Z";file.bytes=Buffer.from(JSON.stringify(record));
+  const reference={...r.reference,sha256:sha256(file.bytes),executionCodeSha:"b".repeat(40)},raw=Buffer.from(file.bytes),before=f.current(),writes=f.calls.filter(c=>c.startsWith("PUT:"));
+  expect(await f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,reference)).toMatchObject({expiresAt:"2026-09-23T12:59:59.000Z"});
+  expect(file.bytes).toEqual(raw);expect(f.current()).toEqual(before);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual(writes);
+  f.setDate("Wed, 23 Sep 2026 12:59:59 GMT");vi.setSystemTime(new Date("2026-09-23T12:59:59Z"));
+  await expect(f.store.confirmImport(f.sealed,f.b.manifest,f.b.job,reference)).rejects.toThrow();
+});
+it("rejects a recorded deadline beyond the Blob creation window even when clamping could hide it",async()=>{
+  const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
+  const file=f.files.get(archiveRenewalName(f.sealed.operationId))!,record=JSON.parse(file.bytes.toString());
+  record.expiresAt="2026-09-23T13:00:01.000Z";file.bytes=Buffer.from(JSON.stringify(record));
+  await expect(f.store.verifyImportStaging(f.sealed,f.b.manifest,f.b.job,{...r.reference,sha256:sha256(file.bytes)})).rejects.toThrow();
+});
 it.each(["reference","local-code","expired","manifest","record","operation","createdAt"])("rejects changed renewed staging %s",async(kind)=>{
   const f=await expiredArchiveFixture(),r=await f.store.renewArchiveStaging(f.sealed,f.b.manifest,f.b.job,f.authorization);
   if(kind==="reference")r.reference.sha256=hash(900);

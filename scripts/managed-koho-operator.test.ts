@@ -379,6 +379,19 @@ it("rejects a tail build different from the renewal reference before dispatch",a
   await expect(operateManagedKoho({...f.input,renewalReference:{sha256:"8".repeat(64),localCodeSha:"9".repeat(40)}},f.container,f.arm,f.budget)).rejects.toThrow();
   expect(tail).not.toHaveBeenCalled();
 });
+it("keeps the issuer reference while explicitly binding a reviewed continuation build",async()=>{
+  const f=await tailArchive(),now=Date.parse(f.manifest.expiresAt)+1;vi.spyOn(Date,"now").mockReturnValue(now);
+  const reference={sha256:"8".repeat(64),localCodeSha:"9".repeat(40),executionCodeSha:f.input.tailRecovery.localCodeSha};
+  vi.mocked(f.budget.verifyImportStaging).mockResolvedValue({sha256:reference.sha256,expiresAt:new Date(now+3*60*60_000).toISOString()});
+  const tail=vi.spyOn(tailOperator,"resumeArchiveTail").mockImplementation(async()=>{f.files.set(f.source,f.data);});
+  expect(await operateManagedKoho({...f.input,renewalReference:reference},f.container,f.arm,f.budget)).toMatchObject({status:"staged"});
+  expect(f.budget.verifyImportStaging).toHaveBeenCalledWith(expect.anything(),expect.anything(),f.job,reference);expect(tail).toHaveBeenCalledOnce();
+});
+it("rejects a continuation execution build mismatch before dispatch",async()=>{
+  const f=await tailArchive(),tail=vi.spyOn(tailOperator,"resumeArchiveTail");
+  await expect(operateManagedKoho({...f.input,renewalReference:{sha256:"8".repeat(64),localCodeSha:f.input.tailRecovery.localCodeSha,executionCodeSha:"9".repeat(40)}},f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(tail).not.toHaveBeenCalled();
+});
 async function metadataRecoveryFixture() {
   const f=await fixture(true),pkg=f.manifest.packages[0];
   const transfer=await copyManagedTransfer({sourcePath:f.sourcePath,byteLength:pkg.byteLength,sha256:pkg.sha256,acquiredAt:pkg.acquiredAt},f.path);
