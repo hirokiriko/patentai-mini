@@ -305,6 +305,11 @@ Blob応答時刻が読み取り間で戻る場合も、発行時と読取時の�
 書き換えず、作成時刻窓と記録期限を照合したうえで`renewedAt + windowMs`までに限定する。
 レビュー済みの修正buildで既存記録を使う場合は、`renewalReference.executionCodeSha`を明示する。
 発行時の`localCodeSha`とraw SHAを保持し、実行SHAをtail入力と実buildの両方で照合する。
+commit済みZIPの全量検証だけが通信中断した場合も、ZIPを再送しない。既存recovery検証markerの
+作成から元の検証上限内であること、停止済みsenderと失敗証拠、marker原文/hashとETagを照合できれば、
+`reconcile-stage`の`verificationContinuation`で同じ期限の残時間だけ検証できる。Local code SHA・
+失敗hash・停止確認・marker hashを明示し、専用create-only markerで一度に限定する。
+大容量streamの通信設定を短いserver timeoutで上書きせず、元の検証AbortSignalで全体を制限する。
 送信残量は従来のtail証拠から差し引き、通常stage/start・別operation・新規予約へ更新期限を流用しない。
 保存確定時も同記録と現在台帳を再照合し、従来CASでstage証跡だけを追加する。期限更新はJob起動や配備ではない。
 旧期限を保った正式archiveは、従来の歴史receipt読取りにより後続の通常Jobと限定cleanupで利用できる。

@@ -26,8 +26,9 @@ export async function archiveRead(container: ContainerClient, name: string, maxi
   const data = Buffer.concat(parts); return { data, props, value: JSON.parse(data.toString("utf8")) as unknown };
 }
 /** Verify the exact committed Azure bytes without making a second Local ZIP. */
-export async function verifyArchiveBytes(container: ContainerClient, pkg: Pick<Package, "sha256" | "byteLength" | "etag">) {
-  const signal = AbortSignal.timeout(15 * 60_000), blob = container.getBlobClient(cloudSourceName(pkg.sha256));
+export async function verifyArchiveBytes(container: ContainerClient, pkg: Pick<Package, "sha256" | "byteLength" | "etag">, maximumMs=15*60_000) {
+  requireManual(Number.isSafeInteger(maximumMs)&&maximumMs>0&&maximumMs<=15*60_000);
+  const signal = AbortSignal.timeout(maximumMs), blob = container.getBlobClient(cloudSourceName(pkg.sha256));
   const props = await blob.getProperties({ conditions: { ifMatch: pkg.etag }, abortSignal: signal });
   requireManual(props.etag === pkg.etag && props.contentLength === pkg.byteLength && !props.contentEncoding);
   const response = await blob.download(0, undefined, { conditions: { ifMatch: pkg.etag }, abortSignal: signal, maxRetryRequests: 0 });
@@ -61,7 +62,9 @@ export async function readVerifiedArchive(container: ContainerClient, config: Cl
   requireManual(props.etag === receipt.etag && props.contentLength === pkg.byteLength && !props.contentEncoding);
   return { receipt, manifest };
 }
-export async function confirmArchiveReceipt(container: ContainerClient, config: CloudConfiguration, pkg: Package, reconcile = false, guard = () => {}) {
+export const archiveVerificationContinuationSchema=z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),
+  priorFailureSha256:z.string().regex(/^[a-f0-9]{64}$/),priorSenderTerminated:z.literal(true),markerSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export async function confirmArchiveReceipt(container: ContainerClient, config: CloudConfiguration, pkg: Package, reconcile = false, guard = () => {}, continuation?:z.infer<typeof archiveVerificationContinuationSchema>) {
   requireManual("serviceBudget" in config && config.serviceBudget && pkg.acquiredAt);
   requireManual(Date.parse(pkg.acquiredAt) <= Date.now());
   const identity = archivePackageIdentity(pkg), name = archiveReceiptName(config.operationId);
@@ -72,10 +75,21 @@ export async function confirmArchiveReceipt(container: ContainerClient, config: 
     // A single create-only slot bounds full-byte verification, including failed
     // or concurrent attempts. Existing verified receipts only need metadata reads.
     const slot = Buffer.from(JSON.stringify({ operationId: config.operationId, identityDigest: expected.identityDigest, etag: pkg.etag }));
-    guard();await container.getBlockBlobClient(`receipts/${config.operationId}/archive-verification${reconcile ? "-recovery" : ""}-started.json`).uploadData(slot, {
+    let maximumMs=15*60_000;
+    if(continuation){
+      const proof=archiveVerificationContinuationSchema.parse(continuation);requireManual(reconcile);
+      const prior=await archiveRead(container,`receipts/${config.operationId}/archive-verification-recovery-started.json`);
+      requireManual(prior&&sha256(prior.data)===proof.markerSha256&&prior.data.equals(slot)&&prior.props.createdOn instanceof Date);
+      const deadline=prior.props.createdOn.getTime()+15*60_000;
+      maximumMs=deadline-Date.now();requireManual(maximumMs>20_000&&maximumMs<=15*60_000);
+      guard();await container.getBlockBlobClient(`receipts/${config.operationId}/archive-verification-continuation-started.json`).uploadData(Buffer.from(JSON.stringify({
+        ...proof,operationId:config.operationId,identityDigest:expected.identityDigest,etag:pkg.etag,verifyNotAfter:new Date(deadline).toISOString()})),{
+        conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
+      maximumMs=deadline-Date.now();
+    }else{guard();await container.getBlockBlobClient(`receipts/${config.operationId}/archive-verification${reconcile ? "-recovery" : ""}-started.json`).uploadData(slot, {
       conditions: { ifNoneMatch: "*" }, abortSignal: AbortSignal.timeout(20_000),
-      blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });
-    guard();await verifyArchiveBytes(container,pkg);guard();
+      blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });}
+    guard();await verifyArchiveBytes(container,pkg,maximumMs);guard();
     const bytes = Buffer.from(JSON.stringify({ ...expected, verifiedAt: new Date().toISOString() }));
     await container.getBlockBlobClient(name).uploadData(bytes, { conditions: { ifNoneMatch: "*" }, abortSignal: AbortSignal.timeout(20_000),
       blobHTTPHeaders: { blobContentType: "application/json", blobCacheControl: "private, no-store" } });

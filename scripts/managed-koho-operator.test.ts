@@ -12,7 +12,7 @@ import { managedDigest } from "../src/lib/patent-watch/managed-claims";
 import { allocateManagedDownload, completeManagedDownload, copyManagedTransfer, managedTransferStatus, releaseManagedTransfer } from "./managed-koho-transfer";
 import { copyManualSource } from "../src/lib/koho-import/manual-cli-source";
 import * as manualSource from "../src/lib/koho-import/manual-cli-source";
-import { archiveReceiptName } from "../src/lib/koho-import/managed-archive";
+import { archivePackageIdentity, archiveReceiptName, confirmArchiveReceipt } from "../src/lib/koho-import/managed-archive";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
 import * as tailOperator from "./managed-koho-tail";
 const temporary:string[]=[];
@@ -24,12 +24,13 @@ async function fixture(archiveOnly=false){
     f.request=managedImportBudgetRequest(f.config,f.manifest,f.job,f.policy,f.binding,f.pricingDigest,null);f.config.serviceBudget!.requestDigest=f.request.requestDigest;}
   const sourcePath=join(path,"fictional.zip");await writeFile(sourcePath,f.data);
   const files=new Map<string,Buffer>([[cloudSourceName(f.manifest.packages[0].sha256),f.data]]),calls:string[]=[];
-  let loseAck="",expireAfter="",headFailure="";
+  let loseAck="",expireAfter="",headFailure="",creationAgeMs=30_000;
   const pipeline=newPipeline(new AnonymousCredential(),{retryOptions:{maxTries:1},httpClient:{async sendRequest(request){
     const url=new URL(request.url),name=url.pathname.slice(`/${f.config.container}/`.length),headers=request.headers.clone();
     for(const key of headers.headerNames())headers.remove(key);
     headers.set("x-ms-request-id","fictional");headers.set("x-ms-version","2025-11-05");headers.set("etag",'"sealed"');calls.push(`${request.method}:${name}`);
     headers.set("last-modified",new Date(Date.now()-30_000).toUTCString());
+    headers.set("x-ms-creation-time",new Date(Date.now()-creationAgeMs).toUTCString());
     let status=200,data=Buffer.alloc(0),bodyAsText:string|undefined;
     if(url.searchParams.get("restype")==="container"){}
     else if(request.method==="HEAD"&&name===cloudSourceName(f.manifest.packages[0].sha256)&&headFailure){
@@ -76,8 +77,33 @@ async function fixture(archiveOnly=false){
   });
   return{...f,path,sourcePath,input,container,arm,files,calls,budget,
     rebind:()=>{f.request=managedImportBudgetRequest(f.config,f.manifest,f.job,f.policy,f.binding,f.pricingDigest,null);f.config.serviceBudget!.requestDigest=f.request.requestDigest;},
-    lose:(name:string)=>{loseAck=name;},expire:(name:string)=>{expireAfter=name;},failHead:(code:string)=>{headFailure=code;}};
+    lose:(name:string)=>{loseAck=name;},expire:(name:string)=>{expireAfter=name;},failHead:(code:string)=>{headFailure=code;},creationAge:(ms:number)=>{creationAgeMs=ms;}};
 }
+async function verificationContinuationFixture(){
+  const f=await fixture(true),pkg={...f.manifest.packages[0],etag:'"sealed"'},name=cloudReceiptPrefix(f.config)+"archive-verification-recovery-started.json";
+  const bytes=Buffer.from(JSON.stringify({operationId:f.config.operationId,identityDigest:managedDigest(archivePackageIdentity(pkg)),etag:pkg.etag}));f.files.set(name,bytes);
+  return{...f,pkg,name,proof:{localCodeSha:"e".repeat(40),priorFailureSha256:"f".repeat(64),priorSenderTerminated:true as const,markerSha256:sha256(bytes)}};
+}
+it("continues committed-byte verification only within the existing recovery deadline",async()=>{
+  const f=await verificationContinuationFixture(),before=Buffer.from(f.files.get(f.name)!);
+  await confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},f.proof);
+  const marker=JSON.parse(f.files.get(cloudReceiptPrefix(f.config)+"archive-verification-continuation-started.json")!.toString());
+  expect(Date.parse(marker.verifyNotAfter)).toBeLessThan(Date.now()+15*60_000);expect(f.files.get(f.name)).toEqual(before);
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(1);
+  await confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},f.proof);
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(1);
+});
+it.each(["expired","future","hash","identity","absent","already-claimed"])("refuses verification continuation %s before reading source bytes",async(kind)=>{
+  const f=await verificationContinuationFixture();
+  if(kind==="expired")f.creationAge(15*60_000);
+  if(kind==="future")f.creationAge(-60_000);
+  if(kind==="hash")f.proof.markerSha256="0".repeat(64);
+  if(kind==="identity"){const b=Buffer.from(JSON.stringify({operationId:f.config.operationId,identityDigest:"0".repeat(64),etag:f.pkg.etag}));f.files.set(f.name,b);f.proof.markerSha256=sha256(b);}
+  if(kind==="absent")f.files.delete(f.name);
+  if(kind==="already-claimed")f.files.set(cloudReceiptPrefix(f.config)+"archive-verification-continuation-started.json",Buffer.from("{}"));
+  await expect(confirmArchiveReceipt(f.container,f.config,f.pkg,true,()=>{},f.proof)).rejects.toThrow();
+  expect(f.calls.filter(c=>c===`GET:${cloudSourceName(f.pkg.sha256)}`)).toHaveLength(0);
+});
 it.each(["manifest","staged"])("recovers lost %s ACK from original approved input, without writes or ARM calls",async(which)=>{
   const f=await fixture();f.lose(which==="manifest"?cloudManifestName(f.config):cloudReceiptPrefix(f.config)+"staged.json");
   await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
