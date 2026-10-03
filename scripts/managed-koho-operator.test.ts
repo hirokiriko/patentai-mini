@@ -6,7 +6,7 @@ import { AnonymousCredential, BlobServiceClient, newPipeline } from "@azure/stor
 import { afterEach, expect, it, vi } from "vitest";
 import { managedCloudImportFixture } from "./managed-koho-cloud.test-support";
 import { operateManagedKoho, type ManagedKohoBudget } from "./managed-koho-operator";
-import { cloudManifestName, cloudReceiptPrefix, cloudSourceName } from "../src/lib/koho-import/cloud-config";
+import { cloudManifestName, cloudReceiptPrefix, cloudSourceName, sha256 } from "../src/lib/koho-import/cloud-config";
 import { managedImportBudgetRequest } from "../src/lib/patent-watch/managed-execution-budget";
 import { managedDigest } from "../src/lib/patent-watch/managed-claims";
 import { allocateManagedDownload, completeManagedDownload, copyManagedTransfer, managedTransferStatus, releaseManagedTransfer } from "./managed-koho-transfer";
@@ -14,6 +14,7 @@ import { copyManualSource } from "../src/lib/koho-import/manual-cli-source";
 import * as manualSource from "../src/lib/koho-import/manual-cli-source";
 import { archiveReceiptName } from "../src/lib/koho-import/managed-archive";
 import { runCloudImport } from "../src/lib/koho-import/cloud-runtime";
+import * as tailOperator from "./managed-koho-tail";
 const temporary:string[]=[];
 afterEach(async()=>{vi.restoreAllMocks();for(const path of temporary.splice(0))await rm(path,{recursive:true,force:true});});
 async function fixture(archiveOnly=false){
@@ -28,6 +29,7 @@ async function fixture(archiveOnly=false){
     const url=new URL(request.url),name=url.pathname.slice(`/${f.config.container}/`.length),headers=request.headers.clone();
     for(const key of headers.headerNames())headers.remove(key);
     headers.set("x-ms-request-id","fictional");headers.set("x-ms-version","2025-11-05");headers.set("etag",'"sealed"');calls.push(`${request.method}:${name}`);
+    headers.set("last-modified",new Date(Date.now()-30_000).toUTCString());
     let status=200,data=Buffer.alloc(0),bodyAsText:string|undefined;
     if(url.searchParams.get("restype")==="container"){}
     else if(request.method==="HEAD"&&name===cloudSourceName(f.manifest.packages[0].sha256)&&headFailure){
@@ -311,6 +313,41 @@ it("stops after expiry during recovery marker acknowledgement without uploading"
   const f=await partialArchive();f.expire(cloudReceiptPrefix(f.config)+"upload-recovery-started.json");
   await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();
   expect(f.calls.filter(c=>c===`PUT:${f.source}`)).toHaveLength(0);
+});
+async function tailArchive(){
+  const f=await partialArchive(),name=cloudReceiptPrefix(f.config)+"upload-recovery-started.json";
+  f.lose(name);await expect(operateManagedKoho(f.recovery,f.container,f.arm,f.budget)).rejects.toThrow();f.lose("");
+  const input={...f.input,command:"recover-archive-tail",tailRecovery:{localCodeSha:"e".repeat(40),ownerApprovalSha256:"a".repeat(64),
+    priorFailureSha256:"c".repeat(64),priorEvidenceSha256:"d".repeat(64),priorRecoveryMarkerSha256:sha256(f.files.get(name)!),priorSenderTerminated:true,
+    priorStartedAt:new Date(Date.now()-40_000).toISOString(),priorTerminatedObservedAt:new Date(Date.now()-10_000).toISOString(),
+    maxUploadElapsedMs:60_000,blockListSha256:"e".repeat(64),blockIdPrefix:"11111111-1111-4111-8111-111111111111"}};
+  return{...f,input,name};
+}
+it("verifies committed tail bytes before sealing, with no new reservation, claim or job",async()=>{
+  const f=await tailArchive();const tail=vi.spyOn(tailOperator,"resumeArchiveTail").mockImplementation(async()=>{f.files.set(f.source,f.data);});
+  expect(await operateManagedKoho(f.input,f.container,f.arm,f.budget)).toMatchObject({status:"staged"});
+  expect(tail).toHaveBeenCalledOnce();expect(f.budget.reserveImport).toHaveBeenCalledOnce();expect(f.budget.claimImport).toHaveBeenCalledOnce();
+  expect(f.calls.filter(c=>c===`GET:${f.source}`)).toHaveLength(1);expect(f.arm).not.toHaveBeenCalled();
+});
+it("never seals a same-size corrupt committed tail",async()=>{
+  const f=await tailArchive(),bad=Buffer.from(f.data);bad[0]^=1;
+  vi.spyOn(tailOperator,"resumeArchiveTail").mockImplementation(async()=>{f.files.set(f.source,bad);});
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();
+  expect(f.files.has(archiveReceiptName(f.config.operationId))).toBe(false);expect(f.files.has(cloudManifestName(f.config))).toBe(false);
+  expect(f.budget.confirmImport).not.toHaveBeenCalled();
+});
+it.each(["operation","source","bytes","expiry","committed","normal-command"])("rejects unsafe tail %s before dispatch",async(kind)=>{
+  const f=await tailArchive(),tail=vi.spyOn(tailOperator,"resumeArchiveTail");
+  const marker=JSON.parse(f.files.get(f.name)!.toString());
+  if(kind==="operation")marker.operationId="22222222-2222-4222-8222-222222222222";
+  if(kind==="source")marker.sourceSha256="0".repeat(64);
+  if(kind==="bytes")marker.sourceBytes++;
+  f.files.set(f.name,Buffer.from(JSON.stringify(marker)));
+  if(kind==="expiry")vi.spyOn(Date,"now").mockReturnValue(Date.parse(f.manifest.expiresAt)+1);
+  if(kind==="committed")f.files.set(f.source,f.data);
+  if(kind==="normal-command")f.input.command="stage";
+  await expect(operateManagedKoho(f.input,f.container,f.arm,f.budget)).rejects.toThrow();expect(tail).not.toHaveBeenCalled();
+  expect(f.budget.reserveImport).toHaveBeenCalledOnce();expect(f.arm).not.toHaveBeenCalled();
 });
 async function metadataRecoveryFixture() {
   const f=await fixture(true),pkg=f.manifest.packages[0];

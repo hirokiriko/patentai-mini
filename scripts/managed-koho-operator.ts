@@ -13,8 +13,9 @@ import { managedBudgetBindingEnvironment } from "../src/lib/patent-watch/managed
 import { archiveRead, archiveReceiptName, confirmArchiveReceipt, readVerifiedArchive, verifyArchiveBytes } from "../src/lib/koho-import/managed-archive";
 import { releaseManagedTransfer } from "./managed-koho-transfer";
 import { isAzureBlobNotFound } from "../src/lib/azure-blob-errors";
+import { resumeArchiveTail, tailRecoverySchema } from "./managed-koho-tail";
 
-const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","recover-archive-upload","release-transfer","reconcile-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
+const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage","reconcile-stage","recover-archive-upload","recover-archive-tail","release-transfer","reconcile-transfer","start","status"]),config:z.unknown(),manifest:z.unknown(),
   job:z.object({resourceId:managedCloudConfigSchema.shape.jobResourceId,name:managedCloudConfigSchema.shape.jobName,image:managedCloudConfigSchema.shape.image,
     databaseSecretRef:z.string().regex(/^[a-z0-9-]{1,64}$/)}).strict(),
   sources:z.array(z.object({sha256:z.string().regex(/^[a-f0-9]{64}$/),path:z.string().max(4096).refine(isAbsolute)}).strict()).max(4).default([]),
@@ -22,8 +23,10 @@ const inputSchema=z.object({schema:z.literal(1),command:z.enum(["prepare","stage
   transferRecovery:z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),projectRoot:z.string().max(4096).refine(isAbsolute)}).strict().optional(),
   uploadRecovery:z.object({localCodeSha:z.string().regex(/^[a-f0-9]{40}$/),ownerApprovalSha256:z.string().regex(/^[a-f0-9]{64}$/),
     priorFailureSha256:z.string().regex(/^[a-f0-9]{64}$/),priorSenderTerminated:z.literal(true),maxUploadElapsedMs:z.number().int().positive()}).strict().optional(),
+  tailRecovery:tailRecoverySchema.optional(),
 }).strict().refine(v=>(v.command==="reconcile-transfer")===(v.transferRecovery!==undefined))
-  .refine(v=>(v.command==="recover-archive-upload")===(v.uploadRecovery!==undefined));
+  .refine(v=>(v.command==="recover-archive-upload")===(v.uploadRecovery!==undefined))
+  .refine(v=>(v.command==="recover-archive-tail")===(v.tailRecovery!==undefined));
 function canonical(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonical).join(",")}]`;
   if(value&&typeof value==="object")return `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
@@ -58,7 +61,7 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       manifestSha256:config.manifest.sha256,receiptSha256:sha256(receipt.data)}},metadataRecoveryCodeSha:input.transferRecovery?.localCodeSha},container,input.transferRecovery?.projectRoot);
   }
   const fresh=()=>requireManual(Date.parse(manifest.expiresAt)>Date.now()&&Date.parse(manifest.expiresAt)-Date.now()<=6*60*60_000);
-  const marker=async(name:string,data:Buffer)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
+  const marker=async(name:string,data:Buffer,signal?:AbortSignal)=>{fresh();return container.getBlockBlobClient(cloudReceiptPrefix(config)+name).uploadData(data,{conditions:{ifNoneMatch:"*"},abortSignal:signal??AbortSignal.timeout(20_000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});};
   const binding={operationId:config.operationId,approvalDigest:approvalDigest(manifest),configurationDigest:configurationDigest(config),jobDigest:sha256(canonical(input.job))};
   const readJson=async(name:string,maxBytes=131072)=>{
     const props=await existing(container,name);if(!props)return null;
@@ -87,18 +90,20 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       databaseGrowthBytes:Number.isSafeInteger(report.databaseGrowthBytes)?report.databaseGrowthBytes:null};
   }
   const budget=budgetDependency??ManagedServiceBudgetStorage.configured();
-  if(input.command==="stage"||input.command==="reconcile-stage"||input.command==="recover-archive-upload"){
-    const reconcile=input.command==="reconcile-stage",recover=input.command==="recover-archive-upload",fromArchives=manifest.packages.every(p=>p.archive);
+  if(input.command==="stage"||input.command==="reconcile-stage"||input.command==="recover-archive-upload"||input.command==="recover-archive-tail"){
+    const reconcile=input.command==="reconcile-stage",recover=input.command==="recover-archive-upload",tail=input.command==="recover-archive-tail",fromArchives=manifest.packages.every(p=>p.archive);
     if(reconcile)requireManual(manifest.archiveOnly||fromArchives);
     if(recover)requireManual(manifest.archiveOnly&&manifest.packages.length===1&&!fromArchives&&
       input.uploadRecovery!.maxUploadElapsedMs+15*60_000<manifest.maxElapsedMs);
+    if(tail)requireManual(manifest.archiveOnly&&manifest.packages.length===1&&!fromArchives&&
+      input.tailRecovery!.maxUploadElapsedMs+15*60_000<manifest.maxElapsedMs);
     requireManual(input.sources.length===(reconcile||fromArchives?0:manifest.packages.length)&&new Set(input.sources.map(s=>s.sha256)).size===input.sources.length);
     if(!reconcile&&!fromArchives)for(const pkg of manifest.packages){
       const source=input.sources.find(s=>s.sha256===pkg.sha256);requireManual(source);
       const stat=await lstat(source.path);requireManual(stat.isFile()&&!stat.isSymbolicLink()&&stat.size===pkg.byteLength);
       await verifyManualSnapshot(source.path,pkg.byteLength,pkg.sha256);
     }
-    if(reconcile||recover){
+    if(reconcile||recover||tail){
       const beginning=await readJson(cloudReceiptPrefix(config)+"staging-started.json",65536);
       requireManual(beginning&&Object.entries(binding).every(([key,v])=>beginning.value[key]===v));
       await budget.verifyImportStaging(config,manifest,input.job);
@@ -109,17 +114,26 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       await budget.claimImport(config,manifest,input.job,"stage");
       await marker("staging-started.json",Buffer.from(JSON.stringify({...binding,state:"staging"})));
     }
-    if(recover){
-      // Explicit OWNER recovery is one-shot. Neither a lost marker ACK nor a
-      // second invocation grants another upload. Historical intents and budget
-      // claims remain unchanged; committed content uses reconcile-stage only.
+    if(recover||tail){
+      // Each recovery marker has one winner. Tail recovery spends only the
+      // proven remainder of the prior upload allowance. Historical intents and
+      // budget claims remain unchanged; committed content uses reconcile-stage.
       for(const name of [cloudSourceName(manifest.packages[0].sha256),cloudManifestName(config),
         archiveReceiptName(config.operationId),...['start-requested.json','staged.json',
           'archive-verification-started.json','archive-verification-recovery-started.json'].map(n=>cloudReceiptPrefix(config)+n)])
         requireManual(!await existing(container,name));
       requireManual(Date.now()+manifest.maxElapsedMs<Date.parse(manifest.expiresAt));
-      await marker("upload-recovery-started.json",Buffer.from(JSON.stringify({...binding,...input.uploadRecovery,
+      if(recover)await marker("upload-recovery-started.json",Buffer.from(JSON.stringify({...binding,...input.uploadRecovery,
         sourceSha256:manifest.packages[0].sha256,sourceBytes:manifest.packages[0].byteLength})));
+      else{
+        const previous=await readJson(cloudReceiptPrefix(config)+"upload-recovery-started.json",65536),pkg=manifest.packages[0];
+        requireManual(previous&&previous.props.lastModified&&Object.entries(binding).every(([key,v])=>previous.value[key]===v)&&
+          previous.value.sourceSha256===pkg.sha256&&previous.value.sourceBytes===pkg.byteLength);
+        await resumeArchiveTail({recovery:input.tailRecovery!,sourcePath:input.sources[0].path,sourceBytes:pkg.byteLength,
+          blob:container.getBlockBlobClient(cloudSourceName(pkg.sha256)),previous:{data:previous.data,lastModified:previous.props.lastModified,
+            maxUploadElapsedMs:previous.value.maxUploadElapsedMs,ownerApprovalSha256:previous.value.ownerApprovalSha256},guard:fresh,
+          createMarker:(data,signal)=>marker("upload-tail-started.json",Buffer.from(JSON.stringify({...binding,...JSON.parse(data.toString("utf8"))})),signal)});
+      }
     }
     let archiveReceiptSha256:string|undefined;
     for(const pkg of manifest.packages){
@@ -128,8 +142,9 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
       fresh();
       if(reconcile)requireManual(present); // Never replay an ambiguous ZIP upload.
       if(recover)requireManual(!present);
-      // SDK uploadFile uses a new block-ID prefix and commits only this upload's
-      // blocks. Never trust, mix, commit or delete the previous partial blocks.
+      if(tail)requireManual(present);
+      // Full upload uses a new SDK prefix. Tail recovery already conditionally
+      // committed its reconciled prefix; both paths still require full SHA QA.
       if(!present)await container.getBlockBlobClient(name).uploadFile(input.sources.find(s=>s.sha256===pkg.sha256)!.path,{conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(input.uploadRecovery?.maxUploadElapsedMs??15*60_000),
         blockSize:8*1024**2,concurrency:1,blobHTTPHeaders:{blobContentType:"application/zip",blobCacheControl:"private, no-store"}});
       const saved=await existing(container,name);requireManual(saved?.contentLength===pkg.byteLength&&typeof saved.etag==="string");pkg.etag=saved.etag;
@@ -185,7 +200,7 @@ if(require.main===module){
     requireManual(process.argv.length===2);let size=0;const chunks:Buffer[]=[];
     for await(const chunk of process.stdin){size+=chunk.length;requireManual(size<=256*1024);chunks.push(Buffer.from(chunk));}
     const input=inputSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))),config=parseCloudConfiguration(input.config);
-    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??config.expectedCodeSha));
+    if(input.command!=="status")requireManual((await readFile(".managed-build-sha","utf8")).trim()===(input.transferRecovery?.localCodeSha??input.uploadRecovery?.localCodeSha??input.tailRecovery?.localCodeSha??config.expectedCodeSha));
     const connection=process.env.AZURE_STORAGE_CONNECTION_STRING;requireManual(connection);
     const container=BlobServiceClient.fromConnectionString(connection,{retryOptions:{maxTries:1,tryTimeoutInMs:20_000}}).getContainerClient(config.container);
     const output=await operateManagedKoho(input,container,await operatorArm(input.job.resourceId));process.stdout.write(JSON.stringify(output)+"\n");

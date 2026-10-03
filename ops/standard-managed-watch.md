@@ -279,8 +279,20 @@ Blob不在、検証失敗、両slot不明、期限切れは一時コピーと予
 create-only `upload-recovery-started.json`の成功ACKを得た呼出しが送信できる。
 SDKは新しいblock IDで全量を送り、旧未commit blocksを再利用せず、条件付きcommit後に
 ETag固定全量SHAを照合する。旧転送量・不明usage・予約をリセットしない。
-復旧markerのACK不明、競合、再失敗は追加再送を認めない。状態を読戻し、確定Blobがあれば
+復旧markerのACK不明、競合、再失敗は同じ全量再送を認めない。状態を読戻し、確定Blobがあれば
 既存`reconcile-stage`で照合する。原本を分割せず、既存Blobの上書き・削除も行わない。
+
+安全な部分再開が既に承認され、送信processの終了と同じ原本のSDK block一覧を確定できた場合、
+`recover-archive-tail`で残部だけを送信できる。これは新しい送信時間枠を発行しない。
+adapterは前回開始より前の時刻と終了確認後の時刻、その原証拠hashを照合し、区間全体を保守的に既使用時間へ計上する。
+`tailRecovery`は元の承認hash・復旧marker hash・失敗/終了証拠hash・全block一覧hash・選択prefix・
+元送信上限・開始/終了確認時刻を固定する。元markerの上限と一致し、残時間がある場合だけ、
+create-only `upload-tail-started.json`へ既使用/残時間/固定deadlineを保存する。
+選択したSDK prefixの連番と各8MiB blockを照合し、残部のみを同じSDKで送る。
+全chunkと条件付きcommitは同じ残時間期限を使用する。commit一覧は選択prefixだけとし、
+旧prefixを混ぜない。正常commitにより不要なuncommitted blocksはAzure側で破棄される。
+前後の全block集合、Local原本、条件付きcommit、従来のETag固定全量SHAを照合してからsealする。
+未知ACK、競合、再失敗では同tailを再送せず、確定状態を読戻す。予約・不明usage・旧失敗履歴は維持する。
 
 `release-transfer`は保存済みarchive config/manifest・job・transferId・`sources:[]`をimport operatorへ渡す。
 
