@@ -13,9 +13,10 @@ import { managedWatchBudgetRequest, managedImportBudgetRequest, managedUploadBud
 import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
 import { managedArtifactIntentSchema, managedArtifactContextSchema } from "./managed-artifact-contract";
 import { managedCloudConfigSchema, parseManagedCloudConfiguration, parseManagedCloudStartConfiguration } from "./managed-cloud-config";
-import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256 } from "../koho-import/cloud-config";
+import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256, cloudSourceName, cloudManifestName, cloudReceiptPrefix } from "../koho-import/cloud-config";
 import { readVerifiedArchive } from "../koho-import/managed-archive";
 import { isAzureBlobNotFound } from "../azure-blob-errors";
+import { archiveRenewalInputSchema, archiveRenewalReferenceSchema, archiveRenewalRecordSchema, archiveRenewalName, archiveRenewalBinding, stableArchiveOperationDigest } from "../koho-import/archive-expiry-renewal";
 
 // The storage binding comes from the installed operator/worker environment, never
 // from a request, reporting month, profile revision, or arbitrary Blob name.
@@ -325,7 +326,7 @@ export class ManagedServiceBudgetStorage {
   }
   /** Only sealing a previously claimed stage is resumable. This read grants no
    * upload or ARM start permission and never reserves or claims again. */
-  async verifyImportStaging(value: unknown, manifest: unknown, job: ManagedImportJob) {
+  async verifyImportStaging(value: unknown, manifest: unknown, job: ManagedImportJob, renewal?:z.infer<typeof archiveRenewalReferenceSchema>) {
     return this.guarded(async () => {
       const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), saved = await this.read();
       const context = await this.importRequest(c, m, structuredClone(job), saved);
@@ -334,15 +335,73 @@ export class ManagedServiceBudgetStorage {
       const maximum = this.clock(saved, 65).maximumActionMs;
       const completion = saved.state.plans.find(p => p.month === o!.processingMonth)?.completionAllowance;
       if (completion) checkManagedCompletionBudget(saved.state, completion, this.clock(saved, 65));
-      check(saved.date.getTime() + maximum < Math.min(Date.parse(o!.expiresAt), Date.parse(context.executionExpiresAt)) &&
+      const permit=renewal?await this.readArchiveRenewal(saved,c,m,job,context,renewal,65):null;
+      check(saved.date.getTime() + maximum < (permit?Date.parse(permit.expiresAt):Math.min(Date.parse(o!.expiresAt), Date.parse(context.executionExpiresAt))) &&
         o!.processingMonth === new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
       validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximum);
+      return permit;
     });
   }
-  async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob) {
+  /** A separate immutable record renews archive staging only. The original
+   * manifest and the strict ledger retain their historical expiration values. */
+  async renewArchiveStaging(value:unknown,manifest:unknown,job:ManagedImportJob,authorization:unknown){
+    return this.guarded(async()=>{
+      const input=archiveRenewalInputSchema.parse(authorization),c=parseManagedCloudImportConfiguration(value),saved=await this.read();
+      const context=await this.importRequest(c,manifest,job,saved),bytes=Buffer.from(JSON.stringify(manifest));
+      const m=parseCloudManifest(bytes,{...c,manifest:{...c.manifest,sha256:sha256(bytes),byteLength:bytes.length}},Date.now(),false);
+      check(isManagedCloudManifest(m)&&m.archiveOnly&&m.packages.length===1&&!m.packages[0].archive);
+      const o=saved.state.operations.find(o=>o.operationId===c.operationId),at=saved.date.getTime();
+      check(o&&managedDigest(o)===input.originalOperationDigest&&o.intentDigest===managedDigest(context.request)&&
+        o.stage==="claimed"&&o.start==="ready"&&!o.unknown&&!o.reviewRequired&&o.actualYen===null&&o.units.jobs===0&&o.units.minutes===0&&
+        Date.parse(o.expiresAt)<=at&&Date.parse(m.expiresAt)<=at);
+      const month=new Date(at+9*60*60_000).toISOString().slice(0,7);check(o!.processingMonth===month);
+      const [year,monthNumber]=month.split("-").map(Number),monthEnd=Date.UTC(year,monthNumber,1)-9*60*60_000;
+      const completion=saved.state.plans.find(p=>p.month===month)?.completionAllowance;
+      if(completion)checkManagedCompletionBudget(saved.state,completion,this.clock(saved,65));
+      const expiry=Math.min(at+input.windowMs,monthEnd,Date.parse(context.policy.validUntil)-1,completion?Date.parse(completion.validUntil)-1:Infinity);
+      check(at+this.clock(saved,65).maximumActionMs<expiry);
+      for(const name of [archiveRenewalName(c.operationId),cloudSourceName(m.packages[0].sha256),cloudManifestName(c),...['start-requested.json','staged.json','archive-verified.json',
+        'archive-verification-started.json','archive-verification-recovery-started.json','upload-tail-started.json'].map(n=>cloudReceiptPrefix(c)+n)]){
+        let absent=false;try{await this.container.getBlobClient(name).getProperties({abortSignal:this.signal()});}catch(e){if(!missingBlob(e))throw e;absent=true;}check(absent);
+      }
+      const fresh=await this.read();check(fresh.etag===saved.etag&&fresh.date.getTime()+this.clock(fresh,65).maximumActionMs<expiry);
+      const record=archiveRenewalRecordSchema.parse({...input,schema:1,operationId:c.operationId,requestDigest:context.request.requestDigest,
+        ...archiveRenewalBinding(c,m,job),stableOperationDigest:stableArchiveOperationDigest(o!),targetBindingHash:this.binding.targetBindingHash,ownerBindingHash:this.binding.ownerBindingHash,
+        originalManifestExpiresAt:m.expiresAt,originalOperationExpiresAt:o!.expiresAt,renewedAt:fresh.date.toISOString(),expiresAt:new Date(Math.min(expiry,fresh.date.getTime()+input.windowMs)).toISOString()});
+      await this.createJson(archiveRenewalName(c.operationId),record,32768);
+      const result=await this.readJson(archiveRenewalName(c.operationId),32768);check(managedDigest(result.value)===managedDigest(record));
+      check((await this.read()).etag===saved.etag);
+      return{reference:{sha256:result.sha256,localCodeSha:input.localCodeSha},record};
+    });
+  }
+  private async readArchiveRenewal(saved:ReadState,c:ReturnType<typeof parseManagedCloudImportConfiguration>,manifest:unknown,job:ManagedImportJob,
+    context:Awaited<ReturnType<ManagedServiceBudgetStorage["importRequest"]>>,reference:unknown,minutes:number){
+    const ref=archiveRenewalReferenceSchema.parse(reference),raw=await this.readJson(archiveRenewalName(c.operationId),32768);
+    check(raw.sha256===ref.sha256);const r=archiveRenewalRecordSchema.parse(raw.value),bytes=Buffer.from(JSON.stringify(manifest));check(r.localCodeSha===ref.localCodeSha);
+    const m=parseCloudManifest(bytes,{...c,manifest:{...c.manifest,sha256:sha256(bytes),byteLength:bytes.length}},Date.now(),false);
+    check(isManagedCloudManifest(m)&&m.archiveOnly&&m.packages.length===1&&!m.packages[0].archive);
+    const o=saved.state.operations.find(o=>o.operationId===c.operationId),at=saved.date.getTime(),issued=Date.parse(r.renewedAt);
+    // Blob response clocks can move backwards between reads. Preserve the
+    // immutable record, but never use more than its earlier bounded deadline.
+    const recordedExpiry=Date.parse(r.expiresAt),expires=Math.min(recordedExpiry,issued+r.windowMs);
+    check(o&&o.intentDigest===managedDigest(context.request)&&!o.unknown&&!o.reviewRequired&&o.actualYen===null&&o.start==="ready"&&
+      ["claimed","done"].includes(o.stage)&&o.units.jobs===0&&o.units.minutes===0&&r.stableOperationDigest===stableArchiveOperationDigest(o)&&
+      r.operationId===c.operationId&&r.requestDigest===context.request.requestDigest&&r.originalManifestExpiresAt===m.expiresAt&&r.originalOperationExpiresAt===o.expiresAt);
+    check(Object.entries(archiveRenewalBinding(c,m,job)).every(([k,v])=>r[k as keyof typeof r]===v)&&
+      r.targetBindingHash===this.binding.targetBindingHash&&r.ownerBindingHash===this.binding.ownerBindingHash);
+    check(Date.parse(o!.expiresAt)<=issued&&Date.parse(m.expiresAt)<=issued&&issued<=at&&at+this.clock(saved,minutes).maximumActionMs<expires&&
+      raw.createdAt instanceof Date&&raw.createdAt.getTime()>=issued&&raw.createdAt.getTime()<=issued+6*IO_MS+1000&&recordedExpiry<=raw.createdAt.getTime()+r.windowMs&&
+      o!.processingMonth===new Date(at+9*60*60_000).toISOString().slice(0,7)&&new Date(expires-1+9*60*60_000).toISOString().slice(0,7)===o!.processingMonth);
+    validateManagedBudgetPolicy(context.policy,this.binding,saved.date,expires-at);
+    const completion=saved.state.plans.find(p=>p.month===o!.processingMonth)?.completionAllowance;
+    if(completion)checkManagedCompletionBudget(saved.state,completion,{...this.clock(saved,minutes),maximumActionMs:expires-at-1});
+    return{expiresAt:new Date(expires).toISOString(),sha256:raw.sha256};
+  }
+  async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob,renewal?:z.infer<typeof archiveRenewalReferenceSchema>) {
     return this.guarded(async () => {
       const c = parseManagedCloudImportConfiguration(value), m: unknown = structuredClone(manifest), j = structuredClone(job), saved = await this.read();
       const context = await this.importRequest(c, m, j, saved), fresh = await this.read(); check(fresh.etag === saved.etag);
+      if(renewal)await this.readArchiveRenewal(fresh,c,m,j,context,renewal,1);
       const o = fresh.state.operations.find(o => o.operationId === c.operationId);
       check(o?.intentDigest === managedDigest(context.request));
       if (o!.stage === "done") { check(o!.stageDigest ? o!.stageDigest === c.manifest.sha256 : o!.evidenceDigests.includes(c.manifest.sha256)); return; }

@@ -71,7 +71,12 @@ export async function runCloudImport(value: unknown, blob: CloudBlobBoundary, op
           guard(); const parent = resolve(tmpdir()); directory = await mkdtemp(join(parent, "koho-cloud-"));
           requireManual(dirname(directory) === parent); await chmod(directory, 0o700);
           const source = join(directory, "source.zip");
-          requireManual(await blob.download(cloudSourceName(pkg.sha256), pkg.byteLength, pkg.etag, source) === pkg.sha256);
+          guard();
+          const remaining = Math.floor(Math.min(deadline - performance.now(), expiry - Date.now()));
+          requireManual(remaining > 0);
+          const downloadDeadline = AbortSignal.timeout(remaining);
+          const downloadSignal = options.signal ? AbortSignal.any([options.signal, downloadDeadline]) : downloadDeadline;
+          requireManual(await blob.download(cloudSourceName(pkg.sha256), pkg.byteLength, pkg.etag, source, downloadSignal) === pkg.sha256);
           guard(); await verifyManualSnapshot(source, pkg.byteLength, pkg.sha256);
           const parsed = await parseKohoPackage({ packageType: pkg.packageType, source: { type: "file", path: source },
             limits: isManagedCloudConfiguration(config)

@@ -4,12 +4,12 @@ import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { requireManual } from "./manual-cli-config";
-import type { CloudConfiguration } from "./cloud-config";
+import { isManagedCloudConfiguration, type CloudConfiguration } from "./cloud-config";
 
 export interface CloudBlobBoundary {
   assertPrivate(): Promise<void>;
   read(name: string, bytes: number, etag: string): Promise<Buffer>;
-  download(name: string, bytes: number, etag: string, path: string): Promise<string>;
+  download(name: string, bytes: number, etag: string, path: string, deadlineSignal?: AbortSignal): Promise<string>;
   create(name: string, bytes: Buffer): Promise<string>;
   replace(name: string, bytes: Buffer, etag: string): Promise<string>;
 }
@@ -40,16 +40,25 @@ export function cloudManagedIdentity(config: Pick<CloudConfiguration, "managedId
 }
 
 export function createCloudBlobBoundary(config: CloudConfiguration, signal: AbortSignal): CloudBlobBoundary {
+  const identity = cloudManagedIdentity(config, process.env, signal);
   const service = new BlobServiceClient(`https://${config.storageAccount}.blob.core.windows.net`,
-    cloudManagedIdentity(config, process.env, signal), { retryOptions: { maxTries: 1, tryTimeoutInMs: 60_000 } });
+    identity, { retryOptions: { maxTries: 1, tryTimeoutInMs: 60_000 } });
   const container = service.getContainerClient(config.container);
+  // tryTimeoutInMs becomes a server timeout query parameter. A full ZIP GET
+  // uses Blob's size-dependent default, bounded by the worker's remaining permit.
+  const downloads = isManagedCloudConfiguration(config)
+    ? new BlobServiceClient(`https://${config.storageAccount}.blob.core.windows.net`,
+      identity, { retryOptions: { maxTries: 1 } }).getContainerClient(config.container)
+    : container;
   const options = { abortSignal: signal };
   const etagOf = (value: { etag?: string }) => { requireManual(typeof value.etag === "string" && /^"[A-Za-z0-9]+"$/.test(value.etag)); return value.etag; };
-  const stream = async (name: string, bytes: number, etag: string) => {
+  const stream = async (name: string, bytes: number, etag: string, downloadSignal = signal, bulk = false) => {
+    downloadSignal.throwIfAborted();
     const blob = container.getBlobClient(name);
-    const properties = await blob.getProperties({ ...options, conditions: { ifMatch: etag } });
+    const properties = await blob.getProperties({ abortSignal: downloadSignal, conditions: { ifMatch: etag } });
     requireManual(properties.contentLength === bytes && properties.etag === etag && !properties.contentEncoding);
-    const response = await blob.download(0, undefined, { ...options, conditions: { ifMatch: etag }, maxRetryRequests: 0 });
+    const response = await (bulk ? downloads.getBlobClient(name) : blob).download(0, undefined,
+      { abortSignal: downloadSignal, conditions: { ifMatch: etag }, maxRetryRequests: 0 });
     requireManual(response.contentLength === bytes && response.etag === etag && response.readableStreamBody);
     return response.readableStreamBody;
   };
@@ -62,14 +71,15 @@ export function createCloudBlobBoundary(config: CloudConfiguration, signal: Abor
       finally { source.destroy(); }
       requireManual(length === bytes); return Buffer.concat(parts);
     },
-    async download(name, bytes, etag, path) {
-      const source = await stream(name, bytes, etag), hash = createHash("sha256"); let length = 0;
+    async download(name, bytes, etag, path, deadlineSignal) {
+      const bounded = deadlineSignal ? AbortSignal.any([signal, deadlineSignal]) : signal;
+      const source = await stream(name, bytes, etag, bounded, true), hash = createHash("sha256"); let length = 0;
       const bound = new Transform({ transform(chunk: Buffer, _encoding, callback) {
         length += chunk.length;
         if (length > bytes) callback(Error("cloud_source_stopped"));
         else { hash.update(chunk); callback(null, chunk); }
       } });
-      await pipeline(source, bound, createWriteStream(path, { flags: "wx", mode: 0o600 }), { signal });
+      await pipeline(source, bound, createWriteStream(path, { flags: "wx", mode: 0o600 }), { signal: bounded });
       requireManual(length === bytes); return hash.digest("hex");
     },
     async create(name, bytes) {
