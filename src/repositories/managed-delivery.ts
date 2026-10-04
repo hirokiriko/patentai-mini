@@ -63,7 +63,7 @@ export class ManagedDeliveryRepository {
           requireState(managedDigest(receipt) === stored.receiptDigest && receipt.sourceSha256 === run.sourceSha256 && stored.sourceSha256 === run.sourceSha256 &&
             stored.publicationDate === receipt.publicationDate && receipt.publicationDate === pkg.publicationDate && receipt.issueNumber === pkg.issueNumber &&
             receipt.cumulativeIssue === pkg.cumulativeIssue && run.packageStatus !== "failed" && run.documentCount === receipt.documentCount &&
-            receipt.publishedCount + receipt.publishedAmendments === pkg.publishedCount && receipt.translatedCount + receipt.translatedAmendments === pkg.translatedCount && run.amendmentCount === receipt.amendmentCount);
+            receipt.publishedCount + receipt.publishedAmendments === pkg.publishedCount && receipt.translatedCount + receipt.translatedAmendments + (receipt.translatedCorrections ?? 0) === pkg.translatedCount && run.amendmentCount === receipt.amendmentCount);
           if (pkg.available) {
             availableIds.push(run.importId);
             expectedCounts.set(run.importId, { A1: receipt.publishedCount, P1: receipt.translatedCount, total: receipt.documentCount });

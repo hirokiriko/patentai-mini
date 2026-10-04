@@ -2,7 +2,7 @@ import { KohoZipError } from "./errors";
 import type { KohoZipEntryRole, KohoZipPathCandidate } from "./types";
 
 const DRIVE_PATH_PATTERN = /^[A-Za-z]:/;
-const PRIMARY_SECTIONS = new Set(["P_A1", "P_A5", "P_P1", "P_P5", "P_B1"]);
+const PRIMARY_SECTIONS = new Set(["P_A1", "P_A5", "P_P1", "P_P5", "P_P6", "P_B1"]);
 const SCHEMA_EXTENSIONS = new Set([".xsd", ".dtd", ".xsl", ".xslt", ".js"]);
 const IMAGE_EXTENSIONS = new Set([
   ".tif",

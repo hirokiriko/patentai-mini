@@ -38,6 +38,7 @@ export type KohoPackageSection =
   | "P_A5"
   | "P_P1"
   | "P_P5"
+  | "P_P6"
   | "P_B1";
 
 export type KohoPackageEntryProcessing =
@@ -119,6 +120,7 @@ export interface KohoPackageSectionCountSummary {
   finalXmlResults: number;
   confirmedFullPublications: number;
   confirmedAmendments: number;
+  confirmedCorrections?: number;
   documentFolders: number;
   contents1Records: number;
   contents2Records: number;
@@ -131,11 +133,13 @@ export interface KohoPackageCountSummary {
   finalXmlResults: number;
   confirmedFullPublications: number;
   confirmedAmendments: number;
+  confirmedCorrections?: number;
   nestedXmlCandidates: number;
   documentFolders: number;
   documentListRecords: number;
   roleCounts: Record<KohoZipEntryRole, number>;
-  bySection: Record<KohoPackageSection, KohoPackageSectionCountSummary>;
+  bySection: Record<Exclude<KohoPackageSection, "P_P6">, KohoPackageSectionCountSummary> &
+    Partial<Record<"P_P6", KohoPackageSectionCountSummary>>;
 }
 
 export interface KohoPackageParseResult {

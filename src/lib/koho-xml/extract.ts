@@ -9,6 +9,7 @@ import type {
   KohoApplicantName,
   KohoClassification,
   KohoClaim,
+  KohoCorrectionDocument,
   KohoDateValue,
   KohoDescriptionParagraph,
   KohoFullPublicationDocument,
@@ -997,6 +998,67 @@ function amendedClaimElements(
     }
     return childrenNamed(claims, PATENT, "Claim");
   });
+}
+
+/** Preserve the correction header and optional replacement material as an event. */
+export function extractCorrection(
+  root: XmlTreeElement,
+  source: KohoXmlSourceMetadata,
+  issues: KohoParseIssue[],
+): KohoCorrectionDocument | null {
+  const header = singletonChildNamed(root, JP_PATENT,
+    "InternationalPatentPublicationCorrectionHeader", issues, "correctionHeader");
+  const publication = singletonChildNamed(header, JP_PATENT,
+    "PatentPublicationIdentification", issues, "publicationIdentification");
+  const application = singletonChildNamed(header, JP_PATENT,
+    "ApplicationIdentification", issues, "applicationIdentification");
+  const publicationNumber = requiredSourceString(singletonChildNamed(publication, PATENT,
+    "PublicationNumber", issues, "publicationNumber"), issues, "publicationNumber");
+  const publicationDate = dateValue(singletonChildNamed(publication, COMMON,
+    "PublicationDate", issues, "publicationDate"), issues, "publicationDate", true);
+  const applicationNumber = requiredSourceString(singletonDirectPath(application,
+    [[COMMON, "ApplicationNumber"], [COMMON, "ApplicationNumberText"]], issues,
+    "applicationNumber"), issues, "applicationNumber");
+  const applicationDate = dateValue(singletonChildNamed(application, PATENT,
+    "FilingDate", issues, "applicationDate"), issues, "applicationDate", false);
+  const previousPublicationDate = dateValue(singletonChildNamed(header, JP_PATENT,
+    "PreviousPublicationDate", issues, "correctionPreviousPublicationDate"), issues,
+    "correctionPreviousPublicationDate", false);
+  const correctedPublicationCategory = requiredSourceString(singletonChildNamed(header,
+    JP_PATENT, "CorrectedPublicationCategory", issues, "correctedPublicationCategory"),
+    issues, "correctedPublicationCategory");
+  const correctionGist = requiredSourceString(singletonChildNamed(header, JP_PATENT,
+    "CorrectionGist", issues, "correctionGist"), issues, "correctionGist");
+  const correctionArticle = optionalSourceString(singletonChildNamed(header, JP_PATENT,
+    "CorrectionArticle", issues, "correctionArticle"), issues, "correctionArticle");
+  const annualNumber = optionalSourceString(singletonChildNamed(header, JP_PATENT,
+    "AnnualNumber", issues, "annualNumber"), issues, "annualNumber");
+  const ipc = classifications(singletonChildNamed(header, JP_PATENT,
+    "IPCClassification", issues, "ipc"), "ipc", issues);
+  const fi = classifications(singletonChildNamed(header, JP_PATENT,
+    "NationalClassification", issues, "fi"), "fi", issues);
+  const corrected = singletonChildNamed(root, JP_PATENT,
+    "CorrectInternationalPatentPublication", issues, "correctedPublication");
+  const image = singletonChildNamed(corrected, JP_PATENT,
+    "CorrectOfficialGazetteImage", issues, "correctedPublicationImage");
+  const bibliographic = singletonChildNamed(corrected, JP_PATENT,
+    "InternationalPatentPublicationBibliographicData", issues, "correctedBibliographicData");
+  const description = singletonChildNamed(corrected, JP_PATENT,
+    "Description", issues, "correctedDescription");
+  const claims = singletonChildNamed(corrected, PATENT, "Claims", issues, "correctedClaims");
+  if (corrected && (image ? childElements(corrected).length !== 1 : !bibliographic || !description || !claims)) {
+    addIssue(issues, { code: "cardinality_mismatch", status: "review_required",
+      message: "The corrected publication must contain either gazette images or a structured publication.",
+      field: "correctedPublication" });
+  }
+  const correctedClaims = claims ? claimRecords(childrenNamed(claims, PATENT, "Claim"), issues) : [];
+  const references = collectKohoReferences(root, source.sourceEntryPath, issues);
+  if (hasFailedIssue(issues) || !header || !publicationNumber || !publicationDate ||
+    !applicationNumber || !correctedPublicationCategory || !correctionGist) return null;
+  return { kind: "P6", publicationNumber, applicationNumber, publicationDate, applicationDate,
+    previousPublicationDate, annualNumber, correctedPublicationCategory, correctionGist,
+    correctionArticle, ipc, fi, correctedClaims, contentExtraction: "structured_snapshot",
+    correctionContent: toXmlSnapshot(root), references, source };
 }
 
 export function extractAmendment(

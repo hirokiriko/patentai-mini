@@ -94,9 +94,17 @@ export interface FictionalKohoInputOptions {
   limits?: Partial<KohoXmlParseInput["limits"]>;
 }
 
+export interface FictionalCorrectionXmlOptions extends FictionalRootOptions {
+  publicationNumber?: string | null;
+  applicationNumber?: string | null;
+  publicationDate?: string | null;
+  previousPublicationDate?: string | null;
+  payload?: "xml" | "image" | "none";
+}
+
 interface FictionalKindDefinition {
   packageType: KohoPackageType;
-  section: "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_B1";
+  section: "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_P6" | "P_B1";
   rootLocalName: string;
   schemaBasename: string;
   publicationNumber: string;
@@ -105,7 +113,7 @@ interface FictionalKindDefinition {
   applicationDate: string;
   publicationDate: string;
   indexPublicationDate: string;
-  indexKindCode: "A" | "A5" | "B1" | "B2";
+  indexKindCode: "A" | "A5" | "A6" | "B1" | "B2";
   bibliographicLocalName?: string;
   partyBagLocalName?: string;
   amendmentHeaderLocalName?: string;
@@ -183,6 +191,19 @@ const KIND_DEFINITIONS = {
     indexKindCode: "A5",
     amendmentHeaderLocalName:
       "InternationalPatentPublicationAmendmentHeader",
+  },
+  P6: {
+    packageType: "JPA",
+    section: "P_P6",
+    rootLocalName: "InternationalPatentPublicationCorrection",
+    schemaBasename: "JPInternationalPatentPublicationCorrection_V1_0.xsd",
+    publicationNumber: "2099000007",
+    packagePublicationNumber: "2099000007",
+    applicationNumber: "FICTIONAL-APPLICATION-P6-0007",
+    applicationDate: "2098-02-07",
+    publicationDate: "2099-02-16",
+    indexPublicationDate: "20990216",
+    indexKindCode: "A6",
   },
   B1: {
     packageType: "JPB",
@@ -940,6 +961,41 @@ export function buildFictionalAmendmentXml(
   ]).join("\n");
 }
 
+export function buildFictionalCorrectionXml(options: FictionalCorrectionXmlOptions = {}): string {
+  const definition = KIND_DEFINITIONS.P6;
+  const prefixes = { ...DEFAULT_PREFIXES, ...options.prefixes };
+  const publicationNumber = optionOrDefault(options.publicationNumber, definition.publicationNumber);
+  const publicationDate = optionOrDefault(options.publicationDate, definition.publicationDate);
+  const applicationNumber = optionOrDefault(options.applicationNumber, definition.applicationNumber);
+  const previousDate = optionOrDefault(options.previousPublicationDate, "2099-02-11");
+  let payload: string | null = null;
+  if (options.payload === "image") {
+    payload = `<${prefixes.jppat}:CorrectOfficialGazetteImage><${prefixes.com}:Image/></${prefixes.jppat}:CorrectOfficialGazetteImage>`;
+  } else if (options.payload !== "none") {
+    const full = buildFictionalFullPublicationXml("P1", {
+      prefixes, publicationNumber, publicationDate, applicationNumber,
+    });
+    const rootStart = full.indexOf(`<${prefixes.jppat}:InternationalPatentPublication`);
+    payload = full.slice(full.indexOf(">", rootStart) + 1, full.lastIndexOf(`</${prefixes.jppat}:InternationalPatentPublication>`));
+  }
+  return compact([
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    renderRootOpen(definition.rootLocalName, definition.schemaBasename, options, prefixes),
+    renderElement(qname(prefixes.com, "IPOfficeCode"), "JP", "  "),
+    `<${prefixes.jppat}:InternationalPatentPublicationCorrectionHeader>`,
+    renderPublicationIdentification(publicationNumber, publicationDate, prefixes, "  "),
+    renderElement(qname(prefixes.jppat, "PreviousPublicationDate"), previousDate, "  "),
+    renderApplicationIdentification(applicationNumber, definition.applicationDate, prefixes, "  "),
+    renderElement(qname(prefixes.jppat, "CorrectedPublicationCategory"), "FICTIONAL-P6-CORRECTION", "  "),
+    renderElement(qname(prefixes.jppat, "CorrectionGist"), "FICTIONAL-CORRECTION-GIST", "  "),
+    renderIpc(DEFAULT_IPC, prefixes, "  "),
+    renderFi(DEFAULT_FI, prefixes, "  "),
+    `</${prefixes.jppat}:InternationalPatentPublicationCorrectionHeader>`,
+    payload === null ? null : `<${prefixes.jppat}:CorrectInternationalPatentPublication>${payload}</${prefixes.jppat}:CorrectInternationalPatentPublication>`,
+    `</${prefixes.jppat}:${definition.rootLocalName}>`,
+  ]).join("\n");
+}
+
 export function fictionalPrimaryEntryPath(kind: KohoDocumentKind): string {
   const definition = KIND_DEFINITIONS[kind];
   const documentNumber = definition.packagePublicationNumber;
@@ -953,7 +1009,9 @@ export function createFictionalKohoInput(
 ): KohoXmlParseInput {
   const definition = KIND_DEFINITIONS[kind];
   const defaultXml =
-    kind === "A5" || kind === "P5"
+    kind === "P6"
+      ? buildFictionalCorrectionXml()
+      : kind === "A5" || kind === "P5"
       ? buildFictionalAmendmentXml(kind)
       : buildFictionalFullPublicationXml(kind);
   const defaultIndexHint: NonNullable<KohoXmlParseInput["indexHint"]> = {

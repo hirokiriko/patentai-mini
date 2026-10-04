@@ -67,7 +67,7 @@ export async function runKohoUpload(value: unknown, store: KohoUploadStorage, pa
     const row = rows.find(r => r.issueNumber === receipt.issueNumber);
     requireManual(row?.available && row.cumulativeIssue === receipt.cumulativeIssue &&
       row.publishedCount === receipt.publishedCount + receipt.publishedAmendments &&
-      row.translatedCount === receipt.translatedCount + receipt.translatedAmendments &&
+      row.translatedCount === receipt.translatedCount + receipt.translatedAmendments + (receipt.translatedCorrections ?? 0) &&
       plan.documents.every(d => d.publicationDate === receipt.publicationDate));
     requireManual((await store.sourceBlob(id).getProperties(options())).etag === source.etag);
     await createExact(prefix + "distribution.json", distribution, 2 * 1024 * 1024);

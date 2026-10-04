@@ -7,11 +7,11 @@ import { managedDigest } from "../patent-watch/managed-claims";
 import { managedDate } from "../patent-watch/managed-period";
 const date = z.string().refine(s => { try { managedDate(s); return true; } catch { return false; } });
 const field = z.string().min(1).max(100);
-export const managedCorrectionSchema = z.object({ eventKey: managedHash, kind: z.enum(["A5", "P5", "embedded"]), publicationNumber: field,
+export const managedCorrectionSchema = z.object({ eventKey: managedHash, kind: z.enum(["A5", "P5", "P6", "embedded"]), publicationNumber: field,
   applicationNumber: field, detectedPublicationDate: date, originalPublicationNumber: field.nullable(), originalPublicationDate: date.nullable(),
   contentDigest: managedHash, claimsEffect: z.enum(["none", "unresolved"]),
   changes: z.array(z.object({ documentName: field.nullable(), category: field.nullable(), item: field.nullable(), way: field.nullable() }).strict()).max(10_000),
-}).strict();
+}).strict().refine(correction => correction.kind !== "P6" || correction.claimsEffect === "unresolved");
 export type ManagedCorrection = z.infer<typeof managedCorrectionSchema>;
 const elements = (node: KohoXmlElementSnapshot) => node.children.flatMap(c => c.type === "element" ? [c.element] : []);
 /** Keep amendment units separate. A reported whole amendment is never a full public claim set. */
@@ -64,6 +64,15 @@ export function projectManagedCorrections(parsed: KohoPackageParseResult): Manag
         originalPublicationNumber: r.identityConfirmed ? (a.nationalPublicationNumber?.value ?? (a.kind === "A5" ? a.publicationNumber.value : null)) : null,
         originalPublicationDate: r.identityConfirmed ? a.previousPublicationDate?.value ?? null : null, contentDigest: managedDigest(a.amendmentContent),
         ...change, claimsEffect: r.identityConfirmed ? change.claimsEffect : "unresolved" }));
+    } else if (r.entryType === "correction" && "correction" in r) {
+      const correction = r.correction ?? r.candidate;
+      if (!correction) throw new ManagedWatchError("incomplete");
+      events.push(managedCorrectionSchema.parse({ eventKey: managedDigest({ path: entry.normalizedPath, content: correction.correctionContent }), kind: "P6",
+        publicationNumber: correction.publicationNumber.value, applicationNumber: correction.applicationNumber.value,
+        detectedPublicationDate: correction.publicationDate.value,
+        originalPublicationNumber: r.identityConfirmed ? correction.publicationNumber.value : null,
+        originalPublicationDate: r.identityConfirmed ? correction.previousPublicationDate?.value ?? null : null,
+        contentDigest: managedDigest(correction.correctionContent), claimsEffect: "unresolved", changes: [] }));
     } else if (r.entryType === "full_publication" && "document" in r && r.document) {
       for (const [index, content] of r.document.amendmentContent.entries()) {
         events.push(managedCorrectionSchema.parse({ eventKey: managedDigest({ path: entry.normalizedPath, index, content }), kind: "embedded",
@@ -73,6 +82,7 @@ export function projectManagedCorrections(parsed: KohoPackageParseResult): Manag
       }
     }
   }
-  if (events.filter(e => e.kind !== "embedded").length !== parsed.counts.confirmedAmendments) throw new ManagedWatchError("incomplete");
+  if (events.filter(e => e.kind === "A5" || e.kind === "P5").length !== parsed.counts.confirmedAmendments ||
+    events.filter(e => e.kind === "P6").length !== (parsed.counts.confirmedCorrections ?? 0)) throw new ManagedWatchError("incomplete");
   return events.map(event => { const { eventKey, ...identity } = event; void eventKey; return { ...identity, eventKey: managedDigest(identity) }; });
 }

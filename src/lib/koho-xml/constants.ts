@@ -9,11 +9,11 @@ export const KOHO_NAMESPACES = {
 } as const;
 
 export interface KohoRootDefinition {
-  entryType: "full_publication" | "amendment";
+  entryType: "full_publication" | "amendment" | "correction";
   fixedKind: KohoDocumentKind | null;
   packageType: KohoPackageType;
-  section: "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_B1";
-  expectedIndexKind: "A" | "A5" | "B1" | "B2" | null;
+  section: "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_P6" | "P_B1";
+  expectedIndexKind: "A" | "A5" | "A6" | "B1" | "B2" | null;
   schemaBasename: string;
   bibliographicLocalName?: string;
   partyBagLocalName?: string;
@@ -62,6 +62,14 @@ export const ROOT_DEFINITIONS: Record<string, KohoRootDefinition> = {
     schemaBasename: "JPInternationalPatentPublicationAmendment_V1_0.xsd",
     amendmentHeaderLocalName:
       "InternationalPatentPublicationAmendmentHeader",
+  },
+  InternationalPatentPublicationCorrection: {
+    entryType: "correction",
+    fixedKind: "P6",
+    packageType: "JPA",
+    section: "P_P6",
+    expectedIndexKind: "A6",
+    schemaBasename: "JPInternationalPatentPublicationCorrection_V1_0.xsd",
   },
   RegisteredPatentPublication: {
     entryType: "full_publication",

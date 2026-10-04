@@ -8,6 +8,7 @@ export const ABSTRACT_SECTION_NAMES: Readonly<
     "補正の掲載（公開特許公報）": "P_A5",
     "公表特許公報（特表）": "P_P1",
     "国際公開後における補正の掲載": "P_P5",
+    "訂正(公表特許公報)": "P_P6",
   },
   JPB: {
     特許公報: "P_B1",
@@ -22,6 +23,7 @@ export const ABSTRACT_OFFICIAL_SECTION_LABELS: Readonly<
     "補正の掲載(公開特許公報)": "P_A5",
     公表特許公報: "P_P1",
     国際公開後における補正の掲載: "P_P5",
+    "訂正(公表特許公報)": "P_P6",
   },
   JPB: {
     特許公報: "P_B1",
@@ -38,13 +40,14 @@ export const KNOWN_DISPLAY_FLAGS: Readonly<
 export const KNOWN_KINDS: Readonly<
   Record<KohoCsvPackageType, ReadonlySet<string>>
 > = {
-  JPA: new Set(["A", "A5"]),
+  JPA: new Set(["A", "A5", "A6"]),
   JPB: new Set(["B1", "B2"]),
 };
 
 export const ALL_KNOWN_KINDS: ReadonlySet<string> = new Set([
   "A",
   "A5",
+  "A6",
   "B1",
   "B2",
 ]);

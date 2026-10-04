@@ -1,6 +1,6 @@
 export type KohoPackageType = "JPA" | "JPB";
 
-export type KohoDocumentKind = "A1" | "A5" | "P1" | "P5" | "B1" | "B2";
+export type KohoDocumentKind = "A1" | "A5" | "P1" | "P5" | "P6" | "B1" | "B2";
 
 export type KohoIngestStatus =
   | "success"
@@ -11,6 +11,7 @@ export type KohoIngestStatus =
 export type KohoEntryType =
   | "full_publication"
   | "amendment"
+  | "correction"
   | "nested_st26"
   | "unknown";
 
@@ -275,6 +276,27 @@ export interface KohoNestedSt26Metadata {
   contentParsed: false;
 }
 
+/** A P6 correction is an event, never an additional full-publication document. */
+export interface KohoCorrectionDocument {
+  kind: "P6";
+  publicationNumber: KohoSourceString;
+  applicationNumber: KohoSourceString;
+  publicationDate: KohoDateValue;
+  applicationDate: KohoDateValue | null;
+  previousPublicationDate: KohoDateValue | null;
+  annualNumber: KohoSourceString | null;
+  correctedPublicationCategory: KohoSourceString;
+  correctionGist: KohoSourceString;
+  correctionArticle: KohoSourceString | null;
+  ipc: KohoClassification[];
+  fi: KohoClassification[];
+  correctedClaims: KohoClaim[];
+  contentExtraction: "structured_snapshot";
+  correctionContent: KohoXmlElementSnapshot;
+  references: KohoCollectedReference[];
+  source: KohoXmlSourceMetadata;
+}
+
 interface KohoResultBase {
   status: KohoIngestStatus;
   entryType: KohoEntryType;
@@ -321,6 +343,25 @@ export type KohoAmendmentResult =
       candidate: KohoAmendmentDocument;
     });
 
+interface KohoCorrectionResultBase extends KohoResultBase {
+  status: "success" | "review_required";
+  entryType: "correction";
+  kind: "P6";
+}
+
+export type KohoCorrectionResult =
+  | (KohoCorrectionResultBase & {
+      identityConfirmed: true;
+      correction: KohoCorrectionDocument;
+      candidate: null;
+    })
+  | (KohoCorrectionResultBase & {
+      status: "review_required";
+      identityConfirmed: false;
+      correction: null;
+      candidate: KohoCorrectionDocument;
+    });
+
 interface KohoNestedSt26ResultBase extends KohoResultBase {
   status: "success" | "review_required";
   entryType: "nested_st26";
@@ -357,6 +398,7 @@ export interface KohoFailedResult extends KohoResultBase {
 export type KohoXmlParseResult =
   | KohoFullPublicationResult
   | KohoAmendmentResult
+  | KohoCorrectionResult
   | KohoNestedSt26Result
   | KohoUnsupportedResult
   | KohoUnconfirmedResult

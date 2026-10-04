@@ -8,21 +8,34 @@ import { startKohoUpload } from "./upload-arm";
 import { runKohoUpload } from "./upload-runtime";
 import { kohoUploadPrefix } from "./upload-contract";
 import type { saveUploadedCloudPlan } from "./cloud-db";
+import { fictionalP6Package } from "./p6-package.test-support";
 
-function distribution(count = 1) {
+function distribution(count = 1, translated = 0, control = "01122") {
   const csvText = [DISTRIBUTION_HEADERS.JPA.join(","),
-    ["20260812", "148", "01122", "000001", "000001", "", "", String(count).padStart(5, "0"), "00000", "可", ""].join(",")].join("\r\n") + "\r\n";
+    ["20260812", "148", control, "000001", "000001", "", "", String(count).padStart(5, "0"), String(translated).padStart(5, "0"), "可", ""].join(",")].join("\r\n") + "\r\n";
   return { csvText, sha256: sha256(csvText), sourceUrl: MANAGED_DISTRIBUTION_URL, acquiredAt: new Date().toISOString() };
 }
-async function prepared() {
-  const bytes = manualFixture("JPA", 1, { issue: "2026-148", publicationDate: "2026-08-12" });
+async function prepared(bytes = manualFixture("JPA", 1, { issue: "2026-148", publicationDate: "2026-08-12" }), observed = distribution()) {
   const f = uploadFixture(bytes.length); await f.store.create(f.input); await f.store.chunk(f.input.operationId, 0, bytes);
   await f.store.seal(f.input.operationId); await startKohoUpload(f.store, f.input.operationId, f.arm);
   const save = vi.fn<typeof saveUploadedCloudPlan>(async (...args) => { args[4]();
     return { outcome: "inserted", capacityConfirmed: true, savedDocumentCount: 1, databaseGrowthBytes: 100 }; });
-  return { ...f, save, dependencies: { save, distribution: async () => distribution() } };
+  return { ...f, save, dependencies: { save, distribution: async () => observed } };
 }
 describe("fixed cloud upload worker", () => {
+  it.each([true, false])("counts P6 separately at the official-distribution gate (included=%s)", async included => {
+    const f = await prepared(fictionalP6Package(), distribution(1, included ? 1 : 0, "01115"));
+    const result = await runKohoUpload(f.state().intent, f.store, "FICTIONAL_PASSWORD", f.signal, f.dependencies);
+    if (included) {
+      expect(result.status).toBe("complete");
+      expect(f.save).toHaveBeenCalledTimes(1);
+      expect(f.save.mock.calls[0][3]).toMatchObject({ documentCount: 1, amendmentCount: 0 });
+      expect(f.save.mock.calls[0][6]?.receipt).toMatchObject({ translatedCount: 0, translatedAmendments: 0, translatedCorrections: 1 });
+    } else {
+      expect(f.state().status).toBe("failed");
+      expect(f.save).not.toHaveBeenCalled();
+    }
+  });
   it.each(["inserted", "reused"] as const)("parses the real fictional ZIP and retains original, source evidence and %s receipt", async outcome => {
     const f = await prepared(); f.save.mockImplementation(async (...args) => { args[4]();
       return { outcome, capacityConfirmed: true, savedDocumentCount: 1, databaseGrowthBytes: 0 }; });

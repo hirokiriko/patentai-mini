@@ -3,6 +3,7 @@ export const KOHO_SECTIONS = [
   "P_A5",
   "P_P1",
   "P_P5",
+  "P_P6",
   "P_B1",
 ] as const;
 

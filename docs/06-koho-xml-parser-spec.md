@@ -14,7 +14,7 @@
 ### 1.1 目的
 
 - ZIPを全展開せず、entry単位で公報を読み取る。
-- A1、A5、P1、P5、B1、B2を区別する。
+- A1、A5、P1、P5、P6、B1、B2を区別する。
 - primary公報XMLとnested ST.26配列表XML、画像、その他添付を分離する。
 - 公開番号、登録番号、出願情報、出願人、分類、要約、請求の範囲、明細書を
   構造を失わず抽出する。
@@ -23,7 +23,7 @@
 
 ### 1.2 対象
 
-- JPAの公開特許公報系A1、補正掲載A5、公表特許公報系P1、補正掲載P5
+- JPAの公開特許公報系A1、補正掲載A5、公表特許公報系P1、補正掲載P5、訂正P6
 - JPBの特許公報B1、B2
 - ZIP直下と文献区分内の索引CSV
 - primary XMLから参照されるnested ST.26 XML、画像、表、数式、化学式等の
@@ -34,11 +34,12 @@
 - 公報ZIPの取得、自動download、J-PlatPatの自動操作
 - TIF/JPG/PDF本文のOCRまたは画像内容解析
 - ST.26配列表の配列内容解析
-- A5/P5の補正内容を元公報へ自動統合する処理
+- A5/P5の補正内容、P6の訂正内容を元公報へ自動統合する処理
 - DB、API、UI、scheduler、通知、法的期限計算
 - 公報の記載から法的結論を生成する処理
 
-本書の観察値は2026-155号に限られる。他号、過去版、将来版、今回含まれ
+本書の従来の観察値は2026-155号に限られる。第7.7節のP6はIssue #140で
+2026-163号の公式XSD・索引から確認した追加契約である。他号、過去版、将来版、今回含まれ
 なかった公報種別との互換性は、実装Issueで公開可能なfixtureとLocal回帰
 検証を用いて別途確認する。
 
@@ -102,6 +103,7 @@ TIFを本文XMLとして扱ったり、画像から黙って本文を補完し�
 | JPA | `P_A5` | 補正の掲載（公開特許公報） | `A5` | `jppat:UnexaminedPatentPublicationAmendment` | 補正掲載event。元公報全文として扱わない |
 | JPA | `P_P1` | 公表特許公報（特表） | `A` | `jppat:InternationalPatentPublication` | full publication。XMLの国内側公開番号をpath／indexと照合し、`A`だけでA1と区別しない |
 | JPA | `P_P5` | 国際公開後における補正の掲載 | `A5` | `jppat:InternationalPatentPublicationAmendment` | 補正掲載event。event国際公開番号とpath／indexの国内側package keyを分離し、`A5`だけでA5と区別しない |
+| JPA | `P_P6` | 訂正(公表特許公報) | `A6` | `jppat:InternationalPatentPublicationCorrection` | 訂正event。headerの国内側番号・日付とpath／indexを照合し、P5や本文に変換しない |
 | JPB | `P_B1` | 特許公報 | `B1` / `B2` | `jppat:RegisteredPatentPublication` | full publication。B1/B2はCSV kindとXML表示を照合する |
 
 A5/P5は訂正公報の別名ではない。`WrittenAmendmentBag`を持つ補正掲載event
@@ -343,6 +345,7 @@ namespace URIは第5.1節の`jppat` URIであり、`com:languageCode="ja"`、
 | A5 | `jppat:UnexaminedPatentPublicationAmendment` | `JPUnexaminedPatentPublicationAmendment_V1_0.xsd` | 同上 |
 | P1 | `jppat:InternationalPatentPublication` | `JPInternationalPatentPublication_V1_0.xsd` | 同上 |
 | P5 | `jppat:InternationalPatentPublicationAmendment` | `JPInternationalPatentPublicationAmendment_V1_0.xsd` | 同上 |
+| P6 | `jppat:InternationalPatentPublicationCorrection` | `JPInternationalPatentPublicationCorrection_V1_0.xsd` | 第7.7節の公式XSDで確認。既存namespace・版の検査を維持 |
 | B1/B2 | `jppat:RegisteredPatentPublication` | `JPRegisteredPatentPublication_V1_0.xsd` | 同上 |
 
 `xsi:schemaLocation`はnamespace URIと相対XSD pathのpairである。相対pathの
@@ -555,6 +558,31 @@ source値を保持し、path／indexやevent番号との等値をidentity条件�
 | display flag観察値 | `請` | `早`、`際` |
 | nested添付観察値 | ST.26 XML 36、legacy `.app` 7 | ST.26 XML 5、legacy `.app` 8 |
 
+### 7.7 公表特許公報の訂正P6
+
+P6は公式 `JPInternationalPatentPublicationCorrection_V1_0.xsd` のrootと
+`P_P6`、`DOCUMENT_LIST` の国内10桁番号・`A6`・発行日、正式ABSTRACT label
+`訂正(公表特許公報)(P_P6)`を組み合わせて確定する。既存のnamespace、版、
+language、path安全性の検査を維持し、同一内容でも重複した索引候補は確定しない。
+
+`InternationalPatentPublicationCorrectionHeader/PatentPublicationIdentification`
+から国内側公開番号と訂正発行日を取得する。headerの出願番号、
+`CorrectedPublicationCategory`、`CorrectionGist`も保持する。
+`PreviousPublicationDate`は任意の原公開日であり、欠損時に訂正発行日から補完しない。
+payload側の国際公開番号や日付をheaderの識別子へ混入させない。
+
+任意の`CorrectInternationalPatentPublication`は画像だけ、または書誌・明細書・
+請求項を含む構造化本文のchoiceで、payload自体がない場合もある。全文snapshotと
+参照を保持し、画像内容をOCRで補完しない。既存の画像参照に対する要確認状態も維持する。
+訂正claimsは`correctedClaims`として区別し、通常文献のclaimsへ自動統合しない。
+訂正eventの`claimsEffect`は常に`unresolved`とし、本文の存在だけで解決済みにしない。
+
+`confirmedCorrections`と`bySection.P_P6`はP6が存在する入力にだけ追加する。
+通常文献数はA1+P1、従来の補正数はA5+P5のままとする。receiptの任意field
+`translatedCorrections`とpreviewの任意field`publicationCounts.P6`で訂正数を保持し、
+公式配布数の公表系はP1+P5+P6で照合する。P6を持たない既存receipt/countsへ
+0のfieldを注入せず、従来のJSON・digestを保持する。DB schemaとCSVの44列は変更しない。
+
 ## 8. 繰り返し・mixed content正規化
 
 ### 8.1 source value・正規化text・検索用派生
@@ -693,7 +721,7 @@ collectorは1系統とし、`primaryEntryPath + sourceXPath + ordinal`を一意k
 - path prefixから復元した文献directory数
 - `DOCUMENT_LIST.csv` record数
 - `CONTENTS1.csv` / `CONTENTS2.csv` record数
-- A1/A5/P1/P5/B1/B2別件数
+- A1/A5/P1/P5/P6/B1/B2別件数（P6訂正は本文・補正と別count）
 - 画像、legacy `.app`、その他添付数
 
 XML拡張子総数や明示的directory entry数を文献数にしない。
@@ -810,7 +838,7 @@ fixture、test codeは作成しない。
 - ZIP source、中央directory、entry数、累積圧縮／非圧縮byte数、entry単位の
   圧縮／非圧縮byte数に上限を設け、申告値とstream実測値の両方で強制する。
 - path traversal、重複path、外部実体、外部network解決を拒否する。
-- A1/A5/P1/P5/B1/B2をroot、namespace、path、kind、番号、schemaの複合条件で
+- A1/A5/P1/P5/P6/B1/B2をroot、namespace、path、kind、番号、schemaの複合条件で
   識別する。
 - P1の国内側XML番号をpath／indexへ照合し、P5ではevent国際公開番号と国内側
   package keyを分離する。P5のoptional national番号は別のlink identifierとして
@@ -835,7 +863,7 @@ fixture、test codeは作成しない。
 - 図面、選択図、検索報告、本文内画像、表、数式、化学式、reference file、
   外国語文書を第8.3節のXPathとsidecar契約で収集し、参照解決状態を保持する。
 - 未知caseを`確認候補`、`未対応種別`、`取込失敗`へ安全に分類する。
-- fixtureは架空dataまたは公開可能dataのみを使い、A1/A5/P1/P5/B1/B2、
+- fixtureは架空dataまたは公開可能dataのみを使い、A1/A5/P1/P5/P6/B1/B2、
   nested ST.26、path traversal、外部entity、欠損、kind矛盾、mixed content、
   ZIPのentry数／中央directory／累積byte上限、CSV可変長/固定長を種別別にtestする。
   標準entityでescapeされたST.25型
