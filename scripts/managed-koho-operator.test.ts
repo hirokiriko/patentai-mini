@@ -208,7 +208,7 @@ it("sends one fixed start, retains ambiguous reservation, and checks historical 
   await expect(operateManagedKoho(input,f.container,f.arm,f.budget)).rejects.toThrow();
   expect(f.arm.mock.calls.filter(c=>c[1]==="POST")).toHaveLength(1);
   const body=f.arm.mock.calls.find(c=>c[1]==="POST")![2];
-  expect(body).toMatchObject({initContainers:[],containers:[{name:"existing-container",resources:{cpu:2,memory:"4Gi"},env:expect.arrayContaining([{name:"KOHO_CLOUD_DATABASE_PASSWORD",secretRef:"fictional-import"},
+  expect(body).toMatchObject({initContainers:[],containers:[{name:"existing-container",command:["node","--max-old-space-size=3072",".koho-ops/cloud/scripts/koho-cloud-import.js"],args:[],resources:{cpu:2,memory:"4Gi"},env:expect.arrayContaining([{name:"KOHO_CLOUD_DATABASE_PASSWORD",secretRef:"fictional-import"},
     {name:"MANAGED_BUDGET_TARGET_SHA256",value:f.binding.targetBindingHash}])}]});
   vi.spyOn(Date,"now").mockReturnValue(Date.parse(f.manifest.expiresAt)+1);
   expect(await operateManagedKoho({...f.input,command:"status"},f.container,f.arm,f.budget)).toMatchObject({status:"reconciliation_required",stage:"start_requested"});

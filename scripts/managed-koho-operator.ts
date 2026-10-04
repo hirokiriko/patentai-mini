@@ -208,7 +208,8 @@ export async function operateManagedKoho(value:unknown,container:ContainerClient
   fresh();
   const managedConfig=parseManagedCloudImportConfiguration(config);
   try{const response=await arm(`https://management.azure.com${input.job.resourceId}/start?api-version=2025-07-01`,"POST",{containers:[{name:job.properties!.template!.containers![0].name!,image:input.job.image,
-    command:["node",".koho-ops/cloud/scripts/koho-cloud-import.js"],args:[],resources:{cpu:2,memory:"4Gi"},env:[{name:"KOHO_CLOUD_CONFIG_JSON",value:JSON.stringify(config)},
+    // Keep native allocations outside the bounded V8 heap within the same 4-GiB worker.
+    command:["node","--max-old-space-size=3072",".koho-ops/cloud/scripts/koho-cloud-import.js"],args:[],resources:{cpu:2,memory:"4Gi"},env:[{name:"KOHO_CLOUD_CONFIG_JSON",value:JSON.stringify(config)},
       {name:"MANAGED_IMPORT_JOB_JSON",value:JSON.stringify(input.job)},...managedBudgetBindingEnvironment(managedConfig.budgetBinding),
       ...(config.mode==="apply"?[{name:"KOHO_CLOUD_DATABASE_PASSWORD",secretRef:input.job.databaseSecretRef}]:[])]}],initContainers:[]});
   requireManual([200,202].includes(response.status));return{status:"submitting",operationId:config.operationId};

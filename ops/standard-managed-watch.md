@@ -224,6 +224,11 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    転送中もJob停止signalとmanifest・予算permitの最短残期限で中断する。SDK/body再試行なし、
    ETag・全量SHA・既存解析上限は維持する。保存前の失敗でも同じ実行を再起動せず、正式receiptと
    非稼働を確認して旧予約を保持し、原因解消後に既存archiveを参照する新しい通常取込を予約する。
+   通常取込workerはNodeの`--max-old-space-size=3072`を起動引数に固定する。既定V8 heapだけで
+   大きな解析結果を保持できない場合に備え、2vCPU/4GiBの同じcontainer内でnative allocationの余地を残す。
+   App全体の`NODE_OPTIONS`やparserの展開・entry上限は変更しない。ZIP容量だけから成功を保証せず、
+   対象原本の同一Node majorでのpreviewとpeak RSSを確認する。終了receiptを残せない異常終了では、
+   同じJobの終了とDBの部分commit有無を照合し、旧予約を保持してから新しい通常取込を判断する。
    このmanifestも`prepare`→`stage`で固定し、`start`は返却済みconfig/manifestで一度だけ実行する。`status`は元の入力又は確定入力のどちらでも
    同じoperationの保存結果を読み戻す。stageの応答喪失でも新operationへ迂回せず、固定markerとmanifestを回収する。
    `partial`又は`start_requested`は完了ではない。finished receiptがなければJob metadataと既知IDを照合し、再POSTしない。
