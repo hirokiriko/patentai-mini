@@ -36,7 +36,7 @@ const OFFICIAL_PACKAGE_VERSION_CODE: Readonly<
 };
 
 const OFFICIAL_SECTION_FORMAT =
-  /^(.+)\((P_(?:A1|A5|P1|P5|B1))\)$/u;
+  /^(.+)\((P_(?:A1|A5|P1|P5|P6|B1))\)$/u;
 const OFFICIAL_SECTION_FIELD_WIDTH = 80;
 
 function matchesPackageCode(

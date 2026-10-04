@@ -31,6 +31,15 @@ function officialSectionField(label: string, section: string): string {
 }
 
 describe("parseKohoCsv ABSTRACT", () => {
+  it("recognizes the exact padded official P6 correction label", () => {
+    const field = officialSectionField("訂正(公表特許公報)", "P_P6");
+    const r = parseAbstract("JPA", `A_001,20990216,2099-016,09999\r\n${field},FICTIONAL-RANGE,00001\r\n`);
+    expect(r.status).toBe("success");
+    expect(r.records[1].projection).toMatchObject({ section: "P_P6", documentCount: { value: 1 } });
+    expect(r.records[1].sourceCells[0]).toBe(field);
+    const wrong = parseAbstract("JPA", `A_001,20990216,2099-016,09999\r\n${officialSectionField("公表特許公報", "P_P6")},FICTIONAL-RANGE,00001\r\n`);
+    expect(wrong.records[1].issues.map(i => i.code)).toContain("unknown_section");
+  });
   it.each(["JPA", "JPB"] as const)(
     "%s metadataとsummaryをsource表現のままparseする",
     (packageType) => {

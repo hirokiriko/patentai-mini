@@ -50,12 +50,13 @@ const ISSUE_STATUSES = new Set<string>([
 const ENTRY_TYPES = new Set<string>([
   "full_publication",
   "amendment",
+  "correction",
   "nested_st26",
   "unknown",
 ]);
 const DOCUMENT_KINDS = new Set<string>(["A1", "P1", "B1", "B2"]);
-const ALL_KINDS = new Set<string>(["A1", "A5", "P1", "P5", "B1", "B2"]);
-const SECTIONS = ["P_A1", "P_A5", "P_P1", "P_P5", "P_B1"] as const;
+const ALL_KINDS = new Set<string>(["A1", "A5", "P1", "P5", "P6", "B1", "B2"]);
+const SECTIONS = ["P_A1", "P_A5", "P_P1", "P_P5", "P_B1", "P_P6"] as const;
 const SECTION_SET = new Set<string>(SECTIONS);
 const ROLES = ["directory", "xml", "csv", "schema", "image", "other"] as const;
 
@@ -118,6 +119,7 @@ function assertCounts(
     counts.nestedXmlCandidates,
     counts.documentFolders,
     counts.documentListRecords,
+    counts.confirmedCorrections ?? 0,
   ];
   if (topLevel.some((value) => !isNonNegativeInteger(value))) {
     invalid("invalid_counts");
@@ -131,6 +133,7 @@ function assertCounts(
 
   for (const section of SECTIONS) {
     const sectionCounts = counts.bySection?.[section];
+    if (section === "P_P6" && sectionCounts === undefined) continue;
     if (!sectionCounts) invalid("invalid_counts");
     const values = [
       sectionCounts.primaryXmlCandidates,
@@ -141,6 +144,7 @@ function assertCounts(
       sectionCounts.contents1Records,
       sectionCounts.contents2Records,
       sectionCounts.attachmentCount,
+      sectionCounts.confirmedCorrections ?? 0,
     ];
     if (values.some((value) => !isNonNegativeInteger(value))) {
       invalid("invalid_counts");

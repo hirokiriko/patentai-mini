@@ -209,7 +209,10 @@ operationId/runs/expiresAt/budgetProof以外の固定項目。各requestは次�
    既存ユーザー保存原本は保持し、取得日・公開日・号・サイズ・SHAを台帳へ記録。
    許可されたpackage/累計サイズを超えるものはpreview/uploadせず停止する。
 2. `managed-koho-preview`へ `{schema:1,sourcePath,byteLength,sha256}` を渡し、元ファイルを変えず有限parseする。
-   plan/Sources/Receiptのhash、A1/P1/A5/P5件数、未解析、補正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
+   plan/Sources/Receiptのhash、A1/P1/A5/P5と存在する場合のP6件数、未解析、補正・訂正の原番号/原日付欠落、展開量、時間・実測RSSを確認。未解析を0とみなさない。
+   P6は独立した訂正eventで、公式の公表系配布数はP1+P5+P6と照合する。
+   通常文献数A1+P1と補正数A5+P5は変更しない。P6の任意count fieldを旧receiptへ補わず、旧JSON/digestと号ごとのcode証跡を保つ。
+   XMLの訂正claimsを元公報へ自動統合せず、claimsEffect=unresolvedを維持する。網羅性の一致とclaimsの利用可否は別判定とする。
 3. まず1 packageだけの`archiveOnly:true` manifestを作り、`acquiredAt`も固定する。
    import operatorへ `{schema:1,command,config,manifest,job,sources}` を渡す。
    通常運用のconfigは有効な標準profileのSTANDARD_MANAGED_WATCH_STANDARD_V1を使う。

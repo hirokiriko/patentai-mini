@@ -6,7 +6,7 @@ import {
   ROOT_DEFINITIONS,
   type KohoRootDefinition,
 } from "./constants";
-import { extractAmendment, extractFullPublication } from "./extract";
+import { extractAmendment, extractCorrection, extractFullPublication } from "./extract";
 import {
   inspectKohoEntryPath,
   resolveSchemaLocationToken,
@@ -65,6 +65,9 @@ const IDENTITY_CARDINALITY_FIELDS = new Set([
   "applicationDate",
   "plainLanguageDesignationText",
   "amendmentHeader",
+  "correctionHeader",
+  "correctionPreviousPublicationDate",
+  "correctedPublication",
   "nationalPublicationNumber",
 ]);
 
@@ -938,6 +941,24 @@ export function parseKohoXml(input: KohoXmlParseInput): KohoXmlParseResult {
       source,
       issues,
     };
+  }
+
+  if (rootDefinition.entryType === "correction" && kind === "P6") {
+    const correction = extractCorrection(root, source, issues);
+    if (!correction) return failedResult(source, issues, "correction", kind);
+    addSamePublicationNumberIdentityChecks(input, path, kind,
+      correction.publicationNumber.value, hasDomesticPublicationNumberFormat, issues);
+    if (!input.indexHint?.publicationDate) issues.push(issue("index_hint_missing",
+      "review_required", "The correction publication date requires package index evidence.",
+      "indexHint.publicationDate"));
+    addPublicationDateIdentityCheck(input, correction.publicationDate.value, issues);
+    const identityConfirmed = !hasIdentityIssue(issues);
+    if (identityConfirmed) return {
+      status: hasReviewIssue(issues) ? "review_required" : "success", entryType: "correction",
+      kind, identityConfirmed: true, correction, candidate: null, source, issues,
+    };
+    return { status: "review_required", entryType: "correction", kind,
+      identityConfirmed: false, correction: null, candidate: correction, source, issues };
   }
 
   if (!isAmendmentKind(kind)) {

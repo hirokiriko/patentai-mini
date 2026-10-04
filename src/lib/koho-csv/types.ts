@@ -102,7 +102,7 @@ export interface KohoCsvOptionalString {
   value: string | null;
 }
 
-export type KohoCsvSection = "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_B1";
+export type KohoCsvSection = "P_A1" | "P_A5" | "P_P1" | "P_P5" | "P_P6" | "P_B1";
 
 export interface KohoCsvAbstractMetadataProjection {
   recordType: "metadata";
@@ -133,7 +133,7 @@ export type KohoCsvAbstractProjection =
   | KohoCsvAbstractMetadataProjection
   | KohoCsvAbstractSummaryProjection;
 
-export type KohoCsvKnownKind = "A" | "A5" | "B1" | "B2";
+export type KohoCsvKnownKind = "A" | "A5" | "A6" | "B1" | "B2";
 
 export interface KohoCsvDocumentListProjection {
   countryCode: {

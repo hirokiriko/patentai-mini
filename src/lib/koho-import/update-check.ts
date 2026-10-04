@@ -144,11 +144,12 @@ function renderUpdateCheck(config: UpdateConfiguration, tables: TableObservation
     if (p.summary) details.push(countsText(p.summary));
     if (p.issue) details.push(`ABSTRACT号 ${p.issue}（年通号/総通号との対応は未確認）`);
     if (p.sha256 && (duplicateGroups.get(p.sha256) ?? 0) > 1) details.push("同一bytesの重複取得候補（別名を含む）");
+    if (p.sections?.P_P6) details.push(`訂正(P6): 主XML候補 ${p.sections.P_P6.primaryXmlCandidates}; 確認済み ${p.sections.P_P6.confirmedCorrections ?? 0}`);
     if (row && p.sections) {
-      // JPA daily counts include A5/P5 amendments. Preserve the component counts;
+      // JPA daily counts include A5/P5 amendments and P6 corrections. Preserve the component counts;
       // attachments are separate and a total match alone never proves parsing completeness.
       const units = row.packageType === "JPA" ? [["公開(本文+補正)", row.dailyCounts.published, p.sections.P_A1.primaryXmlCandidates + p.sections.P_A5.primaryXmlCandidates],
-        ["公表(本文+補正)", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates + p.sections.P_P5.primaryXmlCandidates]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
+        [p.sections.P_P6 ? "公表(本文+補正+訂正)" : "公表(本文+補正)", row.dailyCounts.translated, p.sections.P_P1.primaryXmlCandidates + p.sections.P_P5.primaryXmlCandidates + (p.sections.P_P6?.primaryXmlCandidates ?? 0)]] : [["特許", row.dailyCounts.patents, p.sections.P_B1.primaryXmlCandidates]];
       for (const [name, daily, observed] of units) details.push(`${name}: 表の日件数 ${daily} / 対応section本文XML候補 ${observed}（比較単位の一致は未確認）`);
     }
     return details.join("; ");

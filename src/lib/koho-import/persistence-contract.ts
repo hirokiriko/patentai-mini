@@ -54,6 +54,7 @@ const ALL_DOCUMENT_KINDS: ReadonlySet<string> = new Set([
   "A5",
   "P1",
   "P5",
+  "P6",
   "B1",
   "B2",
 ]);
@@ -75,7 +76,7 @@ const ROLES = [
   "other",
 ] as const;
 const SECTIONS = ["P_A1", "P_A5", "P_P1", "P_P5", "P_B1"] as const;
-const SECTION_SET: ReadonlySet<string> = new Set(SECTIONS);
+const SECTION_SET: ReadonlySet<string> = new Set([...SECTIONS, "P_P6"]);
 
 const KOHO_ISSUE_CODE_FLAGS: Record<KohoIssueCode, true> = {
   invalid_limits: true,
@@ -159,6 +160,7 @@ interface CanonicalSectionCounts {
   contents2Records: number;
   attachmentCount: number;
   roleCounts: RoleCounts;
+  confirmedCorrections?: number;
 }
 
 interface CanonicalCounts {
@@ -170,7 +172,8 @@ interface CanonicalCounts {
   documentFolders: number;
   documentListRecords: number;
   roleCounts: RoleCounts;
-  bySection: Record<Section, CanonicalSectionCounts>;
+  bySection: Record<Section, CanonicalSectionCounts> & { P_P6?: CanonicalSectionCounts };
+  confirmedCorrections?: number;
 }
 
 function invalid(code: KohoImportPlanValidationErrorCode): never {
@@ -209,6 +212,22 @@ function exactRecord(
       snapshot[key] = descriptor.value;
     }
     return snapshot;
+  } catch {
+    invalid(code);
+  }
+}
+
+/** Preserve absent extension fields: historical canonical JSON is hash-bound. */
+function exactRecordWithOptional(
+  value: unknown,
+  requiredKeys: readonly string[],
+  optionalKeys: readonly string[],
+  code: KohoImportPlanValidationErrorCode,
+): JsonRecord {
+  try {
+    const present = optionalKeys.filter(key => value !== null && typeof value === "object" &&
+      Object.prototype.hasOwnProperty.call(value, key));
+    return exactRecord(value, [...requiredKeys, ...present], code);
   } catch {
     invalid(code);
   }
@@ -352,7 +371,7 @@ function projectSectionCounts(
     "attachmentCount",
     "roleCounts",
   ] as const;
-  const record = exactRecord(value, keys, code);
+  const record = exactRecordWithOptional(value, keys, ["confirmedCorrections"], code);
   return {
     primaryXmlCandidates: nonNegativeInteger(record.primaryXmlCandidates, code),
     finalXmlResults: nonNegativeInteger(record.finalXmlResults, code),
@@ -366,6 +385,7 @@ function projectSectionCounts(
     contents2Records: nonNegativeInteger(record.contents2Records, code),
     attachmentCount: nonNegativeInteger(record.attachmentCount, code),
     roleCounts: projectRoleCounts(record.roleCounts, code),
+    ...("confirmedCorrections" in record ? { confirmedCorrections: nonNegativeInteger(record.confirmedCorrections, code) } : {}),
   };
 }
 
@@ -382,8 +402,15 @@ function projectCounts(value: unknown): CanonicalCounts {
     "roleCounts",
     "bySection",
   ] as const;
-  const record = exactRecord(value, keys, code);
-  const bySection = exactRecord(record.bySection, SECTIONS, code);
+  const record = exactRecordWithOptional(value, keys, ["confirmedCorrections"], code);
+  const bySection = exactRecordWithOptional(record.bySection, SECTIONS, ["P_P6"], code);
+  const correctionSection = "P_P6" in bySection ? projectSectionCounts(bySection.P_P6, code) : undefined;
+  const correctionCount = "confirmedCorrections" in record ? nonNegativeInteger(record.confirmedCorrections, code) : undefined;
+  if ((correctionCount ?? 0) !== (correctionSection?.confirmedCorrections ?? 0) ||
+    (correctionSection && (correctionSection.confirmedFullPublications !== 0 || correctionSection.confirmedAmendments !== 0)) ||
+    SECTIONS.some(section => (projectSectionCounts(bySection[section], code).confirmedCorrections ?? 0) !== 0)) {
+    invalid(code);
+  }
   return {
     primaryXmlCandidates: nonNegativeInteger(record.primaryXmlCandidates, code),
     finalXmlResults: nonNegativeInteger(record.finalXmlResults, code),
@@ -402,7 +429,9 @@ function projectCounts(value: unknown): CanonicalCounts {
       P_P1: projectSectionCounts(bySection.P_P1, code),
       P_P5: projectSectionCounts(bySection.P_P5, code),
       P_B1: projectSectionCounts(bySection.P_B1, code),
+      ...(correctionSection ? { P_P6: correctionSection } : {}),
     },
+    ...(correctionCount !== undefined ? { confirmedCorrections: correctionCount } : {}),
   };
 }
 

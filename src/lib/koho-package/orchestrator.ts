@@ -37,13 +37,14 @@ import type {
   KohoPackageXmlResult,
 } from "./types";
 
-const SECTIONS = ["P_A1", "P_A5", "P_P1", "P_P5", "P_B1"] as const;
+const SECTIONS = ["P_A1", "P_A5", "P_P1", "P_P5", "P_B1", "P_P6"] as const;
 const SECTION_SET = new Set<string>(SECTIONS);
 const JPA_SECTIONS = new Set<KohoPackageSection>([
   "P_A1",
   "P_A5",
   "P_P1",
   "P_P5",
+  "P_P6",
 ]);
 const JPB_SECTIONS = new Set<KohoPackageSection>(["P_B1"]);
 const KNOWN_CSV: ReadonlyMap<
@@ -114,12 +115,13 @@ const DEFAULT_DEPENDENCIES: PackageDependencies = {
 interface XmlIdentity {
   packagePublicationNumber: string;
   kind: KohoDocumentKind;
-  entryType: "full_publication" | "amendment";
+  entryType: "full_publication" | "amendment" | "correction";
   identityConfirmed: boolean;
 }
 
 interface DocumentListView {
   record: KohoCsvContractDocumentListRecord;
+  countryCode: string;
   publicationNumber: string;
   kindCode: string;
   issuePublicationDate: string;
@@ -792,7 +794,7 @@ function checkAbstract(
   }
 
   for (const section of SECTIONS) {
-    const candidateCount = counts.bySection[section].primaryXmlCandidates;
+    const candidateCount = counts.bySection[section]?.primaryXmlCandidates ?? 0;
     const matches = summaries.filter((item) => item.semantic.section === section);
     if (matches.length === 0) {
       if (candidateCount > 0) {
@@ -920,7 +922,7 @@ function checkContents(
     );
 
   for (const section of fullSections) {
-    const candidateCount = counts.bySection[section].primaryXmlCandidates;
+    const candidateCount = counts.bySection[section]?.primaryXmlCandidates ?? 0;
     for (const logicalFile of ["contents1", "contents2"] as const) {
       const expectedPath = `DOCUMENT/${section}/${logicalFile === "contents1" ? "CONTENTS1.csv" : "CONTENTS2.csv"}`;
       const entry = entries.find(
@@ -1035,22 +1037,29 @@ function buildCounts(
 ): KohoPackageCountSummary {
   const counts = emptyCounts();
   const documentFolders = new Set<string>();
+  const sectionCounts = (section: KohoPackageSection) => {
+    if (section === "P_P6") {
+      counts.confirmedCorrections ??= 0;
+      return counts.bySection.P_P6 ??= { ...emptySectionCounts(), confirmedCorrections: 0 };
+    }
+    return counts.bySection[section];
+  };
 
   for (const entry of entries) {
     counts.roleCounts[entry.role] += 1;
     const section = sectionFromPath(entry.normalizedPath);
     if (section) {
-      counts.bySection[section].roleCounts[entry.role] += 1;
+      sectionCounts(section).roleCounts[entry.role] += 1;
       if (
         entry.role === "schema" ||
         entry.role === "image" ||
         entry.role === "other" ||
         (entry.role === "xml" && entry.pathCandidate !== "primary_xml")
       ) {
-        counts.bySection[section].attachmentCount += 1;
+        sectionCounts(section).attachmentCount += 1;
       }
       if (entry.role === "xml" && entry.pathCandidate === "primary_xml") {
-        counts.bySection[section].primaryXmlCandidates += 1;
+        sectionCounts(section).primaryXmlCandidates += 1;
       }
     }
     if (entry.role === "xml" && entry.pathCandidate === "primary_xml") {
@@ -1065,7 +1074,9 @@ function buildCounts(
 
   counts.documentFolders = documentFolders.size;
   for (const section of SECTIONS) {
-    counts.bySection[section].documentFolders = [...documentFolders].filter((folder) =>
+    const count = counts.bySection[section];
+    if (!count) continue;
+    count.documentFolders = [...documentFolders].filter((folder) =>
       folder.startsWith(`DOCUMENT/${section}/`),
     ).length;
   }
@@ -1078,24 +1089,30 @@ function buildCounts(
     if (!section) continue;
     const semanticCount = attached.result.records.filter((record) => record.semantic !== null).length;
     if (attached.result.logicalFile === "contents1") {
-      counts.bySection[section].contents1Records += semanticCount;
+      sectionCounts(section).contents1Records += semanticCount;
     } else if (attached.result.logicalFile === "contents2") {
-      counts.bySection[section].contents2Records += semanticCount;
+      sectionCounts(section).contents2Records += semanticCount;
     }
   }
 
   counts.finalXmlResults = xmlResults.length;
   for (const attached of xmlResults) {
     const section = sectionFromPath(attached.normalizedPath);
-    if (section) counts.bySection[section].finalXmlResults += 1;
+    if (section) sectionCounts(section).finalXmlResults += 1;
     const identity = xmlIdentity(attached.result);
     if (!identity?.identityConfirmed) continue;
     if (identity.entryType === "full_publication") {
       counts.confirmedFullPublications += 1;
-      if (section) counts.bySection[section].confirmedFullPublications += 1;
+      if (section) sectionCounts(section).confirmedFullPublications += 1;
+    } else if (identity.entryType === "correction") {
+      counts.confirmedCorrections = (counts.confirmedCorrections ?? 0) + 1;
+      if (section) {
+        const count = sectionCounts(section);
+        count.confirmedCorrections = (count.confirmedCorrections ?? 0) + 1;
+      }
     } else {
       counts.confirmedAmendments += 1;
-      if (section) counts.bySection[section].confirmedAmendments += 1;
+      if (section) sectionCounts(section).confirmedAmendments += 1;
     }
   }
 
@@ -1105,8 +1122,8 @@ function buildCounts(
 function emptyCounts(): KohoPackageCountSummary {
   const roleCounts = emptyRoleCounts();
   const bySection = Object.fromEntries(
-    SECTIONS.map((section) => [section, emptySectionCounts()]),
-  ) as Record<KohoPackageSection, KohoPackageSectionCountSummary>;
+    SECTIONS.filter(section => section !== "P_P6").map((section) => [section, emptySectionCounts()]),
+  ) as KohoPackageCountSummary["bySection"];
   return {
     primaryXmlCandidates: 0,
     finalXmlResults: 0,
@@ -1156,6 +1173,7 @@ function getDocumentListViews(
     return [
       {
         record,
+        countryCode: semantic.countryCode.sourceValue,
         publicationNumber: semantic.publicationNumber,
         kindCode: semantic.kindCode.sourceValue,
         issuePublicationDate: semantic.issuePublicationDate,
@@ -1180,6 +1198,12 @@ function contentsPublicationNumber(
 }
 
 function xmlIdentity(result: KohoXmlParseResult): XmlIdentity | null {
+  if ("correction" in result) {
+    const correction = result.correction ?? result.candidate;
+    if (!correction) return null;
+    return { packagePublicationNumber: correction.publicationNumber.value,
+      kind: result.kind, entryType: "correction", identityConfirmed: result.identityConfirmed };
+  }
   if ("document" in result) {
     const document = result.document ?? result.candidate;
     if (!document || !result.kind) return null;
@@ -1231,6 +1255,7 @@ function hasUsableDocumentListConsensus(
   matches: readonly DocumentListView[],
   kind: KohoDocumentKind,
 ): boolean {
+  if (kind === "P6") return matches.length === 1 && matches[0].countryCode === "JP";
   return kind === "P5" ? matches.length === 1 : hasConsensus(matches);
 }
 
