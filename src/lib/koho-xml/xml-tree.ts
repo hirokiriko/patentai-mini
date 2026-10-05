@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer";
+
 import { SaxesParser, type SaxesTagNS } from "saxes";
 
 import type {
@@ -33,6 +35,12 @@ interface SourcePathMetadata {
 }
 
 const sourcePathMetadata = new WeakMap<XmlTreeElement, SourcePathMetadata>();
+
+function detachXmlString(value: string): string {
+  // Saxes may return slices backed by the entire XML input. Keep only each
+  // accepted value, preserving its exact UTF-16 code units.
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
 
 function materializeSourcePath(element: XmlTreeElement): string {
   const segments: string[] = [];
@@ -260,25 +268,28 @@ export function parseXmlTree(
       );
 
       const parent = stack.at(-1);
-      const siblingKey = `${tag.uri}\0${tag.local}`;
+      const namespaceUri = detachXmlString(tag.uri);
+      const localName = detachXmlString(tag.local);
+      const sourceName = detachXmlString(tag.name);
+      const siblingKey = `${namespaceUri}\0${localName}`;
       const parentCounts = childNameCounts.at(-1);
       const siblingIndex = parentCounts
         ? (parentCounts.get(siblingKey) ?? 0) + 1
         : 1;
       parentCounts?.set(siblingKey, siblingIndex);
-      const pathSegment = `${tag.local}[${siblingIndex}]`;
+      const pathSegment = `${localName}[${siblingIndex}]`;
       const element: XmlTreeElement = {
-        namespaceUri: tag.uri,
-        localName: tag.local,
-        sourceName: tag.name,
+        namespaceUri,
+        localName,
+        sourceName,
         get sourcePath() {
           return materializeSourcePath(element);
         },
         attributes: Object.values(tag.attributes).map((attribute) => ({
-          namespaceUri: attribute.uri,
-          localName: attribute.local,
-          sourceName: attribute.name,
-          value: attribute.value,
+          namespaceUri: detachXmlString(attribute.uri),
+          localName: detachXmlString(attribute.local),
+          sourceName: detachXmlString(attribute.name),
+          value: detachXmlString(attribute.value),
         })),
         children: [],
       };
@@ -313,11 +324,12 @@ export function parseXmlTree(
       if (!parent) {
         return;
       }
+      const retainedValue = detachXmlString(value);
       const last = parent.children.at(-1);
       if (last?.type === "text") {
-        last.value += value;
+        last.value += retainedValue;
       } else {
-        parent.children.push({ type: "text", value });
+        parent.children.push({ type: "text", value: retainedValue });
       }
     };
 
