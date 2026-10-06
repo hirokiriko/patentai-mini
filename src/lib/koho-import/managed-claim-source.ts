@@ -18,17 +18,28 @@ function number(value: string | null): number {
 }
 /** Conservative Japanese reference grammar; ambiguous references remain incomplete. */
 export function managedClaimReferences(text: string): number[] {
-  const normalized = digits(text), references = new Set<number>();
+  const normalized = digits(text).replace(/，/g, ","), references = new Set<number>();
   const conjunction = "(?:及び|および|又は|または|若しくは|もしくは)";
-  const separator = `(?:から|乃至|ないし|〜|～|－|-|[、,]\\s*${conjunction}|、|,|${conjunction})`;
-  const reference = new RegExp(`請求項\\s*([0-9]+(?:\\s*${separator}\\s*(?:請求項\\s*)?[0-9]+)*)`, "g");
+  const separator = `(?:から|乃至|ないし|〜|～|－|-|[、,]\\s*${conjunction}\\s*[、,]?|、|,|${conjunction})`;
+  const selectionLabel = "(?:の(?:いずれか|何れか)\\s*[1一]つの請求項(?=\\s*に記載(?:の|された|される|する|[。．]|$)))?";
+  const reference = new RegExp(`請求項\\s*([0-9]+(?:\\s*${separator}\\s*(?:請求項\\s*)?[0-9]+)*)${selectionLabel}`, "g");
   const remainder = normalized.replace(reference, (match: string, expression: string, offset: number) => {
     // A regex prefix is not a complete reference: unsupported composite separators
     // must not silently drop the remaining claim numbers (e.g. 1及び／又は2).
     const suffix = normalized.slice(offset + match.length).replace(/^\s*まで\s*/, "");
     const existingTail = /^\s*(?:$|に(?:記載|係る|おいて)|の(?:いずれか|何れか)|記載|を引用|[。．])/;
-    const explicitSelectionTail = /^\s*(?:の記載の|(?:のすべてに|(?:の(?:うち(?:の)?|内|少なくとも))?(?:いずれか|何れか)(?:\s*[1一]項?)?\s*(?:に)?)記載(?:の|された|される|する|[。．]|$))/;
-    if (!existingTail.test(suffix) && !explicitSelectionTail.test(suffix)) {
+    const explicitSelectionTail = /^\s*(?:の記載の|(?:のすべてに|(?:の(?:うち(?:の)?|内|少なくとも))?(?:いずれか|何れか)(?:\s*[1一](?:項|つ)?)?\s*(?:に)?)記載(?:の|された|される|する|[。．]|$))/;
+    const unfinishedSelection = new RegExp(`^\\s*の(?:いずれか|何れか)(?:\\s*[1一](?:項|つ)?)?\\s*(?:${separator}|と|並びに)\\s*[0-9]`);
+    if (unfinishedSelection.test(suffix)) throw new ManagedClaimsError("reference_missing");
+    // Possessive noun phrases have explicit references too (e.g. 請求項1の装置).
+    // Keep selectors, relationship clauses, and unfinished lists outside this rule.
+    const nominalTail = /^\s*の\s*(?![一二三四五六七八九十百千万零〇第全各両内他]|何れ|双方|任意|少なくとも|請求項|記載|従属)[\p{Script=Han}\p{Script=Katakana}ー々]{1,100}(?=\s*(?:$|[。．、,（(]|に|で|を|と|の|が|は))/u;
+    const nominal = nominalTail.exec(suffix);
+    const continuesList = new RegExp(`^\\s*(?:と|の|[、,]\\s*(?:${conjunction})?)\\s*[、,]?\\s*[0-9一二三四五六七八九十]`);
+    // 又は must not be split into a noun ending in 又 and the particle は.
+    const nominalList = new RegExp(`^\\s*の\\s*[\\p{Script=Han}\\p{Script=Katakana}ー々]{1,100}(?:${conjunction}|並びに|と)\\s*[、,]?\\s*[0-9一二三四五六七八九十]`, "u");
+    const completeNominal = nominal !== null && !nominalList.test(suffix) && !continuesList.test(suffix.slice(nominal[0].length));
+    if (!existingTail.test(suffix) && !explicitSelectionTail.test(suffix) && !completeNominal) {
       throw new ManagedClaimsError("reference_missing");
     }
     const items = expression.replace(/請求項\s*/g, "").split(new RegExp(`\\s*(${separator})\\s*`));
