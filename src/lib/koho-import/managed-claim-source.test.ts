@@ -3,9 +3,10 @@ import { parseKohoXml } from "../koho-xml";
 import { buildFictionalFullPublicationXml, createFictionalKohoInput } from "../koho-xml/__fixtures__/fictional-koho";
 import { managedClaimReferences, projectManagedClaimSource } from "./managed-claim-source";
 import type { KohoImportDocumentPlan } from "./types";
-function fixture() {
+function fixture(secondText = "請求項１に記載の装置。", mixedContent = false) {
   const parsed = parseKohoXml(createFictionalKohoInput("A1", { xml: buildFictionalFullPublicationXml("A1", {
-    claims: [{ number: "1", text: "架空の検出装置。".repeat(400) + "全文の末尾制約。" }, { number: "2", text: "請求項１に記載の装置。" }],
+    claims: [{ number: "1", text: "架空の検出装置。".repeat(400) + "全文の末尾制約。" }, { number: "2", text: secondText }],
+    mixedContent: mixedContent ? { firstClaim: true } : false,
   }) }));
   if (!("document" in parsed) || !parsed.document) throw Error("fixture_parse_failed");
   const document = parsed.document;
@@ -50,10 +51,44 @@ describe("original parser to managed claim metadata", () => {
     ["請求項1、2、又は3に記載の架空装置。", [1, 2, 3]],
     ["請求項1～3のすべてに記載の架空装置。", [1, 2, 3]],
     ["請求項1の記載の架空装置。", [1]],
+    ["請求項1の架空装置。", [1]],
+    ["請求項1又は2のサンプル装置において、架空部材を備える。", [1, 2]],
+    ["請求項1の前記方法を実行する架空装置。", [1]],
+    ["請求項1、又は、請求項2に記載の架空装置。", [1, 2]],
+    ["請求項１，２，及び３に記載の架空装置。", [1, 2, 3]],
+    ["請求項1から3のいずれか1つの請求項に記載の架空装置。", [1, 2, 3]],
   ])("tracks explicit references: %s", (text, expected) => expect(managedClaimReferences(text)).toEqual(expected));
   it.each(["前記請求項のいずれかに記載。", "請求項3から1に記載。", "請求項一に記載。",
     "請求項1及び／又は2に記載。", "請求項1、および。", "請求項1、および2並びに3に記載。", "請求項1から3まで及び5に記載。",
     "請求項1のうちいずれか及び2に記載の架空装置。", "請求項1の記載及び2に記載の架空装置。",
     "請求項1のうちいずれかに記載及び2に記載の架空装置。", "請求項1のすべてに記載及び2に記載の架空装置。",
-    "請求項1並びに2に記載。", "請求項1と2に記載。"])("marks ambiguous references incomplete: %s", text => expect(() => managedClaimReferences(text)).toThrow());
+    "請求項1並びに2に記載。", "請求項1と2に記載。",
+    "請求項1のいずれか及び2に記載。", "請求項1の何れか及び2に記載。",
+    "請求項1の2に記載。", "請求項1の第2項に記載。", "請求項1の全項に記載。",
+    "請求項1の従属としての請求項3に記載。", "請求項1の装置及び2に記載。",
+    "請求項1の装置と2に記載。", "請求項1の装置、2に記載。", "請求項1の装置、又は2に記載。",
+    "請求項1の装置又は2に記載。", "請求項1の装置又は、2に記載。", "請求項1の装置と、2に記載。",
+    "請求項1から3のいずれか1つの請求項に記載及び4に記載。",
+    "請求項1から3のいずれか1つの請求項に記載、又は4に記載。",
+    "請求項1、又は、に記載。", "請求項1、、2に記載。", "請求項1，及び／又は2に記載。",
+  ])("marks ambiguous references incomplete: %s", text => expect(() => managedClaimReferences(text)).toThrow());
+  it.each([
+    ["請求項3の架空装置。", "reference_missing"],
+    ["請求項2の架空装置。", "reference_missing"],
+    ["請求項1から1002の架空装置。", "reference_missing"],
+  ])("keeps invalid dependency graphs incomplete: %s", (text, reason) => {
+    const f = fixture(); f.document.claims[1].plainText = text;
+    f.stored.claimsText = f.document.claims.map(c => c.plainText).join("\n\n");
+    expect(projectManagedClaimSource(f.document, f.stored, "b".repeat(64))).toMatchObject({ status: "review_required", reason, claimsJson: null });
+  });
+  it("projects an explicit nominal reference without changing parsed claim text or numbers", () => {
+    const f = fixture("請求項１の架空装置において、架空部材を備える。");
+    const projected = projectManagedClaimSource(f.document, f.stored, "b".repeat(64));
+    expect(projected.status).toBe("complete");
+    expect(JSON.parse(projected.claimsJson!).claims[1]).toEqual({ claimNo: 2, text: f.document.claims[1].plainText, dependsOn: [1] });
+  });
+  it("keeps non-text claims incomplete even with a supported nominal reference", () => {
+    const f = fixture("請求項1の架空装置。", true);
+    expect(projectManagedClaimSource(f.document, f.stored, "b".repeat(64))).toMatchObject({ status: "review_required", reason: "non_text_claim", claimsJson: null });
+  });
 });
