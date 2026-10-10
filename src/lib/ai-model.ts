@@ -2,6 +2,8 @@ import { boundedAzureFetch } from "./ai-operation-budget";
 import { createAzure } from "@ai-sdk/azure";
 import { google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
+import { readTrialPolicy, trialConfigured, TrialError } from "./trial/policy";
+import { trialAiTransport } from "./trial/ai-transport";
 
 /**
  * 環境変数で LLM プロバイダー/モデルを切り替える。
@@ -11,6 +13,7 @@ import { openai } from "@ai-sdk/openai";
  * Azure OpenAI はモデル名ではなく deployment name を指定する。
  */
 function getProvider() {
+  if (trialConfigured()) return "azure";
   return process.env.AI_PROVIDER ?? "google";
 }
 
@@ -37,6 +40,12 @@ function readAzureEndpoint() {
 }
 
 function getAzureProvider(role: "normal" | "fast") {
+  if (trialConfigured()) {
+    const policy = readTrialPolicy();
+    if (!["web", "worker"].includes(process.env.TRIAL_RUNTIME_ROLE ?? "")) throw new TrialError();
+    return createAzure({ resourceName: policy.ai.resourceName, apiVersion: policy.ai.apiVersion, apiKey: "",
+      fetch: boundedAzureFetch(role, trialAiTransport(role, process.env.TRIAL_RUNTIME_ROLE as "web" | "worker")) });
+  }
   return createAzure({
     ...readAzureEndpoint(),
     fetch: boundedAzureFetch(role),
@@ -46,10 +55,12 @@ function getAzureProvider(role: "normal" | "fast") {
 }
 
 function getAzureDeploymentName(): string {
+  if (trialConfigured()) return readTrialPolicy().ai.normalDeployment;
   return readRequiredEnv("AZURE_OPENAI_DEPLOYMENT_NAME");
 }
 
 function getAzureFastDeploymentName(): string {
+  if (trialConfigured()) return readTrialPolicy().ai.miniDeployment;
   return (
     process.env.AZURE_OPENAI_FAST_DEPLOYMENT_NAME?.trim() ||
     getAzureDeploymentName()

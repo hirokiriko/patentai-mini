@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
+import { trialConfigured, TrialError } from "./trial/policy";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -52,6 +53,7 @@ export function isAiOperationStopped(error: unknown): boolean {
 
 const deadlines = new WeakSet<AbortSignal>();
 const managedWatchCapability = Symbol("managed_full_claims_watch");
+const trialCapability = Symbol("trial_durable_budget");
 export type ManagedWatchDispatchJournal = {
   /** Atomic durable reservation ACK is required before network dispatch. */
   reserve(input: { ordinal: number; requestSha256: string; estimatedInputTokens: number; maximumOutputTokens: number }): Promise<void>;
@@ -59,7 +61,7 @@ export type ManagedWatchDispatchJournal = {
   reconcile(input: { ordinal: number; inputTokens: number; outputTokens: number }): Promise<void>;
 };
 type ManagedWatchBudgetOptions = {
-  capability: typeof managedWatchCapability;
+  capability: typeof managedWatchCapability | typeof trialCapability;
   consumed: number;
   deadline: AbortSignal;
   journal: ManagedWatchDispatchJournal;
@@ -86,6 +88,7 @@ export function aiOperationDeadline(milliseconds: number): AbortSignal {
 }
 
 export class AiOperationBudget {
+  get isTrial() { return this.managed?.capability === trialCapability; }
   private readonly consumed = { normal: 0, fast: 0 };
   private readonly maximum: Readonly<Record<Role, number>>;
   get used(): Readonly<Record<Role, number>> { return Object.freeze({ ...this.consumed }); }
@@ -97,7 +100,9 @@ export class AiOperationBudget {
   constructor(maximum: Record<Role, number>, private readonly managed?: ManagedWatchBudgetOptions) {
     const managedAllowed = managed?.capability === managedWatchCapability && maximum.normal === 41 && maximum.fast === 0 &&
       Number.isSafeInteger(managed.consumed) && managed.consumed >= 0 && managed.consumed <= 41;
-    if (managed && !managedAllowed) throw new AiOperationStopped();
+    const trialAllowed = managed?.capability === trialCapability &&
+      ((maximum.normal === 3 && maximum.fast === 0) || (maximum.normal === 0 && maximum.fast === 1)) && managed.consumed === 0;
+    if (managed && !managedAllowed && !trialAllowed) throw new AiOperationStopped();
     if (!Number.isInteger(maximum.normal) || maximum.normal < 0 || maximum.normal > (managedAllowed ? 41 : 12) ||
         !Number.isInteger(maximum.fast) || maximum.fast < 0 || maximum.fast > 8) throw new AiOperationStopped();
     this.maximum = Object.freeze({ ...maximum });
@@ -248,7 +253,16 @@ export function withManagedWatchBudget<T>(input: { consumed: number; deadlineAt:
     finally { budget.closeManagedScope(); }
   });
 }
-export function boundedAzureFetch(role: Role): typeof fetch {
+export function boundedAzureFetch(role: Role, transport: typeof fetch = globalThis.fetch): typeof fetch {
+  if (trialConfigured() && !active.getStore()?.isTrial) throw new TrialError("trial_budget_unavailable");
   // Non-budgeted workflows retain their provider behavior.
-  return active.getStore()?.wrapFetch(role) ?? globalThis.fetch;
+  return active.getStore()?.wrapFetch(role, transport) ?? transport;
+}
+/** Trial can never acquire the production 41-call capability. */
+export function withTrialAiBudget<T>(input: { kind: "compare" | "extract"; deadlineAt: number; journal: ManagedWatchDispatchJournal }, operation: () => Promise<T>): Promise<T> {
+  const remaining = input.deadlineAt - Date.now();
+  if (active.getStore() || remaining <= 0 || remaining > 15 * 60_000) throw new AiOperationStopped("timeout");
+  const budget = new AiOperationBudget(input.kind === "compare" ? { normal:3,fast:0 } : { normal:0,fast:1 }, {
+    capability: trialCapability, consumed:0, deadline: aiOperationDeadline(remaining), journal: input.journal });
+  return active.run(budget, async () => { try { return await operation(); } finally { budget.closeManagedScope(); } });
 }

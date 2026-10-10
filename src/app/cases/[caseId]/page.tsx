@@ -1,4 +1,5 @@
 import { requireOwner } from "@/lib/owner-http";
+import { readTrialPolicy, trialConfigured } from "../../../lib/trial/policy";
 import { comparisonExplanation, comparePublicationNumbers } from "../../../lib/comparison-display";
 import Link from "next/link";
 import { Suspense } from "react";
@@ -18,7 +19,7 @@ import { UploadCsvForm } from "./upload-csv-form";
 import { UploadPatentFilesForm } from "./upload-patent-files-form";
 import { KohoCorpusPicker } from "./koho-corpus-picker";
 import { AnalyzeButton } from "./analyze-button";
-import type { ExtractedClaims } from "@/lib/extract-claims";
+import { extractedClaimsSchema, type ExtractedClaims } from "../../../lib/extract-claims";
 import { StepProgressBar } from "@/components/step-progress-bar";
 import { NextActionBanner } from "@/components/next-action-banner";
 import { JplatpatGuide } from "@/components/jplatpat-guide";
@@ -126,14 +127,39 @@ export default async function CaseDetailPage({
 }: {
   params: Promise<{ caseId: string }>;
 }) {
-  await requireOwner();
   const { caseId } = await params;
+  await requireOwner(`/cases/${caseId}`);
   const caseIdNum = Number(caseId);
 
   const row = await caseRepo.findById(caseIdNum);
   if (!row) notFound();
 
   const drafts = await draftPatentRepo.findByCaseId(caseIdNum);
+  if (trialConfigured()) {
+    const sample = readTrialPolicy().samples.find(s => s.caseId === caseIdNum);
+    await requireOwner(`/cases/${caseId}`);
+    return <CaseDetailClient><main className="mx-auto max-w-4xl space-y-6 px-6 py-8">
+      <Link href="/" className="text-blue-700 underline">案件一覧に戻る</Link>
+      <h1 className="text-3xl font-bold">{row.title}</h1>
+      <section className="space-y-3 rounded border p-5"><h2 className="text-xl font-semibold">公開サンプルの比較</h2>
+        <p>運営者が準備したサンプルで、比較・根拠の確認・PDFとCSVの取得を試せます。</p>
+        {sample ? <Link href={`/cases/${caseId}/managed-watch`} className="text-blue-700 underline">比較と保存した帳票を開く</Link>
+          : <p>この案件は入力・抽出演習用です。比較を利用するには運営者によるサンプルの準備が必要です。</p>}
+      </section>
+      <section className="space-y-4 rounded border p-5" id="step-1"><h2 className="text-xl font-semibold">資料の入力・抽出演習</h2>
+        <p>公開資料または完全架空の資料を入力してください。抽出演習の本文は15,000文字以内です。ここで抽出した内容はサンプル比較へ自動登録されません。</p>
+        <UploadDraftForm caseId={caseIdNum}/>
+        <ul className="space-y-4">{drafts.map(d => <li key={d.draftId} className="space-y-2 border-t pt-3">
+          <p>入力資料 #{d.draftId}</p>{d.extractedClaimsJson?<p>抽出結果は保存済みです。</p>:<ExtractClaimsButton caseId={caseIdNum} draftId={d.draftId} hasExtracted={false}/>}
+          {d.parsedText && <details><summary>読み取った本文</summary><pre className="whitespace-pre-wrap break-words">{d.parsedText}</pre></details>}
+          {d.sourceFilePath && isOriginalFileBlobName(d.sourceFilePath) && <a href={`/api/cases/${caseId}/attachments/draft/${d.draftId}`} className="text-blue-700 underline">保存した原本を取得</a>}
+          {d.extractedClaimsJson && (()=>{const extracted=extractedClaimsSchema.safeParse(parseJsonOrNull(d.extractedClaimsJson,"trial.extracted"));
+            return extracted.success ? <details><summary>保存した抽出結果（比較前）</summary><p>{extracted.data.title}</p>
+              <ul>{extracted.data.claims.map(c=><li key={c.claimNo} className="whitespace-pre-wrap">請求項{c.claimNo}: {c.text}</li>)}</ul></details>:<p>抽出結果を確認できません。</p>;})()}
+        </li>)}</ul>
+      </section>
+    </main></CaseDetailClient>;
+  }
   const isBaseMode = row.baseApplicationMode;
 
   // kind 別に分類。kind="main" は通常モードの特許案、または統合後の特許案。

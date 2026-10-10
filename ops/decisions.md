@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-10-10: Issue #148 — OWNER限定試用の認証基盤
+
+- 承認済み本文の公開・再取得一致とLead自己完結性確認を経てLocal-onlyで開始。別App・論理DB・最小権限LOGIN・private保存・認証・期限・費用台帳を分離し、共有DB server/environmentの承認構成を維持する。
+- この差分は未配備の基盤。署名policy、OWNER限定認証、route/method allowlist、期間、固定DB、試用UI、MI token transportを実装する。未完成のtrial費用・Job・Storageを旧production経路へfallbackさせず拒否する。
+- 既存正規経路のpreflightは認証/対象/DNS成功、TCP timeout。TLS/SQL/catalog監査未到達。共有network/firewallの変更へ拡張せず、試用専用配備と実機受入を保留する。
+- 本番変更・main merge・招待を追加せず、実AI/帳票/費用の全受入前にGOとしない。実装済み範囲と再開条件は `ops/owner-trial.md` に記録する。
+
 ## 2026-09-22: Issue #123 — 印刷ダイアログに依存しない期間PDF
 
 - Decision: 既存の検証済み期間モデルからNode上でPDFKitによりPDF bytesを生成し、明示GETで直接ダウンロードする。印刷/HTML/CSVを維持し、AI・DB write・ブラウザー処理を生成内部に加えない。
@@ -447,6 +454,17 @@ OWNER原本の非公開digestと実行profileを、既存署名review内の完�
 前月の既消費・予約・不明usageを含めて制限する。翌月は通常枠へ復帰する。
 署名、exact-state CAS、結果不明writeの照合、worker/stage再開の期限検査を維持する。
 実承認値や実原本は公開fixtureやコードへ埋め込まず、完全架空の値で境界を検証する。
+
+## 2026-10-10: Issue #148 — 試用専用の永続予約と実行経路
+
+単一署名targetへ固定し、旧production台帳・41-call workerを転用しない。
+費用/回数/保存量/入力packageをETag台帳で累積し、phase・月・image更新で消さない。
+Jobはterminal照合まで同時1。AI/Blob/DB/開始ACKが不明なら予約保持・再送禁止。
+MI認証待機後の送信直前に期限を検査し、終了後は既送信分だけ精算する。
+完全な小容量公開packageとsample XMLをLocal operatorから専用DBへ投入する。
+配備・実AI・画面/帳票・実費受入はLocalで別証拠とし、未実施をGOへ読み替えない。
+DB接続待ちで実装を止めず、未承認network変更は具体的な最小1件へ分離する。
+設定・負試験・配備/撤去・利用案内は `ops/owner-trial.md` に記録する。
 
 ## 2026-10-06: Issue #139 — 明示的な請求項参照の限定改善
 

@@ -1,6 +1,7 @@
 import mammoth from "mammoth";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { trialConfigured } from "./trial/policy";
 import {
   extractTextWithDocumentIntelligence,
   getDocumentIntelligenceMissingEnv,
@@ -139,6 +140,7 @@ async function extractWithDocumentIntelligenceFallback(
   buffer: Buffer,
   reason: "empty" | "garbled" | "docx-layout"
 ): Promise<string | null> {
+  if (trialConfigured()) throw new FileParseError("試用では画像だけの資料や文字化けした資料のOCRは利用できません。文字を読み取れる資料を選んでください。", "trial_ocr_unavailable");
   if (!isDocumentIntelligenceConfigured()) {
     if (reason === "garbled") {
       throw new FileParseError(

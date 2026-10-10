@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 const UNKNOWN_RESULT_MESSAGE =
   "作成結果を確認できませんでした。再作成する前に案件一覧を更新してください。";
 
-export function NewCaseForm() {
+export function NewCaseForm({ trial = false }: { trial?: boolean } = {}) {
   const router = useRouter();
   const [title, setTitle] = useState("");
   const [baseApplicationMode, setBaseApplicationMode] = useState(false);
@@ -37,7 +37,7 @@ export function NewCaseForm() {
       const res = await fetch("/api/cases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(trial ? { title: title.trim() } : {
           title: title.trim(),
           baseApplicationMode,
           baseApplicationNumber: baseApplicationNumber.trim() || null,
@@ -138,7 +138,7 @@ export function NewCaseForm() {
         </div>
       )}
 
-      <div className="rounded-lg border-2 border-gray-200 bg-gray-50 px-4 py-3">
+      {!trial && <div className="rounded-lg border-2 border-gray-200 bg-gray-50 px-4 py-3">
         <label className="flex items-start gap-3 text-base">
           <input
             type="checkbox"
@@ -197,7 +197,7 @@ export function NewCaseForm() {
             />
           </div>
         )}
-      </div>
+      </div>}
     </form>
   );
 }

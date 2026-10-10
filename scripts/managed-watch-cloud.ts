@@ -7,6 +7,7 @@ import { ManagedCloudStartRepository } from "../src/repositories/managed-cloud-s
 import { ManagedServiceBudgetStorage } from "../src/lib/patent-watch/managed-service-budget-storage";
 import { managedBudgetBindingFromEnvironment } from "../src/lib/patent-watch/managed-budget-contract";
 import { cloudManagedIdentity } from "../src/lib/koho-import/cloud-blob";
+import { trialConfigured, TrialError } from "../src/lib/trial/policy";
 
 /** Fixed awaited worker; an OS/Job restart does not replay a claimed run. */
 if(require.main===module){
@@ -17,6 +18,7 @@ if(require.main===module){
   void(async()=>{
     let connection:Awaited<ReturnType<typeof openManagedCloudDatabase>>|undefined;
     try{
+      if(trialConfigured())throw new TrialError("trial_dispatch_unavailable");
       if(process.argv.length!==2||!process.env.MANAGED_WATCH_CONFIG_JSON||Buffer.byteLength(process.env.MANAGED_WATCH_CONFIG_JSON)>32768)throw Error();
       const config=parseManagedCloudStartConfiguration(JSON.parse(process.env.MANAGED_WATCH_CONFIG_JSON),Date.now(),false);
       const password=process.env.MANAGED_WATCH_DATABASE_PASSWORD;

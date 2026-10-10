@@ -5,6 +5,10 @@ import { storeOriginalFile } from "@/lib/blob-storage";
 import { isFileParseError, parseFile } from "@/lib/parse-file";
 import { db } from "@/db";
 import { withManagedOriginalUpload } from "@/repositories/managed-case-graph";
+import { trialConfigured } from "../../../../../lib/trial/policy";
+import { draftPatents } from "../../../../../db/schema";
+import { reserveTrialDatabase } from "../../../../../lib/trial/database-capacity";
+import { trialHash } from "../../../../../lib/trial/ledger";
 
 export const maxDuration = 60;
 
@@ -37,6 +41,7 @@ export const maxDuration = 60;
   if (file.size < 1 || file.size > 50 * 1024**2) return NextResponse.json({ error: "ファイルは1バイト以上50MiB以下で指定してください" }, { status: 400 });
 
   const kindRaw = formData.get("kind");
+  if (trialConfigured() && kindRaw !== null && kindRaw !== "main") return NextResponse.json({ error: "main_draft_required" }, { status: 400 });
   const kind =
     kindRaw === "base" || kindRaw === "addition" ? kindRaw : "main";
 
@@ -59,7 +64,9 @@ export const maxDuration = 60;
     // 抽出失敗してもレコードは作成する
   }
 
-  const row = await withManagedOriginalUpload(db, caseIdNum, async () => {
+  if(trialConfigured() && (!parsedText || Buffer.byteLength(parsedText)>1024**2)) return NextResponse.json({error:"trial_input_limit"},{status:400});
+  const capacity=trialConfigured()?await reserveTrialDatabase(db,`draft:${caseIdNum}:${trialHash(buffer)}`,Buffer.byteLength(parsedText??"")+8192):null;
+  const row = await withManagedOriginalUpload(db, caseIdNum, async tx => {
   const storedFile = await storeOriginalFile({
     caseId: caseIdNum,
     category: "drafts",
@@ -69,6 +76,10 @@ export const maxDuration = 60;
     contentType: file.type,
   });
 
+  if(trialConfigured()){
+    const [saved]=await tx.insert(draftPatents).values({caseId:caseIdNum,kind,sourceFilePath:storedFile!.blobName,parsedText}).returning();
+    return saved;
+  }
   return draftPatentRepo.create({
     caseId: caseIdNum,
     kind,
@@ -76,6 +87,7 @@ export const maxDuration = 60;
     parsedText,
   });
   });
+  await capacity?.persisted();
 
   return NextResponse.json(row, { status: 201 });
 }

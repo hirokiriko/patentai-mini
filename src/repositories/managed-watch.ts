@@ -17,6 +17,8 @@ import { verifyManagedBaseOriginal, MANAGED_BASE_XML_BYTES } from "../lib/patent
 import { lockManagedCase } from "./managed-case-graph";
 import { managedWatchAiBudgetSchema, requireManagedWatchCost, type ManagedWatchAiBudget } from "../lib/patent-watch/managed-watch-cost";
 import { isManagedFailureCode } from "../lib/patent-watch/managed-failure";
+import { readTrialPolicy, requireTrialActive, trialConfigured } from "../lib/trial/policy";
+import { reserveTrialDatabase,checkTrialDatabaseSize } from "../lib/trial/database-capacity";
 
 type Database = NodePgDatabase<typeof schema>;
 const S = schema.managedWatchSettings, R = schema.managedWatchRuns, D = schema.managedWatchDispatches, F = schema.managedWatchFindings;
@@ -62,6 +64,19 @@ const runFrom = readManagedStoredRun;
 /** Only the managed tables are writable. Common corpus and old watch meanings stay unchanged. */
 export class ManagedWatchRepository {
   constructor(private readonly database: Database,private readonly readOriginal=readOriginalFile) {}
+  async claimTrial(caseId: number, runId: string, executionId: string, snapshotDigest: string, deadlineAt: string): Promise<ManagedRun> {
+    const p = readTrialPolicy(); requireTrialActive(p);
+    requireState(process.env.TRIAL_RUNTIME_ROLE === "worker" && p.samples.some(s => s.caseId === caseId) &&
+      /^[a-z0-9-]{1,100}$/.test(executionId) && Date.parse(deadlineAt) > Date.now() &&
+      Date.parse(deadlineAt) <= Date.now()+15*60_000 && Date.parse(deadlineAt) <= Date.parse(p.endsAt));
+    return this.database.transaction(async tx => {
+      const [row] = await tx.select().from(R).where(and(eq(R.caseId,caseId),eq(R.runId,runId))).for("update");
+      requireState(row && row.status === "prepared" && row.executionId === null && row.consumedNormal === 0 &&
+        row.startReservationId === null && row.snapshotDigest === snapshotDigest);
+      const [saved] = await tx.update(R).set({ status:"running", executionId, acceptedAt:new Date().toISOString(),deadlineAt })
+        .where(eq(R.runId,runId)).returning(); return runFrom(saved);
+    });
+  }
   async setting(caseId: number): Promise<ManagedSetting | null> {
     const [row] = await this.database.select().from(S).where(eq(S.caseId, caseId));
     return row ? settingFrom(row) : null;
@@ -127,7 +142,15 @@ export class ManagedWatchRepository {
   }
   async prepare(caseId: number, period: PublicationPeriod): Promise<ManagedRun> {
     validateManagedPeriod(period);
-    return this.database.transaction(async tx => {
+    if(trialConfigured()){
+      const setting=await this.setting(caseId);requireState(setting?.enabled,"invalid_setting");
+      const expected=managedPeriodForPublication(setting.monitoringStartsOn,period.to);
+      requireState(expected?.from===period.from&&expected.to===period.to,"invalid_setting");
+      const active=await this.database.select({id:R.runId}).from(R).where(and(eq(R.caseId,caseId),inArray(R.status,ACTIVE))).limit(1);
+      requireState(!active.length,"in_progress");
+    }
+    const trialCapacity=trialConfigured()?await reserveTrialDatabase(this.database,`run:${randomUUID()}`,1024**2):null;
+    const prepared=await this.database.transaction(async tx => {
       await tx.execute(sql`select pg_advisory_xact_lock(${LOCK}::bigint)`);
       const [row] = await tx.select().from(S).where(eq(S.caseId, caseId)); requireState(row, "not_found");
       const setting = settingFrom(row); requireState(setting.enabled, "invalid_setting");
@@ -192,15 +215,17 @@ export class ManagedWatchRepository {
       const snapshot: ManagedRunSnapshot = { schema: 1, setting, period, sourceKeys: [...sourceKeys], candidates,
         scannedDocuments: sourceKeys.size, incompleteDocuments, sourceBytes };
       validateManagedSnapshot(snapshot);
-      const snapshotJson = JSON.stringify(snapshot); requireState(Buffer.byteLength(snapshotJson) <= 64 * 1024 ** 2, "limit");
+      const snapshotJson = JSON.stringify(snapshot); requireState(Buffer.byteLength(snapshotJson) <= (trialConfigured()?1:64) * 1024 ** 2, "limit");
       const [saved] = await tx.insert(R).values({ runId: randomUUID(), settingId: setting.settingId, caseId, status: "prepared",
         periodFrom: period.from, periodTo: period.to, baseDigest: setting.baseDigest, snapshotJson, snapshotDigest: managedDigest(snapshot),sourceDocumentId:setting.source.documentId,
         countsJson: JSON.stringify({ populationDocuments, scannedDocuments: sourceKeys.size, incompleteDocuments, prefiltered: candidates.length, sourceBytes }) }).returning();
       return runFrom(saved);
     }, { isolationLevel: "repeatable read" });
+    await trialCapacity?.persisted();return prepared;
   }
   /** Called only by the fixed Job after it starts; a second worker may not take over. */
   async claim(caseId: number, runId: string, executionId: string, proof?: { operationId: string; snapshotDigest: string; mode?: "no_change_only" }): Promise<ManagedRun> {
+    requireState(!trialConfigured(),"unavailable");
     requireState(/^[a-zA-Z0-9_.-]{1,180}$/.test(executionId), "invalid_setting");
     return this.database.transaction(async tx => {
       const [row] = await tx.select().from(R).where(and(eq(R.caseId, caseId), eq(R.runId, runId))).for("update"); requireState(row, "not_found");
@@ -221,20 +246,21 @@ export class ManagedWatchRepository {
       return runFrom(saved);
     });
   }
-  private async running(tx: Parameters<Parameters<Database["transaction"]>[0]>[0], run: ManagedRun) {
+  private async running(tx: Parameters<Parameters<Database["transaction"]>[0]>[0], run: ManagedRun, settlement = false) {
     const [row] = await tx.select().from(R).where(and(eq(R.caseId, run.caseId), eq(R.runId, run.runId))).for("update");
     requireState(row && row.status === "running" && row.settingId === run.settingId && row.executionId === run.executionId && row.snapshotDigest === run.snapshotDigest &&
       managedDigest(run.snapshot) === row.snapshotDigest &&
-      row.deadlineAt !== null && Date.parse(row.deadlineAt) > Date.now(), "expired");
+      row.deadlineAt !== null && (Date.parse(row.deadlineAt) > Date.now() || (settlement && trialConfigured())), "expired");
     return row;
   }
   journal(run: ManagedRun, stage: "screening" | "detail", chunkIndex: number | null, inputDigest: string, aiBudget: ManagedWatchAiBudget): ManagedWatchDispatchJournal {
     const fixedBudget = Object.freeze(managedWatchAiBudgetSchema.parse(aiBudget));
     return {
       reserve: async entry => this.database.transaction(async tx => {
+        if (trialConfigured()) requireTrialActive(readTrialPolicy());
         const row = await this.running(tx, run);
         const current = runFrom(row);
-        requireState(entry.ordinal === row.consumedNormal + 1 && entry.ordinal <= 41, "limit");
+        requireState(entry.ordinal === row.consumedNormal + 1 && entry.ordinal <= (trialConfigured() ? 3 : 41), "limit");
         requireState(stage === "screening" ? entry.ordinal === 1 && chunkIndex === null && row.planJson === null
           : row.planJson !== null && chunkIndex !== null && entry.ordinal === chunkIndex + 2);
         requireState(stage === "screening" ? inputDigest === managedDigest(managedScreeningInput(current.snapshot))
@@ -247,7 +273,7 @@ export class ManagedWatchRepository {
         await tx.update(R).set({ consumedNormal: entry.ordinal }).where(eq(R.runId, run.runId));
       }),
       reconcile: async entry => this.database.transaction(async tx => {
-        await this.running(tx, run);
+        await this.running(tx, run, true);
         const saved = await tx.update(D).set({ inputTokens: entry.inputTokens, outputTokens: entry.outputTokens, status: "reconciled" })
           .where(and(eq(D.runId, run.runId), eq(D.ordinal, entry.ordinal), eq(D.status, "reserved"), eq(D.inputDigest, inputDigest))).returning({ id: D.dispatchId });
         requireState(saved.length === 1);
@@ -257,7 +283,7 @@ export class ManagedWatchRepository {
   async saveScreening(run: ManagedRun, selectedIds: number[]) {
     requireState(selectedIds.length <= 20 && new Set(selectedIds).size === selectedIds.length, "incomplete");
     return this.database.transaction(async tx => {
-      const current = runFrom(await this.running(tx, run));
+      const current = runFrom(await this.running(tx, run, true));
       const selected = current.snapshot.candidates.filter(c => selectedIds.includes(c.candidateId));
       requireState(selected.length === selectedIds.length && selected.every(c => c.source), "incomplete");
       const plan = planManagedComparisons(current.snapshot.setting.base, current.snapshot.setting.selectedClaimNos,
@@ -272,7 +298,7 @@ export class ManagedWatchRepository {
   async saveDetail(run: ManagedRun, index: number, value: unknown) {
     requireState(run.plan?.chunks[index], "incomplete"); const results = validateManagedComparisons(run.plan.chunks[index], value);
     await this.database.transaction(async tx => {
-      const row = await this.running(tx, run); requireState(row.planDigest === run.plan!.digest);
+      const row = await this.running(tx, run, true); requireState(row.planDigest === run.plan!.digest);
       const saved = await tx.update(D).set({ resultJson: JSON.stringify({ results }), status: "completed" })
         .where(and(eq(D.runId, run.runId), eq(D.ordinal, index + 2), eq(D.status, "reconciled"), eq(D.stage, "detail"), eq(D.chunkIndex, index))).returning({ id: D.dispatchId });
       requireState(saved.length === 1);
@@ -283,10 +309,22 @@ export class ManagedWatchRepository {
     await this.database.update(R).set({ status: unknown ? "unknown" : "failed", errorCode, completedAt: new Date().toISOString() })
       .where(and(eq(R.caseId, run.caseId), eq(R.runId, run.runId), eq(R.executionId, run.executionId!), eq(R.status, "running")));
   }
+  /** Only after exact terminal ARM evidence; never releases an active worker. */
+  async failUnstartedTrial(caseId:number,runId:string,snapshotDigest:string) {
+    requireState(trialConfigured() && readTrialPolicy().samples.some(s=>s.caseId===caseId));
+    await this.database.transaction(async tx=>{
+      const [row]=await tx.select().from(R).where(and(eq(R.caseId,caseId),eq(R.runId,runId))).for("update");
+      requireState(row && row.status==="prepared" && row.executionId===null && row.consumedNormal===0 &&
+        row.startReservationId===null && row.snapshotDigest===snapshotDigest);
+      const dispatched=await tx.select({id:D.dispatchId}).from(D).where(eq(D.runId,runId)).limit(1);
+      requireState(dispatched.length===0);
+      await tx.update(R).set({status:"failed",errorCode:"incomplete",completedAt:new Date().toISOString()}).where(eq(R.runId,runId));
+    });
+  }
   /** Read-after-restart never sends AI. Only wholly persisted results can finalize. */
   async finalize(run: ManagedRun) {
     return this.database.transaction(async tx => {
-      const row = await this.running(tx, run), current = runFrom(row);
+      const row = await this.running(tx, run, true), current = runFrom(row);
       const dispatches = await tx.select().from(D).where(eq(D.runId, run.runId)).orderBy(asc(D.ordinal));
       const empty = current.snapshot.candidates.length === 0;
       requireState(empty ? dispatches.length === 0 && row.consumedNormal === 0 : current.plan &&
@@ -324,6 +362,7 @@ export class ManagedWatchRepository {
     requireState(row,"not_found");return row;
   }
   async reviewFinding(caseId: number, findingId: number, reviewed: boolean, expectedVersion:number) {
+    if(trialConfigured())await checkTrialDatabaseSize(this.database);
     const setting = await this.setting(caseId); requireState(setting, "not_found");
     await this.findingReview(caseId,findingId);
     requireState(Number.isSafeInteger(expectedVersion)&&expectedVersion>=0&&expectedVersion<2147483647,"invalid_setting");
