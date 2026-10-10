@@ -2,18 +2,19 @@ import { ContainerClient, type IHttpClient, type WebResource } from "@azure/stor
 import { Readable } from "node:stream";
 import { trialIdentity } from "./identity";
 import { readTrialPolicy, requireTrialActive, trialPolicyDigest, TrialError, type TrialPolicy } from "./policy";
+import type { OperatorAccess } from "./operator-access";
 
 export type TrialStoragePurpose = "originals" | "artifacts" | "budget";
 /** The SDK invokes this adapter after its asynchronous bearer credential policy.
  * Thus even a cached token or refresh cannot bypass the final write boundary. */
-export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,transport:typeof fetch=globalThis.fetch):IHttpClient {
+export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,transport:typeof fetch=globalThis.fetch,access?:OperatorAccess):IHttpClient {
   const origin=`https://${p.storage.account}.blob.core.windows.net`,prefix=`/${p.storage[purpose]}`;
   return {async sendRequest(request:WebResource){
     const u=new URL(request.url),controller=new AbortController();
-    const abort=()=>controller.abort();request.abortSignal?.addEventListener("abort",abort);
+    const abort=()=>controller.abort();request.abortSignal?.addEventListener("abort",abort);access?.signal.addEventListener("abort",abort);
     const timer=setTimeout(abort,20_000);
     let stage="target"; try{
-      if(request.abortSignal?.aborted)abort();
+      if(request.abortSignal?.aborted||access?.signal.aborted)abort();
       if(u.origin!==origin||u.username||u.password||u.hash||!([prefix,prefix+"/"].includes(u.pathname)||u.pathname.startsWith(prefix+"/"))||
         /%2f|%5c|\.\./i.test(u.pathname)||!["GET","HEAD","PUT"].includes(request.method)||
         (request.method==="PUT"&&(u.pathname===prefix||[...u.searchParams.keys()].some(k=>k!=="timeout")||
@@ -34,6 +35,7 @@ export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,trans
       stage="guard"; // No asynchronous work between this check and the only external send.
       if(trialPolicyDigest(readTrialPolicy())!==trialPolicyDigest(p))throw new TrialError();
       if(purpose!=="budget"&&request.method==="PUT")requireTrialActive(p);
+      access?.storage(purpose,request.url,request.method);
       controller.signal.throwIfAborted();
       stage="send"; const response=await transport(request.url,{method:request.method,headers,body:body?new Uint8Array(body):undefined,signal:controller.signal,redirect:"error"});
       stage="response"; const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
@@ -46,7 +48,7 @@ export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,trans
       return {request,status:response.status,headers:resultHeaders,
         ...(request.streamResponseStatusCodes?.has(response.status)?{readableStreamBody:Readable.from([bytes])}:{bodyAsText:bytes.toString("utf8")})};
     }catch{throw new TrialError(`trial_storage_unavailable_${stage}`);}
-    finally{clearTimeout(timer);request.abortSignal?.removeEventListener("abort",abort);}
+    finally{clearTimeout(timer);request.abortSignal?.removeEventListener("abort",abort);access?.signal.removeEventListener("abort",abort);}
   }};
 }
 /** Credentials and endpoints come only from the process's signed policy. */

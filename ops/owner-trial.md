@@ -1,3 +1,5 @@
+See [Local preparation and access gates](owner-trial-preflight.md) for the current offline implementation and live blockers.
+
 # Issue #148: OWNER限定試用
 
 正式仕様・承認値は [Issue #148](https://github.com/hirokiriko/patentai-mini/issues/148) と最新Lead続行記録を正本とする。Local sole writer、同じDraft PR #149。OWNER本人のみ、第三者招待なし、本番変更・mainマージ・本番配備なし。

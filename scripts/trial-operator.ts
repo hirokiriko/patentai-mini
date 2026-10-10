@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile,lstat } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { and,eq } from "drizzle-orm";
@@ -22,6 +21,8 @@ import { prepareTrialPackage,TRIAL_PACKAGE_BYTES } from "../src/lib/trial/packag
 import { saveKohoImportPlan } from "../src/repositories/drizzle";
 import { trialArm,startTrialWatch } from "../src/lib/trial/job";
 import type { TrialAudience } from "../src/lib/trial/identity";
+import { OperatorAccess,operatorTicketSchema,guardOperatorDatabase } from "../src/lib/trial/operator-access";
+import { beginOperatorReceipt } from "../src/lib/trial/operator-journal";
 
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("initialize-ledger")}).strict(),
@@ -34,12 +35,15 @@ const commands=z.discriminatedUnion("command",[
     publicationDate:z.string().regex(/^\d{8}$/),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
   z.object({command:z.literal("delivery-reconcile"),caseId:z.number().int().positive(),deliveryId:z.uuidv4(),abandonPartial:z.boolean()}).strict(),
 ]);
-export const trialOperatorInput=z.object({environment:z.record(z.string(),z.string()),databaseUrl:z.string(),request:commands}).strict();
+export const trialOperatorInput=z.object({environment:z.record(z.string(),z.string()),databaseUrl:z.string(),request:commands,
+  access:operatorTicketSchema.optional(),recoveryDirectory:z.string().optional()}).strict();
 const exec=promisify(execFile);
 /** Local only. CLI output is consumed in memory and never forwarded or logged. */
-function operatorStorageCredential(p:TrialPolicy,audience:TrialAudience="https://storage.azure.com/"){return{async getToken(){
+function operatorStorageCredential(p:TrialPolicy,access:OperatorAccess,audience:TrialAudience="https://storage.azure.com/"){return{async getToken(){
+  access.check(30_000);
   const result=await exec(process.platform==="win32"?"az.cmd":"az",["account","get-access-token","--resource",audience,"--output","json","--only-show-errors"],
-    {windowsHide:true,shell:process.platform==="win32",timeout:30_000,maxBuffer:65536});
+    {windowsHide:true,shell:process.platform==="win32",timeout:30_000,maxBuffer:65536,signal:access.signal});
+  access.check();
   const token=JSON.parse(result.stdout);
   if(typeof token.accessToken!=="string"||token.tenant?.toLowerCase()!==p.auth.tenantId.toLowerCase())throw new TrialError();
   const claims=JSON.parse(Buffer.from(token.accessToken.split(".")[1],"base64url").toString("utf8"));
@@ -47,6 +51,25 @@ function operatorStorageCredential(p:TrialPolicy,audience:TrialAudience="https:/
   return{token:token.accessToken,expiresOnTimestamp:Number(token.expires_on)*1000};
 }};}
 export async function runTrialOperator(value:unknown){
+  const input=trialOperatorInput.parse(value),p=readTrialPolicy(input.environment);
+  if(input.request.command==="package-preview")return executeTrialOperator(input);
+  const access=new OperatorAccess(input.access,p);
+  try{
+    access.check(5*60_000);
+    if(!input.recoveryDirectory)throw new TrialError("trial_operator_journal_unavailable");
+    // Validate all mutable key bindings before reservations or any remote call.
+    const request=input.request;
+    if(request.command==="sample-save")access.sampleKey(request.caseId,request.sha256);
+    if((request.command==="package-import"||request.command==="package-reconcile")&&!access.ticket.packages.includes(request.sha256))throw new TrialError();
+    if(request.command==="delivery-reconcile"&&!access.ticket.artifacts.some(a=>a.caseId===request.caseId&&a.deliveryId===request.deliveryId))throw new TrialError();
+    const reconcile=["status","job-reconcile","delivery-reconcile","package-reconcile"].includes(request.command);
+    const receipt=await beginOperatorReceipt(input.recoveryDirectory,p.localOperator!.recoveryDirectoryDigest,access.ticket,request,reconcile);
+    let completed=false;
+    try{const result=await executeTrialOperator(input,access);completed=true;return result;}
+    finally{await receipt.finish(completed);}
+  }finally{access.dispose();}
+}
+async function executeTrialOperator(value:unknown,access?:OperatorAccess){
   const input=trialOperatorInput.parse(value),p=readTrialPolicy(input.environment);
   const allowed=new Set(["DEPLOYMENT_KIND","TRIAL_POLICY_JSON","TRIAL_POLICY_SIGNATURE","TRIAL_POLICY_PUBLIC_KEY"]);
   if(Object.keys(input.environment).some(k=>!allowed.has(k))||!p.database.migratorUser||!p.database.ownerRole)throw new TrialError();
@@ -59,12 +82,13 @@ export async function runTrialOperator(value:unknown){
     const bytes=await readFile(source.sourcePath),pkg=await prepareTrialPackage(bytes,source.sha256);
     return{status:"previewed",sourceBytes:bytes.length,payloadBytes:pkg.payloadBytes,documents:pkg.plan.documentCount};
   }
+  if(!access)throw new TrialError();
   const url=new URL(input.databaseUrl);
   if(url.protocol!=="postgresql:"||url.hostname!==p.database.host||Number(url.port||5432)!==5432||
     decodeURIComponent(url.pathname.slice(1))!==p.database.database||decodeURIComponent(url.username)!==p.database.migratorUser||!url.password||url.search||url.hash)throw new TrialError();
-  const credential=operatorStorageCredential(p);
+  const credential=operatorStorageCredential(p,access);
   const container=(purpose:"originals"|"artifacts"|"budget")=>new ContainerClient(`https://${p.storage.account}.blob.core.windows.net/${p.storage[purpose]}`,credential,
-    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p)});
+    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p,globalThis.fetch,access)});
   const budgetContainer=container("budget"),ledger=new TrialLedger(p,new TrialBlobLedgerIO(budgetContainer));
   if(input.request.command==="initialize-ledger"){
     requireTrialActive(p);await assertTrialPrivate(budgetContainer);
@@ -75,7 +99,9 @@ export async function runTrialOperator(value:unknown){
   const client=new Client({connectionString:url.href,ssl:{rejectUnauthorized:true,servername:p.database.host},connectionTimeoutMillis:15000,
     statement_timeout:30000,query_timeout:35000,lock_timeout:5000,idle_in_transaction_session_timeout:30000,application_name:"trial-local-operator"});
   client.on("error",()=>undefined);
+  const unguard=guardOperatorDatabase(client,access);
   try{
+    access.check(35_000);
     await client.connect();
     const identity=(await client.query("select current_database() as db,current_user as usr,(select ssl from pg_stat_ssl where pid=pg_backend_pid()) as tls")).rows[0];
     if(identity.db!==p.database.database||identity.usr!==p.database.migratorUser||identity.tls!==true)throw new TrialError();
@@ -118,7 +144,7 @@ export async function runTrialOperator(value:unknown){
     const caseId=request.command==="setting-save"?request.setting.caseId:request.caseId;
     const sample=p.samples.find(s=>s.caseId===caseId);if(!sample)throw new TrialError("trial_sample_not_ready");
     if(request.command==="status")return{runs:await watch.history(caseId),deliveries:await new ManagedDeliveryRepository(database).list(caseId),ledgerRevision:(await ledger.read()).state.revision};
-    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),operatorStorageCredential(p,"https://management.azure.com/")));
+    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),operatorStorageCredential(p,access,"https://management.azure.com/"),access));
     if(request.command==="delivery-reconcile")return{status:await reconcileManagedDelivery(new ManagedDeliveryRepository(database),new ManagedPrivateStorage(container("artifacts")),caseId,request.deliveryId,request.abandonPartial,ledger)};
     requireTrialActive(p);
     if(request.command==="setting-save"){
@@ -129,7 +155,7 @@ export async function runTrialOperator(value:unknown){
     const {command:_command,caseId:_caseId,...source}=request;void _command;void _caseId;
     const preview=await previewManagedBase({...source,documentId:1}),bytes=await readFile(source.sourcePath);
     if(bytes.length>1024**2||trialHash(bytes)!==source.sha256)throw new TrialError("trial_input_limit");
-    const id=trialHash(`sample:${caseId}:${source.sha256}`),key=`cases/${caseId}/prior-art/${Date.now()}-${randomUUID()}-sample.xml`;
+    const id=trialHash(`sample:${caseId}:${source.sha256}`),key=access.sampleKey(caseId,source.sha256);
     const admitted=await ledger.reserve({id,intent:id,kind:"storage",bytes:bytes.length,storageKey:key});
     if(!admitted.created)throw new TrialError("trial_sample_reconciliation_required");
     const capacity=await reserveTrialDatabase(database,`sample:${id}`,bytes.length+65536,ledger);
@@ -146,7 +172,7 @@ export async function runTrialOperator(value:unknown){
       // Returned only over the owner's private pipe; never publish this record.
       return{status:"saved",base:preview.base,source:{...preview.source,documentId:row.docId}};
     }catch{await ledger.markUnknown(id).catch(()=>undefined);throw new TrialError("trial_sample_reconciliation_required");}
-  }finally{await client.end().catch(()=>undefined);}
+  }finally{unguard();await client.end().catch(()=>undefined);}
 }
 if(require.main===module){
   const timer=setTimeout(()=>{process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);},5*60_000);

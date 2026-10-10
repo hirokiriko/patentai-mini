@@ -11,6 +11,7 @@ import { readTrialPolicy, requireTrialActive, trialPolicyDigest, TrialError, typ
 import { TrialLedger, trialHash, trialCallYen } from "./ledger";
 import { trialIdentity } from "./identity";
 import { verifyTrialBuild } from "./runtime";
+import type { OperatorAccess } from "./operator-access";
 export { verifyTrialBuild } from "./runtime";
 
 export const trialJobRequestSchema = z.object({ schema:z.literal(1),kind:z.literal("trial-watch"),
@@ -19,14 +20,16 @@ export const trialJobRequestSchema = z.object({ schema:z.literal(1),kind:z.liter
 export type TrialJobRequest = z.infer<typeof trialJobRequestSchema>;
 const VERSION = "2025-07-01";
 export type TrialArm = (suffix: string, method:"GET" | "POST", body?:unknown) => Promise<{status:number;body:unknown}>;
-export function trialArm(p: TrialPolicy, signal: AbortSignal, identity=trialIdentity(p,"web","https://management.azure.com/")): TrialArm {
+export function trialArm(p: TrialPolicy, signal: AbortSignal, identity=trialIdentity(p,"web","https://management.azure.com/"),access?:OperatorAccess): TrialArm {
   return async (suffix,method,body) => {
     if ((suffix === "/start") !== (method === "POST") || !["","/start","/executions"].includes(suffix)&&!/^\/executions\/[a-z0-9-]{1,100}$/.test(suffix)) throw new TrialError();
     const token = await identity.getToken();
     if (method === "POST") { requireTrialActive(p); if (trialPolicyDigest(readTrialPolicy()) !== trialPolicyDigest(p)) throw new TrialError(); }
-    const response = await fetch(`https://management.azure.com${p.jobResourceId}${suffix}?api-version=${VERSION}`, {
+    const url=`https://management.azure.com${p.jobResourceId}${suffix}?api-version=${VERSION}`;
+    access?.arm(url,method);
+    const response = await fetch(url, {
       method,headers:{Authorization:`Bearer ${token.token}`,"Content-Type":"application/json"},redirect:"error",
-      signal:AbortSignal.any([signal,AbortSignal.timeout(30_000)]),...(body === undefined ? {} : {body:JSON.stringify(body)}) });
+      signal:AbortSignal.any([signal,AbortSignal.timeout(30_000),...(access?[access.signal]:[])]),...(body === undefined ? {} : {body:JSON.stringify(body)}) });
     const reader = response.body?.getReader(), parts:Uint8Array[]=[]; let size=0;
     try { if (reader) for (;;) { const r=await reader.read(); if(r.done)break; size+=r.value.length;
       if(size>1024**2)throw new TrialError(); parts.push(r.value); } }

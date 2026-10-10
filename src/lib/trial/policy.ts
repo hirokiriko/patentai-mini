@@ -39,6 +39,8 @@ export const trialPolicySchema = z.object({
   environmentResourceId: resource.refine(v => v.includes("/managedEnvironments/")),
   image: z.string().regex(/^[a-z0-9.-]+\.azurecr\.io\/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}$/).optional(),
   cost: trialCostProfileSchema.optional(),
+  localOperator: z.object({ticketDigest:z.string().regex(/^[a-f0-9]{64}$/),
+    recoveryDirectoryDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict().optional(),
   samples: z.array(z.object({ caseId: z.number().int().positive().max(2_147_483_647),
     from: z.iso.date(), through: z.iso.date() }).strict().refine(v => v.from <= v.through)).max(5),
 }).strict().superRefine((p, ctx) => {
