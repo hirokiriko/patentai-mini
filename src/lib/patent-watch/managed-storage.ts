@@ -6,6 +6,7 @@ import { generateManagedDeliveryPdf, managedDeliveryCsv, validateManagedDelivery
 import type { ManagedDeliveryRepository } from "../../repositories/managed-delivery";
 import { configuredManagedArtifactAdmission } from "./managed-artifact-budget";
 import { managedArtifactIntentSchema, type ManagedArtifactAdmission, type ManagedArtifactIntent } from "./managed-artifact-contract";
+import { trialConfigured, TrialError } from "../trial/policy";
 const artifactSchema=z.object({kind:z.enum(["snapshot","pdf","csv"]),sha256:managedHash,bytes:z.number().int().positive().max(16*1024**2)}).strict();
 export const managedArtifactManifestSchema=z.object({schema:z.literal(1),caseId:managedId,deliveryId:z.uuidv4(),artifacts:z.array(artifactSchema).length(3)}).strict();
 export type ManagedArtifactManifest=z.infer<typeof managedArtifactManifestSchema>;
@@ -23,6 +24,7 @@ export class ManagedPrivateStorage{
   withDeadline(deadline:AbortSignal){return new ManagedPrivateStorage(this.container,this.deadline?AbortSignal.any([this.deadline,deadline]):deadline);}
   private signal(){return this.deadline?AbortSignal.any([this.deadline,AbortSignal.timeout(20_000)]):AbortSignal.timeout(20_000);}
   static configured(deadline?:AbortSignal){
+    if(trialConfigured())throw new TrialError("trial_storage_unavailable");
     const connection=process.env.AZURE_STORAGE_CONNECTION_STRING,container=process.env.AZURE_BLOB_CONTAINER_NAME;
     if(!connection||!container)throw new ManagedWatchError("unavailable");
     return new ManagedPrivateStorage(BlobServiceClient.fromConnectionString(connection,{retryOptions:{maxTries:1,tryTimeoutInMs:20_000}}).getContainerClient(container),deadline);

@@ -12,12 +12,16 @@ import { dispatchManagedWatch, reconcileManagedWatchStart } from "./managed-clou
 import { uploadManagedArm } from "../koho-import/upload-arm";
 import { cloudEnvironmentResourceIdSchema } from "../koho-import/cloud-config";
 import { managedArtifactDatabaseTarget } from "./managed-artifact-budget";
+import { trialConfigured, TrialError } from "../trial/policy";
 
 export const managedWebWatchSettingsSchema = managedCloudConfigSchema.omit({ operationId: true, runs: true, expiresAt: true,
   budgetProof: true, serviceBudget: true, budgetBinding: true, expectedEnvironmentResourceId: true }).extend({
   budgetBinding: managedBudgetBindingSchema, expectedEnvironmentResourceId: cloudEnvironmentResourceIdSchema,
 }).strict();
 export async function configuredManagedWebWatch(env = process.env) {
+  // Trial uses its own durable admission and dispatch contract. Never accept the
+  // existing production settings while that contract is unavailable.
+  if (trialConfigured(env)) throw new TrialError("trial_dispatch_unavailable");
   const raw = env.MANAGED_WATCH_WEB_SETTINGS;
   if (!raw || Buffer.byteLength(raw) > 32_768 || !env.DATABASE_URL) throw new ManagedWatchError("unavailable");
   const c = managedWebWatchSettingsSchema.parse(JSON.parse(raw));

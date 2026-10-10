@@ -9,8 +9,8 @@ import { FindingReview } from "../../delivery-controls";
 
 export const dynamic = "force-dynamic";
 export default async function ManagedDeliveryPage({ params }: { params: Promise<{ caseId: string; deliveryId: string }> }) {
-  await requireOwner();
   const p = await params;
+  await requireOwner(`/cases/${p.caseId}/managed-watch/deliveries/${p.deliveryId}`);
   let caseId: number, id: string;
   try { caseId = managedCaseId(p.caseId); id = z.uuidv4().parse(p.deliveryId); } catch { notFound(); }
   const saved = await managedDeliveryRepository().get(caseId, id).catch(error => {
@@ -18,6 +18,7 @@ export default async function ManagedDeliveryPage({ params }: { params: Promise<
     throw new Error("delivery_unavailable");
   });
   if (saved.status !== "stored") notFound();
+  await requireOwner(`/cases/${p.caseId}/managed-watch/deliveries/${p.deliveryId}`);
   return <main className="mx-auto max-w-5xl space-y-5 px-6 py-8">
     <Link className="text-blue-700 underline" href={`/cases/${caseId}/managed-watch`}>納品版の一覧に戻る</Link>
     <div className="flex gap-5">{(["pdf", "csv"] as const).map(format => <a key={format} className="text-blue-700 underline" href={`/api/cases/${caseId}/managed-watch/deliveries/${id}/${format}`}>保存原本の{format.toUpperCase()}を取得</a>)}</div>

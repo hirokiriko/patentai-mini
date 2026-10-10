@@ -5,6 +5,8 @@ import { withManagedDeliveryDatabase } from "@/lib/patent-watch/managed-request-
 import { ManagedDeliveryRepository } from "@/repositories/managed-delivery";
 import { managedHash } from "@/lib/patent-watch/managed-types";
 import { ManagedPrivateStorage, createManagedDelivery } from "@/lib/patent-watch/managed-storage";
+import { trialConfigured } from "../../../../../../lib/trial/policy";
+import { assertTrialPeriod } from "../../../../../../lib/trial/input";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=120;
@@ -13,6 +15,7 @@ const input=z.object({deliveryId:z.uuidv4(),period:managedRequestPeriod,distribu
 export const POST=withOwnerRoute(async(request:Request,{params}:{params:Promise<{caseId:string}>})=>{
   try{
     const caseId=managedCaseId((await params).caseId),value=await managedJson(request,2048),body=managedRequestInput(()=>input.parse(value));
+    if (trialConfigured()) assertTrialPeriod(caseId, body.period.from, body.period.to);
     return await withManagedDeliveryDatabase(async(db,deadline)=>{
     const repository=new ManagedDeliveryRepository(db);
     const report=await createManagedDelivery(repository,ManagedPrivateStorage.configured(deadline),{kind:"delivery",caseId,...body},deadline);

@@ -5,6 +5,7 @@ import { storeOriginalFile } from "@/lib/blob-storage";
 import { isFileParseError, parseFile } from "@/lib/parse-file";
 import { db } from "@/db";
 import { withManagedOriginalUpload } from "@/repositories/managed-case-graph";
+import { trialConfigured } from "../../../../../lib/trial/policy";
 
 export const maxDuration = 60;
 
@@ -37,6 +38,7 @@ export const maxDuration = 60;
   if (file.size < 1 || file.size > 50 * 1024**2) return NextResponse.json({ error: "ファイルは1バイト以上50MiB以下で指定してください" }, { status: 400 });
 
   const kindRaw = formData.get("kind");
+  if (trialConfigured() && kindRaw !== null && kindRaw !== "main") return NextResponse.json({ error: "main_draft_required" }, { status: 400 });
   const kind =
     kindRaw === "base" || kindRaw === "addition" ? kindRaw : "main";
 

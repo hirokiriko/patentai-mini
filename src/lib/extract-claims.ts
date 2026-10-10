@@ -246,5 +246,8 @@ async function extractClaimsWithinBudget(
 }
 
 export function extractClaims(parsedText: string): Promise<ExtractedClaims> {
+  // Do not turn missing trial admission into a successful fallback extraction.
+  if (trialConfigured()) return Promise.reject(new TrialError("trial_budget_unavailable"));
   return withAiOperationBudget({ normal: 0, fast: 4 }, () => extractClaimsWithinBudget(parsedText));
 }
+import { trialConfigured, TrialError } from "./trial/policy";

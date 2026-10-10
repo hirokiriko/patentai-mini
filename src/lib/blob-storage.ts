@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { isOriginalFileBlobName } from "./original-file-metadata";
+import { trialConfigured, TrialError } from "./trial/policy";
 
 export { isOriginalFileBlobName } from "./original-file-metadata";
 
@@ -26,6 +27,8 @@ export type BlobCleanupResult = {
 };
 
 function getBlobConfig(): BlobConfig | null {
+  // Trial must not use broad account keys or silently omit cloud persistence.
+  if (trialConfigured()) throw new TrialError("trial_storage_unavailable");
   const connectionString = process.env.AZURE_STORAGE_CONNECTION_STRING;
   const containerName = process.env.AZURE_BLOB_CONTAINER_NAME;
 

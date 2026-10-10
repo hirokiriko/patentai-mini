@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
+import { trialConfigured, TrialError } from "./trial/policy";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -248,7 +249,8 @@ export function withManagedWatchBudget<T>(input: { consumed: number; deadlineAt:
     finally { budget.closeManagedScope(); }
   });
 }
-export function boundedAzureFetch(role: Role): typeof fetch {
+export function boundedAzureFetch(role: Role, transport: typeof fetch = globalThis.fetch): typeof fetch {
+  if (trialConfigured()) throw new TrialError("trial_budget_unavailable");
   // Non-budgeted workflows retain their provider behavior.
-  return active.getStore()?.wrapFetch(role) ?? globalThis.fetch;
+  return active.getStore()?.wrapFetch(role, transport) ?? transport;
 }

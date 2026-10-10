@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-10-10: Issue #148 — OWNER限定試用の認証基盤
+
+- 承認済み本文の公開・再取得一致とLead自己完結性確認を経てLocal-onlyで開始。別App・論理DB・最小権限LOGIN・private保存・認証・期限・費用台帳を分離し、共有DB server/environmentの承認構成を維持する。
+- この差分は未配備の基盤。署名policy、OWNER限定認証、route/method allowlist、期間、固定DB、試用UI、MI token transportを実装する。未完成のtrial費用・Job・Storageを旧production経路へfallbackさせず拒否する。
+- 既存正規経路のpreflightは認証/対象/DNS成功、TCP timeout。TLS/SQL/catalog監査未到達。共有network/firewallの変更へ拡張せず、試用専用配備と実機受入を保留する。
+- 本番変更・main merge・招待を追加せず、実AI/帳票/費用の全受入前にGOとしない。実装済み範囲と再開条件は `ops/owner-trial.md` に記録する。
+
 ## 2026-09-22: Issue #123 — 印刷ダイアログに依存しない期間PDF
 
 - Decision: 既存の検証済み期間モデルからNode上でPDFKitによりPDF bytesを生成し、明示GETで直接ダウンロードする。印刷/HTML/CSVを維持し、AI・DB write・ブラウザー処理を生成内部に加えない。

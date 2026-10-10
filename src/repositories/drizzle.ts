@@ -1,4 +1,6 @@
 import { db } from "../db";
+import { readTrialPolicy, requireTrialActive, trialConfigured, TrialError } from "../lib/trial/policy";
+import { trialCaseInput } from "../lib/trial/input";
 import { lockManagedCase } from "./managed-case-graph";
 import { isOriginalFileBlobName, parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
 import { APPLICANTS_JSON_BYTES, projectFindingBibliography } from "../lib/patent-watch/bibliography";
@@ -730,6 +732,18 @@ export const caseRepo: CaseRepository = {
     return row ?? null;
   },
   async create(data) {
+    if (trialConfigured()) {
+      const input = trialCaseInput.parse(data), policy = readTrialPolicy();
+      requireTrialActive(policy);
+      return db.transaction(async tx => {
+        await tx.execute(sql`select pg_advisory_xact_lock(148, 1)`);
+        const existing = await tx.select({ id: cases.caseId }).from(cases).limit(5);
+        requireTrialActive(policy);
+        if (existing.length >= 5) throw new TrialError("trial_case_limit");
+        const [row] = await tx.insert(cases).values({ title: input.title, baseApplicationMode: false, baseApplicationNumber: null }).returning();
+        return row;
+      }, { isolationLevel: "read committed" });
+    }
     const [row] = await db
       .insert(cases)
       .values({
