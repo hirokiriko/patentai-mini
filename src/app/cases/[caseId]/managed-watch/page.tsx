@@ -60,7 +60,7 @@ export default async function ManagedWatchPage({ params }: { params: Promise<{ c
       <ul className="space-y-2">{[...runs].reverse().map(r => <li className="rounded border p-4" key={r.runId}>
         <p>{r.periodFrom} 〜 {r.periodTo} ／ {states[r.status] ?? "要確認"}</p>
         <p className="text-sm text-gray-600">準備: {r.createdAt} ／ 受理: {r.acceptedAt ?? "未受理"} ／ 完了: {r.completedAt ?? "未完了"}</p>
-        {["prepared", "running", "unknown"].includes(r.status) && <WatchStart caseId={caseId} runId={r.runId} reserved={r.startReservationId !== null} />}
+        {(trial || ["prepared", "running", "unknown"].includes(r.status)) && <WatchStart caseId={caseId} runId={r.runId} reserved={r.startReservationId !== null || (trial && r.status!=="prepared")} />}
       </li>)}</ul><p>比較の完了と、期間内の公報取得・納品版の完成は別々に確認します。結果不明の処理は再開始前に照合が必要です。</p>
     </section>
     {!!originals.length && <section><h2 className="text-xl font-semibold">保存した添付原本</h2><ul className="mt-3 space-y-2">{originals.map(o => <li key={`${o.kind}-${o.id}`}>

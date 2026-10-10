@@ -10,6 +10,8 @@ import { managedDigest, validateManagedComparisons, type ManagedComparison } fro
 import { managedDeliveryDueOn, managedPeriodForPublication, JAPAN_HOLIDAYS, validateManagedPeriod, type PublicationPeriod } from "../lib/patent-watch/managed-period";
 import { ManagedWatchError } from "../lib/patent-watch/managed-types";
 import type { ManagedArtifactManifest } from "../lib/patent-watch/managed-storage";
+import { trialConfigured } from "../lib/trial/policy";
+import { reserveTrialDatabase } from "../lib/trial/database-capacity";
 type Database = NodePgDatabase<typeof schema>;
 const T = schema.managedWatchDeliveries, R = schema.managedWatchRuns, F = schema.managedWatchFindings;
 const requireState = (ok: unknown) => { if (!ok) throw new ManagedWatchError("incomplete"); };
@@ -17,15 +19,19 @@ export class ManagedDeliveryRepository {
   constructor(private readonly database: Database) {}
   async acquireDistribution() {
     const snapshot = await acquireManagedDistribution(), T = schema.managedDistributionSnapshots;
-    await this.database.insert(T).values(snapshot).onConflictDoNothing({ target: T.sha256 });
+    const [prior]=await this.database.select().from(T).where(eq(T.sha256,snapshot.sha256));
+    const capacity=trialConfigured()&&!prior?await reserveTrialDatabase(this.database,`distribution:${snapshot.sha256}`,Buffer.byteLength(snapshot.csvText)+65536):null;
+    if(!prior)await this.database.insert(T).values(snapshot).onConflictDoNothing({ target: T.sha256 });
     const [stored] = await this.database.select().from(T).where(eq(T.sha256, snapshot.sha256));
     requireState(stored && stored.csvText === snapshot.csvText && stored.sourceUrl === snapshot.sourceUrl);
+    await capacity?.persisted();
     return { sha256: stored.sha256, acquiredAt: stored.acquiredAt };
   }
   async prepare(caseId: number, period: PublicationPeriod, coverageInput: unknown, reason: ManagedDelivery["reason"], deliveredOn: string | null = null, deliveryId:string = randomUUID(), deadline?:AbortSignal) {
     validateManagedPeriod(period);
     const coverage = validateManagedCoverage(coverageInput);
-    return this.database.transaction(async tx => {
+    const capacity=trialConfigured()?await reserveTrialDatabase(this.database,`delivery:${deliveryId}`,1024**2):null;
+    const result=await this.database.transaction(async tx => {
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
       deadline?.throwIfAborted();
       const [already] = await tx.select({id:T.deliveryId}).from(T).where(eq(T.deliveryId,deliveryId));
@@ -164,12 +170,13 @@ export class ManagedDeliveryRepository {
           prefiltered:completed.reduce((n,r)=>n+r.snapshot.candidates.filter(c=>c.publicationDate>=period.from&&c.publicationDate<=period.to).length,0),compared:findings.length,completedRuns:completed.length,failedRuns:failed.length,activeRuns:active.length,
           acquiredAt:new Date(distribution.acquiredAt).toISOString(),comparedAt:lastCompleted?.completedAt?new Date(lastCompleted.completedAt).toISOString():null,
           complete:availableIds.length===packages.length && processedDocuments===importedDocuments && completed.length>0 && !incompleteDocuments && !unresolvedCorrections && !failed.length && !active.length},findings}));
-      const snapshotJson=JSON.stringify(report);requireState(Buffer.byteLength(snapshotJson)<=16*1024**2);
+      const snapshotJson=JSON.stringify(report);requireState(Buffer.byteLength(snapshotJson)<=(trialConfigured()?1:16)*1024**2);
       await tx.insert(T).values({deliveryId:report.deliveryId,settingId:setting.settingId,caseId,periodFrom:period.from,periodTo:period.to,
         version:report.version,previousDeliveryId:report.previousDeliveryId,reason,status:"prepared",baseDigest:setting.baseDigest,
         distributionSha256:distribution.sha256,snapshotJson,snapshotDigest:managedDigest(report),deliveredOn});
       return report;
     },{isolationLevel:"repeatable read"});
+    await capacity?.persisted();return result;
   }
   async get(caseId:number,deliveryId:string) {
     const [row]=await this.database.select().from(T).where(and(eq(T.caseId,caseId),eq(T.deliveryId,deliveryId)));

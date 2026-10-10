@@ -13,6 +13,7 @@ import { uploadManagedArm } from "../koho-import/upload-arm";
 import { cloudEnvironmentResourceIdSchema } from "../koho-import/cloud-config";
 import { managedArtifactDatabaseTarget } from "./managed-artifact-budget";
 import { trialConfigured, TrialError } from "../trial/policy";
+import { webTrialWatch } from "../trial/job";
 
 export const managedWebWatchSettingsSchema = managedCloudConfigSchema.omit({ operationId: true, runs: true, expiresAt: true,
   budgetProof: true, serviceBudget: true, budgetBinding: true, expectedEnvironmentResourceId: true }).extend({
@@ -34,6 +35,7 @@ export async function configuredManagedWebWatch(env = process.env) {
 /** The run UUID is also its unique one-Job start UUID. Reloads recover it from
  * the DB, not browser memory; an uncertain reservation never creates a new ID. */
 export async function webManagedWatch(db: NodePgDatabase<typeof schema>, caseId: number, runId: string, action: "start" | "reconcile", deadline: AbortSignal) {
+  if (trialConfigured()) return webTrialWatch(db,caseId,runId,action,deadline);
   const c = await configuredManagedWebWatch();
   if (!c.caseAllowList.includes(caseId)) throw new ManagedWatchError("not_found");
   const watch = new ManagedWatchRepository(db), starts = new ManagedCloudStartRepository(db);

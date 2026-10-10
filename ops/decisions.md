@@ -455,6 +455,17 @@ OWNER原本の非公開digestと実行profileを、既存署名review内の完�
 署名、exact-state CAS、結果不明writeの照合、worker/stage再開の期限検査を維持する。
 実承認値や実原本は公開fixtureやコードへ埋め込まず、完全架空の値で境界を検証する。
 
+## 2026-10-10: Issue #148 — 試用専用の永続予約と実行経路
+
+単一署名targetへ固定し、旧production台帳・41-call workerを転用しない。
+費用/回数/保存量/入力packageをETag台帳で累積し、phase・月・image更新で消さない。
+Jobはterminal照合まで同時1。AI/Blob/DB/開始ACKが不明なら予約保持・再送禁止。
+MI認証待機後の送信直前に期限を検査し、終了後は既送信分だけ精算する。
+完全な小容量公開packageとsample XMLをLocal operatorから専用DBへ投入する。
+配備・実AI・画面/帳票・実費受入はLocalで別証拠とし、未実施をGOへ読み替えない。
+DB接続待ちで実装を止めず、未承認network変更は具体的な最小1件へ分離する。
+設定・負試験・配備/撤去・利用案内は `ops/owner-trial.md` に記録する。
+
 ## 2026-10-06: Issue #139 — 明示的な請求項参照の限定改善
 
 請求項番号に続く限定した名詞表現、全角コンマ、読点を伴う接続詞、

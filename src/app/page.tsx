@@ -39,7 +39,7 @@ export default async function HomePage() {
       <h1 className="text-3xl font-bold mb-6">Patent Prior-Art Check</h1>
 
       {!trial && <p className="mb-6"><Link href="/admin/koho-updates" className="text-blue-700 underline">公報データを更新する</Link></p>}
-      {trial && <p className="mb-6">公開サンプルを選んで比較を試せます。入力・抽出の練習用案件は最大5件です。比較には運営者が準備したサンプルを使用します。</p>}
+      {trial && <p className="mb-6">公開サンプルを選んで比較を試せます。案件はサンプルを含め最大5件です。比較には運営者が準備したサンプルを使用します。</p>}
       <NewCaseForm trial={trial} />
 
       <section className="mt-8">

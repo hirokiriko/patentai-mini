@@ -9,6 +9,17 @@ const name = z.string().regex(/^[a-z][a-z0-9_-]{1,62}$/);
 const container = z.string().regex(/^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$/).refine(v => !v.includes("--"));
 const resource = z.string().regex(/^\/subscriptions\/[a-f0-9-]{36}\/resourceGroups\/[a-zA-Z0-9_.()-]{1,90}\/providers\/Microsoft\.App\/(?:jobs|managedEnvironments)\/[a-zA-Z0-9-]{1,60}$/);
 const httpsOrigin = z.string().refine(v => { try { const u = new URL(v); return u.protocol === "https:" && u.origin === v; } catch { return false; } });
+const yen = z.number().int().nonnegative().max(1_000_000);
+const rates = z.object({ inputYenPerMillion: yen.refine(v => v > 0), outputYenPerMillion: yen.refine(v => v > 0) }).strict();
+export const trialCostProfileSchema = z.object({
+  checkedAt: z.iso.datetime(), validUntil: z.iso.datetime(),
+  normal: rates, mini: rates,
+  // Reviewed tax-inclusive upper forecasts, including shared/unknown obligations.
+  initialOtherYen: yen, retainedOtherYen: yen, monthOtherYen: yen,
+  sharedRemainingYen: yen, jobYenPerHour: yen.refine(v => v > 0),
+  databaseBaselineBytes: z.number().int().nonnegative().safe(),
+}).strict().refine(p => Date.parse(p.validUntil) > Date.parse(p.checkedAt) &&
+  Date.parse(p.validUntil) - Date.parse(p.checkedAt) <= 24 * 60 * 60_000);
 
 /** Signed operator configuration. Never accepted from HTTP input or a group header.
  * The fixed dates and limits cannot be enlarged by a profile revision or restart. */
@@ -18,7 +29,7 @@ export const trialPolicySchema = z.object({
   retentionReviewAt: z.literal(TRIAL_RETENTION_REVIEW), codeSha: z.string().regex(/^[a-f0-9]{40}$/),
   auth: z.object({ tenantId: z.uuid(), ownerId: z.uuid(), clientId: z.uuid(), origin: httpsOrigin }).strict(),
   database: z.object({ host: z.string().regex(/^[a-z0-9-]+\.postgres\.database\.azure\.com$/),
-    port: z.literal(5432), database: name, webUser: name, workerUser: name }).strict(),
+    port: z.literal(5432), database: name, webUser: name, workerUser: name, migratorUser:name.optional(), ownerRole:name.optional() }).strict(),
   storage: z.object({ account: z.string().regex(/^[a-z0-9]{3,24}$/), originals: container, artifacts: container, budget: container }).strict(),
   identity: z.object({ webClientId: z.uuid(), workerClientId: z.uuid() }).strict(),
   ai: z.object({ resourceName: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9-]{1,62}$/),
@@ -26,6 +37,8 @@ export const trialPolicySchema = z.object({
     apiVersion: z.string().regex(/^(?:v1|\d{4}-\d{2}-\d{2}(?:-preview)?)$/) }).strict(),
   jobResourceId: resource.refine(v => v.includes("/jobs/")),
   environmentResourceId: resource.refine(v => v.includes("/managedEnvironments/")),
+  image: z.string().regex(/^[a-z0-9.-]+\.azurecr\.io\/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}$/).optional(),
+  cost: trialCostProfileSchema.optional(),
   samples: z.array(z.object({ caseId: z.number().int().positive().max(2_147_483_647),
     from: z.iso.date(), through: z.iso.date() }).strict().refine(v => v.from <= v.through)).max(5),
 }).strict().superRefine((p, ctx) => {
@@ -35,6 +48,8 @@ export const trialPolicySchema = z.object({
   if (p.database.webUser === p.database.workerUser || p.identity.webClientId.toLowerCase() === p.identity.workerClientId.toLowerCase() ||
     new Set([p.storage.originals, p.storage.artifacts, p.storage.budget]).size !== 3 || new Set(p.samples.map(s => s.caseId)).size !== p.samples.length)
     ctx.addIssue({ code: "custom", message: "invalid_separation" });
+  const roles=[p.database.webUser,p.database.workerUser,p.database.migratorUser,p.database.ownerRole].filter(Boolean);
+  if(new Set(roles).size!==roles.length)ctx.addIssue({code:"custom",message:"invalid_separation"});
 });
 export type TrialPolicy = z.infer<typeof trialPolicySchema>;
 export class TrialError extends Error { constructor(public readonly code = "trial_unavailable") { super(code); this.name = "TrialError"; } }

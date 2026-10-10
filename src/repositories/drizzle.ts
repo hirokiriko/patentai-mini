@@ -1,6 +1,7 @@
 import { db } from "../db";
 import { readTrialPolicy, requireTrialActive, trialConfigured, TrialError } from "../lib/trial/policy";
 import { trialCaseInput } from "../lib/trial/input";
+import { checkTrialDatabaseSize } from "../lib/trial/database-capacity";
 import { lockManagedCase } from "./managed-case-graph";
 import { isOriginalFileBlobName, parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
 import { APPLICANTS_JSON_BYTES, projectFindingBibliography } from "../lib/patent-watch/bibliography";
@@ -735,6 +736,7 @@ export const caseRepo: CaseRepository = {
     if (trialConfigured()) {
       const input = trialCaseInput.parse(data), policy = readTrialPolicy();
       requireTrialActive(policy);
+      await checkTrialDatabaseSize(db);
       return db.transaction(async tx => {
         await tx.execute(sql`select pg_advisory_xact_lock(148, 1)`);
         const existing = await tx.select({ id: cases.caseId }).from(cases).limit(5);
@@ -755,6 +757,7 @@ export const caseRepo: CaseRepository = {
     return row;
   },
   async update(caseId, data) {
+    if(trialConfigured())await checkTrialDatabaseSize(db);
     const updates: Record<string, unknown> = { updatedAt: sql`now()` };
     if (data.title !== undefined) updates.title = data.title;
     if (data.status !== undefined) updates.status = data.status;
@@ -954,13 +957,16 @@ export async function saveKohoImportPlan(
   expectedDisposition?: "inserted" | "reused",
   managedSources?: readonly ManagedClaimSource[],
   managedReceipt?: ManagedPackageReceipt,
+  verifyOnly = false,
 ) {
+    if(verifyOnly&&(!reuseExisting||expectedDisposition!=="reused"))throw new Error("koho_read_only_contract_required");
     const validatedPlan = validatedPlanSnapshot(plan);
     const claimSources = managedSources ? validateManagedImportSources(validatedPlan, managedSources) : null;
     const receipt = managedReceipt ? validateManagedPackageReceipt(validatedPlan, managedReceipt) : null;
     if (receipt && (!reuseExisting || !claimSources)) throw new Error("managed_receipt_requires_immutable_claim_sources");
 
     return database.transaction(async (tx) => {
+      if(verifyOnly)await tx.execute(sql`set transaction read only`);
       await tx.execute(
         sql`select pg_advisory_xact_lock(${KOHO_IMPORT_WATCH_CURSOR_LOCK_ID}::bigint)`,
       );
@@ -971,7 +977,7 @@ export async function saveKohoImportPlan(
           const [prior] = await tx.select().from(managedImportReceipts).where(eq(managedImportReceipts.importId, importId));
           if (prior) {
             if (Object.entries(row).some(([key, value]) => prior[key as keyof typeof prior] !== value)) throw new Error("managed_receipt_mismatch");
-          } else await tx.insert(managedImportReceipts).values(row);
+          } else {if(verifyOnly)throw new Error("managed_receipt_missing");await tx.insert(managedImportReceipts).values(row);}
         }
         if (!claimSources?.length) return;
         const documents = await tx.select({ documentId: kohoImportDocuments.documentId, path: kohoImportDocuments.normalizedEntryPath })
@@ -990,7 +996,7 @@ export async function saveKohoImportPlan(
             claimsJson: value.claimsJson, claimsDigest: value.claimsDigest, status: value.status, reason: value.reason };
           if (prior) {
             if (Object.entries(row).some(([key, val]) => prior[key as keyof typeof prior] !== val)) throw new Error("managed_claim_source_mismatch");
-          } else additions.push(row);
+          } else {if(verifyOnly)throw new Error("managed_claim_source_missing");additions.push(row);}
         }
         for (let offset = 0; offset < additions.length; offset += 100) {
           await tx.insert(managedPublicationClaims).values(additions.slice(offset, offset + 100));

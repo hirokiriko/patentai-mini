@@ -1,7 +1,12 @@
 import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { draftPatentRepo } from "@/repositories";
-import { extractClaims } from "@/lib/extract-claims";
+import { extractClaims, extractTrialClaims } from "@/lib/extract-claims";
+import { trialConfigured } from "../../../../../../../lib/trial/policy";
+import { runTrialExtraction } from "../../../../../../../lib/trial/extraction";
+import { db } from "../../../../../../../db";
+import { reserveTrialDatabase } from "../../../../../../../lib/trial/database-capacity";
+import { trialHash } from "../../../../../../../lib/trial/ledger";
 
 export const maxDuration = 60;
 
@@ -27,6 +32,14 @@ export const maxDuration = 60;
   }
 
   try {
+    if (trialConfigured()) {
+      if(draft.parsedText.length>15000)return NextResponse.json({error:"抽出演習の本文は15,000文字以内です"},{status:400});
+      const capacity=await reserveTrialDatabase(db,`extract:${draftIdNum}:${trialHash(draft.parsedText)}`,256*1024);
+      const updated = await runTrialExtraction(Number(caseId),draftIdNum,draft.parsedText,
+        () => extractTrialClaims(draft.parsedText!), claims => draftPatentRepo.updateExtractedClaims(draftIdNum,JSON.stringify(claims)));
+      await capacity.persisted();
+      return NextResponse.json(updated);
+    }
     const claims = await extractClaims(draft.parsedText);
 
     const updated = await draftPatentRepo.updateExtractedClaims(

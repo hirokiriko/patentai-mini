@@ -1,7 +1,9 @@
 import { randomUUID } from "crypto";
 import { BlobServiceClient } from "@azure/storage-blob";
 import { isOriginalFileBlobName } from "./original-file-metadata";
-import { trialConfigured, TrialError } from "./trial/policy";
+import { readTrialPolicy, requireTrialActive, trialConfigured, TrialError } from "./trial/policy";
+import { trialContainer } from "./trial/storage";
+import { trialStorageAdmission } from "./trial/storage-admission";
 
 export { isOriginalFileBlobName } from "./original-file-metadata";
 
@@ -71,14 +73,13 @@ export async function storeOriginalFile(params: {
   kind?: string;
 }): Promise<StoredOriginalFile | null> {
   if (params.buffer.length < 1 || params.buffer.length > 50 * 1024**2) throw new Error("original_file_size_invalid");
-  const config = getBlobConfig();
-  if (!config) {
+  const trial = trialConfigured(), config = trial ? null : getBlobConfig();
+  if (!trial && !config) {
     return null;
   }
 
-  const blobServiceClient = BlobServiceClient.fromConnectionString(config.connectionString, { retryOptions: { maxTries: 1, tryTimeoutInMs: 20_000 } });
-  const containerClient = blobServiceClient.getContainerClient(config.containerName);
-  await containerClient.createIfNotExists({ abortSignal: AbortSignal.timeout(20_000) });
+  const containerClient = trial ? trialContainer("originals") : BlobServiceClient.fromConnectionString(config!.connectionString, { retryOptions: { maxTries: 1, tryTimeoutInMs: 20_000 } }).getContainerClient(config!.containerName);
+  if (!trial) await containerClient.createIfNotExists({ abortSignal: AbortSignal.timeout(20_000) });
   const properties = await containerClient.getProperties({ abortSignal: AbortSignal.timeout(20_000) });
   if (properties.blobPublicAccess) throw new Error("original_storage_unavailable");
 
@@ -93,6 +94,9 @@ export async function storeOriginalFile(params: {
 
   const contentType = params.contentType || "application/octet-stream";
   const blockBlobClient = containerClient.getBlockBlobClient(blobName);
+  const reservation = trial ? await trialStorageAdmission("originals",blobName,params.buffer) : null;
+  if (trial) requireTrialActive(readTrialPolicy());
+  try {
   await blockBlobClient.uploadData(params.buffer, {
     conditions: { ifNoneMatch: "*" }, abortSignal: AbortSignal.timeout(20_000),
     blobHTTPHeaders: {
@@ -100,6 +104,8 @@ export async function storeOriginalFile(params: {
       blobCacheControl: "private, no-store",
     },
   });
+  await reservation?.stored();
+  } catch(error) { if(!trial)throw error;await reservation?.unknown().catch(()=>undefined); throw new TrialError("trial_storage_write_unknown"); }
 
   return {
     blobName,
@@ -119,9 +125,9 @@ export function isScopedOriginalName(name: string, caseId: number, category: Blo
 /** The caller obtains name from a case-bound DB row, never from a URL parameter. */
 export async function readOriginalFile(caseId: number, category: BlobCategory, name: string) {
   if (!isScopedOriginalName(name, caseId, category)) throw new Error("original_not_found");
-  const config = getBlobConfig(); if (!config) throw new Error("original_storage_unavailable");
+  const trial = trialConfigured(), config = trial ? null : getBlobConfig(); if (!trial && !config) throw new Error("original_storage_unavailable");
   try {
-    const container = BlobServiceClient.fromConnectionString(config.connectionString, { retryOptions: { maxTries: 1, tryTimeoutInMs: 20_000 } }).getContainerClient(config.containerName);
+    const container = trial ? trialContainer("originals") : BlobServiceClient.fromConnectionString(config!.connectionString, { retryOptions: { maxTries: 1, tryTimeoutInMs: 20_000 } }).getContainerClient(config!.containerName);
     const properties = await container.getProperties({ abortSignal: AbortSignal.timeout(20_000) });
     if (properties.blobPublicAccess) throw Error();
     const blob = container.getBlobClient(name), metadata = await blob.getProperties({ abortSignal: AbortSignal.timeout(20_000) });
