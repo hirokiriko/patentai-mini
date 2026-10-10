@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { readTrialPolicy, trialPolicyBytes, type TrialPolicy } from "../src/lib/trial/policy";
 import { operatorPolicyBinding, operatorTicketDigest, type OperatorTicket } from "../src/lib/trial/operator-access";
-import { executeTrialSession, MAX_SESSION_REQUESTS, prepareTrialSession, runTrialSessionStdin, saveTrialRuntimePolicy, SessionPermit, type RuntimePolicyIO, type SessionClock } from "./trial-session";
+import { bindTrialSessionBaseline, executeTrialSession, MAX_BOOTSTRAP_BASELINE_BYTES, MAX_SESSION_REQUESTS, prepareTrialSession, runTrialSessionStdin, saveTrialRuntimePolicy, SessionPermit, type RuntimePolicyIO, type SessionClock } from "./trial-session";
 
 // Fixed fictional test material. This test never generates a key pair or opens a credential file.
 const key = createPrivateKey({ key: Buffer.from("302e020100300506032b657004220420" + "01".repeat(32), "hex"), format: "der", type: "pkcs8" });
@@ -22,6 +22,9 @@ function fixture() {
     database: { host: "fixture.postgres.database.azure.com", port: 5432, database: "trial_fixture", webUser: "trial_web", workerUser: "trial_worker", migratorUser: "trial_migrator", ownerRole: "trial_owner" },
     storage: { account: "fixturestorage", originals: "fixture-originals", artifacts: "fixture-artifacts", budget: "fixture-budget" },
     identity: { webClientId: id, workerClientId: second }, ai: { resourceName: "fixture-ai", normalDeployment: "normal", miniDeployment: "mini", apiVersion: "v1" },
+    cost: { checkedAt: iso(start), validUntil: iso(start + 3_600_000), normal: { inputYenPerMillion: 100, outputYenPerMillion: 200 },
+      mini: { inputYenPerMillion: 10, outputYenPerMillion: 20 }, initialOtherYen: 100, retainedOtherYen: 100, monthOtherYen: 100,
+      sharedRemainingYen: 0, jobYenPerHour: 100, databaseBaselineBytes: 1024 },
     jobResourceId: `/subscriptions/${id}/resourceGroups/fixture/providers/Microsoft.App/jobs/fixture`,
     environmentResourceId: `/subscriptions/${id}/resourceGroups/fixture/providers/Microsoft.App/managedEnvironments/fixture`,
     samples: [{ caseId: 1, from: "2026-01-01", through: "2026-02-01" }],
@@ -244,7 +247,7 @@ describe("owner-private runtime policy artifact", () => {
     p.localOperator!.recoveryDirectoryDigest = createHash("sha256").update(resolve(input.recoveryDirectory)).digest("hex");
     input.environment.TRIAL_POLICY_JSON = JSON.stringify(p);
     input.environment.TRIAL_POLICY_SIGNATURE = sign(null, trialPolicyBytes(p), key).toString("base64");
-    return { input, prepared: prepareTrialSession(input, clock) };
+    return { input, prepared: bindTrialSessionBaseline(prepareTrialSession(input, clock), 8192) };
   }
   it("writes only signed public environment with exclusive creation and fsync, without altering policy dates", async () => {
     const { input, prepared } = preparedArtifact(), order: string[] = []; let saved = "";
@@ -252,7 +255,7 @@ describe("owner-private runtime policy artifact", () => {
       sync: vi.fn(async () => { order.push("sync"); }), close: vi.fn(async () => { order.push("close"); }) };
     const io: RuntimePolicyIO = { inspect: vi.fn(async () => ({ isDirectory: () => true, isSymbolicLink: () => false })),
       create: vi.fn(async () => { order.push("create"); return handle; }) };
-    const result = await saveTrialRuntimePolicy(prepared, io);
+    const result = await saveTrialRuntimePolicy(prepared, "final", io);
     expect(io.create).toHaveBeenCalledWith(join(input.recoveryDirectory, "trial-runtime-policy.json"), "wx", 0o600);
     expect(order).toEqual(["create", "write", "sync", "close"]);
     expect(JSON.parse(saved)).toEqual(prepared.common.environment);
@@ -266,19 +269,21 @@ describe("owner-private runtime policy artifact", () => {
   it("does not overwrite an existing or uncertain artifact and rejects the wrong directory", async () => {
     const { prepared } = preparedArtifact(), create = vi.fn(async () => { throw Error("EEXIST"); });
     const io: RuntimePolicyIO = { inspect: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }), create };
-    await expect(saveTrialRuntimePolicy(prepared, io)).rejects.toThrow(); expect(create).toHaveBeenCalledOnce();
-    const changed = { ...prepared, common: { ...prepared.common, recoveryDirectory: resolve("different-directory") } };
-    await expect(saveTrialRuntimePolicy(changed, io)).rejects.toThrow(); expect(create).toHaveBeenCalledOnce();
+    await expect(saveTrialRuntimePolicy(prepared, "final", io)).rejects.toThrow(); expect(create).toHaveBeenCalledOnce();
+    const changed = prepared; changed.common = { ...changed.common, recoveryDirectory: resolve("different-directory") };
+    await expect(saveTrialRuntimePolicy(changed, "final", io)).rejects.toThrow(); expect(create).toHaveBeenCalledOnce();
   });
   it("closes a partial artifact after fsync failure and never retries its creation", async () => {
     const { prepared } = preparedArtifact(), close = vi.fn(async () => undefined), create = vi.fn(async () => ({
       writeFile: async () => undefined, sync: async () => { throw Error("fsync failed"); }, close }));
-    await expect(saveTrialRuntimePolicy(prepared, { inspect: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }), create })).rejects.toThrow();
+    await expect(saveTrialRuntimePolicy(prepared, "final", { inspect: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }), create })).rejects.toThrow();
     expect(create).toHaveBeenCalledOnce(); expect(close).toHaveBeenCalledOnce();
   });
   it("awaits durable artifact completion before any bootstrap or operator dispatch", async () => {
     const { prepared, permit } = controlled(); let finish: () => void = () => undefined;
-    const runtimePolicy = vi.fn(async () => new Promise<void>(resolve => { finish = resolve; }));
+    const runtimePolicy = vi.fn(async (_prepared: unknown, phase: "pending" | "final") => {
+      if (phase === "pending") await new Promise<void>(resolve => { finish = resolve; });
+    });
     const bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
     const work = executeTrialSession(prepared, permit, { runtimePolicy, bootstrap, operator });
     try { await vi.advanceTimersByTimeAsync(0); expect(runtimePolicy).toHaveBeenCalledOnce(); expect(bootstrap).not.toHaveBeenCalled(); expect(operator).not.toHaveBeenCalled();
@@ -289,6 +294,62 @@ describe("owner-private runtime policy artifact", () => {
     const { prepared, permit } = controlled(), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
     try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: async () => { throw Error("unknown save"); }, bootstrap, operator })).rejects.toThrow();
       expect(bootstrap).not.toHaveBeenCalled(); expect(operator).not.toHaveBeenCalled(); }
+    finally { permit.dispose(); }
+  });
+  it("uses a separate pending filename and cannot save an unmeasured final policy", async () => {
+    const { input } = preparedArtifact(), prepared = prepareTrialSession(input, clock), files: string[] = [];
+    const io: RuntimePolicyIO = { inspect: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }),
+      create: async path => { files.push(path); return { writeFile: async () => undefined, sync: async () => undefined, close: async () => undefined }; } };
+    await saveTrialRuntimePolicy(prepared, "pending", io);
+    expect(files).toEqual([join(input.recoveryDirectory, "trial-runtime-policy.pending.json")]);
+    await expect(saveTrialRuntimePolicy(prepared, "final", io)).rejects.toThrow(); expect(files).toHaveLength(1);
+    await saveTrialRuntimePolicy(bindTrialSessionBaseline(prepared, 8192), "final", io);
+    expect(files[1]).toBe(join(input.recoveryDirectory, "trial-runtime-policy.json"));
+  });
+});
+
+describe("measured baseline binding before ledger initialization", () => {
+  it("requires an existing signed cost profile before any bootstrap", () => {
+    const input = fixture(), p = readTrialPolicy(input.environment); delete p.cost;
+    input.access.policyDigest = operatorPolicyBinding(p); p.localOperator!.ticketDigest = operatorTicketDigest(input.access);
+    input.environment.TRIAL_POLICY_JSON = JSON.stringify(p); input.environment.TRIAL_POLICY_SIGNATURE = sign(null, trialPolicyBytes(p), key).toString("base64");
+    expect(() => prepareTrialSession(input, clock)).toThrow();
+  });
+  it("changes only measured DB bytes and derived ticket digests, keeping prices, targets and all dates", () => {
+    const initial = prepareTrialSession(fixture(), clock), before = readTrialPolicy(initial.common.environment), final = bindTrialSessionBaseline(initial, 32 * 1024 ** 2);
+    const after = readTrialPolicy(final.common.environment);
+    expect(after).toEqual({ ...before, cost: { ...before.cost!, databaseBaselineBytes: 32 * 1024 ** 2 },
+      localOperator: { ...before.localOperator!, ticketDigest: operatorTicketDigest(final.common.access) } });
+    expect(final.common.access).toEqual({ ...initial.common.access, policyDigest: operatorPolicyBinding(after) });
+    expect(final.common.environment.TRIAL_POLICY_PUBLIC_KEY).toBe(initial.common.environment.TRIAL_POLICY_PUBLIC_KEY);
+    expect(() => bindTrialSessionBaseline(initial, 8192)).toThrow();
+  });
+  it.each([-1, 0.5, NaN, Infinity, MAX_BOOTSTRAP_BASELINE_BYTES + 1])("rejects invalid/unapproved measured capacity %s before any operator", async bytes => {
+    const { prepared, permit } = controlled(), operator = vi.fn(async (value: unknown) => operatorSuccess(value)), artifact = vi.fn(artifactSuccess);
+    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifact,
+      bootstrap: async () => ({ ...bootstrapSuccess(), databaseBaselineBytes: bytes }), operator })).rejects.toThrow();
+      expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledOnce(); }
+    finally { permit.dispose(); }
+  });
+  it("orders pending, bootstrap, measured final and every operator with one shared final signed policy", async () => {
+    const { prepared, permit } = controlled(), order: string[] = [], environments: string[] = [];
+    try { await expect(executeTrialSession(prepared, permit, {
+      runtimePolicy: async (p, phase) => { order.push(phase); const policy = readTrialPolicy(p.common.environment);
+        expect(policy.cost!.databaseBaselineBytes).toBe(phase === "pending" ? 1024 : 8192); if (phase === "final") environments.push(JSON.stringify(p.common.environment)); },
+      bootstrap: async () => { order.push("bootstrap"); return bootstrapSuccess(); },
+      operator: async value => { order.push("operator"); const v = value as { environment: Record<string, string>; access: OperatorTicket };
+        environments.push(JSON.stringify(v.environment)); const policy = readTrialPolicy(v.environment);
+        expect(policy.cost!.databaseBaselineBytes).toBe(8192); expect(operatorPolicyBinding(policy)).toBe(v.access.policyDigest);
+        expect(policy.localOperator!.ticketDigest).toBe(operatorTicketDigest(v.access)); return operatorSuccess(value); },
+    })).resolves.toEqual({ status: "completed", completedRequests: 2 });
+      expect(order).toEqual(["pending", "bootstrap", "final", "operator", "operator"]); expect(new Set(environments).size).toBe(1);
+    } finally { permit.dispose(); }
+  });
+  it("retains unknown overall and sends no operator when measured final save fails", async () => {
+    const { prepared, permit } = controlled(), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
+    const artifact = vi.fn(async (_p: unknown, phase: "pending" | "final") => { if (phase === "final") throw Error("fsync unknown"); });
+    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifact, bootstrap, operator })).rejects.toThrow();
+      expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledTimes(2); }
     finally { permit.dispose(); }
   });
 });

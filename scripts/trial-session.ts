@@ -11,6 +11,7 @@ import { managedSettingSchema } from "../src/lib/patent-watch/managed-types";
 
 const MAX_INPUT = 2 * 1024 ** 2;
 export const MAX_SESSION_REQUESTS = 16; // Bootstrap consumes up to four of the process-wide 20 connections.
+export const MAX_BOOTSTRAP_BASELINE_BYTES = 64 * 1024 ** 2;
 const databaseWindowSchema = operatorTicketSchema.shape.databaseWindow.unwrap();
 type DatabaseWindow = z.infer<typeof databaseWindowSchema>;
 const environmentSchema = z.object({ DEPLOYMENT_KIND: z.literal("trial"), TRIAL_POLICY_JSON: z.string(),
@@ -28,6 +29,12 @@ const permitSchema = z.object({ type: z.literal("permit"), lifecycleId: z.uuidv4
 export type SessionClock = { utc(): number; monotonic(): number };
 const systemClock: SessionClock = { utc: () => Date.now(), monotonic: () => performance.now() };
 const failure = () => new TrialError("trial_session_reconciliation_required");
+type SessionCommon = { environment: z.infer<typeof environmentSchema>; access: z.infer<typeof operatorTicketSchema>;
+  databaseUrl: string; recoveryDirectory: string };
+// Keep the already-verified private KeyObject only in a captured, single-use
+// signer. It cannot be serialized into the prepared state or a runtime artifact.
+const baselineSigners = new WeakMap<object, (bytes: number) => SessionCommon>();
+const measuredSessions = new WeakSet<object>();
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw failure();
   return value as Record<string, unknown>;
@@ -65,7 +72,7 @@ function validateReferences(request: unknown, index: number, requests: unknown[]
 export function prepareTrialSession(value: unknown, clock: SessionClock = systemClock) {
   const input = trialSessionInput.parse(value), original = readTrialPolicy(input.environment);
   const ticket = operatorTicketSchema.parse(input.access), prior = ticket.databaseWindow, actual = input.databaseWindow;
-  if (!prior || !original.localOperator || original.phase !== "initial" ||
+  if (!prior || !original.localOperator || !original.cost || original.phase !== "initial" ||
     operatorTicketDigest(ticket) !== original.localOperator.ticketDigest || ticket.policyDigest !== operatorPolicyBinding(original)) throw failure();
   for (const key of ["lifecycleId", "guardianNonce", "ruleId", "journalUrl"] as const) if (prior[key] !== actual[key]) throw failure();
   const began = Date.parse(actual.jobStartedAt), end = Date.parse(actual.useUntil), now = clock.utc();
@@ -93,7 +100,26 @@ export function prepareTrialSession(value: unknown, clock: SessionClock = system
     const refs = validateReferences(request, index, input.requests);
     if (!refs.length) trialOperatorInput.parse({ ...common, request });
   });
-  return { bootstrap, common, requests: input.requests, databaseWindow: actual };
+  const prepared = { bootstrap, common, requests: input.requests, databaseWindow: actual };
+  baselineSigners.set(prepared, (bytes: number) => {
+    const measured = trialPolicySchema.parse({ ...policy, cost: { ...policy.cost!, databaseBaselineBytes: bytes } });
+    const measuredAccess = operatorTicketSchema.parse({ ...access, policyDigest: operatorPolicyBinding(measured) });
+    measured.localOperator = { ...policy.localOperator!, ticketDigest: operatorTicketDigest(measuredAccess) };
+    const measuredEnvironment = { ...environment, TRIAL_POLICY_JSON: JSON.stringify(measured),
+      TRIAL_POLICY_SIGNATURE: sign(null, trialPolicyBytes(measured), privateKey).toString("base64") };
+    const confirmed = readTrialPolicy(measuredEnvironment), measuredCheck = new OperatorAccess(measuredAccess, confirmed, clock);
+    try { measuredCheck.check(0); } finally { measuredCheck.dispose(); }
+    return { ...common, environment: measuredEnvironment, access: measuredAccess };
+  });
+  return prepared;
+}
+
+/** The sole post-bootstrap policy update: an actually measured bounded DB size.
+ * Prices, budget estimates, policy/grant dates and DB targets are left intact. */
+export function bindTrialSessionBaseline(prepared: ReturnType<typeof prepareTrialSession>, bytes: number) {
+  const signer = baselineSigners.get(prepared); baselineSigners.delete(prepared);
+  if (!signer || !Number.isSafeInteger(bytes) || bytes < 0 || bytes > MAX_BOOTSTRAP_BASELINE_BYTES) throw failure();
+  const measured = { ...prepared, common: signer(bytes) }; measuredSessions.add(measured); return measured;
 }
 
 /** Parent EOF, permit expiry and clock rollback are fatal for the whole DB worker.
@@ -160,7 +186,8 @@ export type RuntimePolicyIO = {
 };
 /** The launcher ACL-checks this existing owner-private directory. Exclusive
  * creation is intentional: a partial/unknown prior save is never overwritten. */
-export async function saveTrialRuntimePolicy(prepared: PreparedSession, io: RuntimePolicyIO = { inspect: lstat, create: open }) {
+export async function saveTrialRuntimePolicy(prepared: PreparedSession, phase: "pending" | "final", io: RuntimePolicyIO = { inspect: lstat, create: open }) {
+  if ((phase === "pending" && !baselineSigners.has(prepared)) || (phase === "final" && !measuredSessions.has(prepared))) throw failure();
   const environment = environmentSchema.parse(prepared.common.environment), policy = readTrialPolicy(environment);
   const directory = prepared.common.recoveryDirectory, hash = (value: string) => createHash("sha256").update(value).digest("hex");
   if (!isAbsolute(directory) || hash(resolve(directory)) !== policy.localOperator?.recoveryDirectoryDigest) throw failure();
@@ -168,11 +195,12 @@ export async function saveTrialRuntimePolicy(prepared: PreparedSession, io: Runt
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw failure();
   const serialized = JSON.stringify(environment) + "\n";
   if (Buffer.byteLength(serialized) > 65536) throw failure();
-  const handle = await io.create(join(directory, "trial-runtime-policy.json"), "wx", 0o600);
+  if (phase !== "pending" && phase !== "final") throw failure();
+  const handle = await io.create(join(directory, phase === "pending" ? "trial-runtime-policy.pending.json" : "trial-runtime-policy.json"), "wx", 0o600);
   try { await handle.writeFile(serialized); await handle.sync(); } finally { await handle.close(); }
   return { sha256: hash(serialized) };
 }
-export type SessionAdapters = { runtimePolicy(prepared: PreparedSession): Promise<unknown>;
+export type SessionAdapters = { runtimePolicy(prepared: PreparedSession, phase: "pending" | "final"): Promise<unknown>;
   bootstrap(value: unknown): Promise<unknown>; operator(value: unknown): Promise<unknown> };
 function requireOperatorResult(request: unknown, value: unknown) {
   const r = record(request), result = record(value);
@@ -191,11 +219,14 @@ function requireOperatorResult(request: unknown, value: unknown) {
 export async function executeTrialSession(prepared: ReturnType<typeof prepareTrialSession>, permit: SessionPermit,
   adapters: SessionAdapters = { runtimePolicy: saveTrialRuntimePolicy, bootstrap: runTrialBootstrap, operator: runTrialOperator }) {
   await permit.wait(); permit.check();
-  await abortable(adapters.runtimePolicy(prepared), permit.signal); permit.check();
+  await abortable(adapters.runtimePolicy(prepared, "pending"), permit.signal); permit.check();
   const bootstrapResult = record(await abortable(adapters.bootstrap(prepared.bootstrap), permit.signal)); permit.check();
   if (bootstrapResult.status !== (prepared.bootstrap.mode === "apply" ? "bootstrapped" : "reconciled") ||
     bootstrapResult.cases !== prepared.bootstrap.manifest.cases.length || !Number.isSafeInteger(bootstrapResult.databaseBaselineBytes) ||
-    Number(bootstrapResult.databaseBaselineBytes) < 0 || bootstrapResult.automaticResend !== false) throw failure();
+    Number(bootstrapResult.databaseBaselineBytes) < 0 || Number(bootstrapResult.databaseBaselineBytes) > MAX_BOOTSTRAP_BASELINE_BYTES ||
+    bootstrapResult.automaticResend !== false) throw failure();
+  const final = bindTrialSessionBaseline(prepared, Number(bootstrapResult.databaseBaselineBytes));
+  await abortable(adapters.runtimePolicy(final, "final"), permit.signal); permit.check();
   const results: unknown[] = [];
   for (const [index, template] of prepared.requests.entries()) {
     permit.check(); const request = structuredClone(template), refs = validateReferences(request, index, prepared.requests);
@@ -204,7 +235,7 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
       if (result.status !== "saved" || !Object.hasOwn(result, field)) throw failure();
       record(record(request).setting)[field] = structuredClone(result[field]);
     }
-    const input = trialOperatorInput.parse({ ...prepared.common, request });
+    const input = trialOperatorInput.parse({ ...final.common, request });
     permit.check(); const result = await abortable(adapters.operator(input), permit.signal); permit.check();
     requireOperatorResult(request, result); results.push(result);
   }

@@ -299,8 +299,13 @@ digests, approval records, OWNER grant interval, prearm/seed bounds, original
 signed policy/ticket, existing signing key and DB credentials, fictional source
 paths, absolute Node/compiled-script/recovery paths. No secret is generated.
 Actual T0 must fit the existing signed policy and one-hour ticket. The bridge
-preserves the policy period, changes only its derived operator digest/signature,
-and exports the signed public environment to private trial-runtime-policy.json.
+preserves prices, budgets, policy/grant periods and DB targets. It first saves an
+exclusive/fsynced trial-runtime-policy.pending.json intent, then runs bootstrap.
+Before the first ledger operation it binds the measured DB baseline (at most
+64MiB), derives the matching operator digest/signature with the existing key,
+and saves the final public environment to private trial-runtime-policy.json.
+Never deploy the pending artifact. A failed/unknown final save stops before all
+operator requests and keeps the completed/unknown bootstrap receipts.
 App, worker and ledger must use that exact policy for subsequent validation.
 The ten-minute DB permit is separate from the one-hour data grant.
 
