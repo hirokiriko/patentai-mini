@@ -7,7 +7,7 @@ from . import __main__ as entry
 from .adapters import digest
 from .lifecycle import Denied, initial
 from .test_lifecycle import Clock, Journal, Transport
-from .test_adapters import SERVER, RULE, RID, Credential
+from .test_adapters import SERVER, RULE, RID, Credential,response
 
 
 class EntryTests(unittest.TestCase):
@@ -44,6 +44,24 @@ class EntryTests(unittest.TestCase):
                 with self.assertRaises(Denied):self.assemble()
                 credentials.assert_not_called()
 
+    def test_single_seed_uses_actual_owner_start_and_rejects_changed_deadline(self):
+        self.state.update(cleanup_strategy='single_job',successor_id=None,successor_nonce=None,successor_runtime=None)
+        self.fixed={k:deepcopy(self.state[k]) for k in entry.FIXED}
+        self.state['binding_digest']=digest({'binding':self.config['binding'],'immutable':self.fixed})
+        self.config.update(immutable=deepcopy(self.fixed),seed_not_before=self.clock.utc().isoformat(),
+            prearm_until=(self.clock.utc()+timedelta(seconds=300)).isoformat())
+        for k in ('prepared_at','cleanup_at','deadline','ready_until'):self.config['immutable'][k]='$CURRENT'
+        for k in ('job_started_at','job_deadline'):self.config['immutable']['cloud_guard'][k]='$CURRENT'
+        self.journal.state=deepcopy(self.state)
+        seed=Mock();seed._request.return_value=response(200,self.state,{'etag':'fixed'})
+        with patch.object(entry,'AzureCredential',return_value=Credential()),patch.object(entry,'BlobJournal',side_effect=[seed,self.journal]):
+            runner,*_=entry.assemble(self.config,http=Mock(),clock=self.clock,environment=self.environment)
+        self.assertEqual(runner.actor_id,RID+':'+self.runtime['execution_id'])
+        bad=deepcopy(self.state);bad['cleanup_at']=(self.clock.utc()+timedelta(seconds=601)).isoformat()
+        seed._request.return_value=response(200,bad,{'etag':'fixed'})
+        with patch.object(entry,'AzureCredential',return_value=Credential()),patch.object(entry,'BlobJournal',return_value=seed):
+            with self.assertRaises(Denied):entry.assemble(self.config,http=Mock(),clock=self.clock,environment=self.environment)
+
     def test_main_resolves_only_current_platform_execution_and_requires_readback(self):
         self.config['immutable']['cloud_guard']['execution_id']='/fictional/jobs/guard/executions/$CURRENT'
         self.config['immutable']['cloud_guard']['replica_name']='$CURRENT'
@@ -57,6 +75,11 @@ class EntryTests(unittest.TestCase):
 
     def test_rehearsal_runs_read_lease_cas_without_any_firewall_write(self):
         self.config.update(mode='rehearsal',journal_url='https://fictional.blob.core.windows.net/private/rehearsal.json')
+        runtime={**self.runtime,'job_deadline':(self.clock.utc()+timedelta(seconds=300)).isoformat()}
+        self.state.update(initial(at=self.clock.utc().isoformat(),rule_id=RULE,lifecycle_id=RID,guardian_pid=None,
+            independent_guard_verified=True,cloud_guard=runtime,cleanup_strategy='rehearsal'))
+        self.state['runtime_readback']={**runtime,'at':self.clock.utc().isoformat(),'status':'Running'}
+        self.config['immutable']={k:deepcopy(self.state[k]) for k in entry.FIXED};self.journal.state=deepcopy(self.state)
         runner,*_=self.assemble()
         wire=Transport(self.clock)
         with patch.object(entry,'assemble',return_value=(runner,self.journal,wire,self.clock)),patch.object(entry.Clock,'utc',self.clock.utc):

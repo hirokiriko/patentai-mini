@@ -1,0 +1,63 @@
+import { afterEach,describe,expect,it,vi } from "vitest";
+import { OperatorAccess,operatorPolicyBinding,operatorTicketDigest,type OperatorTicket } from "./operator-access";
+import { DatabasePermit,databasePermitReader,guardDatabasePermit } from "./database-permit";
+import { trialFixture } from "./policy.test-support";
+import { TRIAL_START } from "./policy";
+
+const start=Date.parse(TRIAL_START),id="11111111-1111-4111-8111-111111111111";
+function setup(){
+  vi.useFakeTimers();vi.setSystemTime(start+1000);
+  const p=structuredClone(trialFixture);
+  const ticket:OperatorTicket={schema:1,id,policyDigest:operatorPolicyBinding(p),startsAt:new Date(start).toISOString(),
+    endsAt:new Date(start+3600000).toISOString(),packages:[],samples:[],artifacts:[],
+    databaseWindow:{lifecycleId:id,bindingDigest:"a".repeat(64),guardianNonce:"fictional",ruleId:`/subscriptions/${id}/resourceGroups/fictional/providers/Microsoft.DBforPostgreSQL/flexibleServers/fictional/firewallRules/guard`,
+      journalUrl:`https://${p.storage.account}.blob.core.windows.net/guard/state.json`,jobStartedAt:new Date(start).toISOString(),useUntil:new Date(start+600000).toISOString()}};
+  p.localOperator={ticketDigest:operatorTicketDigest(ticket),recoveryDirectoryDigest:"b".repeat(64)};
+  const access=new OperatorAccess(ticket,p,{utc:()=>Date.now(),monotonic:()=>Date.now()-start});
+  const state=()=>({binding_digest:ticket.databaseWindow!.bindingDigest,lifecycle_id:id,rule_id:ticket.databaseWindow!.ruleId,
+    cleanup_strategy:"single_job",status:"active",usage_allowed:true,close_requested:false,blocked:null,
+    cloud_guard:{nonce:"fictional",job_started_at:ticket.databaseWindow!.jobStartedAt},cleanup_at:ticket.databaseWindow!.useUntil,
+    use_lease_from:new Date(Date.now()).toISOString(),use_lease_until:new Date(Math.min(Date.now()+10000,start+600000)).toISOString()});
+  return{access,state};
+}
+afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
+describe("guardian database permit",()=>{
+  it("renews across a healthy 20 second Blob wait then checks the next SQL",async()=>{
+    const{access,state}=setup(),read=vi.fn(async()=>state()),close=vi.fn(),query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}));
+    const permit=new DatabasePermit(access,read,close),client={query};guardDatabasePermit(client,permit);
+    await client.query("BEGIN" as never);await vi.advanceTimersByTimeAsync(20000);await client.query("COMMIT" as never);
+    expect(read.mock.calls.length).toBeGreaterThan(10);expect(close).not.toHaveBeenCalled();expect(query).toHaveBeenCalledTimes(2);
+    permit.dispose();access.dispose();
+  });
+  it("rejects COMMIT when the guardian withdraws use and permits rollback cleanup",async()=>{
+    const{access,state}=setup();let allowed=true;const close=vi.fn(),query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}));
+    const permit=new DatabasePermit(access,async()=>({...state(),usage_allowed:allowed}),close),client={query};guardDatabasePermit(client,permit);
+    await client.query("BEGIN" as never);allowed=false;
+    await expect(client.query("COMMIT" as never)).rejects.toThrow();await client.query("ROLLBACK" as never);
+    expect(query.mock.calls.map(c=>c[0])).toEqual(["BEGIN","ROLLBACK"]);expect(close).toHaveBeenCalled();permit.dispose();access.dispose();
+  });
+  it("expires the live connection when refresh hangs and never revives it from a late response",async()=>{
+    const{access,state}=setup(),close=vi.fn();let done:(v:unknown)=>void=()=>undefined,calls=0;
+    const permit=new DatabasePermit(access,()=>++calls===1?Promise.resolve(state()):new Promise(r=>{done=r;}),close);
+    await permit.refresh();await vi.advanceTimersByTimeAsync(10001);expect(close).toHaveBeenCalled();
+    done(state());await Promise.resolve();await expect(permit.refresh()).rejects.toThrow();expect(()=>permit.assertSend()).toThrow();permit.dispose();access.dispose();
+  });
+  it("stops before the fixed ten-minute cutoff while the one-hour ticket remains valid",async()=>{
+    const{access,state}=setup(),close=vi.fn(),permit=new DatabasePermit(access,async()=>state(),close);
+    vi.setSystemTime(start+596000);await expect(permit.refresh()).rejects.toThrow();expect(access.check(0)).toBeGreaterThan(0);
+    permit.dispose();access.dispose();
+  });
+  it("rejects oversized leases, wrong bindings and final sends with too little server timeout margin",async()=>{
+    const{access,state}=setup();const s=state(),permit=new DatabasePermit(access,async()=>({...s,use_lease_until:new Date(Date.now()+11000).toISOString()}),vi.fn());
+    await expect(permit.refresh()).rejects.toThrow();permit.dispose();access.dispose();
+  });
+  it("does not send a journal GET when token acquisition passes the DB cutoff",async()=>{
+    const{access}=setup(),network=vi.fn();const read=databasePermitReader(access,{getToken:async()=>{vi.setSystemTime(start+600000);return{token:"fictional"};}},network);
+    await expect(read()).rejects.toThrow();expect(network).not.toHaveBeenCalled();access.dispose();
+  });
+  it("requires ETag and bounded JSON from the exact fixed journal",async()=>{
+    const{access,state}=setup(),network=vi.fn<typeof fetch>(async()=>new Response(JSON.stringify(state()),{headers:{etag:'"fixed"'}}));
+    const value=await databasePermitReader(access,{getToken:async()=>({token:"fictional"})},network)();expect(value.status).toBe("active");
+    expect(network.mock.calls[0][0]).toBe(access.ticket.databaseWindow!.journalUrl);access.dispose();
+  });
+});

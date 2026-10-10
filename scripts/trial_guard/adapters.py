@@ -46,14 +46,14 @@ def _http_child(pipe, request):
     """Only in-memory arguments/pipe; never stdout or raw exception text."""
     connection = None
     try:
-        method, url, headers, body, seconds = request
+        method, url, headers, body, seconds, limit = request
         u = urlsplit(url)
         cls = http.client.HTTPSConnection if u.scheme == 'https' else http.client.HTTPConnection
         connection = cls(u.hostname, u.port, timeout=seconds)
         connection.request(method, u.path + ('?' + u.query if u.query else ''), body=body, headers=headers)
         response = connection.getresponse()
-        content = response.read(1_048_577)
-        if len(content) > 1_048_576:
+        content = response.read(limit+1)
+        if len(content) > limit:
             raise ValueError('response_limit')
         pipe.send((response.status, {k.lower(): v for k, v in response.getheaders()}, content))
     except Exception:
@@ -72,7 +72,8 @@ class BoundedHttp:
             raise Denied('http_target')
         ctx = multiprocessing.get_context('spawn')
         parent, child = ctx.Pipe(duplex=False)
-        process = ctx.Process(target=_http_child, args=(child, (method, url, headers, body, deadline.remaining())), daemon=True)
+        limit=65536 if u.hostname.endswith('.blob.core.windows.net') else 1048576
+        process = ctx.Process(target=_http_child, args=(child, (method, url, headers, body, deadline.remaining(),limit)), daemon=True)
         try:
             process.start(); child.close()
             if not parent.poll(deadline.remaining()):
@@ -143,6 +144,8 @@ class AzureCredential:
 
 class ArmTransport:
     version = '2024-08-01'
+    lro_actions = ('Microsoft.DBforPostgreSQL/locations/azureAsyncOperation/read',
+                   'Microsoft.DBforPostgreSQL/locations/operationResults/read')
     def __init__(self, binding, credential, http, clock, assert_send_lease):
         self.binding = deepcopy(binding)
         self.credential, self.http, self.clock, self.assert_send_lease = credential, http, clock, assert_send_lease
@@ -156,6 +159,12 @@ class ArmTransport:
         if ipaddress.ip_address(binding['ipv4']).version != 4 or binding['mode'] not in ('owner', 'guardian'):
             raise ValueError('binding')
         self.subscription = parts[2]
+        self.high,self.anchor,self.mono=clock.utc(),clock.utc(),clock.monotonic()
+
+    def observe(self, at):
+        self.high=max(self.high,at,self.clock.utc(),self.anchor+timedelta(seconds=max(0,self.clock.monotonic()-self.mono)))
+        self.anchor,self.mono=self.high,self.clock.monotonic()
+        return self.high
 
     def _bound(self, operation, rule_id):
         if rule_id != self.rule or operation['method'] not in ('PUT', 'DELETE'):
@@ -163,7 +172,8 @@ class ArmTransport:
         uuid.UUID(operation['request_id'])
         return {'request_id': operation['request_id'], 'rule_id': self.rule, 'method': operation['method']}
 
-    def _request(self, method, url, deadline, body=None, request_id=None, write=False):
+    def _request(self, method, url, deadline, body=None, request_id=None, write=False, authorize=None):
+        if authorize:authorize(deadline)
         token = self.credential.token('https://management.azure.com/', deadline)
         headers = {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}
         if request_id:
@@ -171,6 +181,7 @@ class ArmTransport:
             headers['x-ms-return-client-request-id'] = 'true'
         if write:
             self.assert_send_lease(deadline.remaining())
+        if authorize:authorize(deadline)
         deadline.remaining()
         return self.http(method, url, headers, encoded(body) if body is not None else None, deadline)
 
@@ -232,13 +243,27 @@ class ArmTransport:
             result.update(terminal='failed', proof='write_response', error_code=json_body(r).get('error', {}).get('code'))
         return result
 
+    def _authorize_lro(self, deadline):
+        # An operation URL is evidence of a request, never authorization. Only
+        # the locally reviewed exact two-action subscription grant may enable it.
+        approval=self.binding.get('lro_authorization') or {}
+        if (approval.get('approved') is not True or approval.get('readback_verified') is not True or
+                approval.get('scope') != '/subscriptions/'+self.subscription or
+                sorted(approval.get('actions',[])) != sorted(self.lro_actions) or
+                not isinstance(approval.get('evidence_sha256'),str) or len(approval['evidence_sha256'])!=64 or
+                any(c not in '0123456789abcdef' for c in approval['evidence_sha256']) or
+                not approval.get('principal_id') or not approval.get('assignment_id') or
+                not approval.get('ends_at') or self.observe(self.clock.utc())+timedelta(seconds=deadline.remaining())>=parse(approval['ends_at'])):
+            raise OSError('lro_authorization_unconfirmed')
+        if getattr(self.credential,'principal',approval['principal_id']).lower()!=approval['principal_id'].lower():
+            raise OSError('lro_principal_unconfirmed')
     def poll(self, *, operation, rule_id, timeout):
         bound = self._bound(operation, rule_id)
         url = self._lro_url(operation['operation_url'])
         receipt = operation.get('operation_receipt') or {}
         if any(receipt.get(k) != v for k, v in bound.items()) or receipt.get('url') != url or receipt.get('kind') not in ('status', 'result'):
             raise OSError('operation_receipt_mismatch')
-        r = self._request('GET', url, Deadline(timeout, self.clock.monotonic))
+        r = self._request('GET', url, Deadline(timeout, self.clock.monotonic),authorize=self._authorize_lro)
         result = {**bound, 'http': r['status'], 'terminal': None}
         value = json_body(r)
         status = value.get('status') if r['status'] == 200 else None
@@ -307,13 +332,19 @@ class BlobJournal:
         return value.get('binding_digest') == self.binding_digest and all(value.get(k) == v for k, v in self.immutable.items())
 
     def _request(self, method, deadline, body=None, headers=None, lease=False):
+        payload=encoded(body) if body is not None else None
+        if payload is not None and len(payload)>65536:
+            raise Conflict('journal_size_limit')
         token = self.credential.token('https://storage.azure.com/', deadline)
         h = {'Authorization': 'Bearer ' + token, 'x-ms-version': '2023-11-03', 'x-ms-date': datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')}
         h.update(headers or {})
         if self.lease:
             h['x-ms-lease-id'] = self.lease
         deadline.remaining()
-        return self.http(method, self.url + ('?comp=lease' if lease else ''), h, encoded(body) if body is not None else None, deadline)
+        response=self.http(method, self.url + ('?comp=lease' if lease else ''), h, payload, deadline)
+        if len(response['body'])>65536:
+            raise Conflict('journal_size_limit')
+        return response
 
     def initialize(self, state):
         if not self._valid_binding(state):

@@ -1,5 +1,10 @@
 # Local preparation and one-time access
 
+For the selected acceptance run, use [the single-Job execution plan](owner-trial-execution-plan.md).
+It supersedes the successor requirement, RG-only LRO choice, conditional artifact
+grant and undecided Easy Auth credential model below. It preserves a no-start
+decision until the listed authority, integration and effective-access gates pass.
+
 This supplements `owner-trial.md`. A plan, signed policy, mock test or role count
 is not authority to create resources or grant permissions. Keep the original
 trial authority, guardian authority and additional OWNER data-access proposal

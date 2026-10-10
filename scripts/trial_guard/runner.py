@@ -20,6 +20,18 @@ class GuardianRunner:
     def opening_gate(self):
         with self.journal.locked():
             state = self.journal.load()
+        if state.get('cleanup_strategy') == 'single_job':
+            result=self.controller.tick()
+            if result['status'] != 'ready_waiting' or result.get('close_requested') or result.get('put') is not None:
+                raise Denied('single_job_not_ready')
+            with self.journal.locked():
+                current=self.journal.load()
+                if current['version'] != result['version'] or current.get('put') is not None:
+                    raise Denied('ready_changed')
+                current.update(version=current['version']+1,guardian_ready={'actor':self.actor_id,'lifecycle_id':current['lifecycle_id'],
+                    'at':self.effective_now(current).isoformat(),'tick':result['tick_count'],**current['cloud_guard']})
+                self.journal.save(current,expected_version=current['version']-1)
+            return True
         proof = self.successor_probe()
         now = self.effective_now(state)
         runtime = state.get('successor_runtime') or {}
@@ -41,6 +53,17 @@ class GuardianRunner:
         if state['status'] == 'closed':
             return {'closed': True, 'exit': True, 'transferred': False}
         end = parse(state['cloud_guard']['job_deadline'])
+        if state.get('cleanup_strategy') == 'single_job':
+            now=self.effective_now(state)
+            if (end-now).total_seconds() <= 300 and not state.get('single_job_warning'):
+                with self.journal.locked():
+                    current=self.journal.load()
+                    current.update(version=current['version']+1,single_job_warning={'at':now.isoformat(),'reason':'owner_recovery_required_if_unclosed'},close_requested=True,usage_allowed=False)
+                    self.journal.save(current,expected_version=current['version']-1)
+            result=self.controller.tick()
+            return {'closed':result['status']=='closed','exit':result['status']=='closed','transferred':False,'status':result['status'],
+                'attention':'owner_recovery_required_if_unclosed' if (end-now).total_seconds()<=300 and result['status']!='closed' else None,
+                'deadline_exceeded':now>=end}
         h = state.get('handoff') or {}
         if h.get('to') == self.actor_id and state.get('writer_actor') == self.actor_id:
             result = self.controller.tick()

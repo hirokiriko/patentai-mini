@@ -11,8 +11,8 @@ import time
 from copy import deepcopy
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit
-from .adapters import AzureCredential, ArmTransport, BlobJournal, BoundedHttp, Deadline, Handoff, digest
-from .lifecycle import Controller, Denied, Conflict, parse
+from .adapters import AzureCredential, ArmTransport, BlobJournal, BoundedHttp, Deadline, Handoff, digest,json_body
+from .lifecycle import Controller, Denied, Conflict, parse,initial
 from .runner import GuardianRunner
 
 
@@ -22,7 +22,7 @@ class Clock:
 
 
 FIXED = {'lifecycle_id', 'rule_id', 'prepared_at', 'cleanup_at', 'deadline',
-    'cloud_guard', 'ready_until', 'successor_id', 'successor_nonce', 'successor_runtime', 'cleanup_targets_digest'}
+    'cloud_guard', 'ready_until', 'successor_id', 'successor_nonce', 'successor_runtime', 'cleanup_targets_digest','cleanup_strategy','owner_access'}
 
 
 def report(value):
@@ -57,8 +57,15 @@ def assemble(config, *, http=None, clock=None, environment=None):
     env = os.environ if environment is None else environment
     clock, http = clock or Clock(), http or BoundedHttp()
     fixed = deepcopy(config['immutable'])
+    if (config['mode']=='rehearsal') != (fixed.get('cleanup_strategy')=='rehearsal'):
+        raise Denied('rehearsal_mode_binding')
+    if fixed.get('cleanup_strategy')=='rehearsal':
+        if config['mode']!='rehearsal':raise Denied('rehearsal_mode_binding')
+        http=PermissionHttp(http,clock,config['prearm_until'] if fixed['deadline']=='$CURRENT' else fixed['deadline'])
     if set(fixed) != FIXED or config['binding']['mode'] != 'guardian' or fixed['rule_id'] != config['binding']['rule_id'] or fixed['lifecycle_id'] != config['binding']['lifecycle_id']:
         raise Denied('immutable_configuration')
+    if fixed['cleanup_strategy'] == 'single_job' and (config['mode']=='receiver' or any(fixed[k] is not None for k in ('successor_id','successor_nonce','successor_runtime'))):
+        raise Denied('single_job_no_receiver')
     expected = fixed['successor_runtime'] if config['mode'] == 'receiver' else fixed['cloud_guard']
     if config['mode'] == 'receiver':
         http=PermissionHttp(http,clock,expected['permissions_until'])
@@ -78,6 +85,32 @@ def assemble(config, *, http=None, clock=None, environment=None):
         raise Denied('runtime_binding')
     credential = AzureCredential('guardian', expected['principal_id'], config['tenant_id'], http, env)
     credential.token('https://management.azure.com/', Deadline(10, clock.monotonic))
+    if fixed.get('cleanup_strategy') in ('single_job','rehearsal') and fixed['prepared_at']=='$CURRENT':
+        # OWNER writes the exact actual ARM start only after the Job exists.
+        # Read a bounded seed; then validate every static and time-derived field
+        # before binding a normal immutable leased journal. No rule write here.
+        seed=BlobJournal(config['journal_url'],'unresolved',credential,http,clock,immutable={})
+        response=seed._request('GET',Deadline(10,clock.monotonic))
+        if response['status']==404:raise Conflict('seed_not_ready')
+        state=json_body(response)
+        if response['status']!=200 or not response['headers'].get('etag'):raise Conflict('seed_unconfirmed')
+        actual={k:deepcopy(state.get(k)) for k in FIXED}
+        for key in FIXED-{'cloud_guard','prepared_at','cleanup_at','deadline','ready_until'}:
+            if actual[key]!=fixed[key]:raise Denied('seed_static_binding')
+        for key in expected.keys()-{'job_started_at','job_deadline'}:
+            if actual['cloud_guard'].get(key)!=expected[key]:raise Denied('seed_runtime_binding')
+        at=parse(actual['cloud_guard']['job_started_at'])
+        if not (parse(config['seed_not_before'])<=at<=clock.utc()<parse(config['prearm_until']) and
+                (clock.utc()-at).total_seconds()<300):raise Denied('seed_time_binding')
+        derived=initial(at=at.isoformat(),rule_id=actual['rule_id'],lifecycle_id=actual['lifecycle_id'],guardian_pid=None,
+            independent_guard_verified=True,cleanup_seconds=600 if fixed['cleanup_strategy']=='single_job' else None,
+            cloud_guard=actual['cloud_guard'],cleanup_strategy=fixed['cleanup_strategy'])
+        if any(actual[k]!=derived[k] for k in ('prepared_at','cleanup_at','deadline','ready_until')):
+            raise Denied('seed_deadlines')
+        if state.get('binding_digest')!=digest({'binding':config['binding'],'immutable':actual}):raise Denied('seed_digest')
+        fixed,expected=actual,actual['cloud_guard']
+        if fixed['cleanup_strategy']=='rehearsal':
+            http.end=min(http.end,parse(fixed['deadline']))
     journal = BlobJournal(config['journal_url'], digest({'binding': config['binding'], 'immutable': fixed}), credential, http, clock, immutable=fixed)
     # OWNER creates this exact immutable state after ARM returns the current
     # execution/replica IDs, before any firewall PUT. No seed may invent them.
@@ -88,6 +121,10 @@ def assemble(config, *, http=None, clock=None, environment=None):
         evidence.get('principal_id') != expected['principal_id'] or evidence.get('status') != 'Running' or
         not 0 <= (clock.utc() - parse(evidence['at'])).total_seconds() <= 60):
         raise Denied('runtime_readback_missing')
+    if fixed['cleanup_strategy'] in ('single_job','rehearsal') and evidence.get('job_started_at')!=expected['job_started_at']:
+        raise Denied('actual_start_readback_missing')
+    if fixed['cleanup_strategy']=='rehearsal' and (state.get('put') is not None or state.get('delete') is not None or state.get('usage_allowed') is not False):
+        raise Denied('rehearsal_write_binding')
     transport = ArmTransport(config['binding'], credential, http, clock, journal.assert_send_lease)
     actor = expected['principal_id'] + ':' + expected['execution_id']
     if config['mode'] == 'receiver' and (actor != fixed['successor_id'] or expected['nonce'] != fixed['successor_nonce'] or
@@ -118,7 +155,7 @@ def assemble(config, *, http=None, clock=None, environment=None):
 def run(config):
     # Bounded prearm wait for the OWNER-created immutable state. No firewall
     # operation is possible during this wait. Failure never starts another Job.
-    ready = parse(config['immutable']['ready_until'])
+    ready = parse(config['prearm_until'] if config['immutable']['ready_until']=='$CURRENT' else config['immutable']['ready_until'])
     if config.get('mode') != 'receiver' and not 0 < (ready - Clock.utc()).total_seconds() <= 300:
         raise Denied('ready_window')
     while True:

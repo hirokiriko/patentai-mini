@@ -25,11 +25,24 @@ def parse(value):
 
 
 def initial(*, at, rule_id, lifecycle_id, guardian_pid, independent_guard_verified,
-            cleanup_seconds=None, cloud_guard=None, ready_seconds=300):
+            cleanup_seconds=None, cloud_guard=None, ready_seconds=300, cleanup_strategy='handoff'):
     at = parse(at)
     if cleanup_seconds is not None and not 0 < cleanup_seconds <= 5 * 3600:
         raise ValueError('invalid_early_cleanup')
-    result = {'version': 0, 'lifecycle_id': lifecycle_id, 'rule_id': rule_id,
+    if cleanup_strategy not in ('single_job','handoff','rehearsal'):
+        raise ValueError('cleanup_strategy')
+    if cleanup_strategy=='rehearsal':
+        if cloud_guard is None or parse(cloud_guard['job_started_at'])!=at or parse(cloud_guard['job_deadline'])!=at+timedelta(seconds=300):
+            raise ValueError('rehearsal_window')
+        return {'version':0,'owner_access':None,'lifecycle_id':lifecycle_id,'rule_id':rule_id,'cleanup_strategy':'rehearsal','prepared_at':at.isoformat(),
+            'cleanup_at':at.isoformat(),'deadline':(at+timedelta(seconds=300)).isoformat(),'ready_until':(at+timedelta(seconds=300)).isoformat(),
+            'last_now':at.isoformat(),'cloud_guard':deepcopy(cloud_guard),'guardian_kind':'azure_job','guardian_pid':None,
+            'independent_guard_verified':True,'status':'rehearsal','close_requested':True,'usage_allowed':False,'put':None,'delete':None,
+            'delete_attempts':0,'blocked':None,'cleanup_responsibility_retained':False,'tick_count':0}
+    if cleanup_strategy == 'single_job' and (cloud_guard is None or cleanup_seconds != 600 or
+            parse(cloud_guard['job_started_at']) != at or parse(cloud_guard['job_deadline']) != at+timedelta(minutes=30)):
+        raise ValueError('single_job_window')
+    result = {'version': 0,'owner_access':None, 'lifecycle_id': lifecycle_id, 'rule_id': rule_id, 'cleanup_strategy':cleanup_strategy,
             'prepared_at': at.isoformat(), 'cleanup_at': (at + timedelta(seconds=cleanup_seconds or 5*3600)).isoformat(),
             'deadline': (at + timedelta(hours=6)).isoformat(), 'last_now': at.isoformat(),
             'guardian_pid': guardian_pid, 'independent_guard_verified': independent_guard_verified,
@@ -93,6 +106,7 @@ class Controller:
     def _load(self):
         self.state = self.journal.load()
         s = self.state
+        if s.get('cleanup_strategy')=='rehearsal':raise Denied('rehearsal_read_only')
         if s.get('writer_actor') is not None and s['writer_actor'] != self.actor_id:
             raise Denied('writer_fenced')
         prepared, cleanup, deadline = map(parse, (s['prepared_at'], s['cleanup_at'], s['deadline']))
@@ -107,6 +121,8 @@ class Controller:
                     and cleanup <= job_end-timedelta(minutes=15)
                     and prepared < ready <= min(prepared+timedelta(minutes=5),cleanup)):
                 raise ValueError('cloud_job_deadlines_changed')
+            if s.get('cleanup_strategy') == 'single_job' and (prepared != job_start or cleanup != job_start+timedelta(minutes=10) or job_end != job_start+timedelta(minutes=30)):
+                raise ValueError('single_job_window_changed')
         current = self.clock.utc()
         previous = parse(s['last_now'])
         elapsed = max(0, self.clock.monotonic() - self.anchor_mono)
@@ -179,6 +195,11 @@ class Controller:
                 and self.at >= parse(self.state['ready_until'])):
             self._save(close_requested=True,usage_allowed=False,attention='ready_expired')
             raise Denied('ready_cutoff_before_transport')
+        if method=='send' and values['operation']['method']=='PUT' and self.state.get('cleanup_strategy')=='single_job':
+            end=min(parse(self.state['ready_until']),parse(self.state['cleanup_at']),parse(self.state['guardian_ready']['at'])+timedelta(seconds=15))
+            budget=min(budget,(end-self.at).total_seconds())
+            if budget<=0:raise Denied('ready_send_budget_expired')
+        if hasattr(self.transport,'observe'):self.transport.observe(self.at)
         begin = self.clock.monotonic()
         result = getattr(self.transport, method)(timeout=budget, **values)
         spent = self.clock.monotonic() - begin
@@ -218,6 +239,20 @@ class Controller:
                 op['retry_after'] = (self.at + timedelta(seconds=15)).isoformat()
         self._save(**{field: op})
 
+    def _single_ready(self):
+        if self.state.get('cleanup_strategy') != 'single_job':
+            return True
+        try:
+            g=self.state['cloud_guard']; r=self.state['guardian_ready']
+            return (r['actor']==g['principal_id']+':'+g['execution_id'] and
+                    r['lifecycle_id']==self.state['lifecycle_id'] and r['tick']>0 and
+                    all(r.get(k)==v for k,v in g.items()) and
+                    parse(self.state['prepared_at'])<=parse(r['at'])<=self.at and
+                    0<=(self.at-parse(r['at'])).total_seconds()<=15 and
+                    self.at<parse(self.state['ready_until']))
+        except (KeyError,TypeError,ValueError):
+            return False
+
     def _send(self, field):
         op = {'method': 'PUT' if field == 'put' else 'DELETE', 'request_id': str(uuid.uuid4()),
               'intent_at': self.at.isoformat(), 'terminal': None, 'operation_url': None}
@@ -228,7 +263,7 @@ class Controller:
         if field == 'put':
             healthy = self._guard_ok()
             self._refresh()
-            if not healthy or self.state['close_requested'] or self.clock.monotonic() >= self.tick_end:
+            if not healthy or not self._single_ready() or self.state['close_requested'] or self.clock.monotonic() >= self.tick_end:
                 # The intent was committed but transmission never started; this
                 # is positively known locally and cannot be confused with loss
                 # of a response after send.
@@ -306,7 +341,7 @@ class Controller:
             self._load()
             if self.state['put'] is not None:
                 raise Denied('durable_put_intent_already_exists')
-            if self.state['blocked'] or self.state['close_requested'] or not self._guard_ok():
+            if self.state['blocked'] or self.state['close_requested'] or not self._guard_ok() or not self._single_ready():
                 raise Denied('start_preconditions_failed')
             baseline = self._inspect()
             if (not baseline or baseline['rule'] != 'absent' or baseline.get('complete_list') is not True

@@ -39,6 +39,9 @@ class AdapterTest(unittest.TestCase):
         self.binding = {'server_id': SERVER, 'rule_id': RULE, 'ipv4': '192.0.2.1', 'mode': 'owner',
             'region': 'fictional', 'lifecycle_id': RID, 'baseline_rules': [], 'baseline_network': {'publicNetworkAccess': 'Enabled'}}
         self.op = {'method': 'PUT', 'request_id': RID, 'intent_at': self.clock.utc().isoformat()}
+        self.binding['lro_authorization']={'approved':True,'readback_verified':True,'scope':'/subscriptions/'+SERVER.split('/')[2],
+            'actions':list(ArmTransport.lro_actions),'evidence_sha256':'a'*64,'principal_id':RID,'assignment_id':RID,
+            'ends_at':(self.clock.utc()+timedelta(hours=1)).isoformat()}
         self.lease_calls = []
 
     def arm(self, wire, mode='owner'):
@@ -84,6 +87,26 @@ class AdapterTest(unittest.TestCase):
         for _ in range(3):
             self.assertIsNone(arm.recover(operation=self.op, rule_id=RULE, timeout=20)['terminal'])
         self.assertEqual(len(wire.calls), 1)
+
+    def test_lro_missing_broader_or_expired_authority_does_not_send(self):
+        url='https://management.azure.com/subscriptions/'+SERVER.split('/')[2]+'/providers/Microsoft.DBforPostgreSQL/locations/fictional/azureAsyncOperation/abc?api-version=2024-08-01'
+        op={**self.op,'operation_url':url,'operation_receipt':{'request_id':RID,'rule_id':RULE,'method':'PUT','url':url,'kind':'status'}}
+        approved=deepcopy(self.binding['lro_authorization'])
+        for replacement in ({},{**approved,'approved':False},{**approved,'scope':SERVER},{**approved,'actions':['*']},
+                {**approved,'ends_at':self.clock.utc().isoformat()}):
+            self.binding['lro_authorization']=replacement;wire=Wire()
+            with self.assertRaises(OSError):self.arm(wire).poll(operation=op,rule_id=RULE,timeout=20)
+            self.assertEqual(wire.calls,[])
+
+    def test_lro_clock_rollback_cannot_extend_grant_after_token_wait(self):
+        url='https://management.azure.com/subscriptions/'+SERVER.split('/')[2]+'/providers/Microsoft.DBforPostgreSQL/locations/fictional/azureAsyncOperation/abc?api-version=2024-08-01'
+        op={**self.op,'operation_url':url,'operation_receipt':{'request_id':RID,'rule_id':RULE,'method':'PUT','url':url,'kind':'status'}}
+        self.binding['lro_authorization']['ends_at']=(self.clock.utc()+timedelta(seconds=21)).isoformat()
+        wire=Wire();arm=self.arm(wire)
+        # Persisted journal high-water is fed by Controller._call after restart.
+        arm.observe(self.clock.utc()+timedelta(seconds=22));self.clock.wall-=timedelta(hours=1)
+        with self.assertRaises(OSError):arm.poll(operation=op,rule_id=RULE,timeout=20)
+        self.assertEqual(wire.calls,[])
 
     def test_auth_denied_throttle_server_failure_and_redirect_not_terminal(self):
         for status in (401, 403, 408, 429, 500, 302):
@@ -167,6 +190,11 @@ class JournalTest(unittest.TestCase):
         j.http = Wire(response(200, self.state))
         with self.assertRaises(Conflict):
             j.load()
+
+    def test_oversize_journal_never_sends_write(self):
+        wire=Wire();j=self.journal(wire)
+        with self.assertRaises(Conflict):j.initialize({**self.state,'data':'x'*65536})
+        self.assertEqual(wire.calls,[])
 
     def test_cas_version_binding_and_unknown_save_readback(self):
         candidate = {**self.state, 'version': 1, 'put': {'request_id': RID}}

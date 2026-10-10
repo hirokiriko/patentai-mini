@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile,lstat } from "node:fs/promises";
-import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { and,eq } from "drizzle-orm";
 import { ContainerClient } from "@azure/storage-blob";
@@ -21,8 +20,9 @@ import { prepareTrialPackage,TRIAL_PACKAGE_BYTES } from "../src/lib/trial/packag
 import { saveKohoImportPlan } from "../src/repositories/drizzle";
 import { trialArm,startTrialWatch } from "../src/lib/trial/job";
 import type { TrialAudience } from "../src/lib/trial/identity";
-import { OperatorAccess,operatorTicketSchema,guardOperatorDatabase } from "../src/lib/trial/operator-access";
+import { OperatorAccess,operatorTicketSchema } from "../src/lib/trial/operator-access";
 import { beginOperatorReceipt } from "../src/lib/trial/operator-journal";
+import { connectPermitDatabase } from "../src/lib/trial/database-client";
 
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("initialize-ledger")}).strict(),
@@ -39,16 +39,20 @@ export const trialOperatorInput=z.object({environment:z.record(z.string(),z.stri
   access:operatorTicketSchema.optional(),recoveryDirectory:z.string().optional()}).strict();
 const exec=promisify(execFile);
 /** Local only. CLI output is consumed in memory and never forwarded or logged. */
-function operatorStorageCredential(p:TrialPolicy,access:OperatorAccess,audience:TrialAudience="https://storage.azure.com/"){return{async getToken(){
+function operatorStorageCredential(p:TrialPolicy,access:OperatorAccess,audience:TrialAudience="https://storage.azure.com/"){
+let cached:{token:string;expiresOnTimestamp:number}|undefined;
+return{async getToken(){
   access.check(30_000);
+  if(cached&&cached.expiresOnTimestamp>Date.now()+60_000)return cached;
   const result=await exec(process.platform==="win32"?"az.cmd":"az",["account","get-access-token","--resource",audience,"--output","json","--only-show-errors"],
     {windowsHide:true,shell:process.platform==="win32",timeout:30_000,maxBuffer:65536,signal:access.signal});
   access.check();
   const token=JSON.parse(result.stdout);
   if(typeof token.accessToken!=="string"||token.tenant?.toLowerCase()!==p.auth.tenantId.toLowerCase())throw new TrialError();
   const claims=JSON.parse(Buffer.from(token.accessToken.split(".")[1],"base64url").toString("utf8"));
-  if(claims.oid?.toLowerCase()!==p.auth.ownerId.toLowerCase()||claims.tid?.toLowerCase()!==p.auth.tenantId.toLowerCase())throw new TrialError();
-  return{token:token.accessToken,expiresOnTimestamp:Number(token.expires_on)*1000};
+  if(claims.oid?.toLowerCase()!==p.auth.ownerId.toLowerCase()||claims.tid?.toLowerCase()!==p.auth.tenantId.toLowerCase()||
+    claims.aud?.replace(/\/$/,"")!==audience.replace(/\/$/,"")||!Number.isFinite(Number(token.expires_on))||Number(token.expires_on)*1000<=Date.now()+60_000)throw new TrialError();
+  cached={token:token.accessToken,expiresOnTimestamp:Number(token.expires_on)*1000};return cached;
 }};}
 export async function runTrialOperator(value:unknown){
   const input=trialOperatorInput.parse(value),p=readTrialPolicy(input.environment);
@@ -96,15 +100,8 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
       conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
     await ledger.read();return{status:"initialized"};
   }
-  const client=new Client({connectionString:url.href,ssl:{rejectUnauthorized:true,servername:p.database.host},connectionTimeoutMillis:15000,
-    statement_timeout:30000,query_timeout:35000,lock_timeout:5000,idle_in_transaction_session_timeout:30000,application_name:"trial-local-operator"});
-  client.on("error",()=>undefined);
-  const unguard=guardOperatorDatabase(client,access);
+  const {client,close}=await connectPermitDatabase({url:url.href,host:p.database.host,database:p.database.database,user:p.database.migratorUser},access,credential);
   try{
-    access.check(35_000);
-    await client.connect();
-    const identity=(await client.query("select current_database() as db,current_user as usr,(select ssl from pg_stat_ssl where pid=pg_backend_pid()) as tls")).rows[0];
-    if(identity.db!==p.database.database||identity.usr!==p.database.migratorUser||identity.tls!==true)throw new TrialError();
     const database=drizzle(client,{schema}),originals=container("originals");
     const readOriginal=async(caseId:number,_category:string,key:string)=>{
       if(!key.startsWith(`cases/${caseId}/prior-art/`))throw new TrialError();await assertTrialPrivate(originals);
@@ -149,8 +146,16 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
     requireTrialActive(p);
     if(request.command==="setting-save"){
       if(request.setting.monitoringStartsOn!==sample.from||!request.setting.contractEndsOn||request.setting.contractEndsOn<sample.through)throw new TrialError();
+      // Fetch the immutable exact-ticket original before opening saveSetting's
+      // DB transaction. A normal Blob wait must not consume PG's idle timeout.
+      const sourceKey=access.sampleKey(caseId,request.setting.source.sha256),source=await readOriginal(caseId,"prior-art",sourceKey);
+      if(trialHash(source.bytes)!==request.setting.source.sha256)throw new TrialError();
+      const preparedWatch=new ManagedWatchRepository(database,async(id,category,key)=>{
+        if(id!==caseId||category!=="prior-art"||key!==sourceKey)throw new TrialError();
+        return{...source,bytes:Buffer.from(source.bytes)};
+      });
       const capacity=await reserveTrialDatabase(database,`setting:${trialHash(JSON.stringify(request.setting))}`,Buffer.byteLength(JSON.stringify(request.setting))+65536,ledger);
-      await watch.saveSetting(request.setting);await capacity.persisted();return{status:"saved"};
+      await preparedWatch.saveSetting(request.setting);await capacity.persisted();return{status:"saved"};
     }
     const {command:_command,caseId:_caseId,...source}=request;void _command;void _caseId;
     const preview=await previewManagedBase({...source,documentId:1}),bytes=await readFile(source.sourcePath);
@@ -172,7 +177,7 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
       // Returned only over the owner's private pipe; never publish this record.
       return{status:"saved",base:preview.base,source:{...preview.source,documentId:row.docId}};
     }catch{await ledger.markUnknown(id).catch(()=>undefined);throw new TrialError("trial_sample_reconciliation_required");}
-  }finally{unguard();await client.end().catch(()=>undefined);}
+  }finally{await close();}
 }
 if(require.main===module){
   const timer=setTimeout(()=>{process.stdout.write('{"status":"reconciliation_required"}\n');process.exit(2);},5*60_000);

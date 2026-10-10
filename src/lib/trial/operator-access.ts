@@ -10,6 +10,9 @@ export const operatorTicketSchema = z.object({
   packages: z.array(sha).max(2),
   samples: z.array(z.object({ caseId: z.number().int().positive().max(2_147_483_647), sha256: sha, key }).strict()).max(5),
   artifacts: z.array(z.object({ caseId: z.number().int().positive().max(2_147_483_647), deliveryId: z.uuidv4() }).strict()).max(5),
+  databaseWindow: z.object({lifecycleId:z.uuidv4(),bindingDigest:sha,guardianNonce:z.string().min(1).max(100),
+    ruleId:z.string().regex(/^\/subscriptions\/[a-f0-9-]+\/resourceGroups\/[\w.-]+\/providers\/Microsoft.DBforPostgreSQL\/flexibleServers\/[\w-]+\/firewallRules\/[\w-]+$/),
+    journalUrl:z.url(),jobStartedAt:z.iso.datetime(),useUntil:z.iso.datetime()}).strict().optional(),
 }).strict();
 export type OperatorTicket = z.infer<typeof operatorTicketSchema>;
 export function operatorPolicyBinding(policy: TrialPolicy) {
@@ -46,6 +49,9 @@ export class OperatorAccess {
       (policy.phase === "initial" && (Date.parse(policy.startsAt) < start || Date.parse(policy.endsAt) > end)))
       throw new TrialError("trial_operator_ticket_invalid");
     this.anchorUtc = this.highWater = this.lastWall = clock.utc(); this.anchorMono = clock.monotonic();
+    if(t.databaseWindow){const d=t.databaseWindow,u=new URL(d.journalUrl);
+      if(u.origin!==`https://${policy.storage.account}.blob.core.windows.net`||u.username||u.password||u.search||u.hash||!/^\/[a-z0-9-]+\/state\.json$/.test(u.pathname)||
+        Date.parse(d.jobStartedAt)<start||Date.parse(d.useUntil)>end||Date.parse(d.useUntil)-Date.parse(d.jobStartedAt)!==600_000)throw new TrialError("trial_database_window_invalid");}
     this.signal = this.controller.signal;
     this.timer = setTimeout(() => this.controller.abort(), Math.max(0, end - this.anchorUtc));
     this.timer.unref?.();
@@ -96,7 +102,7 @@ export class OperatorAccess {
 /** Install before Drizzle: nested statements and its automatic COMMIT use this boundary. */
 export function guardOperatorDatabase<T extends { query: (...args: never[]) => unknown; end: () => unknown }>(client: T, access: OperatorAccess) {
   const query = client.query;
-  Object.defineProperty(client, "query", { value: function (...args: unknown[]) {
+  Object.defineProperty(client, "query", { configurable:true, value: function (...args: unknown[]) {
     const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: string })?.text;
     // ROLLBACK is cleanup, never a new business operation or reservation release.
     if (text?.trim().toUpperCase() !== "ROLLBACK") access.check(35_000);
