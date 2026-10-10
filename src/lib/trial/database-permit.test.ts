@@ -60,4 +60,55 @@ describe("guardian database permit",()=>{
     const value=await databasePermitReader(access,{getToken:async()=>({token:"fictional"})},network)();expect(value.status).toBe("active");
     expect(network.mock.calls[0][0]).toBe(access.ticket.databaseWindow!.journalUrl);access.dispose();
   });
+  it("rejects a second SQL or rollback while the first permit read is pending",async()=>{
+    const{access,state}=setup(),query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}));
+    let release:(value:unknown)=>void=()=>undefined;
+    const read=vi.fn(()=>new Promise<unknown>(resolve=>{release=resolve;}));
+    const permit=new DatabasePermit(access,read,vi.fn()),client={query};guardDatabasePermit(client,permit);
+    const first=client.query("BEGIN");
+    await expect(client.query("COMMIT")).rejects.toThrow("trial_database_query_in_progress");
+    await expect(client.query("ROLLBACK")).rejects.toThrow("trial_database_query_in_progress");
+    expect(read).toHaveBeenCalledOnce();expect(query).not.toHaveBeenCalled();
+    release(state());await first;expect(query).toHaveBeenCalledOnce();permit.dispose();access.dispose();
+  });
+  it("holds the send boundary until SQL completion and obtains a fresh permit for the next SQL",async()=>{
+    const{access,state}=setup(),read=vi.fn(async()=>state());
+    let entered:()=>void=()=>undefined,release:(value:object)=>void=()=>undefined;
+    const started=new Promise<void>(resolve=>{entered=resolve;}),pending=new Promise<object>(resolve=>{release=resolve;});
+    const query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>{entered();return pending;});
+    const permit=new DatabasePermit(access,read,vi.fn()),client={query};guardDatabasePermit(client,permit);
+    const first=client.query("insert into fictional values (1)");await started;
+    await expect(client.query("COMMIT")).rejects.toThrow("trial_database_query_in_progress");
+    await expect(client.query("ROLLBACK")).rejects.toThrow("trial_database_query_in_progress");
+    expect(query).toHaveBeenCalledOnce();expect(read).toHaveBeenCalledOnce();
+    release({});await first;await client.query("COMMIT");
+    expect(query.mock.calls.map(args=>args[0])).toEqual(["insert into fictional values (1)","COMMIT"]);
+    expect(read).toHaveBeenCalledTimes(2);permit.dispose();access.dispose();
+  });
+  it("never reuses a connection after an unacknowledged SQL, including COMMIT or rollback",async()=>{
+    const{access,state}=setup(),read=vi.fn(async()=>state());
+    const query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>{throw new Error("fictional lost acknowledgement");});
+    const permit=new DatabasePermit(access,read,vi.fn()),client={query};guardDatabasePermit(client,permit);
+    await expect(client.query("COMMIT")).rejects.toThrow("lost acknowledgement");
+    for(const sql of ["COMMIT","select 1","ROLLBACK"])await expect(client.query(sql)).rejects.toThrow("trial_database_connection_unconfirmed");
+    expect(query).toHaveBeenCalledOnce();expect(read).toHaveBeenCalledOnce();permit.dispose();access.dispose();
+  });
+  it("rejects callback and cursor contracts before obtaining a permit or sending SQL",async()=>{
+    const{access,state}=setup(),read=vi.fn(async()=>state()),query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}));
+    const permit=new DatabasePermit(access,read,vi.fn()),client={query};guardDatabasePermit(client,permit);
+    const callback=vi.fn();
+    await expect(client.query("select 1",callback)).rejects.toThrow("trial_database_query_contract_invalid");
+    await expect(client.query({text:"select 1",callback})).rejects.toThrow("trial_database_query_contract_invalid");
+    await expect(client.query({text:"select 1",submit:vi.fn()})).rejects.toThrow("trial_database_query_contract_invalid");
+    expect(callback).not.toHaveBeenCalled();expect(read).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();
+    await client.query({text:"select $1",values:[1]});expect(query).toHaveBeenCalledOnce();permit.dispose();access.dispose();
+  });
+  it("permits only a non-concurrent exact rollback after lease withdrawal, never mixed SQL",async()=>{
+    const{access,state}=setup(),read=vi.fn(async()=>({...state(),usage_allowed:false}));
+    const query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({})),permit=new DatabasePermit(access,read,vi.fn()),client={query};guardDatabasePermit(client,permit);
+    await expect(client.query("COMMIT")).rejects.toThrow("trial_database_permit_unavailable");
+    await expect(client.query("ROLLBACK; insert into fictional values (1)")).rejects.toThrow();
+    expect(query).not.toHaveBeenCalled();await client.query("  rollback  ");expect(query.mock.calls).toEqual([["  rollback  "]]);
+    permit.dispose();access.dispose();
+  });
 });

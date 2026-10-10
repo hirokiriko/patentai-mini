@@ -49,10 +49,33 @@ export class DatabasePermit {
 
 export function guardDatabasePermit<T extends {query:(...args:never[])=>unknown}>(client:T,permit:DatabasePermit){
   const original=client.query;
+  let busy=false,unconfirmed=false;
   Object.defineProperty(client,"query",{value:async function(...args:unknown[]){
-    const text=typeof args[0]==="string"?args[0]:(args[0] as {text?:string})?.text;
-    if(text?.trim().toUpperCase()!=="ROLLBACK"){await permit.refresh();permit.assertSend();}
-    return Reflect.apply(original,client,args);
+    // Acquire before the first await, including for ROLLBACK. Never enqueue a
+    // query in pg with a permit checked while another statement was running.
+    if(busy)throw new TrialError("trial_database_query_in_progress");
+    if(unconfirmed)throw new TrialError("trial_database_connection_unconfirmed");
+    const config=args[0] as {text?:unknown;callback?:unknown;submit?:unknown}|null|undefined;
+    const text=typeof args[0]==="string"?args[0]:config?.text;
+    // Only promise queries have a completion boundary this guard can hold.
+    // Callback, cursor and custom Query objects must not release busy early.
+    if(typeof text!=="string"||!text.trim()||args.some(value=>typeof value==="function")||
+      (typeof args[0]==="object"&&(config?.callback!==undefined||config?.submit!==undefined)))
+      throw new TrialError("trial_database_query_contract_invalid");
+    busy=true;
+    try{
+      if(text.trim().toUpperCase()!=="ROLLBACK"){await permit.refresh();permit.assertSend();}
+      try{
+        const pending=Reflect.apply(original,client,args) as PromiseLike<unknown>|undefined;
+        if(!pending||typeof pending.then!=="function")throw new TrialError("trial_database_query_contract_invalid");
+        return await pending;
+      }catch(error){
+        // A transport/query timeout can settle the promise before the backend
+        // has finished. Never place a retry or cleanup SQL behind that query.
+        // The owning connection's finally closes it; its receipt stays unknown.
+        unconfirmed=true;throw error;
+      }
+    }finally{busy=false;}
   }});
 }
 

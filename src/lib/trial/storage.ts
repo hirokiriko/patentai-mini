@@ -3,11 +3,12 @@ import { Readable } from "node:stream";
 import { trialIdentity } from "./identity";
 import { readTrialPolicy, requireTrialActive, trialPolicyDigest, TrialError, type TrialPolicy } from "./policy";
 import type { OperatorAccess } from "./operator-access";
+import { OWNER_STORAGE_BODY_LIMIT, type OwnerStorageBudget } from "./storage-budget";
 
 export type TrialStoragePurpose = "originals" | "artifacts" | "budget";
 /** The SDK invokes this adapter after its asynchronous bearer credential policy.
  * Thus even a cached token or refresh cannot bypass the final write boundary. */
-export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,transport:typeof fetch=globalThis.fetch,access?:OperatorAccess):IHttpClient {
+export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,transport:typeof fetch=globalThis.fetch,access?:OperatorAccess,ownerBudget?:OwnerStorageBudget):IHttpClient {
   const origin=`https://${p.storage.account}.blob.core.windows.net`,prefix=`/${p.storage[purpose]}`;
   return {async sendRequest(request:WebResource){
     const u=new URL(request.url),controller=new AbortController();
@@ -21,26 +22,42 @@ export function trialStorageHttp(purpose:TrialStoragePurpose,p:TrialPolicy,trans
           u.searchParams.getAll("timeout").length>1||(u.searchParams.has("timeout")&&!/^(?:[1-9]|1[0-9]|20)$/.test(u.searchParams.get("timeout")!))))||
         !request.headers.get("authorization")?.startsWith("Bearer "))throw new TrialError();
       stage="body"; let body:Buffer|undefined;
+      const bodyLimit=access?OWNER_STORAGE_BODY_LIMIT:50*1024**2;
       if(request.method==="PUT"){
         const raw=typeof request.body==="function"?request.body():request.body;
         if(typeof raw==="string"||Buffer.isBuffer(raw)||raw instanceof Uint8Array)body=Buffer.from(raw);
         else if(raw&&Symbol.asyncIterator in Object(raw)){
           const chunks:Buffer[]=[];let n=0;
-          for await(const chunk of raw as AsyncIterable<Uint8Array>){n+=chunk.length;if(n>50*1024**2)throw new TrialError();chunks.push(Buffer.from(chunk));}
+          for await(const chunk of raw as AsyncIterable<Uint8Array>){n+=chunk.length;if(n>bodyLimit)throw new TrialError();chunks.push(Buffer.from(chunk));}
           body=Buffer.concat(chunks);
         }else throw new TrialError();
-        if(body.length>50*1024**2)throw new TrialError();
+        if(body.length>bodyLimit)throw new TrialError();
       }
       stage="headers"; const headers=new Headers();for(const k of request.headers.headerNames())headers.set(k,request.headers.get(k)!);
       stage="guard"; // No asynchronous work between this check and the only external send.
       if(trialPolicyDigest(readTrialPolicy())!==trialPolicyDigest(p))throw new TrialError();
       if(purpose!=="budget"&&request.method==="PUT")requireTrialActive(p);
       access?.storage(purpose,request.url,request.method);
+      if(access){
+        if(!ownerBudget)throw new TrialError("trial_owner_storage_budget_required");
+        ownerBudget.reserve(access,body?.length??0);
+        // fsync can take time; expiry is checked again after durable reservation.
+        access.storage(purpose,request.url,request.method);
+      }
       controller.signal.throwIfAborted();
       stage="send"; const response=await transport(request.url,{method:request.method,headers,body:body?new Uint8Array(body):undefined,signal:controller.signal,redirect:"error"});
       stage="response"; const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
-      try{if(reader)for(;;){const v=await reader.read();if(v.done)break;size+=v.value.length;
-        if(size>(response.ok?50*1024**2:65536))throw new TrialError();chunks.push(v.value);}}
+      try{
+        if(access){
+          const length=response.headers.get("content-length"),encoding=response.headers.get("content-encoding");
+          if(length===null||!/^\d+$/.test(length)||Number(length)>bodyLimit||(encoding&&encoding!=="identity"))throw new TrialError();
+        }
+        // The stream check bounds accepted bodies; a final oversized chunk may
+        // already have arrived. It is not a claim about billed wire bytes.
+        if(reader)for(;;){const v=await reader.read();if(v.done)break;size+=v.value.length;
+          if(size>(response.ok?bodyLimit:65536))throw new TrialError();chunks.push(v.value);}
+        if(access&&request.method!=="HEAD"&&size!==Number(response.headers.get("content-length")))throw new TrialError();
+      }
       finally{if(reader){await reader.cancel().catch(()=>undefined);reader.releaseLock();}}
       const bytes=Buffer.concat(chunks),resultHeaders=request.headers.clone();
       for(const k of resultHeaders.headerNames())resultHeaders.remove(k);

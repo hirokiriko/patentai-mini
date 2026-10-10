@@ -8,7 +8,7 @@ existing OWNER-private manifest. No push, CI, image update, Azure/Graph operatio
 credential creation or live AI call was performed during this refinement.
 
 **Current decision: do not start. Additional approval alone is insufficient.**
-The remaining offline integration and effective-access checks are listed below.
+Offline integration is implemented. Exact-head CI, fixed external evidence and the specific additional approvals below remain necessary before live execution.
 One branch, one writer, Draft/no-auto-merge, OWNER only, no invitation, no main
 merge and no production configuration or data change remain mandatory.
 
@@ -112,7 +112,7 @@ The **seven custom definitions** are: exact-rule remover; server observer;
 two-action LRO observer; journal RW; Trial Storage RW; Job control; AI create.
 Journal RW has no management Actions and only Blob read/write DataActions.
 Trial Storage RW adds container metadata read, which is required by the Local
-private-container check; OWNER input grants reuse this definition, not journal RW.
+private-container check; OWNER input grants reuse this definition, not journal RW. The Blob UTC condition does not time-limit the metadata Action. Remove each temporary OWNER assignment by its recorded deadline and verify absence, or first prove unchanged existing OWNER access already covers it.
 Job control has only Microsoft.App/jobs/read, jobs/start/action and
 jobs/executions/read. AI create has only the DataAction
 Microsoft.CognitiveServices/accounts/OpenAI/responses/write. Blob Lease is
@@ -166,9 +166,9 @@ resends zero. Runtime Job at most 12 starts/6 total hours, App active at most
 48 hours. The remaining four Job slots are reservations for necessary denial,
 failure and cold-start checks, not a requirement to spend them.
 
-1. Finish the offline integration gates below; freeze one head. Later, with
+1. Freeze the validated offline implementation at one head. Later, with
    authorization to resume external operations, check exact-head CI and independent
-   review, then build locally (at most two builds) and push two dedicated images.
+   review, then build locally (at most two builds). Push two dedicated images only after step2 and all additional authority gates pass.
    Pin actual digests and check OWNER push and each MI pull; no paid cloud build.
 2. Reconcile exact cost ledger rows and public transfer prices. Preserve all
    unsettled amounts. Verify fixed resources, actual IPv4 and the original network
@@ -189,7 +189,7 @@ failure and cold-start checks, not a requirement to spend them.
    DB/schema/DDL/role changes and DELETE. If existing PUBLIC CONNECT prevents
    isolation, stop instead of modifying existing databases.
 7. Complete fixed package/sample/settings input before T0+600 seconds. No more
-   than 20 Local operator invocations; each permit reader caps itself at 2,000
+   than one bootstrap plus 16 sequential operator requests in one Node process. Bootstrap uses at most four connections; the process caps all connection attempts at 20, including failures. Each permit reader caps itself at 2,000
    GETs including refresh. Permit renews during Blob waits, checks every SQL and
    COMMIT, closes on loss and uses a 1-second server statement timeout with ≥2s
    send margin. Socket closure is not proof of server rollback/COMMIT failure.
@@ -215,30 +215,29 @@ failure and cold-start checks, not a requirement to spend them.
 ## Conservative cost and exact missing reads
 
 Saved exchange rate is 173.305 JPY/USD. Use no free-tier credit without a matched
-meter/path. Initial model 4,288.72326784 yen includes contingency 1,000 yen:
+meter/path. Saved raw model is 4,288.72326784 yen. The implementation integer reservation model is **4,311 yen**: normal24 x87 + mini12 x13 + Job12 x19 + other1,839. Integer rates are normal434/2,600 and mini130/780 per million tokens, Job38/hour. This includes contingency1,000 yen:
 guardian 500 + other 500, **not two additional amounts**. Start threshold is
-4,500 yen, absolute initial cap 5,000; the 211.27673216 headroom is not a new
+4,500 yen, absolute initial cap 5,000; the **189 yen** headroom is not a new
 reserve. Existing project forecast 38,331 includes unsettled 11,527, all retained.
-Total allocation remains 38,331 + 5,000 + 10,000 = 53,331 yen; trial/retention
-10,000 is cumulative, not a monthly regrant.
+October project allocation model remains 38,331 + 5,000 + 10,000 = 53,331 yen. Issue148 initial plus trial/retention remains cumulative15,000 yen; trial/retention10,000 is not a monthly regrant.
 
 | Guardian input | Conservative quantity |
 |---|---:|
 | Compute | rehearsal 300s + main 1,800s + 600s billing allowance; allowance does not extend execution |
-| Blob operations, priced all as writes | 100,000 (47,297 guardian + 5,250 OWNER heartbeat + 40,000 DB permit + 7,453 other allowance) |
-| ARM requests | 7,000 (static 6,309 + 691 other allowance) |
-| Journal payload | write ≤64KiB; wire read ≤64KiB + one overflow-detection byte |
+| Blob operations, priced all as writes | 100,000 (48,347 guardian + 5,250 OWNER heartbeat + 40,000 DB permit + 3,000 OWNER control + 3,403 OWNER data) |
+| ARM requests | 7,000 (6,309 guardian + at most600 wrapper + at most32 operator = 6,941; remaining59) |
+| Journal payload | write ≤64KiB; response-body read ≤64KiB + one overflow-detection byte |
 | Logs / log retention | 0.1GB / 0.3GB-month |
 | ACR incremental / journal retained | 1GB-month / 0.01GB-month |
 | Successor | zero resource, execution and cost |
 
 At saved rates guardian known subtotal is **173.20968225 yen**, leaving
 326.79031775 inside its existing 500. Body+image transfer model is
-45.87890625 GiB for both images (compressed ≤1GiB each, runtime pulls ≤16,
+72.04943848 GiB for both images (compressed ≤1GiB each, runtime pulls ≤16,
 guardian pulls ≤2, pushes ≤2), Blob and ARM. Proposed overall transfer envelope
 is 100GiB = guardian 32 + other 68. Header/App/AI response/PDF/CSV/extra-pull
 mapping is not yet demonstrated; **100GiB is not an enforced/verified cap**.
-Image layer sizes must be measured before their update. Normal/mini AI request
+The 3,403 OWNER data calls reserve at most4MiB in each direction; remaining96,597 Blob calls use64KiB in each direction. Accepted Blob bodies total38.37756348GiB, ARM13.671875GiB and images20GiB. Remaining27.95056GiB must cover mapped stream overrun, headers/TLS, App, AI responses, reports and logs. These application limits are not a wire billing cap. Image layers must be measured before their update. Normal/mini AI request
 bodies total at most 3,905,088 bytes for this input; responses are separate.
 
 Define E_guard and E_other as sums over distinct billed paths of bytes/1e9 times
@@ -281,12 +280,63 @@ Include actual retained auth/App/image/storage/logs and cleanup residual charges
 |---|---|
 | Existing authority; executable now | Local code/tests/review and private plan records. After hold is lifted, authorized fixed-target read checks only; no external operations during this refinement. |
 | Additional approval, then conditional execution | Two exact OWNER data grants; one LRO scope change to fixed subscription; one finite dedicated Easy Auth client secret of the model above. Counts and lifetimes do not broaden automatically. |
-| Offline path implemented; full launch validation pending | OWNER initialize/heartbeat/open/close/status and the guardian's bounded seed read now bind **actual** T0, with a distinct read-only 5-minute rehearsal. OWNER expiry is pinned to the original grant interval and immutable journal. The persistent launch/heartbeat wrapper and its finite operation accounting still require an end-to-end offline rehearsal; a guessed prelaunch T0 remains unacceptable. |
-| Technically unresolved; offline integration required | Dedicated DB/four-role bootstrap with fixed SQL plan and per-DDL unknown receipts, guarded migration/ACL path, and end-to-end no-bypass tests. The shared guarded Client now exists; that does not mean bootstrap exists. |
+| Offline implementation complete | Persistent OWNER session and python -m trial_guard.execution start/prepare/work/close/prove/handoff workflow; fixed Job adapter, fsynced request counters, one-start/no-resend receipts, 25-minute warning and30-minute retained obligation. Node binds actual signed DB window, runs guarded bootstrap/input sequentially, stops on permit expiry/parent EOF/clock rollback. Recovery is cleanup-only including terminal Job readback. |
+| Dedicated DB bootstrap implemented | Fixed four roles/DB, catalog hazard checks, nine approved existing migrations through guarded Client, per-DDL/COMMIT unknown receipts, fictional cases, exact trial ACL/runtime denial checks. Reconciliation reads original receipts/catalogs. Unknown passwords require fixed-credential login, not mere role existence. No admin membership/shared DB ACL expansion. |
 | Effective environment validation pending | Existing admin capability; isolation without existing-DB changes; 10-minute bootstrap/input feasibility; exact absent-child RBAC; ABAC parser/effectiveness; ACR mode/pulls; LRO behavior; dedicated Easy Auth login; App DB route after Local rule removal. |
-| Cost evidence pending | OWNER finite request plan, image layers, transfer path/quantity mapping and official rate, stable ledger correspondence/current remaining budget. |
+| Cost evidence pending | Finite request counts are enforced offline. Image layers, transfer path/quantity mapping and rate, stable ledger correspondence and current budget require fixed external reads. |
 
-The two integration gaps are explicit blockers, not requests for wider authority.
-Complete them offline before proposing a start. No promise of normal gap-free
-cleanup or 10-minute DB completion follows from unit tests alone. Record actual
-failure-free timing and every acceptance result; unresolved results stay unresolved.
+Offline checks do not prove live ACL effectiveness, normal gap-free cleanup or
+10-minute DB completion. Actual timing and each acceptance result must be
+recorded. The private final record ties all check counts and independent reviews
+to the exact local head. Remote CI is unrun until authorized push/readback.
+
+## Offline launch artifacts and held external reads
+
+A fresh start also requires current (at most10-minute-old) exact-head CI/review, matching IPv4/server/rule, all unsettled retained, initial forecast <=4,500 and cap5,000, and private evidence digests for network approval, IP, isolation, ledger, prices, effective permissions and additional authority. Offline results cannot set these live gates. Expired initial evidence never prevents cleanup-only resumption.
+
+The protected JSON launcher input contains fixed guardian Job/template/identity
+digests, approval records, OWNER grant interval, prearm/seed bounds, original
+signed policy/ticket, existing signing key and DB credentials, fictional source
+paths, absolute Node/compiled-script/recovery paths. No secret is generated.
+Actual T0 must fit the existing signed policy and one-hour ticket. The bridge
+preserves the policy period, changes only its derived operator digest/signature,
+and exports the signed public environment to private trial-runtime-policy.json.
+App, worker and ledger must use that exact policy for subsequent validation.
+The ten-minute DB permit is separate from the one-hour data grant.
+
+trial-session.jsonl uses an OS writer lock and fsynced hash chain. Restart keeps
+all counters and performs cleanup-only recovery; it never repeats Job start,
+rule PUT, bootstrap or inputs. owner-storage-budget.jsonl cannot reset after
+process loss. Bootstrap target/step receipts are independent of passwords and
+tickets; unknown COMMIT/DDL never succeeds by inference. Each SQL is awaited;
+parallel or poisoned-client SQL is refused. PGOPTIONS/PGREPLICATION/PGSERVICE
+injection is rejected, and actual TLS/identity/timeout settings are read back.
+
+After the hold is lifted, minimum read-only evidence is:
+
+1. The public Bandwidth price GET/pages and the two previously approved fixed
+   public IPv4 checks. Compare the one current IPv4 with the approval.
+2. Fixed DB metadata, complete firewall list and exact child GET; isolated DB
+   catalog/admin capability evidence without editing existing DB ACLs.
+3. Fixed ACR/AI/Storage/environment metadata and normal/mini exact deployment
+   GETs, without a deployment collection scan. Check registry mode, not change it.
+4. Exact planned18 assignment and7 definition GETs plus necessary scope
+   permissions. Guardian Job start/read/replica response schemas including
+   terminal recovery need read-verification before enabling launch.
+5. Exact trial App/Job/execution/auth settings and named manifest HEAD/GET.
+   No listSecrets, listKeys or tenant-wide discovery.
+6. Two stable ledger state GET/re-GETs and only referenced evidence files;
+   explicit operation/digest/reservation correspondence preserves unsettled sums.
+7. After separate directory/secret authority and exact object creation, their
+   app/SP/OWNER assignment and credential metadata GETs.
+
+No old budget grant-window script may be rerun for these reads: it includes
+permission changes. Missing read permission remains a specific scope/time delta,
+never an implicit renewal or broader role.
+
+Saved global price evidence expires2026-10-28T15:00Z. Trial cost profiles are
+valid at most24h in code. Refresh only approved exact prices and re-evaluate
+before expiry, or refuse new paid work at expiry. Do not extend stale evidence
+to formal trial end or invent a fresh monthly allocation.
+
+Directory binding formats are explicit: Python recovery_directory_digest uses SHA256 of the canonical JSON string path; the signed TS recoveryDirectoryDigest uses SHA256 of the raw resolved path. Do not interchange the two.

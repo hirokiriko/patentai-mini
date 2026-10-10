@@ -23,6 +23,7 @@ import type { TrialAudience } from "../src/lib/trial/identity";
 import { OperatorAccess,operatorTicketSchema } from "../src/lib/trial/operator-access";
 import { beginOperatorReceipt } from "../src/lib/trial/operator-journal";
 import { connectPermitDatabase } from "../src/lib/trial/database-client";
+import { ownerStorageBudget } from "../src/lib/trial/storage-budget";
 
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("initialize-ledger")}).strict(),
@@ -91,8 +92,9 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
   if(url.protocol!=="postgresql:"||url.hostname!==p.database.host||Number(url.port||5432)!==5432||
     decodeURIComponent(url.pathname.slice(1))!==p.database.database||decodeURIComponent(url.username)!==p.database.migratorUser||!url.password||url.search||url.hash)throw new TrialError();
   const credential=operatorStorageCredential(p,access);
+  const storageBudget=ownerStorageBudget(input.recoveryDirectory!,access);
   const container=(purpose:"originals"|"artifacts"|"budget")=>new ContainerClient(`https://${p.storage.account}.blob.core.windows.net/${p.storage[purpose]}`,credential,
-    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p,globalThis.fetch,access)});
+    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p,globalThis.fetch,access,storageBudget)});
   const budgetContainer=container("budget"),ledger=new TrialLedger(p,new TrialBlobLedgerIO(budgetContainer));
   if(input.request.command==="initialize-ledger"){
     requireTrialActive(p);await assertTrialPrivate(budgetContainer);
@@ -102,6 +104,9 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
   }
   const {client,close}=await connectPermitDatabase({url:url.href,host:p.database.host,database:p.database.database,user:p.database.migratorUser},access,credential);
   try{
+    if(!/^[a-z][a-z0-9_]{1,62}$/.test(p.database.ownerRole))throw new TrialError();
+    await client.query(`SET ROLE "${p.database.ownerRole}"`);
+    if((await client.query("select current_user as usr")).rows[0]?.usr!==p.database.ownerRole)throw new TrialError("trial_database_identity_invalid");
     const database=drizzle(client,{schema}),originals=container("originals");
     const readOriginal=async(caseId:number,_category:string,key:string)=>{
       if(!key.startsWith(`cases/${caseId}/prior-art/`))throw new TrialError();await assertTrialPrivate(originals);

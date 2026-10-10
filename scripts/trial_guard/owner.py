@@ -11,7 +11,7 @@ from .__main__ import FIXED,Clock,PermissionHttp
 from .adapters import AzureCredential,ArmTransport,BlobJournal,BoundedHttp,digest,Deadline
 from .lifecycle import Controller,Denied,parse,initial
 
-def assemble_owner(config,*,http=None,clock=None,require_fresh=True):
+def assemble_owner(config,*,http=None,clock=None,require_fresh=True,recovery_only=False):
     if config.get('live_enabled') is not True or config.get('cleanup_strategy') not in ('single_job','rehearsal'):
         raise Denied('owner_not_enabled')
     if urlsplit(config['journal_url']).path.split('/')[-1] != ('rehearsal.json' if config['cleanup_strategy']=='rehearsal' else 'state.json'):
@@ -32,7 +32,7 @@ def assemble_owner(config,*,http=None,clock=None,require_fresh=True):
     credential=AzureCredential('owner',config['owner_id'],config['tenant_id'],wire)
     credential.token('https://storage.azure.com/',Deadline(10,clock.monotonic))
     runtime=deepcopy(config['cloud_guard']);e=config['runtime_readback']
-    if (e.get('status')!='Running' or not at<=parse(e['at'])<=clock.utc() or
+    if (e.get('status') not in (('Running','Succeeded','Failed','Stopped') if recovery_only else ('Running',)) or not at<=parse(e['at'])<=clock.utc() or
             (require_fresh and (clock.utc()-parse(e['at'])).total_seconds()>60) or
             any(e.get(k)!=runtime[k] for k in ('execution_id','replica_name','image_digest','principal_id','job_started_at'))):
         raise Denied('owner_runtime_readback')
@@ -64,22 +64,53 @@ def assemble_owner(config,*,http=None,clock=None,require_fresh=True):
             'alive':bool(ready),'at':ready.get('at',s['prepared_at'])}
     return journal,Controller(journal,transport,clock,proof),s,clock
 
+class OwnerSession:
+    """One credential/journal/controller per execution, never a new use window.
+
+    Snapshots have passed Blob immutable binding + ETag checks under the finite
+    lease. The caller still checks their short use lease at every dispatch.
+    """
+    def __init__(self,config,*,http=None,clock=None,require_fresh=True,recovery_only=False):
+        self.journal,self.controller,self.initial,self.clock=assemble_owner(config,http=http,clock=clock,require_fresh=require_fresh,recovery_only=recovery_only)
+        self.strategy=config['cleanup_strategy']
+        self.recovery_only=recovery_only
+        self.version=-1
+        self.high=parse(self.initial['last_now'])
+        self.heartbeat_attempts=0
+
+    def action(self,action):
+        if action not in ('initialize','heartbeat','open','close','status'):raise Denied('owner_action')
+        if self.recovery_only and action not in ('close','status'):raise Denied('recovery_only')
+        if self.strategy=='rehearsal' and action not in ('initialize','status'):raise Denied('rehearsal_read_only')
+        if action=='initialize':
+            self.journal.initialize(self.initial)
+            return {'status':'initialized','snapshot':deepcopy(self.initial)}
+        if action=='open':
+            return self._snapshot(self.controller.start())
+        if action=='close':self.controller.request_close()
+        if action=='heartbeat':
+            self.heartbeat_attempts+=1
+            if self.heartbeat_attempts>1050:raise Denied('owner_heartbeat_limit')
+        with self.journal.locked():
+            state=self.journal.load()
+            if state['version']<self.version or parse(state['last_now'])<self.high:raise Denied('owner_snapshot_rollback')
+            if action=='heartbeat':
+                now=max(self.clock.utc(),self.high,parse(state['last_now']))
+                if self.clock.utc()<self.high or state['close_requested'] or now>=parse(state['cleanup_at']):raise Denied('owner_use_ended')
+                previous=parse((state.get('owner_heartbeat') or {}).get('at',state['prepared_at']))
+                if (now-previous).total_seconds()<2:raise Denied('heartbeat_cadence')
+                state.update(version=state['version']+1,last_now=now.isoformat(),owner_heartbeat={'at':now.isoformat(),
+                    'lifecycle_id':state['lifecycle_id'],'nonce':state['cloud_guard']['nonce']})
+                self.journal.save(state,expected_version=state['version']-1)
+            return self._snapshot(state)
+
+    def _snapshot(self,state):
+        if state['version']<self.version or parse(state['last_now'])<self.high:raise Denied('owner_snapshot_rollback')
+        self.version,self.high=state['version'],parse(state['last_now'])
+        return {'status':state['status'],'closed':state['status']=='closed',
+            'obligation':state['cleanup_responsibility_retained'],'snapshot':deepcopy(state)}
+
 def owner_action(config,action,*,http=None,clock=None):
     if action not in ('initialize','heartbeat','open','close','status'):raise Denied('owner_action')
     if config.get('cleanup_strategy')=='rehearsal' and action not in ('initialize','status'):raise Denied('rehearsal_read_only')
-    journal,controller,initial_state,clock=assemble_owner(config,http=http,clock=clock,require_fresh=action in ('initialize','open'))
-    if action=='initialize':
-        journal.initialize(initial_state);return {'status':'initialized'}
-    if action=='open':
-        return {'status':controller.start()['status']}  # durable intent prevents resend
-    if action=='close':controller.request_close()
-    with journal.locked():
-        state=journal.load()
-        if action=='heartbeat':
-            if state['close_requested'] or clock.utc()>=parse(state['cleanup_at']):raise Denied('owner_use_ended')
-            previous=(state.get('owner_heartbeat') or {}).get('at',state['prepared_at'])
-            if (clock.utc()-parse(previous)).total_seconds()<2:raise Denied('heartbeat_cadence')
-            state.update(version=state['version']+1,owner_heartbeat={'at':clock.utc().isoformat(),
-                'lifecycle_id':state['lifecycle_id'],'nonce':state['cloud_guard']['nonce']})
-            journal.save(state,expected_version=state['version']-1)
-        return {'status':state['status'],'closed':state['status']=='closed','obligation':state['cleanup_responsibility_retained']}
+    return OwnerSession(config,http=http,clock=clock,require_fresh=action in ('initialize','open')).action(action)

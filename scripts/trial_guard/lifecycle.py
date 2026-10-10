@@ -403,7 +403,7 @@ class Controller:
                     and value.get('exact_http') == 404 and value.get('complete_list') is True
                     and value.get('listed_absent') is True):
                 self._save(status='closed', usage_allowed=False, rule_absent=True,
-                           closed_at=self.at.isoformat(), cleanup_responsibility_retained=False)
+                           closed_at=self.at.isoformat(), closure_evidence=deepcopy(value), cleanup_responsibility_retained=False)
                 return deepcopy(self.state)
             if value['rule'] != 'owned' or not value.get('server_ready') or value.get('complete_list') is not True:
                 return deepcopy(self.state)
