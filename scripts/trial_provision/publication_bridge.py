@@ -54,7 +54,7 @@ def compose_configuration(publication, journal, inputs):
     need(isinstance(inputs, dict) and set(inputs) == INPUT_KEYS
          and type(inputs['schema']) is int and inputs['schema'] == 1
          and inputs['publication_config_sha256'] == publication['config_sha256'])
-    images = verified_publication_images(journal)
+    images = verified_publication_images(journal,verified_attempt=publication.get('verified_attempt'))
     preparation = journal.values('publication_preparation')[0]
     need(preparation['code_sha'] == publication['frozen_head']
          and preparation['source_sha256'] ==
@@ -69,6 +69,10 @@ def compose_configuration(publication, journal, inputs):
     common = {'schema', 'sources', 'frozen_head', 'ci', 'recovery', 'control_budget'}
     need(common <= set(publication) and type(publication.get('live', False)) is bool)
     config = {key: deepcopy(publication[key]) for key in common}
+    if 'attempt' in publication:
+        config.update({key:deepcopy(publication[key]) for key in ('attempt','attempt_evidence')})
+        verified=publication['verified_attempt'];w=verified.activation['windows']
+        need(inputs['plan_bindings']=={'guardian_window':w['guardian'],'owner_window':w['owner_input']})
     if 'code_sources' in publication:
         config['code_sources'] = deepcopy(publication['code_sources'])
     windows = deepcopy(inputs['plan_bindings'])
@@ -120,7 +124,7 @@ def prepare_bridge(publication, journal, reference, *, now):
     config = compose_configuration(publication, journal, inputs)
     directory = Path(publication['recovery']['directory'])
     verify_owner_directory(directory)
-    output = directory / OUTPUT_NAME
+    output = directory / ('provision-next-config.json' if 'attempt' in publication else OUTPUT_NAME)
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')
@@ -171,12 +175,11 @@ def prepare_bridge(publication, journal, reference, *, now):
 
 
 def _journal(publication):
+    from .attempt import journal_descriptor
     recovery = publication['recovery']
-    binding = publication['control_budget']['binding']
+    name,binding=journal_descriptor(publication,publication.get('verified_attempt'))
     return Journal(recovery['directory'], recovery['directory_digest'],
-                   {'manifest_sha256': publication['sources']['manifest']['sha256'],
-                    'owner_id': publication['manifest']['owner']['principal_id'],
-                    'task_id': binding['task_id']}, require_existing=True)
+                   binding,name=name,require_existing=True)
 
 
 def _prepared_record(journal, binding):
@@ -195,7 +198,7 @@ def _summary(binding, repeated):
             'config_sha256': binding['output']['sha256'], 'replayed': repeated}
 
 
-def complete_bridge(publication, binding, *, clock):
+def complete_bridge(publication, binding, *, clock,trusted_attempt_authority=None):
     """Call the real normal entry only after all publication locks are closed."""
     with _journal(publication) as journal:
         _require_record(journal, 'provision_bridge_intent', binding)
@@ -206,7 +209,8 @@ def complete_bridge(publication, binding, *, clock):
             need(saved == [_prepared_record(journal, binding)])
             return _summary(binding, True)
     from .cli import run_command
-    result = run_command({'action': 'prepare', 'config': binding['output']['path']}, clock=clock)
+    kwargs={} if trusted_attempt_authority is None else {'trusted_attempt_authority':trusted_attempt_authority}
+    result = run_command({'action': 'prepare', 'config': binding['output']['path']}, clock=clock,**kwargs)
     need(result.get('status') == 'prepared' and result.get('cloud_calls') == 0)
     with _journal(publication) as journal:
         _require_record(journal, 'provision_bridge_intent', binding)

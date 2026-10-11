@@ -171,7 +171,7 @@ def _validate_ci(value, head, now):
 
 def _load_common_configuration(path, *, now, local_head, owner_context,
                                local_source_digests=None, acl_check=verify_owner_file,
-                               required_extra=frozenset(), optional_extra=frozenset()):
+                               required_extra=frozenset(), optional_extra=frozenset(),trusted_attempt_authority=None):
     """Shared private authority/head/CI/source/budget gates; never allocates.
 
     Only fixed reviewed callers select additional schema fields. Publication
@@ -181,7 +181,7 @@ def _load_common_configuration(path, *, now, local_head, owner_context,
     raw_config = _read(path, acl_check)
     config = _json(raw_config)
     _keys(config, {'schema', 'sources', 'frozen_head', 'ci', 'recovery', 'control_budget'} | required_extra,
-          {'live', 'code_sources'} | optional_extra)
+          {'live', 'code_sources','attempt','attempt_evidence'} | optional_extra)
     _need(type(config['schema']) is int and config['schema'] == 1, 'config_schema')
     _need(type(config.get('live', False)) is bool, 'config_live')
     config.setdefault('live', False)
@@ -244,11 +244,23 @@ def _load_common_configuration(path, *, now, local_head, owner_context,
                   config_sha256=hashlib.sha256(raw_config).hexdigest(),
                   gates={'owner_matches': True, 'head_matches': True, 'ci_passed': True,
                          'source_hashes_match': True, 'code_pins_checked': bool(code)})
+    if 'attempt' in config or 'attempt_evidence' in config:
+        _need('attempt' in config and 'attempt_evidence' in config,'attempt_sources')
+        from .attempt import ARTIFACTS,verify_attempt
+        evidence=config['attempt_evidence'];_keys(evidence,{'authority','parent_final','artifacts'});_keys(evidence['artifacts'],set(ARTIFACTS))
+        _file_ref(config['attempt'])
+        parent_path=Path(config['recovery']['directory'])/'trial-provision.jsonl'
+        result['verified_attempt']=verify_attempt(result,manifest,authority_raw=_read_ref(evidence['authority'],acl_check),
+            activation_raw=_read_ref(config['attempt'],acl_check),parent_journal_raw=_read(parent_path,acl_check),
+            parent_final_raw=_read_ref(evidence['parent_final'],acl_check),
+            artifacts={key:_read_ref(evidence['artifacts'][key],acl_check) for key in ARTIFACTS},
+            trusted_authority_sha256=trusted_attempt_authority,now=now)
+    else:_need(trusted_attempt_authority is None,'attempt_not_configured')
     return result
 
 
 def load_configuration(path, *, now, local_head, owner_context,
-                       local_source_digests=None, acl_check=verify_owner_file):
+                       local_source_digests=None, acl_check=verify_owner_file,trusted_attempt_authority=None):
     """Load post-publication inputs; default live=False never starts transport.
 
     ``owner_context`` is caller-observed AzureCliCredential mode, tenant_id and
@@ -259,7 +271,7 @@ def load_configuration(path, *, now, local_head, owner_context,
     result = _load_common_configuration(path, now=now, local_head=local_head,
         owner_context=owner_context, local_source_digests=local_source_digests, acl_check=acl_check,
         required_extra={'plan_bindings', 'resource_bindings', 'runtime_deadline', 'auth_deadline',
-                        'cleanup_deadlines', 'policy_verifier_node'}, optional_extra={'secret_sources'})
+                        'cleanup_deadlines', 'policy_verifier_node'}, optional_extra={'secret_sources'},trusted_attempt_authority=trusted_attempt_authority)
     _validate_windows(result)
     _path(result['policy_verifier_node'])
     resources = result['resource_bindings']

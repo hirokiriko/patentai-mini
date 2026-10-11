@@ -14,7 +14,10 @@ from scripts.trial_provision.tests import test_operations as operations_fixture
 
 class MemoryJournal(Journal):
     # Exercise production intent/allocation/checkpoint validation without files.
-    def __init__(self): self.records = []
+    def __init__(self):
+        import threading
+        self.records = []
+        self.mutex = threading.RLock()
     def append(self, event, value):
         no_secret(value)
         self.records.append({'event': event, 'value': deepcopy(value)})

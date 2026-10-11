@@ -8,6 +8,7 @@ import json
 import os
 import re
 import uuid
+import threading
 from copy import deepcopy
 from datetime import timedelta
 from pathlib import Path
@@ -24,12 +25,14 @@ class Receipt:
     of an individual record and changed configuration; full-file backup restore
     still requires the operator's original cloud journal, never fresh execution.
     """
-    def __init__(self,directory,expected_directory_digest,configuration_digest):
+    def __init__(self,directory,expected_directory_digest,configuration_digest,*,require_existing=False):
+        self.mutex=threading.RLock()
         p=Path(directory)
         if not p.is_absolute() or p.is_symlink() or not p.is_dir() or str(p.resolve())!=str(p):raise Denied('receipt_directory')
         if digest(str(p))!=expected_directory_digest:raise Denied('receipt_directory_binding')
         self.path=p/'trial-session.jsonl';self.lock_path=p/'trial-session.lock'
         if self.path.is_symlink() or self.lock_path.is_symlink():raise Denied('receipt_symlink')
+        if require_existing and (not self.path.is_file() or not self.lock_path.is_file() or not self.path.stat().st_size):raise Denied('catalog_stage_required')
         self.lock=self.stream=None
         try:
             # Reject existing unsafe evidence before creating or writing either
@@ -69,21 +72,28 @@ class Receipt:
             self.close();raise
 
     def append(self,event,value=None):
-        if len(self.records)>=15000 or not re.fullmatch('[a-z_]{1,40}',event):raise Denied('receipt_limit')
-        row={'sequence':len(self.records),'previous':self.previous,'event':event,'value':value}
-        proof=digest(row);self.stream.write(encoded({**row,'hash':proof})+b'\n');os.fsync(self.stream.fileno())
-        self.previous=proof;self.records.append(row)
+        with self.mutex:
+            if len(self.records)>=15000 or not re.fullmatch('[a-z_]{1,40}',event):raise Denied('receipt_limit')
+            row={'sequence':len(self.records),'previous':self.previous,'event':event,'value':deepcopy(value)}
+            proof=digest(row);raw=encoded({**row,'hash':proof})+b'\n'
+            if self.stream.write(raw)!=len(raw):raise Denied('receipt_short_write')
+            os.fsync(self.stream.fileno())
+            self.previous=proof;self.records.append(row)
 
-    def find(self,event):return [r['value'] for r in self.records if r['event']==event]
-    def count(self,kind):return sum(r['value'].get('kind')==kind for r in self.records if r['event']=='request')
+    def find(self,event):
+        with self.mutex:return [deepcopy(r['value']) for r in self.records if r['event']==event]
+    def count(self,kind):
+        with self.mutex:return sum(r['value'].get('kind')==kind for r in self.records if r['event']=='request')
     def consume(self,kind,limit):
-        if self.count(kind)>=limit:raise Denied('request_budget')
-        self.append('request',{'kind':kind})
+        with self.mutex:
+            if self.count(kind)>=limit:raise Denied('request_budget')
+            self.append('request',{'kind':kind})
     def close(self):
-        try:
-            if self.stream is not None:self.stream.close()
-        finally:
-            if self.lock is not None:self.lock.close()
+        with self.mutex:
+            try:
+                if self.stream is not None:self.stream.close()
+            finally:
+                if self.lock is not None:self.lock.close()
 
 
 def closure_proven(s):

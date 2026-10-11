@@ -1,4 +1,4 @@
-See [Local preparation and access gates](owner-trial-preflight.md) for the current offline implementation and live blockers.
+See [catalog-first linked attempt](owner-trial-linked-attempt.md) for the current preparation order and approval gate. Older [access-gate notes](owner-trial-preflight.md) remain historical context.
 
 # Issue #148: OWNER限定試用
 

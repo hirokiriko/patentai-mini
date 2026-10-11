@@ -354,9 +354,8 @@ class SharedLifetimeBudgetTests(unittest.TestCase):
             counted=CountedHttp(wire,phase,shared_budget=budget)
             for host,heartbeat in (('management.azure.com',False),('fictional.blob.core.windows.net',False),
                     ('fictional.blob.core.windows.net',True)):
-                counted.heartbeat=heartbeat
                 with self.assertRaises(TimeoutError):
-                    counted('GET','https://'+host+'/fixed',{},None,Deadline(1))
+                    counted.for_purpose('heartbeat_blob' if heartbeat else 'owner_control_blob')('GET','https://'+host+'/fixed',{},None,Deadline(1))
         with open_control_budget(self.config) as budget:
             self.assertEqual([130,33,1],[budget.count(k) for k in ('owner_arm','owner_control_blob','heartbeat_blob')])
         self.assertEqual(3,wire.call_count)
@@ -406,11 +405,11 @@ class SharedLifetimeBudgetTests(unittest.TestCase):
             with self.assertRaisesRegex(Denied,'shared_control_budget_unconfirmed'):execute(config)
         receipt.assert_not_called();starter.assert_not_called();worker.assert_not_called()
 
-    def test_live_preflight_failure_releases_existing_budget_lock_without_send(self):
+    def test_legacy_fresh_execution_rejection_releases_budget_lock_without_send(self):
         with self.establish():pass
         config=self.execution_config();wire=Mock()
         with patch(__package__+'.execution.validate_worker_directories'),patch(__package__+'.execution.validate_launch_preflight',side_effect=Denied('offline-preflight')):
-            with self.assertRaisesRegex(Denied,'offline-preflight'):execute(config,http=wire)
+            with self.assertRaisesRegex(Denied,'catalog_stage_required'):execute(config,http=wire)
         wire.assert_not_called()
         with open_control_budget(self.config) as budget:self.assertEqual(128,budget.count('owner_arm'))
 

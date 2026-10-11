@@ -84,7 +84,9 @@ export class OperatorAccess {
       !["GET", "HEAD", "PUT"].includes(method) || (purpose === "artifacts" && method === "PUT")) throw new TrialError("trial_operator_target_denied");
     const params = [...u.searchParams];
     if ([container, container + "/"].includes(u.pathname)) {
-      if (!["GET", "HEAD"].includes(method) || params.length !== 1 || params[0][0] !== "restype" || params[0][1] !== "container")
+      if (!["GET", "HEAD"].includes(method) || u.searchParams.getAll("restype").length !== 1 ||
+        u.searchParams.get("restype") !== "container" || u.searchParams.getAll("timeout").length > 1 ||
+        params.some(([k,v]) => k !== "restype" && (k !== "timeout" || !/^(?:[1-9]|1[0-9]|20)$/.test(v))))
         throw new TrialError("trial_operator_target_denied");
     } else if (!this.keys(purpose).some(k => u.pathname === `${container}/${k}`) ||
       params.some(([k, v]) => k !== "timeout" || !/^(?:[1-9]|1[0-9]|20)$/.test(v)) || params.length > 1)
@@ -99,8 +101,12 @@ export class OperatorAccess {
   }
 }
 
+/** The database transport accepts the narrower catalog-only access object too.
+ * Storage, operator commands and bootstrap still require OperatorAccess. */
+export type DatabaseAccess = Pick<OperatorAccess, "ticket" | "policy" | "signal" | "check">;
+
 /** Install before Drizzle: nested statements and its automatic COMMIT use this boundary. */
-export function guardOperatorDatabase<T extends { query: (...args: never[]) => unknown; end: () => unknown }>(client: T, access: OperatorAccess) {
+export function guardOperatorDatabase<T extends { query: (...args: never[]) => unknown; end: () => unknown }>(client: T, access: DatabaseAccess) {
   const query = client.query;
   Object.defineProperty(client, "query", { configurable:true, value: function (...args: unknown[]) {
     const text = typeof args[0] === "string" ? args[0] : (args[0] as { text?: string })?.text;

@@ -11,6 +11,7 @@ import { TRIAL_NETWORK_DDL,TRIAL_NETWORK_TABLE,TRIAL_ARM_REQUEST_LIMIT,TRIAL_ARM
 import { type OperatorAccess } from "./operator-access";
 import { beginOperatorReceipt } from "./operator-journal";
 import { connectPermitDatabase } from "./database-client";
+import { consumeCatalogBootstrapCapability, type CatalogBootstrapCapability, type BootstrapAuthority } from "./catalog-runtime";
 
 const identifier = z.string().regex(/^[a-z][a-z0-9_]{1,62}$/);
 export const bootstrapManifestSchema = z.object({
@@ -68,10 +69,12 @@ export async function collectTrialBootstrapReceipts(directory: string, binding: 
 
 /** This is a Local-only fixed installer, not a SQL executor. Only the launcher
  * supplies the normal admin binding and existing dedicated credential material.
- * No secret generation, fallback target, DROP, shared ACL edit or admin GRANT. */
+ * No secret generation, fallback target, DROP or shared ACL edit. A signed
+ * catalog plan may authorize one temporary SET-only membership in the new
+ * owner role; it is revoked immediately after CREATE DATABASE. */
 export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; access: OperatorAccess;
   manifest: BootstrapManifest; credentials: BootstrapCredentials; recoveryDirectory: string;
-  credential: Credential; mode: "apply" | "reconcile" }) {
+  credential: Credential; mode: "apply" | "reconcile"; beforeFirstWrite?:()=>Promise<CatalogBootstrapCapability> }) {
   const { policy: p, access, recoveryDirectory: directory, credential, mode } = options;
   if(mode!=="apply"&&mode!=="reconcile")throw new TrialError("trial_bootstrap_binding_invalid");
   const manifest = bootstrapManifestSchema.parse(options.manifest), secrets = bootstrapCredentialsSchema.parse(options.credentials), d = p.database;
@@ -87,6 +90,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     decodeURIComponent(adminUrl.pathname.slice(1)) !== manifest.adminCatalog || decodeURIComponent(adminUrl.username) !== manifest.adminUser ||
     !adminUrl.password || adminUrl.search || adminUrl.hash || [secrets.migratorPassword,secrets.webPassword,secrets.workerPassword].includes(decodeURIComponent(adminUrl.password)))
     throw new TrialError("trial_bootstrap_binding_invalid");
+  if(typeof options.beforeFirstWrite!=="function")throw new TrialError("trial_catalog_capability_required");
   const migrationsFolder = resolve("drizzle"), migrations = readMigrationFiles({ migrationsFolder });
   if (migrations.length !== MIGRATION_HASHES.length || migrations.some((m, i) => m.folderMillis!==MIGRATION_TIMES[i] || trialHash(m.sql.join("--> statement-breakpoint").replace(/\r\n/g,"\n")) !== MIGRATION_HASHES[i])) throw new TrialError("trial_bootstrap_migrations_changed");
   // Stable across tickets, credentials and retries. A fresh ticket/password must
@@ -140,6 +144,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     connections.push(connection);connected.set(key,connection.client); return connection.client;
   };
   const verifiedSteps = new Set<string>();
+  let catalogAuthorized=false;
   const request = (step: string) => ({ operation: "trial-bootstrap-v1", binding, step });
   const removeOrphanStepLock = async(id:string)=>{
     if(!recoveredStaleLock)return;
@@ -166,6 +171,12 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       const receipt = await beginOperatorReceipt(directory, p.localOperator!.recoveryDirectoryDigest, access.ticket, request(id), true);
       await receipt.finish(true); verifiedSteps.add(id); return;
     }
+    if(!catalogAuthorized){
+      const capability=await options.beforeFirstWrite!();check();
+      catalogAuthority=consumeCatalogBootstrapCapability(capability,p,window);
+      if(catalogAuthority.adminUser!==manifest.adminUser)throw new TrialError("trial_catalog_authority_invalid");
+      catalogAuthorized=true;
+    }
     const receipt = await beginOperatorReceipt(directory, p.localOperator!.recoveryDirectoryDigest, access.ticket, request(id));
     let complete = false;
     try { check(); await write(); complete = await verify(); if (!complete) throw new TrialError("trial_bootstrap_readback_mismatch"); }
@@ -180,6 +191,8 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       !row.rolinherit && row.rolconnlimit === limit && row.rolconfig === null && (until === null ? row.rolvaliduntil === null : new Date(row.rolvaliduntil).getTime() === Date.parse(until)));
   };
   let activeStep = "preflight";
+  let catalogAuthority:BootstrapAuthority|undefined;
+  let revokeTemporaryOwner:(()=>Promise<void>)|undefined;
   try {
     const admin = await connect(manifest.adminUser, manifest.adminCatalog);
     const version = (await admin.query("select current_setting('server_version_num')::int / 10000 as major,current_setting('standard_conforming_strings') as strings")).rows[0];
@@ -188,6 +201,8 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     for (const row of existing) if (await state(`role-${roles.indexOf(row.rolname)}`) === "absent") throw new TrialError("trial_bootstrap_name_occupied");
     const dbRow = async () => (await admin.query("select pg_get_userbyid(datdba) as owner,datistemplate,datallowconn,datconnlimit,pg_encoding_to_char(encoding) as encoding from pg_database where datname=$1", [database])).rows[0];
     if (await dbRow() && await state("database") === "absent") throw new TrialError("trial_bootstrap_name_occupied");
+    if(await state("temporary-owner-set-grant")!=="absent"||await state("temporary-owner-set-revoke")!=="absent")
+      throw new TrialError("trial_bootstrap_temporary_membership_reconciliation_required");
     // This catalog is the admin catalog only. Cross-database business ACL
     // evidence remains a separate launcher preflight; CONNECT/TEMP alone is not failure.
     const hazards = (await admin.query(`select count(*)::int as n from pg_class c join pg_namespace n on n.oid=c.relnamespace,
@@ -229,21 +244,44 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     const roleHazards=(await admin.query(`select count(*)::int as n from pg_auth_members where member=any(select oid from pg_roles where rolname=any($1::text[]))
       and not(member=(select oid from pg_roles where rolname=$2) and roleid=(select oid from pg_roles where rolname=$3) and not admin_option and not inherit_option and set_option)`,[roles,migrator,owner])).rows[0];
     if(roleHazards.n!==0)throw new TrialError("trial_bootstrap_membership_hazard");
+    if(catalogAuthority?.mode==="temporary-owner-set"){
+      const {adminOid,bootstrapSuperuserOid}=catalogAuthority;
+      const membership=async()=>(await admin.query(`select m.grantor::int8 as grantor,m.admin_option,m.inherit_option,m.set_option from pg_catalog.pg_auth_members m
+        where m.roleid=(select oid from pg_catalog.pg_roles where rolname=$1) and m.member=$2 order by m.grantor`,[owner,adminOid])).rows;
+      const membershipValid=(rows:Record<string,unknown>[],temporary:boolean)=>rows.length===(temporary?2:1)&&
+        rows.filter(r=>Number(r.grantor)===bootstrapSuperuserOid&&r.admin_option===true&&r.inherit_option===false&&r.set_option===false).length===1&&
+        (!temporary||rows.filter(r=>Number(r.grantor)===adminOid&&r.admin_option===false&&r.inherit_option===false&&r.set_option===true).length===1);
+      if(!membershipValid(await membership(),false))throw new TrialError("trial_bootstrap_temporary_membership_occupied");
+      revokeTemporaryOwner=async()=>{
+        const rows=await membership();if(membershipValid(rows,false))return;
+        if(!membershipValid(rows,true))throw new TrialError("trial_bootstrap_temporary_membership_changed");
+        await step("temporary-owner-set-revoke",()=>admin.query(`REVOKE ${quote(owner)} FROM ${quote(manifest.adminUser)} GRANTED BY ${quote(manifest.adminUser)} RESTRICT`),
+          async()=>membershipValid(await membership(),false));
+      };
+      activeStep="temporary-owner-set-grant";
+      await step(activeStep,()=>admin.query(`GRANT ${quote(owner)} TO ${quote(manifest.adminUser)} WITH ADMIN FALSE, INHERIT FALSE, SET TRUE GRANTED BY ${quote(manifest.adminUser)}`),async()=>{
+        return membershipValid(await membership(),true);
+      });
+    }
     activeStep="database";
     await step(activeStep,()=>admin.query(`CREATE DATABASE ${quote(database)} OWNER ${quote(owner)} TEMPLATE template0 ENCODING 'UTF8' CONNECTION LIMIT 5`),async()=>{
       const r=await dbRow();return Boolean(r&&r.owner===owner&&!r.datistemplate&&r.datallowconn&&r.datconnlimit===5&&r.encoding==="UTF8");
     });
+    if(revokeTemporaryOwner){activeStep="temporary-owner-set-revoke";await revokeTemporaryOwner();revokeTemporaryOwner=undefined;}
+    // The new database's standard PUBLIC CONNECT admits the fixed migrator.
+    // Its existing SET-only owner membership supplies database ACL authority;
+    // no membership in the new owner is retained by the administrator.
+    const client=await connect(migrator,database,secrets.migratorPassword);
+    await client.query(`SET ROLE ${quote(owner)}`);
     // CONNECT grants precede PUBLIC revocation; all ACL targets are the new DB.
     for(const user of [migrator,web,worker]) {
       activeStep=`connect-${roles.indexOf(user)}`;
-      await step(activeStep,()=>admin.query(`GRANT CONNECT ON DATABASE ${quote(database)} TO ${quote(user)}`),async()=>Boolean((await admin.query(
+      await step(activeStep,()=>client.query(`GRANT CONNECT ON DATABASE ${quote(database)} TO ${quote(user)}`),async()=>Boolean((await admin.query(
         "select exists(select 1 from pg_database d,lateral aclexplode(d.datacl) a where d.datname=$1 and a.grantee=(select oid from pg_roles where rolname=$2) and a.privilege_type='CONNECT' and not a.is_grantable) as ok",[database,user])).rows[0].ok));
     }
     activeStep="database-public";
-    await step(activeStep,()=>admin.query(`REVOKE ALL ON DATABASE ${quote(database)} FROM PUBLIC`),async()=>!(await admin.query(
+    await step(activeStep,()=>client.query(`REVOKE ALL ON DATABASE ${quote(database)} FROM PUBLIC`),async()=>!(await admin.query(
       "select exists(select 1 from pg_database d,lateral aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a where d.datname=$1 and a.grantee=0) as bad",[database])).rows[0].bad);
-    const client=await connect(migrator,database,secrets.migratorPassword);
-    await client.query(`SET ROLE ${quote(owner)}`);
     const ddl = async(id:string,sql:string,verify:()=>Promise<boolean>)=>{activeStep=id;await step(id,()=>client.query(sql),verify);};
     await ddl("public-schema", "REVOKE ALL ON SCHEMA public FROM PUBLIC",async()=>!(await client.query(
       "select exists(select 1 from pg_namespace n,lateral aclexplode(coalesce(n.nspacl,acldefault('n',n.nspowner))) a where n.nspname='public' and a.grantee=0) as bad")).rows[0].bad);
@@ -354,6 +392,10 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       requiresExternalBusinessAclAudit:true,automaticResend:false,
       receipts:await collectTrialBootstrapReceipts(directory,binding,[...verifiedSteps])} as const;
   }catch(e){
+    // Only the original still-usable guarded connection may revoke. An unknown
+    // query or expired permit rejects this path: no reconnect, resend or window
+    // extension is introduced, and its durable intent remains for reconciliation.
+    if(revokeTemporaryOwner){try{await revokeTemporaryOwner();}catch{throw new TrialError("trial_bootstrap_temporary_membership_cleanup_unconfirmed");}}
     // Do not attach a pg error/cause: it may contain SQL, password or a target.
     throw new TrialError(e instanceof TrialError ? e.code : `trial_bootstrap_failed_${activeStep.replace(/[^a-zA-Z0-9_-]/g,"")}`);
   }finally{

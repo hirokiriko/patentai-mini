@@ -8,15 +8,16 @@ import { trialOperatorInput, runTrialOperator } from "./trial-operator";
 import { OperatorAccess, operatorPolicyBinding, operatorTicketDigest, operatorTicketSchema } from "../src/lib/trial/operator-access";
 import { readTrialPolicy, trialPolicyBytes, trialPolicySchema, TrialError } from "../src/lib/trial/policy";
 import { managedSettingSchema } from "../src/lib/patent-watch/managed-types";
+import { parseTrialStrictJson } from "../src/lib/trial/strict-json";
 
 import { trialAzureCliPythonSchema } from "./trial-owner-token";
 
 const MAX_INPUT = 2 * 1024 ** 2;
 export const MAX_SESSION_REQUESTS = 16; // Bootstrap consumes up to four of the process-wide 20 connections.
 export const MAX_BOOTSTRAP_BASELINE_BYTES = 64 * 1024 ** 2;
-const databaseWindowSchema = operatorTicketSchema.shape.databaseWindow.unwrap();
+export const databaseWindowSchema = operatorTicketSchema.shape.databaseWindow.unwrap();
 type DatabaseWindow = z.infer<typeof databaseWindowSchema>;
-const environmentSchema = z.object({ DEPLOYMENT_KIND: z.literal("trial"), TRIAL_POLICY_JSON: z.string(),
+export const environmentSchema = z.object({ DEPLOYMENT_KIND: z.literal("trial"), TRIAL_POLICY_JSON: z.string(),
   TRIAL_POLICY_SIGNATURE: z.string(), TRIAL_POLICY_PUBLIC_KEY: z.string() }).strict();
 export const trialSessionInput = z.object({
   azureCliPython: trialAzureCliPythonSchema, environment: environmentSchema, access: operatorTicketSchema,
@@ -236,6 +237,7 @@ export async function saveTrialBootstrapProof(prepared: PreparedSession, result:
   return { sha256: proofHash(serialized) };
 }
 export type SessionAdapters = { runtimePolicy(prepared: PreparedSession, phase: "pending" | "final"): Promise<unknown>;
+  beforeBootstrap?():Promise<void>; beforeRelease?():Promise<void>;
   bootstrapProof(prepared: PreparedSession, result: Record<string, unknown>): Promise<unknown>;
   bootstrap(value: unknown): Promise<unknown>; operator(value: unknown): Promise<unknown> };
 function requireOperatorResult(request: unknown, value: unknown) {
@@ -256,17 +258,14 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
   adapters: SessionAdapters = { runtimePolicy: saveTrialRuntimePolicy, bootstrapProof: saveTrialBootstrapProof, bootstrap: runTrialBootstrap, operator: runTrialOperator }) {
   await permit.wait(); permit.check();
   await abortable(adapters.runtimePolicy(prepared, "pending"), permit.signal); permit.check();
+  if(adapters.beforeBootstrap){await abortable(adapters.beforeBootstrap(),permit.signal);permit.check();}
   const bootstrapResult = record(await abortable(adapters.bootstrap(prepared.bootstrap), permit.signal)); permit.check();
   if (bootstrapResult.status !== (prepared.bootstrap.mode === "apply" ? "bootstrapped" : "reconciled") ||
     bootstrapResult.cases !== prepared.bootstrap.manifest.cases.length || !Number.isSafeInteger(bootstrapResult.databaseBaselineBytes) ||
     Number(bootstrapResult.databaseBaselineBytes) < 0 || Number(bootstrapResult.databaseBaselineBytes) > MAX_BOOTSTRAP_BASELINE_BYTES ||
     bootstrapResult.automaticResend !== false) throw failure();
   const final = bindTrialSessionBaseline(prepared, Number(bootstrapResult.databaseBaselineBytes));
-  const artifact = record(await abortable(adapters.runtimePolicy(final, "final"), permit.signal)); permit.check();
-  const finalRuntimePolicySha256 = sha256Schema.parse(artifact.sha256), proof = bootstrapProof(final, bootstrapResult);
-  const savedProof = record(await abortable(adapters.bootstrapProof(final, bootstrapResult), permit.signal)); permit.check();
-  const bootstrap = { schema: 1, ...proof.bootstrap, finalRuntimePolicySha256, databaseWindowDigest: proofHash(trialProofCanonical(proof.databaseWindow)),
-    receiptSetSha256: proofHash(trialProofCanonical(proof.receipts)), receiptCount: proof.receipts.length, proofSha256: sha256Schema.parse(savedProof.sha256) };
+  const proof = bootstrapProof(final,bootstrapResult);
   const results: unknown[] = [];
   for (const [index, template] of prepared.requests.entries()) {
     permit.check(); const request = structuredClone(template), refs = validateReferences(request, index, prepared.requests);
@@ -279,6 +278,12 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
     permit.check(); const result = await abortable(adapters.operator(input), permit.signal); permit.check();
     requireOperatorResult(request, result); results.push(result);
   }
+  if(adapters.beforeRelease){await abortable(adapters.beforeRelease(),permit.signal);permit.check();}
+  const artifact = record(await abortable(adapters.runtimePolicy(final, "final"), permit.signal)); permit.check();
+  const finalRuntimePolicySha256 = sha256Schema.parse(artifact.sha256);
+  const savedProof = record(await abortable(adapters.bootstrapProof(final, bootstrapResult), permit.signal)); permit.check();
+  const bootstrap = { schema: 1, ...proof.bootstrap, finalRuntimePolicySha256, databaseWindowDigest: proofHash(trialProofCanonical(proof.databaseWindow)),
+    receiptSetSha256: proofHash(trialProofCanonical(proof.receipts)), receiptCount: proof.receipts.length, proofSha256: sha256Schema.parse(savedProof.sha256) };
   return { status: "completed" as const, completedRequests: results.length, bootstrap };
 }
 
@@ -287,7 +292,8 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
 export async function runTrialSessionStdin(input: Readable, options: {
   adapters?: SessionAdapters; clock?: SessionClock; onStop: () => void;
 }) {
-  let size = 0, pending = Buffer.alloc(0), first = true, permit: SessionPermit | undefined;
+  let size = 0, frames=0, pending = Buffer.alloc(0), first = true, permit: SessionPermit | undefined;
+  let receive:((value:unknown)=>void)|undefined;
   const queued: unknown[] = [], channel = new AbortController();
   let resolveInitial: (value: unknown) => void = () => undefined;
   const initial = new Promise<unknown>(resolve => { resolveInitial = resolve; });
@@ -300,14 +306,16 @@ export async function runTrialSessionStdin(input: Readable, options: {
     try {
       if (channel.signal.aborted) return;
       const bytes = Buffer.from(chunk); size += bytes.length;
-      if (size > MAX_INPUT) throw failure();
+      if (size > 4*MAX_INPUT) throw failure();
       pending = Buffer.concat([pending, bytes]);
+      if(pending.length>MAX_INPUT)throw failure();
       for (;;) {
         const end = pending.indexOf(10); if (end < 0) break;
         const line = pending.subarray(0, end); pending = pending.subarray(end + 1);
-        if (!line.length) throw failure();
-        const value: unknown = JSON.parse(line.toString("utf8"));
+        if (!line.length||++frames>4096) throw failure();
+        const value: unknown = parseTrialStrictJson(line);
         if (first) { first = false; resolveInitial(value); }
+        else if(receive)receive(value);
         else if (permit) permit.grant(value);
         else { if (queued.length >= 8) throw failure(); queued.push(value); }
       }
@@ -317,6 +325,13 @@ export async function runTrialSessionStdin(input: Readable, options: {
   const startup = setTimeout(stop, 5000);
   try {
     const value = await abortable(initial, channel.signal);
+    if(record(value).type==="catalog_start"){
+      const {runCatalogSession}=await import("./trial-catalog-session");
+      clearTimeout(startup);
+      return await abortable(runCatalogSession(value,{clock:options.clock,signal:channel.signal,onStop:stop,
+        register(fn){receive=fn;for(const frame of queued)fn(frame);queued.length=0;},
+        send(frame){process.stdout.write(JSON.stringify(frame)+"\n");}}),channel.signal);
+    }
     const prepared = prepareTrialSession(value, options.clock);
     permit = new SessionPermit(prepared.databaseWindow, options.onStop, options.clock);
     clearTimeout(startup);

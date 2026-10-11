@@ -14,6 +14,7 @@ import sys
 import time
 import threading
 from copy import deepcopy
+from contextvars import ContextVar
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -34,36 +35,49 @@ def validate_launch_preflight(config,clock):
     try:
         p=json.loads(config['worker']['payload']['environment']['TRIAL_POLICY_JSON'])
         sha=p['codeSha'];at=parse(f['checked_at'])
-        evidence=('network_approval','current_ip','isolation','current_ledger','current_prices','effective_permissions','additional_authority')
+        staged=config['worker'].get('mode')=='catalog_then_bootstrap_v1'
+        evidence=('network_approval','current_ip','platform_isolation' if staged else 'isolation','current_ledger','current_prices','effective_permissions','additional_authority')
+        audit_ready=(f.get('schema')==2 and type(f.get('schema')) is int and f.get('catalog_acl')=='pending_catalog' and
+            f.get('launch_checks_verified') is True and 'external_business_acl_verified' not in f and 'all_evidence_verified' not in f) if staged else (
+            f.get('external_business_acl_verified') is True and f.get('all_evidence_verified') is True)
         if (not re.fullmatch('[a-f0-9]{40}',sha) or f['ci_head']!=sha or f['reviewed_head']!=sha or
             not at<=clock.utc()<at+timedelta(minutes=10) or
             f['ipv4']!=config['binding']['ipv4'] or f['server_id']!=config['binding']['server_id'] or f['rule_id']!=config['binding']['rule_id'] or
             type(f['initial_forecast_yen']) is not int or f['initial_forecast_yen']>4500 or f['initial_forecast_yen']<0 or f['initial_cap_yen']!=5000 or
-            f['all_unsettled_retained'] is not True or f['external_business_acl_verified'] is not True or
-            f['no_production_change'] is not True or f['all_evidence_verified'] is not True or
+            f['all_unsettled_retained'] is not True or not audit_ready or
+            f['no_production_change'] is not True or
             any(not re.fullmatch('[a-f0-9]{64}',f['evidence_sha256'][k]) for k in evidence)):
             raise Denied('launch_preflight_unconfirmed')
     except (KeyError,TypeError,ValueError):raise Denied('launch_preflight_unconfirmed') from None
 
 
 class CountedHttp:
-    def __init__(self,wire,receipt,shared_budget=None):
+    def __init__(self,wire,receipt,shared_budget=None,*,accounting_lock=None):
         # The per-session receipt is audit detail, not another allowance. New
         # live execute paths must also use the one pre-existing lifetime budget.
-        self.wire,self.receipt,self.heartbeat=wire,receipt,False
+        self.wire,self.receipt=wire,receipt
         self.shared_budget=shared_budget
+        self.accounting_lock=accounting_lock or threading.RLock()
+    def for_purpose(self,purpose):
+        if purpose not in ('owner_control_blob','heartbeat_blob'):raise Denied('owner_http_purpose')
+        def send(method,url,headers,body,deadline):
+            return self._send(purpose,method,url,headers,body,deadline)
+        return send
     def __call__(self,method,url,headers,body,deadline):
+        return self._send('owner_control_blob',method,url,headers,body,deadline)
+    def _send(self,purpose,method,url,headers,body,deadline):
         u=urlsplit(url);host=u.hostname
         if u.scheme!='https' or u.username or u.password or u.port not in (None,443) or u.fragment:
             raise Denied('owner_http_host')
         if host=='management.azure.com':kind,limit='owner_arm',600
         elif host and host.endswith('.blob.core.windows.net'):
-            kind,limit=('heartbeat_blob',5250) if self.heartbeat else ('owner_control_blob',3000)
+            kind,limit=('heartbeat_blob',5250) if purpose=='heartbeat_blob' else ('owner_control_blob',3000)
         else:raise Denied('owner_http_host')
         # Fsync lifetime debit first. A later audit/deadline/HTTP failure keeps
         # that reservation; never refund, fall back or debit the lifetime twice.
-        if self.shared_budget is not None:self.shared_budget.consume(kind,limit)
-        self.receipt.consume(kind,limit)
+        with self.accounting_lock:
+            if self.shared_budget is not None:self.shared_budget.consume(kind,limit)
+            self.receipt.consume(kind,limit)
         deadline.remaining()
         return self.wire(method,url,headers,body,deadline)
 
@@ -100,13 +114,17 @@ def open_control_budget(config):
 
 
 class CountedSession(OwnerSession):
-    def __init__(self,config,wire,clock,recovery_only=False):
-        self.counted=wire
-        super().__init__(config,http=wire,clock=clock,require_fresh=not recovery_only,recovery_only=recovery_only)
+    def __init__(self,config,wire,clock,recovery_only=False,credential_factory=None):
+        self._purpose=ContextVar('owner_action_purpose',default='owner_control_blob')
+        routes={p:wire.for_purpose(p) for p in ('owner_control_blob','heartbeat_blob')}
+        def scoped(method,url,headers,body,deadline):
+            return routes[self._purpose.get()](method,url,headers,body,deadline)
+        kwargs={} if credential_factory is None else {'credential_factory':credential_factory}
+        super().__init__(config,http=scoped,clock=clock,require_fresh=not recovery_only,recovery_only=recovery_only,**kwargs)
     def action(self,action):
-        self.counted.heartbeat=action=='heartbeat'
+        token=self._purpose.set('heartbeat_blob' if action=='heartbeat' else 'owner_control_blob')
         try:return super().action(action)
-        finally:self.counted.heartbeat=False
+        finally:self._purpose.reset(token)
 
 
 class AzureJobStarter:
@@ -116,7 +134,7 @@ class AzureJobStarter:
     multiple or paginated results remain unknown; no second Job is launched.
     Replica response schema must be read-verified before live_enabled is allowed.
     """
-    def __init__(self,config,wire,clock,recovery_only=False,recorded_runtime=None):
+    def __init__(self,config,wire,clock,recovery_only=False,recorded_runtime=None,credential_factory=None):
         self.c,self.clock=config,clock
         self.guardian=guardian_configuration(config) if config.get('guardian_config') is not None else None
         j=config['guardian_job'];self.job=j['resource_id'];self.template=j['template']
@@ -131,6 +149,7 @@ class AzureJobStarter:
         if not recovery_only and not self.clock.utc()<self.until<=self.clock.utc()+timedelta(minutes=5):raise Denied('prearm_window')
         self.http=PermissionHttp(wire,clock,config['owner_permissions_until'])
         self.credential=AzureCredential('owner',config['owner_id'],config['tenant_id'],self.http)
+        if credential_factory is not None:self.credential=credential_factory(self.credential)
 
     def request(self,suffix,method='GET',body=None,before=None):
         if suffix not in ('','/start','/executions') and not re.fullmatch('/executions/[a-z0-9-]{1,100}(?:/replicas)?',suffix):raise Denied('job_suffix')
@@ -248,6 +267,15 @@ def execution_binding(config):
         {'bootstrap':{k:payload.get('bootstrap',{}).get(k) for k in ('manifest','mode')}})
     value['preflight']=config.get('preflight')
     value['control_budget']=deepcopy(config.get('control_budget'))
+    if config['worker'].get('mode') is not None:
+        from .catalog_execution import MODE,catalog_digest,validate_catalog_payload
+        if config['worker']['mode']!=MODE:raise Denied('worker_mode')
+        validate_catalog_payload(payload)
+        value['worker_mode']=MODE
+        value['catalog_plan_digest']=catalog_digest(payload['catalogPlan'])
+        attempt_binding=config.get('attempt_binding_digest')
+        if not isinstance(attempt_binding,str) or re.fullmatch('[a-f0-9]{64}',attempt_binding) is None:raise Denied('attempt_binding')
+        value['attempt_binding_digest']=attempt_binding
     return value
 
 
@@ -426,7 +454,7 @@ class NodeWorker:
         return self.child.poll() is not None
 
 
-def execute(config,*,clock=None,http=None):
+def execute(config,*,clock=None,http=None,verified_attempt=None,owner_token_pool=None):
     clock=clock or Clock()
     if config.get('live_enabled') is not True:raise Denied('live_not_enabled')
     # Cleanup resumption must remain possible after initial evidence expires.
@@ -436,23 +464,54 @@ def execute(config,*,clock=None,http=None):
     validate_worker_python(config['worker']['payload'])
     validate_worker_directories(config)
     binding=execution_binding(config)
+    w=config['worker'];pin=w.get('artifact_pin')
+    staged=w.get('mode')=='catalog_then_bootstrap_v1'
+    if staged:
+        from scripts.trial_provision.attempt import _proof,check_window
+        from scripts.trial_provision.journal import scope_for_dispatch
+        a=_proof(verified_attempt)['authority']
+        policy=json.loads(w['payload']['environment']['TRIAL_POLICY_JSON'])
+        if (owner_token_pool is None or config.get('attempt_binding_digest')!=verified_attempt.binding_digest or
+            digest(config['control_budget']['binding'])!=a['budget_binding_sha256'] or policy['codeSha']!=a['head'] or
+            config['owner_id']!=a['owner_id']):raise Denied('execution_attempt_binding')
+        plan=w['payload']['catalogPlan'];options=a['catalog_options']
+        expected_set={'schema':1,'kind':'temporary-owner-set-v1','authoritySha256':_proof(verified_attempt)['authority_sha256']} if options['temporary_owner_set'] else None
+        if plan['excludedDatabases']!=options['excluded_databases'] or plan.get('bootstrapOwnerSet')!=expected_set:raise Denied('execution_catalog_authority')
+        windows=verified_attempt.activation['windows']
+        if ({'start':policy['startsAt'],'end':policy['endsAt']}!=windows['initial'] or
+            {k:w['payload']['access'][field] for k,field in (('start','startsAt'),('end','endsAt'))}!=windows['owner_input']):raise Denied('execution_attempt_window')
+    elif verified_attempt is not None:raise Denied('execution_legacy_attempt')
     budget=open_control_budget(config)
-    receipt=None
+    receipt=None;worker=None
     try:
-        receipt=Receipt(config['recovery_directory'],config['recovery_directory_digest'],digest(binding))
-        wire=CountedHttp(http or BoundedHttp(),receipt,shared_budget=budget)
+        receipt=Receipt(config['recovery_directory'],config['recovery_directory_digest'],digest(binding),require_existing=not staged)
         resume=bool(receipt.find('start_intent'))
-        if not resume:validate_launch_preflight(config,clock)
-        w=config['worker'];pin=w.get('artifact_pin')
+        if not resume:
+            validate_launch_preflight(config,clock)
+            if not staged:raise Denied('catalog_stage_required')
+        scoped=budget;credential_factory=None
+        if staged:
+            if not resume:check_window(verified_attempt,'initial',clock.utc(),600)
+            scoped=scope_for_dispatch(budget,verified_attempt,entry_point='owner-cleanup' if resume else 'owner-run',action='recover' if resume else 'execute')
+            credential_factory=lambda credential:owner_token_pool.bind(credential,scoped,verified_attempt)
+        wire=CountedHttp(http or BoundedHttp(),receipt,shared_budget=scoped,accounting_lock=receipt.mutex)
         validate_worker_artifact(w.get('node'),w.get('script'),pin,verify_files=not resume)
         if not resume and pin['head']!=config['preflight']['ci_head']:raise Denied('worker_artifact_head')
         guardian_configuration(config)
         saved=receipt.find('start_ack')
-        starter=AzureJobStarter(config,wire,clock,recovery_only=bool(receipt.find('start_intent')),recorded_runtime=saved[-1].get('runtime') if saved else None)
+        credential_kwargs={} if credential_factory is None else {'credential_factory':credential_factory}
+        starter=AzureJobStarter(config,wire,clock,recovery_only=bool(receipt.find('start_intent')),recorded_runtime=saved[-1].get('runtime') if saved else None,**credential_kwargs)
+        if staged:
+            from .catalog_execution import CatalogNodeWorker,FixedPermitReader
+            worker=CatalogNodeWorker(w['node'],w['script'],w['payload'],receipt=receipt,artifact_pin=pin,clock=clock)
+        else:worker=NodeWorker(w['node'],w['script'],w['payload'],receipt=receipt,artifact_pin=pin)
         def session_factory(runtime,recovery_only):
             c={**config,'cloud_guard':runtime,'runtime_readback':{**runtime,'status':starter.status,'at':clock.utc().isoformat()}}
-            return CountedSession(c,wire,clock,recovery_only=recovery_only)
-        worker=NodeWorker(w['node'],w['script'],w['payload'],receipt=receipt,artifact_pin=pin)
+            session=CountedSession(c,wire,clock,recovery_only=recovery_only,**credential_kwargs)
+            if staged and not recovery_only:
+                credential=credential_factory(AzureCredential('owner',config['owner_id'],config['tenant_id'],wire))
+                worker.install_permit_reader(FixedPermitReader(c,session.initial,wire,clock,credential=credential))
+            return session
         workflow=Workflow(receipt,starter,session_factory,worker,clock,time.sleep)
         previous={}
         for sig in (signal.SIGINT,signal.SIGTERM):
@@ -461,6 +520,7 @@ def execute(config,*,clock=None,http=None):
         finally:
             for sig,handler in previous.items():signal.signal(sig,handler)
     finally:
+        if worker is not None and not worker.stop():raise Denied('worker_stop_unconfirmed')
         try:
             if receipt is not None:receipt.close()
         finally:budget.close()

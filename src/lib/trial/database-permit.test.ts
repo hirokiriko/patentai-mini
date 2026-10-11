@@ -21,6 +21,67 @@ function setup(){
   return{access,state};
 }
 afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
+describe("one counted session permit broadcaster",()=>{
+  async function sharedSetup(count=10){
+    vi.resetModules();const{access,state}=setup(),api=await import("./database-permit");
+    const read=vi.fn<()=>Promise<unknown>>(async()=>state()),revoke=api.installCountedSessionPermitReader(access.ticket.databaseWindow!,read);
+    const credential={getToken:vi.fn(async()=>({token:"fictional"}))},network=vi.fn<typeof fetch>(),close=Array.from({length:count},()=>vi.fn());
+    const permits=close.map(end=>new api.DatabasePermit(access,api.databasePermitReader(access,credential,network),end));
+    const cleanup=()=>{for(const permit of permits)permit.dispose();revoke();access.dispose();vi.clearAllTimers();};
+    return{api,access,state,read,revoke,credential,network,close,permits,cleanup};
+  }
+  it("coalesces pending reads from D+4 connections and schedules only one idle refresh",async()=>{
+    const s=await sharedSetup();let finish:(value:unknown)=>void=()=>undefined;s.read.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    try{
+      const pending=Promise.all(s.permits.map(p=>p.refresh()));expect(s.read).toHaveBeenCalledOnce();finish(s.state());await pending;
+      await vi.advanceTimersByTimeAsync(2000);expect(s.read).toHaveBeenCalledTimes(2);
+      for(const p of s.permits)expect(()=>p.assertSend()).not.toThrow();for(const close of s.close)expect(close).not.toHaveBeenCalled();
+      expect(s.credential.getToken).not.toHaveBeenCalled();expect(s.network).not.toHaveBeenCalled();
+    }finally{s.cleanup();}
+  });
+  it("does not answer later SQL with a previously settled snapshot",async()=>{
+    const s=await sharedSetup(2),calls=[vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({})),vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}))];
+    const clients=calls.map(query=>({query}));clients.forEach((c,i)=>s.api.guardDatabasePermit(c,s.permits[i]));
+    try{
+      await clients[0].query("select 1");expect(s.read).toHaveBeenCalledTimes(1);await clients[1].query("select 1");expect(s.read).toHaveBeenCalledTimes(2);
+      await clients[0].query("COMMIT");expect(s.read).toHaveBeenCalledTimes(3);expect(calls[0]).toHaveBeenCalledTimes(2);expect(calls[1]).toHaveBeenCalledOnce();
+    }finally{s.cleanup();}
+  });
+  it("closes every connection within its ten-second lease while refresh hangs without revival",async()=>{
+    const s=await sharedSetup();let finish:(value:unknown)=>void=()=>undefined;
+    try{
+      await Promise.all(s.permits.map(p=>p.refresh()));s.read.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+      await vi.advanceTimersByTimeAsync(10001);expect(s.read).toHaveBeenCalledTimes(2);for(const close of s.close)expect(close).toHaveBeenCalled();
+      finish(s.state());await vi.advanceTimersByTimeAsync(0);const count=s.read.mock.calls.length;
+      for(const p of s.permits){await expect(p.refresh()).rejects.toThrow();expect(()=>p.assertSend()).toThrow();}
+      await vi.advanceTimersByTimeAsync(20000);expect(s.read).toHaveBeenCalledTimes(count);expect(s.network).not.toHaveBeenCalled();
+    }finally{s.cleanup();}
+  });
+  it("does not recreate idle timers when the last listener disposes during a response",async()=>{
+    const s=await sharedSetup(1);let finish:(value:unknown)=>void=()=>undefined;s.read.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    try{
+      const pending=expect(s.permits[0].refresh()).rejects.toThrow();s.permits[0].dispose();finish(s.state());await pending;
+      await vi.advanceTimersByTimeAsync(10000);expect(s.read).toHaveBeenCalledOnce();await expect(s.permits[0].refresh()).rejects.toThrow();expect(s.read).toHaveBeenCalledOnce();
+    }finally{s.cleanup();}
+  });
+  it("permanently revokes pending sources with no credential or fetch fallback",async()=>{
+    const s=await sharedSetup(1);let finish:(value:unknown)=>void=()=>undefined;s.read.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    try{
+      const pending=expect(s.permits[0].refresh()).rejects.toThrow();s.revoke();finish(s.state());await pending;
+      await expect(s.api.databasePermitReader(s.access,s.credential,s.network)()).rejects.toThrow();await expect(s.permits[0].refresh()).rejects.toThrow();
+      expect(()=>s.api.installCountedSessionPermitReader(s.access.ticket.databaseWindow!,s.read)).toThrow();await vi.advanceTimersByTimeAsync(10000);
+      expect(s.read).toHaveBeenCalledOnce();expect(s.credential.getToken).not.toHaveBeenCalled();expect(s.network).not.toHaveBeenCalled();
+    }finally{s.cleanup();}
+  });
+  it("bounds idle reads for the full 600-second window independently of connection count",async()=>{
+    const s=await sharedSetup();
+    try{
+      await Promise.all(s.permits.map(p=>p.refresh()));await vi.advanceTimersByTimeAsync(600000);expect(s.read.mock.calls.length).toBeLessThanOrEqual(301);
+      for(const close of s.close)expect(close).toHaveBeenCalled();const count=s.read.mock.calls.length;await vi.advanceTimersByTimeAsync(10000);
+      for(const p of s.permits)await expect(p.refresh()).rejects.toThrow();expect(s.read).toHaveBeenCalledTimes(count);
+    }finally{s.cleanup();}
+  });
+});
 describe("guardian database permit",()=>{
   it("renews across a healthy 20 second Blob wait then checks the next SQL",async()=>{
     const{access,state}=setup(),read=vi.fn(async()=>state()),close=vi.fn(),query=vi.fn<(...args:unknown[])=>Promise<object>>(async()=>({}));

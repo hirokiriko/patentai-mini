@@ -85,10 +85,14 @@ class PublicationCliTests(unittest.TestCase):
         self.credential.assert_not_called()
 
     def test_prepare_then_publish_uses_same_budget_and_bundle(self):
+        counts=[]
+        def capture(*args,**_kwargs):
+            counts.append(args[5].count('owner_arm'));return {'status':'unknown'}
+        self.publish.side_effect=capture
         self.call('prepare');self.call('publish','guardian')
         args=self.publish.call_args.args
         self.assertEqual({'schema','slot','docker_path','docker_sha256','docker_host','local_image_id','deadline'},set(args[0]))
-        self.assertEqual('guardian',args[0]['slot']);self.assertEqual(128,args[5].count('owner_arm'))
+        self.assertEqual('guardian',args[0]['slot']);self.assertEqual([128],counts)
         self.assertEqual('owner',self.credential.call_args.args[0])
         self.wire.assert_not_called()
 

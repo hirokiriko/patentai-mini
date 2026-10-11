@@ -8,6 +8,14 @@ import { TrialError, type TrialPolicy } from "../src/lib/trial/policy";
 
 const exec = promisify(execFile);
 const storage = "https://storage.azure.com/", arm = "https://management.azure.com/";
+type OwnerTokenReader=(audience:string)=>Promise<{accessToken:string;tenant:string;expires_on:number}>;
+let sessionReader:{head:string;owner:string;tenant:string;read:OwnerTokenReader;revoked:boolean}|undefined;
+/** The staged child has no CLI fallback after its parent broker is installed. */
+export function installTrialSessionOwnerTokenReader(policy:TrialPolicy,read:OwnerTokenReader){
+  if(sessionReader)throw new TrialError("trial_owner_token_reader_already_installed");
+  const state={head:policy.codeSha,owner:policy.auth.ownerId,tenant:policy.auth.tenantId,read,revoked:false};
+  sessionReader=state;return()=>{state.revoked=true;};
+}
 export const trialAzureCliPythonSchema = z.string().min(1).max(2048).refine(value =>
   isAbsolute(value) && normalize(value) === value && !/[\x00-\x1f]/.test(value) &&
   (process.platform === "win32" ? basename(value).toLowerCase() === "python.exe" : ["python", "python3"].includes(basename(value))));
@@ -22,15 +30,23 @@ export function trialOwnerCredential(policy: TrialPolicy, access: OperatorAccess
   return { async getToken() {
     try {
       access.check(30_000);
+      if(sessionReader&&(sessionReader.revoked||sessionReader.head!==policy.codeSha||sessionReader.owner!==policy.auth.ownerId||sessionReader.tenant!==policy.auth.tenantId))throw new TrialError();
       if (cached && cached.expiresOnTimestamp > Date.now() + 60_000) return cached;
-      const st = await lstat(executable);
-      if (!st.isFile() || st.isSymbolicLink()) throw new TrialError();
-      access.check(30_000);
-      const result = await exec(executable, ["-I", "-m", "azure.cli", "account", "get-access-token", "--resource", audience,
-        "--output", "json", "--only-show-errors"],
-      { windowsHide: true, shell: false, timeout: 30_000, maxBuffer: 65536, signal: access.signal });
+      let value;
+      if(sessionReader){
+        if(sessionReader.revoked||sessionReader.head!==policy.codeSha||sessionReader.owner!==policy.auth.ownerId||sessionReader.tenant!==policy.auth.tenantId)throw new TrialError();
+        value=await sessionReader.read(audience);
+      }else{
+        const st = await lstat(executable);
+        if (!st.isFile() || st.isSymbolicLink()) throw new TrialError();
+        access.check(30_000);
+        const result = await exec(executable, ["-I", "-m", "azure.cli", "account", "get-access-token", "--resource", audience,
+          "--output", "json", "--only-show-errors"],
+        { windowsHide: true, shell: false, timeout: 30_000, maxBuffer: 65536, signal: access.signal });
+        value=JSON.parse(result.stdout);
+      }
       access.check();
-      const value = JSON.parse(result.stdout);
+      if(sessionReader&&(sessionReader.revoked||sessionReader.head!==policy.codeSha||sessionReader.owner!==policy.auth.ownerId||sessionReader.tenant!==policy.auth.tenantId))throw new TrialError();
       if (typeof value.accessToken !== "string" || value.accessToken.length > 32768 || value.accessToken.split(".").length !== 3 ||
         value.tenant?.toLowerCase() !== policy.auth.tenantId.toLowerCase()) throw new TrialError();
       const claims = JSON.parse(Buffer.from(value.accessToken.split(".")[1], "base64url").toString("utf8"));

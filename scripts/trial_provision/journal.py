@@ -8,6 +8,7 @@ import json
 import os
 import re
 import uuid
+import threading
 from copy import deepcopy
 from pathlib import Path
 
@@ -34,7 +35,8 @@ def no_secret(value):
 class Journal:
     """Hash chain and OS writer lock; a partial/changed chain cannot be reset."""
     def __init__(self, directory, directory_digest, binding, *, name='trial-provision', require_existing=False):
-        if name not in ('trial-provision', 'trial-control-budget'):
+        self.mutex = threading.RLock()
+        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next'):
             raise Denied('journal_name')
         directory = Path(directory)
         if (not directory.is_absolute() or not directory.is_dir() or directory.is_symlink()
@@ -83,18 +85,20 @@ class Journal:
             self.close(); raise
 
     def append(self, event, value):
-        if not re.fullmatch('[a-z_]{1,40}', event) or len(self.records) >= 15000:
-            raise Denied('journal_limit')
-        no_secret(value)
-        row = {'sequence':len(self.records), 'previous':self.previous,
-               'event':event, 'value':deepcopy(value)}
-        proof = digest(row); raw = encoded({**row, 'hash':proof})+b'\n'
-        if self.path.stat().st_size+len(raw) > 16*1024*1024: raise Denied('journal_limit')
-        if self.stream.write(raw) != len(raw): raise Denied('journal_short_write')
-        os.fsync(self.stream.fileno())
-        self.records.append(row); self.previous = proof
+        with self.mutex:
+            if not re.fullmatch('[a-z_]{1,40}', event) or len(self.records) >= 15000:
+                raise Denied('journal_limit')
+            no_secret(value)
+            row = {'sequence':len(self.records), 'previous':self.previous,
+                   'event':event, 'value':deepcopy(value)}
+            proof = digest(row); raw = encoded({**row, 'hash':proof})+b'\n'
+            if self.path.stat().st_size+len(raw) > 16*1024*1024: raise Denied('journal_limit')
+            if self.stream.write(raw) != len(raw): raise Denied('journal_short_write')
+            os.fsync(self.stream.fileno())
+            self.records.append(row); self.previous = proof
 
-    def values(self, event): return [deepcopy(r['value']) for r in self.records if r['event']==event]
+    def values(self, event):
+        with self.mutex:return [deepcopy(r['value']) for r in self.records if r['event']==event]
 
     def allocate_id(self, slot):
         if not re.fullmatch('[A-Za-z][A-Za-z0-9_-]{0,63}', slot): raise Denied('allocation_slot')
@@ -161,35 +165,143 @@ class Journal:
     def __exit__(self, *_): self.close()
 
 
+_PHASES=('fresh_read','publication','provision','run','cleanup')
+_PURPOSES=('http','owner_token')
+_PURPOSE_CAPS={'provision':{'http':170,'owner_token':10}}
+_OWNER_PHASE_MAX=dict(zip(_PHASES,(24,24,180,42,120)))
+_ORIGINAL_SEED={'owner_arm':128,'owner_control_blob':32,'heartbeat_blob':0}
+_SCOPE_KEY=object()
+def _budget_need(ok,reason):
+    if not ok:raise Denied(reason)
+def _nonnegative_int(value):return type(value) is int and value>=0
+
 class ControlBudget:
-    """One existing OWNER allowance, shared by provisioning and guardian.
+    """Original lifetime ledger with one append-only verified attempt plan."""
+    LIMITS={'owner_arm':600,'owner_control_blob':3000,'heartbeat_blob':5250}
+    def __init__(self,directory,directory_digest,binding,*,seed,require_existing=False):
+        self.mutex=threading.RLock()
+        _budget_need(isinstance(seed,dict) and set(seed)==set(self.LIMITS) and all(type(seed[k]) is int and 0<=seed[k]<=self.LIMITS[k] for k in seed),'budget_seed')
+        self.seed=deepcopy(seed);self.binding=deepcopy(binding);self._seed_digest=digest(seed);self._binding_digest=digest(binding);self._verified=None;self._poisoned=False;self._closed=False
+        self.journal=Journal(directory,directory_digest,{'binding':binding,'limits':self.LIMITS,'seed':seed},name='trial-control-budget',require_existing=require_existing)
+        try:self._replay()
+        except BaseException:self.close();raise
+    def _assert_open(self):_budget_need(not self._closed and not self._poisoned,'budget_unavailable')
+    def _validate_plan(self,plan):
+        _budget_need(isinstance(plan,dict) and set(plan)=={'schema','attempt','limits','counts_before','phase_caps','unallocated','purpose_caps','budget_binding_sha256'}
+            and type(plan['schema']) is int and plan['schema']==1 and isinstance(plan['attempt'],str) and re.fullmatch('[a-f0-9]{64}',plan['attempt']) is not None
+            and plan['limits']==self.LIMITS and plan['purpose_caps']==_PURPOSE_CAPS and plan['budget_binding_sha256']==digest(self.binding) and self.seed==_ORIGINAL_SEED,'budget_phase_plan')
+        for field in ('counts_before','phase_caps','unallocated'):_budget_need(isinstance(plan[field],dict) and set(plan[field])==set(self.LIMITS),'budget_phase_plan')
+        for kind,limit in self.LIMITS.items():
+            before,reserve,caps=plan['counts_before'][kind],plan['unallocated'][kind],plan['phase_caps'][kind]
+            _budget_need(type(before) is int and self.seed[kind]<=before<=limit and _nonnegative_int(reserve) and isinstance(caps,dict) and set(caps)==set(_PHASES)
+                and all(_nonnegative_int(v) for v in caps.values()) and sum(caps.values())+reserve<=limit-before,'budget_phase_allocation')
+        owner_caps=plan['phase_caps']['owner_arm']
+        _budget_need(all(owner_caps[phase]<=cap for phase,cap in _OWNER_PHASE_MAX.items()) and owner_caps['cleanup']==120 and plan['unallocated']['owner_arm']>=23,'budget_owner_reservation')
+    def _blank_usage(self):return {kind:{phase:0 for phase in _PHASES} for kind in self.LIMITS}
+    def _blank_purposes(self):return {kind:{phase:{purpose:0 for purpose in _PURPOSES} for phase in _PHASES} for kind in self.LIMITS}
+    def _admit(self,kind,phase,purpose,*,verified=None):
+        plan=self._plan
+        _budget_need(plan is not None and kind in self.LIMITS and phase in _PHASES and purpose in _PURPOSES and (purpose!='owner_token' or kind=='owner_arm'),'budget_scope')
+        count=self._counts[kind];_budget_need(count<self.LIMITS[kind],'request_budget');_budget_need(count<self.LIMITS[kind]-plan['unallocated'][kind],'budget_unallocated_reserved')
+        _budget_need(self._used[kind][phase]<plan['phase_caps'][kind][phase],'budget_phase_exhausted')
+        if kind=='owner_arm' and phase!='cleanup':_budget_need(count<457,'budget_cleanup_reserved')
+        if kind=='owner_arm' and phase=='provision':_budget_need(self._purpose_used[kind][phase][purpose]<_PURPOSE_CAPS[phase][purpose],'budget_purpose_exhausted')
+        if verified is not None:
+            from .attempt import check_phase_send
+            check_phase_send(verified,kind,phase,deepcopy(self._counts),self._used[kind][phase])
+    def _add_request(self,row):
+        kind=row['kind'];self._counts[kind]+=1
+        if self._plan is not None:
+            phase,purpose=row['phase'],row['purpose'];self._used[kind][phase]+=1;self._purpose_used[kind][phase][purpose]+=1
+    def _replay(self,verified=None):
+        self._plan=None;self._counts=deepcopy(self.seed);self._used=self._blank_usage();self._purpose_used=self._blank_purposes()
+        with self.journal.mutex:records=deepcopy(self.journal.records)
+        for record in records[1:]:
+            event,value=record['event'],record['value']
+            if event=='phase_plan':
+                _budget_need(self._plan is None,'budget_plan_repeated');self._validate_plan(value);_budget_need(value['counts_before']==self._counts,'budget_plan_snapshot');self._plan=deepcopy(value);continue
+            _budget_need(event=='request' and isinstance(value,dict),'budget_event');kind=value.get('kind');_budget_need(kind in self.LIMITS,'budget_kind')
+            if self._plan is None:_budget_need(set(value)=={'kind'} and self._counts[kind]<self.LIMITS[kind],'budget_legacy_request')
+            else:
+                _budget_need(set(value)=={'kind','attempt','phase','purpose'} and value['attempt']==self._plan['attempt'],'budget_scoped_request')
+                self._admit(kind,value['phase'],value['purpose'],verified=verified)
+            self._add_request(value)
+        self._record_count=len(records)
+    def _unchanged(self):
+        _budget_need(len(self.journal.records)==self._record_count,'budget_outside_writer')
+        _budget_need(digest(self.seed)==self._seed_digest and digest(self.binding)==self._binding_digest,'budget_binding_changed')
+    def _append(self,event,value):
+        try:self.journal.append(event,value)
+        except BaseException:self._poisoned=True;raise
+        self._record_count=len(self.journal.records)
+    def counts(self):
+        with self.mutex:self._assert_open();self._unchanged();return deepcopy(self._counts)
+    def count(self,kind):
+        with self.mutex:self._assert_open();self._unchanged();_budget_need(kind in self.LIMITS,'budget_kind');return self._counts[kind]
+    def begin_attempt(self,verified,*,initialize=False):
+        from .attempt import phase_plan,check_budget_snapshot
+        expected=phase_plan(verified)
+        with self.mutex:
+            self._assert_open();self._unchanged();self._validate_plan(expected)
+            if self._plan is None:
+                _budget_need(initialize is True,'budget_plan_not_prepared')
+                _budget_need(expected['counts_before']==self._counts,'budget_plan_snapshot');check_budget_snapshot(verified,deepcopy(self._counts),initializing=True)
+                self._append('phase_plan',expected);self._plan=deepcopy(expected)
+            else:_budget_need(self._plan==expected,'budget_phase_plan_changed')
+            self._replay(verified);check_budget_snapshot(verified,deepcopy(self._counts),initializing=False);self._verified=verified
+    def consume(self,kind,limit):
+        with self.mutex:
+            self._assert_open();self._unchanged();_budget_need(self._plan is None,'budget_scope_required')
+            _budget_need(type(limit) is int and kind in self.LIMITS and limit==self.LIMITS[kind] and self._counts[kind]<limit,'request_budget')
+            row={'kind':kind};self._append('request',row);self._add_request(row)
+    def _new_scope(self,phase,key):
+        with self.mutex:
+            self._assert_open();self._unchanged();_budget_need(key is _SCOPE_KEY and self._verified is not None and self._plan is not None and phase in _PHASES,'budget_dispatcher_required')
+            return _BudgetScope(self,phase,self._plan['attempt'],_SCOPE_KEY)
+    def _consume_scoped(self,scope,kind,limit,purpose):
+        with self.mutex:
+            self._assert_open();self._unchanged();_budget_need(isinstance(scope,_BudgetScope) and scope._matches(self,self._plan) and self._verified is not None
+                and type(limit) is int and limit==self.LIMITS.get(kind),'budget_scope')
+            phase=scope.phase;self._admit(kind,phase,purpose,verified=self._verified)
+            row={'kind':kind,'attempt':self._plan['attempt'],'phase':phase,'purpose':purpose};self._append('request',row);self._add_request(row)
+    def close(self):
+        with self.mutex:self._closed=True;self._verified=None;self.journal.close()
+    def __enter__(self):return self
+    def __exit__(self,*_):self.close()
 
-    Graph and registry control traffic consumes the same 600 slots formerly
-    modelled as OWNER ARM. This adds no allowance. Image layer transfers are
-    covered separately by the original image/transfer estimate and admission.
-    """
-    LIMITS = {'owner_arm':600, 'owner_control_blob':3000, 'heartbeat_blob':5250}
+class _BudgetScope:
+    __slots__=('__budget','__phase','__attempt')
+    LIMITS=ControlBudget.LIMITS
+    def __init__(self,budget,phase,attempt,key):
+        _budget_need(key is _SCOPE_KEY,'budget_dispatcher_required')
+        object.__setattr__(self,'_BudgetScope__budget',budget);object.__setattr__(self,'_BudgetScope__phase',phase);object.__setattr__(self,'_BudgetScope__attempt',attempt)
+    def __setattr__(self,*_):raise Denied('budget_scope_immutable')
+    @property
+    def phase(self):return self.__phase
+    def _matches(self,budget,plan):return self.__budget is budget and plan is not None and self.__attempt==plan['attempt'] and self.__phase in _PHASES
+    def consume(self,kind,limit):self.__budget._consume_scoped(self,kind,limit,'http')
+    def consume_owner_token(self):self.__budget._consume_scoped(self,'owner_arm',600,'owner_token')
+    def count(self,kind):return self.__budget.count(kind)
+    def counts(self):return self.__budget.counts()
 
-    def __init__(self, directory, directory_digest, binding, *, seed, require_existing=False):
-        if (set(seed) != set(self.LIMITS) or any(type(seed[k]) is not int or
-            not 0 <= seed[k] <= self.LIMITS[k] for k in seed)):
-            raise Denied('budget_seed')
-        self.seed = deepcopy(seed)
-        self.journal = Journal(directory, directory_digest,
-            {'binding':binding, 'limits':self.LIMITS, 'seed':seed}, name='trial-control-budget',require_existing=require_existing)
-
-    def count(self, kind):
-        if kind not in self.LIMITS: raise Denied('budget_kind')
-        return self.seed[kind]+sum(v['kind']==kind for v in self.journal.values('request'))
-
-    def consume(self, kind, limit):
-        if limit != self.LIMITS.get(kind) or self.count(kind)>=limit:
-            raise Denied('request_budget')
-        self.journal.append('request', {'kind':kind})
-
-    def close(self): self.journal.close()
-    def __enter__(self): return self
-    def __exit__(self, *_): self.close()
+_PROVISION_IDS=frozenset(('webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app','O1','O2','E1','E2','E3','E4',
+    'guardMainConfiguration','jobRuntime','appRuntime','auth-platform-secret','auth-config','auth-ingress')+tuple('C'+str(i) for i in range(1,8))+
+    tuple('G'+str(i) for i in range(1,7))+tuple('R'+str(i) for i in range(1,11)))
+def scope_for_dispatch(budget,verified,*,entry_point,action,operation=None):
+    """Fixed source dispatchers classify a validated operation, never JSON phase."""
+    if entry_point=='provision':
+        _budget_need(isinstance(operation,dict) and isinstance(operation.get('kind'),str) and isinstance(operation.get('expected'),dict),'budget_resolved_operation')
+        cleanup=operation.get('method')=='DELETE' or operation['kind'].startswith('cleanup:') or str(operation['expected'].get('auth_action','')).startswith('cleanup:')
+        if cleanup:_budget_need(action in ('cleanup','reconcile'),'budget_dispatch_action');phase='cleanup'
+        else:_budget_need(operation.get('id') in _PROVISION_IDS and action in ('create','update','reconcile'),'budget_dispatch_action');phase='provision'
+    elif entry_point=='publication':_budget_need(action=='publish','budget_dispatch_action');phase='publication'
+    elif entry_point=='registry-cleanup':_budget_need(action=='cleanup','budget_dispatch_action');phase='cleanup'
+    elif entry_point=='rehearsal':_budget_need(action in ('start','poll','seed','verify'),'budget_dispatch_action');phase='run'
+    elif entry_point=='owner-run':_budget_need(action=='execute','budget_dispatch_action');phase='run'
+    elif entry_point=='owner-cleanup':_budget_need(action=='recover','budget_dispatch_action');phase='cleanup'
+    elif entry_point=='fresh-read':_budget_need(action=='read','budget_dispatch_action');phase='fresh_read'
+    else:raise Denied('budget_dispatch_entry')
+    budget.begin_attempt(verified);return budget._new_scope(phase,_SCOPE_KEY)
 
 
 class CountedControlHttp:

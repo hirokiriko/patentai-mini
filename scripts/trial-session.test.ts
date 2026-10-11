@@ -325,12 +325,21 @@ describe("owner-private runtime policy artifact", () => {
     expect(saved).not.toContain("PRIVATE KEY");
     for (const secret of Object.values(input.bootstrap.credentials)) expect(saved).not.toContain(secret);
   });
-  it("cannot emit completion or dispatch operators after an uncertain proof save", async () => {
-    const { prepared, permit } = controlled(), operator = vi.fn(async () => ({status:"initialized"}));
+  it("cannot emit completion after an uncertain final proof save", async () => {
+    const { prepared, permit } = controlled(), operator = vi.fn(async (v:unknown) => operatorSuccess(v));
+    const proof=vi.fn(async()=>{throw Error("fsync unknown");});
     try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess,
-      bootstrap: async () => bootstrapSuccess(), bootstrapProof: async () => { throw Error("fsync unknown"); }, operator })).rejects.toThrow();
-      expect(operator).not.toHaveBeenCalled(); }
+      bootstrap: async () => bootstrapSuccess(), bootstrapProof: proof, operator })).rejects.toThrow("fsync unknown");
+      expect(proof).toHaveBeenCalledOnce();expect(operator).toHaveBeenCalledTimes(2); }
     finally { permit.dispose(); }
+  });
+  it("never writes final policy or proof when the last catalog pass fails",async()=>{
+    const{prepared,permit}=controlled(),phases:string[]=[],proof=vi.fn(artifactSuccess);
+    try{await expect(executeTrialSession(prepared,permit,{runtimePolicy:async(_p,phase)=>{phases.push(phase);return artifactSuccess();},
+      bootstrap:async()=>bootstrapSuccess(),operator:async v=>operatorSuccess(v),bootstrapProof:proof,
+      beforeRelease:async()=>{throw Error("catalog changed");}})).rejects.toThrow("catalog changed");
+      expect(phases).toEqual(["pending"]);expect(proof).not.toHaveBeenCalled();
+    }finally{permit.dispose();}
   });
   it("returns only bound proof hashes/counts and never receipt filenames", async () => {
     const { prepared, permit } = controlled();
@@ -367,25 +376,26 @@ describe("measured baseline binding before ledger initialization", () => {
       expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledOnce(); }
     finally { permit.dispose(); }
   });
-  it("orders pending, bootstrap, measured final and every operator with one shared final signed policy", async () => {
+  it("orders pending, bootstrap, operators and final audit before publishing the measured artifacts", async () => {
     const { prepared, permit } = controlled(), order: string[] = [], environments: string[] = [];
     try { await expect(executeTrialSession(prepared, permit, {
       bootstrapProof: async () => { order.push("proof"); return artifactSuccess(); }, runtimePolicy: async (p, phase) => { order.push(phase); const policy = readTrialPolicy(p.common.environment);
         expect(policy.cost!.databaseBaselineBytes).toBe(phase === "pending" ? 1024 : 8192); if (phase === "final") environments.push(JSON.stringify(p.common.environment)); return artifactSuccess(); },
       bootstrap: async () => { order.push("bootstrap"); return bootstrapSuccess(); },
+      beforeRelease:async()=>{order.push("catalog-pass-3");},
       operator: async value => { order.push("operator"); const v = value as { environment: Record<string, string>; access: OperatorTicket };
         environments.push(JSON.stringify(v.environment)); const policy = readTrialPolicy(v.environment);
         expect(policy.cost!.databaseBaselineBytes).toBe(8192); expect(operatorPolicyBinding(policy)).toBe(v.access.policyDigest);
         expect(policy.localOperator!.ticketDigest).toBe(operatorTicketDigest(v.access)); return operatorSuccess(value); },
     })).resolves.toMatchObject({ status: "completed", completedRequests: 2 });
-      expect(order).toEqual(["pending", "bootstrap", "final", "proof", "operator", "operator"]); expect(new Set(environments).size).toBe(1);
+      expect(order).toEqual(["pending", "bootstrap", "operator", "operator", "catalog-pass-3", "final", "proof"]); expect(new Set(environments).size).toBe(1);
     } finally { permit.dispose(); }
   });
-  it("retains unknown overall and sends no operator when measured final save fails", async () => {
+  it("retains an unknown overall result when the final artifact save after operators fails", async () => {
     const { prepared, permit } = controlled(), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
     const artifact = vi.fn(async (_p: unknown, phase: "pending" | "final") => { if (phase === "final") throw Error("fsync unknown"); });
     try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifact, bootstrap, operator })).rejects.toThrow();
-      expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledTimes(2); }
+      expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).toHaveBeenCalledTimes(2); expect(artifact).toHaveBeenCalledTimes(2); }
     finally { permit.dispose(); }
   });
 });

@@ -54,7 +54,9 @@ def _successful(receipt):
         receipt.get(k) is True for k in ('terminal', 'write_terminal', 'created_by_run', 'readback_verified'))
 
 
-def _publication(manifest, resources, journal, resolver, run_digest):
+def _publication(manifest, resources, journal, resolver, run_digest,verified_attempt=None):
+    from .attempt import effective_slot
+    from .registry_publish import verified_publication_images
     prepared, imported = journal.values('publication_preparation'), journal.values('publication_import')
     require(len(prepared) == 1 and len(imported) == 1)
     preparation, imported = prepared[0], imported[0]
@@ -86,7 +88,7 @@ def _publication(manifest, resources, journal, resolver, run_digest):
         repository_key, tag_key = ('cleanupImageRepository', 'cleanupImageTag') if slot == 'guardian' else ('imageRepository', 'imageTag')
         require(isinstance(source, dict) and set(source) == {'repository', 'tag', 'local_image_id', 'docker_sha256',
             'docker_path_sha256', 'docker_host', 'build_receipt_sha256'}
-            and source['repository'] == manifest[repository_key] and source['tag'] == manifest[tag_key]
+            and source['repository'] == manifest[repository_key] and source['tag'] == effective_slot(manifest,resources['code_sha'],slot,verified_attempt)['tag']
             and isinstance(source['local_image_id'], str) and re.fullmatch('sha256:' + HEX, source['local_image_id'])
             and all(_sha(source[k]) for k in ('docker_sha256', 'docker_path_sha256', 'build_receipt_sha256'))
             and source['docker_host'] in ('npipe:////./pipe/dockerDesktopLinuxEngine', 'npipe:////./pipe/docker_engine'))
@@ -110,10 +112,13 @@ def _publication(manifest, resources, journal, resolver, run_digest):
             and parse(intents[0]['at']) < parse(preparation['publish_until'])
             and parse(intents[0]['deadline']) <= parse(preparation['publish_until'])
             and parse(receipt['observed_at']) >= parse(intents[0]['at']))
+    if verified_attempt is not None:
+        images=verified_publication_images(journal,verified_attempt=verified_attempt)
+        require(all(resources[k]==v for k,v in images.items()))
     return preparation
 
 
-def _prepare(bundle, manifest, resources, journal, resolver, credential):
+def _prepare(bundle, manifest, resources, journal, resolver, credential,verified_attempt=None):
     require(isinstance(bundle, dict) and set(bundle) == {'binding', 'push_receipt', 'scope_proof'})
     binding, push, proof = _binding(bundle['binding']), bundle['push_receipt'], bundle['scope_proof']
     ids = [manifest['ids'][k] for k in ('app', 'job', 'guard')]
@@ -134,7 +139,7 @@ def _prepare(bundle, manifest, resources, journal, resolver, credential):
     run = journal.values('binding')
     require(len(run) == 1)
     run_digest = digest(run[0])
-    preparation = _publication(manifest, resources, journal, resolver, run_digest)
+    preparation = _publication(manifest, resources, journal, resolver, run_digest,verified_attempt)
     require(isinstance(proof, dict) and set(proof) == {'schema', 'initial_plan_digest', 'run_binding_digest',
         'authorized_resource_ids', 'namespace_receipt_digest'}
         and type(proof['schema']) is int and proof['schema'] == 1
@@ -301,7 +306,7 @@ def _summary(receipt):
         'manifest_only': True}
 
 
-def run_registry_cleanup(bundle, manifest, resource_bindings, journal, resolver, credential, raw_wire, budget, clock):
+def run_registry_cleanup(bundle, manifest, resource_bindings, journal, resolver, credential, raw_wire, budget, clock,*,verified_attempt=None):
     """One fixed action: initial DELETE, or known-ACK HEAD recovery only.
 
     A failed preflight has no DELETE intent and may collect fresh read evidence.
@@ -311,7 +316,7 @@ def run_registry_cleanup(bundle, manifest, resource_bindings, journal, resolver,
     it too. This creates no grant and never uses an expired guardian identity.
     """
     bundle = deepcopy(bundle)
-    binding, op = _prepare(bundle, manifest, resource_bindings, journal, resolver, credential)
+    binding, op = _prepare(bundle, manifest, resource_bindings, journal, resolver, credential,verified_attempt)
     saved = journal.values('registry_cleanup_binding')
     fixed = {'bundle_digest': digest(bundle), 'operation': op}
     require(not saved or saved == [fixed])

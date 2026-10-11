@@ -11,7 +11,7 @@ from .__main__ import FIXED,Clock,PermissionHttp
 from .adapters import AzureCredential,ArmTransport,BlobJournal,BoundedHttp,digest,Deadline
 from .lifecycle import Controller,Denied,parse,initial
 
-def assemble_owner(config,*,http=None,clock=None,require_fresh=True,recovery_only=False):
+def assemble_owner(config,*,http=None,clock=None,require_fresh=True,recovery_only=False,credential_factory=None):
     if config.get('live_enabled') is not True or config.get('cleanup_strategy') not in ('single_job','rehearsal'):
         raise Denied('owner_not_enabled')
     if urlsplit(config['journal_url']).path.split('/')[-1] != ('rehearsal.json' if config['cleanup_strategy']=='rehearsal' else 'state.json'):
@@ -30,6 +30,7 @@ def assemble_owner(config,*,http=None,clock=None,require_fresh=True,recovery_onl
         raise Denied('owner_time_binding')
     wire=PermissionHttp(http or BoundedHttp(),clock,config['owner_permissions_until'])
     credential=AzureCredential('owner',config['owner_id'],config['tenant_id'],wire)
+    if credential_factory is not None:credential=credential_factory(credential)
     credential.token('https://storage.azure.com/',Deadline(10,clock.monotonic))
     runtime=deepcopy(config['cloud_guard']);e=config['runtime_readback']
     if (e.get('status') not in (('Running','Succeeded','Failed','Stopped') if recovery_only else ('Running',)) or not at<=parse(e['at'])<=clock.utc() or
@@ -70,8 +71,8 @@ class OwnerSession:
     Snapshots have passed Blob immutable binding + ETag checks under the finite
     lease. The caller still checks their short use lease at every dispatch.
     """
-    def __init__(self,config,*,http=None,clock=None,require_fresh=True,recovery_only=False):
-        self.journal,self.controller,self.initial,self.clock=assemble_owner(config,http=http,clock=clock,require_fresh=require_fresh,recovery_only=recovery_only)
+    def __init__(self,config,*,http=None,clock=None,require_fresh=True,recovery_only=False,credential_factory=None):
+        self.journal,self.controller,self.initial,self.clock=assemble_owner(config,http=http,clock=clock,require_fresh=require_fresh,recovery_only=recovery_only,credential_factory=credential_factory)
         self.strategy=config['cleanup_strategy']
         self.recovery_only=recovery_only
         self.version=-1

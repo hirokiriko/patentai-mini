@@ -152,6 +152,9 @@ def prepare_publication(config, manifest, configuration_sha256, journal):
     local build proof bytes and source identity are fixed before any upload.
     """
     from .configuration import SOURCE_FILES, FORMAL_END
+    from .attempt import effective_slot
+    from .registry_retention import check_attempt
+    verified=config.get('verified_attempt');check_attempt(journal,verified)
     source = {k:config['sources'][k]['sha256'] for k in SOURCE_FILES}
     need(all(re.fullmatch(HEX,v) for v in source.values()) and re.fullmatch(HEX,configuration_sha256))
     need(re.fullmatch('[a-f0-9]{40}',config['frozen_head']))
@@ -159,7 +162,7 @@ def prepare_publication(config, manifest, configuration_sha256, journal):
     slots = {}
     for key,repo,tag in (('guardian','cleanupImageRepository','cleanupImageTag'),('runtime','imageRepository','imageTag')):
         local = config['publication']['slots'][key]
-        slots[key] = {'repository':manifest[repo],'tag':manifest[tag], 'local_image_id':local['local_image_id'],
+        slots[key] = {**effective_slot(manifest,config['frozen_head'],key,verified), 'local_image_id':local['local_image_id'],
             'docker_sha256':local['docker_sha256'],'docker_path_sha256':sha(local['docker_path'].encode()),
             'docker_host':local['docker_host'],'build_receipt_sha256':local['build_receipt']['sha256']}
     event = {'schema':1,'configuration_sha256':configuration_sha256,'manifest_sha256':source['manifest'],
@@ -173,12 +176,15 @@ def prepare_publication(config, manifest, configuration_sha256, journal):
     return event
 
 
-def verified_publication_images(journal):
+def _verified_images(journal,slots,verified_attempt):
     """Actual acknowledged/read-verified digests only; never local image IDs."""
+    from .registry_retention import check_attempt,verify_retention
+    check_attempt(journal,verified_attempt)
     preparations = journal.values('publication_preparation');need(len(preparations) == 1)
     prep = preparations[0];images = {}
-    for slot in ('guardian','runtime'):
+    for slot in slots:
         ident = slot+'ImagePush';receipt=journal.latest(ident);fixed=prep['slots'][slot]
+        if verified_attempt is not None:need(prep['code_sha']==verified_attempt.authority['head'] and fixed['tag']==verified_attempt.authority['tags'][slot])
         need(isinstance(receipt,dict) and receipt.get('operation_id') == ident and receipt.get('state') == 'succeeded'
             and receipt.get('ack_kind') == 'docker_exit0_digest'
             and all(receipt.get(k) is True for k in ('terminal','write_terminal','created_by_run','readback_verified')))
@@ -190,8 +196,13 @@ def verified_publication_images(journal):
         intents=[v for v in journal.values('intent') if v['operation_id'] == ident]
         need(len(intents) == 1 and intents[0]['request_digest'] == receipt['request_digest']
             and intents[0]['method'] == 'PUT' and intents[0]['url'] == prefix+fixed['tag']+'?api-version='+VERSION)
+        need(parse(intents[0]['at'])<parse(prep['publish_until']) and parse(intents[0]['deadline'])==parse(prep['publish_until'])
+            and parse(receipt['observed_at'])>=parse(intents[0]['at']))
         namespace=journal.values(slot+'_image_namespace')
-        need(len(namespace) == 1 and namespace[0]['publication_preparation_digest'] == digest(prep)
+        need(len(namespace)==1)
+        if verified_attempt is not None and slot=='runtime':
+            verify_retention(journal,prep,namespace[0],intents[0],receipt,verified_attempt)
+        else:need(namespace[0]['publication_preparation_digest'] == digest(prep)
             and namespace[0]['run_binding_digest'] == prep['run_binding_digest']
             and namespace[0]['push_request_digest'] == receipt['request_digest']
             and namespace[0]['authenticated'] is True and namespace[0]['http'] == 404
@@ -208,10 +219,17 @@ def verified_publication_images(journal):
         images[slot+'_image']=prep['login_server']+'/'+fixed['repository']+'@'+actual
     return images
 
+def verified_publication_images(journal,*,verified_attempt=None):
+    return _verified_images(journal,('guardian','runtime'),verified_attempt)
 
-def bind_publication(journal, resolver, resource_bindings):
+def verified_publication_image(journal,slot,*,verified_attempt=None):
+    need(slot in ('guardian','runtime'))
+    return _verified_images(journal,(slot,),verified_attempt)[slot+'_image']
+
+
+def bind_publication(journal, resolver, resource_bindings,*,verified_attempt=None):
     """Second phase: bind both actual images into the compiled provision plan."""
-    images=verified_publication_images(journal);prep=journal.values('publication_preparation')[0]
+    images=verified_publication_images(journal,verified_attempt=verified_attempt);prep=journal.values('publication_preparation')[0]
     need(all(resource_bindings[k] == v for k,v in images.items())
         and prep['source_sha256'] == resolver.initial_plan['source_sha256']
         and prep['code_sha'] == resource_bindings['code_sha']
@@ -225,7 +243,10 @@ def bind_publication(journal, resolver, resource_bindings):
 
 
 class _Publisher:
-    def __init__(self, bundle, manifest, journal, credential, wire, budget, clock, runner):
+    def __init__(self, bundle, manifest, journal, credential, wire, budget, clock, runner,verified_attempt=None):
+        from .registry_retention import check_attempt
+        from .attempt import effective_slot
+        check_attempt(journal,verified_attempt);self.verified_attempt=verified_attempt
         need(isinstance(bundle, dict) and set(bundle) == {'schema','slot','docker_path','docker_sha256','docker_host','local_image_id','deadline'})
         need(type(bundle['schema']) is int and bundle['schema'] == 1 and bundle['slot'] in ('guardian','runtime'))
         self.slot = bundle['slot']; self.ident = self.slot + 'ImagePush'
@@ -262,7 +283,7 @@ class _Publisher:
             and getattr(credential,'mode',None) == 'owner'
             and getattr(credential,'principal',None) == manifest['owner']['principal_id']
             and getattr(credential,'tenant',None) == manifest['owner']['tenant_id'])
-        tag = manifest[tag_key]
+        tag = effective_slot(manifest,prep['code_sha'],self.slot,verified_attempt)['tag']
         need(isinstance(tag,str) and re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}',tag))
         self.tag, self.base = host + '/' + repo + ':' + tag, 'https://' + host
         need(slot['repository'] == repo and slot['tag'] == tag)
@@ -294,6 +315,9 @@ class _Publisher:
         digest_url = self.base+'/v2/'+self.binding['repository']+'/manifests/'+(self.image_digest or 'unresolved')+'?api-version='+VERSION
         allowed = {self.url, digest_url, self.base + '/v2/' + self.binding['repository'] + '/manifests/' + self.tag.rsplit(':',1)[1] + '?api-version=' + VERSION,
             self.base + '/acr/v1/' + self.binding['repository'] + '?api-version=' + VERSION}
+        if self.verified_attempt is not None and self.slot=='runtime':
+            from .registry_retention import urls
+            allowed.update(urls(self.journal.values('publication_preparation')[0],self.verified_attempt).values())
         need((method == 'GET' and url in allowed) or (method == 'POST' and url in (self.base+'/oauth2/exchange',self.base+'/oauth2/token')))
         self.journal.append('clock_observation',{'at':self.clock.utc().isoformat()})
         def send(*args):
@@ -328,7 +352,8 @@ class _Publisher:
         return value['exp']
 
     def authenticate(self):
-        self.time(); self.budget.consume('owner_arm',600)
+        self.time()
+        if self.verified_attempt is None:self.budget.consume('owner_arm',600)
         aad = self.credential.token('https://management.azure.com/',Deadline(min(30,self.time()),self.clock.monotonic))
         r = self._wire('POST',self.base+'/oauth2/exchange',urlencode({'grant_type':'access_token',
             'service':self.binding['login_server'],'tenant':self.binding['tenant_id'],'access_token':aad}).encode())
@@ -371,6 +396,10 @@ class _Publisher:
             self.journal.append(self.slot + '_image_measurement',{'request_digest':digest(self.op),
                 'manifest_bytes':len(r['body']),'compressed_content_bytes':sum(x['size'] for x in rows),
                 'layer_count':len(manifest['layers']),'wire_billing_cap':False})
+        if self.verified_attempt is not None and self.slot=='runtime':
+            from .registry_retention import observe_after
+            need(self.image_digest!=self.verified_attempt.authority['retained_runtime']['digest'])
+            observe_after(self,receipt)
         result = {**receipt,'state':'succeeded','terminal':True,'readback_verified':True,
             'observed_at':self.clock.utc().isoformat()}
         self.journal.checkpoint(self.op,result)
@@ -401,15 +430,19 @@ class _Publisher:
             config = _write_config(self.journal,self.binding['login_server'],self.access,self.slot)
             code, output = self.command(config,['image','inspect','--format','{{json .Id}}',self.tag])
             need(code == 0 and json.loads(output) == self.bundle['local_image_id'])
-            url = self.base+'/acr/v1/'+self.binding['repository']+'?api-version='+VERSION
-            response = self._wire('GET',url,token=self.access)
-            errors = json.loads(response['body']).get('errors')
-            need(response['status'] == 404 and isinstance(errors,list) and len(errors) == 1 and errors[0].get('code') == 'NAME_UNKNOWN')
-            at = self.clock.utc().isoformat()
-            event = {'publication_preparation_digest':self.preparation,'run_binding_digest':self.run_digest,
-                **{k:self.binding[k] for k in ('registry_id','login_server','repository')},
-                'method':'GET','url':url,'http':404,'error_code':'NAME_UNKNOWN','authenticated':True,
-                'response_sha256':sha(response['body']),'observed_at':at,'push_operation_id':self.ident,'push_request_digest':digest(self.op)}
+            if self.verified_attempt is not None and self.slot=='runtime':
+                from .registry_retention import observe_namespace
+                event=observe_namespace(self);at=min(row['observed_at'] for row in event['checks'].values())
+            else:
+                url = self.base+'/acr/v1/'+self.binding['repository']+'?api-version='+VERSION
+                response = self._wire('GET',url,token=self.access)
+                errors = json.loads(response['body']).get('errors')
+                need(response['status'] == 404 and isinstance(errors,list) and len(errors) == 1 and errors[0].get('code') == 'NAME_UNKNOWN')
+                at = self.clock.utc().isoformat()
+                event = {'publication_preparation_digest':self.preparation,'run_binding_digest':self.run_digest,
+                    **{k:self.binding[k] for k in ('registry_id','login_server','repository')},
+                    'method':'GET','url':url,'http':404,'error_code':'NAME_UNKNOWN','authenticated':True,
+                    'response_sha256':sha(response['body']),'observed_at':at,'push_operation_id':self.ident,'push_request_digest':digest(self.op)}
             self.journal.append(self.slot + '_image_namespace',event)
             self.time(); need((self.clock.utc()-parse(at)).total_seconds() <= 30)
             self.journal.intent(self.op,self.clock.utc().isoformat())
@@ -439,9 +472,9 @@ class _Publisher:
             cleanup_docker_config(self.journal,self.slot)
 
 
-def run_registry_publish(bundle, manifest, journal, credential, raw_wire, budget, clock, *, runner=docker_command):
+def run_registry_publish(bundle, manifest, journal, credential, raw_wire, budget, clock, *, runner=docker_command,verified_attempt=None):
     """Caller validates protected input/source; never call during offline review."""
-    publisher = _Publisher(bundle,manifest,journal,credential,raw_wire,budget,clock,runner)
+    publisher = _Publisher(bundle,manifest,journal,credential,raw_wire,budget,clock,runner,verified_attempt)
     receipt = publisher.run()
     return {'status':receipt.get('state','unknown'),'terminal':receipt.get('terminal') is True,
         'push_verified':receipt.get('state') == 'succeeded' and receipt.get('readback_verified') is True,

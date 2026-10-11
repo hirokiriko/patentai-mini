@@ -14,6 +14,9 @@ import { trialHash } from "../src/lib/trial/ledger";
 import { inspectTrialCloudDatabase } from "../src/lib/patent-watch/managed-cloud-db";
 import { TrialNetworkBudget } from "../src/lib/trial/network-budget";
 vi.mock("../src/lib/trial/database-client",()=>({connectPermitDatabase:vi.fn()}));
+// Installer-only fixture. Catalog admission is exercised separately with the
+// real fixed SELECT pack and non-serializable capability.
+vi.mock("../src/lib/trial/catalog-runtime",()=>({consumeCatalogBootstrapCapability:vi.fn(()=>({mode:"native-superuser",adminUser:"postgres",adminOid:10}))}));
 
 /** Uses only the existing isolated localhost PG16 helper (--pull never).
  * The production factory is replaced solely here: no Azure URL is contacted,
@@ -66,7 +69,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("trial bootstrap i
     });
     return {policy:p,access,recoveryDirectory:dir,manifest:{schema:1 as const,adminCatalog:"postgres" as const,adminUser:"postgres",cases:[{id:1,title:"FICTIONAL TRIAL SAMPLE 1"}]},
       credentials:{adminUrl:`postgresql://postgres:fictional-admin-only@${p.database.host}/postgres`,migratorPassword:"fictional-%27'-migrator-only",webPassword:"fictional-%40-web-only",workerPassword:"fictional-colon:@-worker-only"},
-      credential:{getToken:async()=>({token:"fixture"})},mode:"apply" as "apply"|"reconcile",sends,attempts,localClient,
+      credential:{getToken:async()=>({token:"fixture"})},beforeFirstWrite:async()=>({} as never),mode:"apply" as "apply"|"reconcile",sends,attempts,localClient,
       loseNextCommit:()=>{loseCommit=true;},withdraw:()=>{alive=false;},expire:()=>{offset=600000;}};
   }
   it("creates only dedicated objects, migrates through guarded queries, preserves the fixture DB and denies runtime DDL/corpus writes",async()=>{

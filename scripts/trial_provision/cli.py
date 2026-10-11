@@ -17,7 +17,8 @@ from scripts.trial_guard.adapters import AzureCredential, BoundedHttp, digest, e
 from scripts.trial_guard.lifecycle import Denied, parse
 from .configuration import load_configuration
 from .controller import Controller, cleanup_only
-from .journal import Journal, ControlBudget, CountedControlHttp
+from .journal import Journal, ControlBudget, CountedControlHttp, scope_for_dispatch
+from .attempt import journal_descriptor,check_window
 from .private_io import verify_owner_file
 from .plan import build_plan
 from .resources import build_resource_operations
@@ -28,14 +29,17 @@ from .auth import GraphAdapter, EasyAuthAdapter
 ROOT=Path(__file__).resolve().parents[2]
 MAX_INPUT=2*1024*1024
 MODULES={
-    'trial_guard':('adapters','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
-    'trial_provision':('auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','publication_configuration','publication_bridge','registry','registry_cli','registry_publish','registry_publish_cli',
+    'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
+    'trial_provision':('attempt','attempt_dispatch','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
+        'providers','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
     'scripts/trial-bootstrap.ts','scripts/trial-operator.ts','scripts/trial-session.ts',
-    'scripts/trial-owner-token.ts','src/lib/trial/bootstrap.ts','package.json','pnpm-lock.yaml'))
+    'scripts/trial-owner-token.ts','src/lib/trial/bootstrap.ts','package.json','pnpm-lock.yaml','scripts/trial-catalog-session.ts','scripts/trial-catalog-prepare.ts',
+    'src/lib/trial/catalog-access.ts','src/lib/trial/catalog-builtins.ts','src/lib/trial/catalog-evaluate.ts',
+    'src/lib/trial/catalog-queries.ts','src/lib/trial/catalog-runtime.ts','src/lib/trial/catalog-schema.ts',
+    'src/lib/trial/catalog-pg16-builtins.json','src/lib/trial/strict-json.ts','src/lib/trial/database-permit.ts','src/lib/trial/database-client.ts'))
 
 
 def git(arguments):
@@ -65,7 +69,7 @@ def local_sources(head, *, live):
     names=git(['ls-files','--','scripts/__init__.py','scripts/trial_guard/*.py','scripts/trial_provision/*.py',
         'scripts/trial-policy-verify.cjs','scripts/trial-bootstrap.ts','scripts/trial-operator.ts',
         'scripts/trial-session.ts','scripts/trial-owner-token.ts','src/lib/trial/bootstrap.ts',
-        'src/lib/trial/policy.ts','package.json','pnpm-lock.yaml']).decode('utf-8').splitlines()
+        'scripts/trial-catalog-session.ts','scripts/trial-catalog-prepare.ts','src/lib/trial/*.ts','src/lib/trial/*.json','package.json','pnpm-lock.yaml']).decode('utf-8').splitlines()
     names=[n for n in names if '/tests/' not in n]
     if not REQUIRED_SOURCES.issubset(set(names)):
         raise Denied('source_not_committed')
@@ -103,9 +107,19 @@ def policy_verifier(node):
     return verify
 
 
-def _window_guard(core):
+def _window_guard(core,verified=None):
     def check(op,now):
         if cleanup_only(op):return
+        if verified is not None:
+            check_window(verified,'guardian',now)
+            # Foundation resources and their grants must finish before the
+            # separate OWNER input window. Runtime changes happen afterwards.
+            from .attempt import _proof
+            windows=_proof(verified)['activation']['windows']
+            foundation=op['id'] in ('webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app','guardMainConfiguration') or (
+                op['id'][:1] in ('C','G','R') and op['id'][1:].isdigit())
+            if foundation and now>=parse(windows['owner_input']['start']):raise Denied('foundation_window_closed')
+            if not foundation:check_window(verified,'owner_input',now)
         slot=op['id']
         name='guardian' if slot.startswith('G') and slot[1:].isdigit() else (
             'owner_input' if slot.startswith('O') and slot[1:].isdigit() else None)
@@ -121,7 +135,7 @@ def _window_guard(core):
     return check
 
 
-def run_command(request, *, clock=None, wire=None):
+def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None,owner_token_pool=None):
     if (not isinstance(request,dict) or set(request)-{'config','action','operation_id','creation_id','runtime_environment','cleanup_evidence','rehearsal_config','bootstrap_config','registry_config'}
         or not {'config','action'}<=set(request)):
         raise Denied('command_shape')
@@ -143,17 +157,18 @@ def run_command(request, *, clock=None, wire=None):
     sources=local_sources(head,live=mutating)
     loaded=load_configuration(path,now=clock.utc(),local_head=head,
         owner_context={'mode':'AzureCliCredential','tenant_id':owner['tenant_id'],
-            'principal_id':owner['principal_id']},local_source_digests=sources)
+            'principal_id':owner['principal_id']},local_source_digests=sources,trusted_attempt_authority=trusted_attempt_authority)
     config=loaded
     if mutating and (config.get('live') is not True or config.get('code_sources')!=sources):
         raise Denied('live_not_enabled')
     recovery=config['recovery']; budget_config=config['control_budget']
+    verified=config.get('verified_attempt');journal_name,journal_binding=journal_descriptor(config,verified)
     with ExitStack() as stack:
         journal=stack.enter_context(Journal(recovery['directory'],recovery['directory_digest'],
-            {'manifest_sha256':config['sources']['manifest']['sha256'],
-             'owner_id':owner['principal_id'],'task_id':budget_config['binding']['task_id']}))
+            journal_binding,name=journal_name,require_existing=verified is not None and action!='prepare'))
         budget=stack.enter_context(ControlBudget(budget_config['directory'],budget_config['directory_digest'],
-            budget_config['binding'],seed=budget_config['seed'],require_existing=action!='prepare'))
+            budget_config['binding'],seed=budget_config['seed'],require_existing=verified is not None or action!='prepare'))
+        if verified is not None:budget.begin_attempt(verified,initialize=action=='prepare')
         resource_ops=build_resource_operations(manifest,loaded['authority_bundle'],config['resource_bindings'])
         old=journal.values('core_plan')
         if old:core=old[0]
@@ -167,7 +182,7 @@ def run_command(request, *, clock=None, wire=None):
         journal.fix_plan(resolver.initial_plan)
         if journal.values('publication_preparation'):
             from .registry_publish import bind_publication
-            bind_publication(journal,resolver,config['resource_bindings'])
+            bind_publication(journal,resolver,config['resource_bindings'],verified_attempt=verified)
         saved=journal.values('runtime_binding')
         if saved:resolver.bind_runtime(saved[0],journal.receipts(),verify_policy=verifier)
         for record in journal.values('cleanup_binding'):
@@ -190,8 +205,8 @@ def run_command(request, *, clock=None, wire=None):
             return {'status':'cleanup_bound','cloud_calls':0}
         if action=='bind-runtime':
             environment=json.loads(private_bytes(request['runtime_environment'],131072))
-            verified=verifier({'DEPLOYMENT_KIND':'trial',**environment})
-            write_end=min(parse(verified['endsAt']),parse(core['windows']['owner_input']['end']))
+            runtime_policy=verifier({'DEPLOYMENT_KIND':'trial',**environment})
+            write_end=min(parse(runtime_policy['endsAt']),parse(core['windows']['owner_input']['end']))
             binding=resolver.make_runtime_binding(environment,journal.receipts(),verify_policy=verifier,
                 deadline=write_end.isoformat().replace('+00:00','Z'))
             if saved and saved[0]!=binding:raise Denied('runtime_binding_changed')
@@ -203,18 +218,33 @@ def run_command(request, *, clock=None, wire=None):
                 'unresolved':sum((journal.latest(x['operation_id']) or {}).get('terminal') is not True
                     for x in journal.values('intent')),'cloud_calls':0,
                 'control_requests_used':budget.count('owner_arm')}
-        counted=CountedControlHttp(wire or BoundedHttp(),budget)
+        requested_operation=None
+        scoped=budget
+        if verified is not None:
+            if owner_token_pool is None:raise Denied('owner_token_pool_required')
+            if action=='registry-cleanup':scoped=scope_for_dispatch(budget,verified,entry_point='registry-cleanup',action='cleanup')
+            elif action in rehearsal_actions:scoped=scope_for_dispatch(budget,verified,entry_point='rehearsal',action=action.removeprefix('rehearsal-'))
+            else:
+                requested_operation=resolver.resolve(request.get('operation_id'),journal.receipts())
+                scoped=scope_for_dispatch(budget,verified,entry_point='provision',action=action,operation=requested_operation)
+        counted=CountedControlHttp(wire or BoundedHttp(),scoped)
         credential=AzureCredential('owner',owner['principal_id'],owner['tenant_id'],counted)
+        if verified is not None:credential=owner_token_pool.bind(credential,scoped,verified)
         if action=='registry-cleanup':
             from .registry_cli import run_registry_cleanup
             bundle=json.loads(private_bytes(request['registry_config']))
             return run_registry_cleanup(bundle,manifest,config['resource_bindings'],journal,resolver,
-                credential,wire or BoundedHttp(),budget,clock)
+                credential,wire or BoundedHttp(),scoped,clock,verified_attempt=verified)
         if action in rehearsal_actions:
             from .rehearsal_cli import run_rehearsal
             bundle=json.loads(private_bytes(request['rehearsal_config']))
+            kwargs={'credential_factory':lambda _credential:credential} if verified is not None else {}
+            if verified is not None:
+                check_window(verified,'guardian',clock.utc())
+                from .attempt import _proof
+                if clock.utc()>=parse(_proof(verified)['activation']['windows']['owner_input']['start']):raise Denied('foundation_window_closed')
             return run_rehearsal(action.removeprefix('rehearsal-'),bundle,journal,resolver,
-                credential,wire or BoundedHttp(),budget,clock)
+                credential,wire or BoundedHttp(),scoped,clock,**kwargs)
         def secret(source):
             reference=config.get('secret_sources',{}).get(source)
             return private_bytes(reference,65536).decode('utf-8')
@@ -224,7 +254,7 @@ def run_command(request, *, clock=None, wire=None):
         auth_binding.update(location=manifest['region'],environment_id=manifest['existing']['environment'],
             runtime_secret_names=['trial-web-database'])
         graph=auth=None
-        requested_operation=resolver.resolve(request.get('operation_id'),journal.receipts())
+        requested_operation=requested_operation or resolver.resolve(request.get('operation_id'),journal.receipts())
         if requested_operation['provider']=='Microsoft.Graph' or requested_operation['expected'].get('auth_action'):
             application_op=resolver.resolve('E1',journal.receipts())
             auth_binding['redirect_uri']=application_op['body']['web']['redirectUris'][0]
@@ -234,7 +264,7 @@ def run_command(request, *, clock=None, wire=None):
         adapters={name:provider for name in ('Microsoft.App','Microsoft.ManagedIdentity','Microsoft.Storage','Microsoft.Authorization')}
         adapters['Microsoft.Graph']=graph
         control=Controller(journal,clock,resolver.resolve,resolver.allowed_ids,adapters,
-            easy_auth=auth,send_guard=_window_guard(core))
+            easy_auth=auth,send_guard=_window_guard(core,verified))
         ident=request.get('operation_id')
         if action=='create':result=control.create(ident)
         elif action=='update':result=control.update(ident,request.get('creation_id'))

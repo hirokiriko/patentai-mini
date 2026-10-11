@@ -3,6 +3,7 @@ import { bootstrapTrialDatabase, bootstrapManifestSchema, bootstrapCredentialsSc
 import { OperatorAccess, operatorTicketSchema } from "../src/lib/trial/operator-access";
 import { readTrialPolicy, TrialError } from "../src/lib/trial/policy";
 import { verifyTrialBuild } from "../src/lib/trial/runtime";
+import type { CatalogBootstrapCapability } from "../src/lib/trial/catalog-runtime";
 
 import { trialAzureCliPythonSchema, trialOwnerCredential } from "./trial-owner-token";
 
@@ -13,7 +14,7 @@ export const trialBootstrapInput = z.object({
 
 /** Protected stdin only; this entry never resolves a management secret or
  * generates credentials. The launcher binds the saved normal admin credential. */
-export async function runTrialBootstrap(value: unknown) {
+export async function runTrialBootstrap(value: unknown, beforeFirstWrite?:()=>Promise<CatalogBootstrapCapability>) {
   const input = trialBootstrapInput.parse(value);
   const allowed = new Set(["DEPLOYMENT_KIND", "TRIAL_POLICY_JSON", "TRIAL_POLICY_SIGNATURE", "TRIAL_POLICY_PUBLIC_KEY"]);
   if (Object.keys(input.environment).some(k => !allowed.has(k))) throw new TrialError("trial_bootstrap_environment_invalid");
@@ -23,7 +24,7 @@ export async function runTrialBootstrap(value: unknown) {
     await verifyTrialBuild(policy);
     const credential = trialOwnerCredential(policy, access, input.azureCliPython);
     return await bootstrapTrialDatabase({ policy, access, manifest: input.manifest, credentials: input.credentials,
-      recoveryDirectory: input.recoveryDirectory, mode: input.mode, credential });
+      recoveryDirectory: input.recoveryDirectory, mode: input.mode, credential, beforeFirstWrite });
   } finally { access.dispose(); }
 }
 

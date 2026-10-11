@@ -1,5 +1,9 @@
 # Issue 148: one acceptance plan, 2026-10-10
 
+Current continuation: [catalog-first linked attempt](owner-trial-linked-attempt.md).
+Its local-first preparation and linked accounting supersede the older ordering;
+the single-guardian and terminal-cleanup requirements below remain applicable.
+
 This supersedes the successor requirement and the optional artifact grant in
 `owner-trial-preflight.md` for this acceptance run. It is an execution contract,
 not permission or evidence that deployment passed. All real IDs, IP, assignment

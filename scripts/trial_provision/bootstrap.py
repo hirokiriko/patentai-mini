@@ -90,13 +90,21 @@ def _observed(receipt):
 def _validate(config, journal, resolver, verify_policy):
     payload = config['worker']['payload']
     _need(config['live_enabled'] is True and payload['bootstrap']['mode'] in ('apply','reconcile'))
-    _need(all(config['preflight'].get(k) is True for k in
-        ('external_business_acl_verified','all_evidence_verified','no_production_change')))
+    staged=config['worker'].get('mode')=='catalog_then_bootstrap_v1'
+    if staged:
+        from scripts.trial_guard.catalog_execution import validate_catalog_payload,catalog_digest,read_catalog_receipt,bootstrap_binding
+        validate_catalog_payload(payload)
+        f=config['preflight']
+        _need(f.get('schema')==2 and f.get('catalog_acl')=='pending_catalog' and f.get('launch_checks_verified') is True and
+            f.get('no_production_change') is True and 'external_business_acl_verified' not in f and 'all_evidence_verified' not in f)
+    else:_need(all(config['preflight'].get(k) is True for k in ('external_business_acl_verified','all_evidence_verified','no_production_change')))
     manifest = resolver._manifest  # Fixed compiler-owned authority, never bundle assertions.
     _need(config['owner_id'] == manifest['owner']['principal_id'] and config['tenant_id'] == manifest['owner']['tenant_id'])
     budget = config['control_budget']
     local_binding = journal.values('binding')[0]
-    _need({k: budget['binding'][k] for k in ('manifest_sha256', 'owner_id', 'task_id')} == local_binding)
+    _need({k: budget['binding'][k] for k in ('manifest_sha256', 'owner_id', 'task_id')} ==
+        {k:local_binding[k] for k in ('manifest_sha256','owner_id','task_id')})
+    if 'attempt' in local_binding:_need(config.get('attempt_binding_digest')==local_binding['attempt']['binding_digest'])
     _need(Path(budget['directory']) == journal.path.parent and digest(str(journal.path.parent)) == budget['directory_digest'])
     _need(budget['seed'] == {'owner_arm':128, 'owner_control_blob':32, 'heartbeat_blob':0})
     receipts = journal.receipts()
@@ -140,6 +148,22 @@ def _validate(config, journal, resolver, verify_policy):
             _need(window[key] == payload['access']['databaseWindow'][key])
         directory = _path(payload['recoveryDirectory'], directory=True)
         _need(hashlib.sha256(str(directory).encode()).hexdigest() == original['localOperator']['recoveryDirectoryDigest'])
+        if staged:
+            catalog=result.get('catalog');_need(isinstance(catalog,dict))
+            _need(set(catalog)=={'schema','pass1Sha256','pass2Sha256','pass3Sha256','auditPlanDigest','auditConnectionAttempts'} and
+                type(catalog['schema']) is int and catalog['schema']==1 and type(catalog['auditConnectionAttempts']) is int)
+            verified=[r for r in rows if r['event']=='catalog_verified']
+            _need(len(verified)==3 and work['sequence']<verified[0]['sequence']<verified[1]['sequence']<verified[2]['sequence']<worker['sequence'])
+            intent=_one(rows,'bootstrap_frame_intent');sent=_one(rows,'bootstrap_frame_sent')
+            _need(verified[0]['sequence']<intent['sequence']<sent['sequence']<verified[1]['sequence'])
+            binding=bootstrap_binding(payload,window);previous=None
+            for number,row in enumerate(verified,1):
+                checksum=catalog['pass%dSha256'%number]
+                proof=read_catalog_receipt(directory,number,checksum,original,payload['catalogPlan'],window,prior=previous)
+                _need(row['value']=={'pass':number,'sha256':checksum,'receipt_digest':catalog_digest(proof),'bootstrap_binding':binding})
+                previous=proof
+            _need(intent['value']==sent['value']=={'pass1_sha256':catalog['pass1Sha256'],'bootstrap_binding':binding})
+            _need(catalog['auditPlanDigest']==catalog_digest(payload['catalogPlan']) and catalog['auditConnectionAttempts']==previous['auditConnectionAttempts'])
         proof_raw = _read(directory / 'trial-bootstrap-proof.json', 256 * 1024)
         final_raw = _read(directory / 'trial-runtime-policy.json', 65536)
         _need(hashlib.sha256(proof_raw).hexdigest() == b['proofSha256'] and hashlib.sha256(final_raw).hexdigest() == b['finalRuntimePolicySha256'])

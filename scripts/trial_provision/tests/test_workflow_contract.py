@@ -13,18 +13,20 @@ closure state machine, 7 role definitions/18 assignments, and resulting receipt
 bindings are exercised; live provider and database acceptance remain separate.
 """
 from copy import deepcopy
+from collections import Counter
 from datetime import timedelta
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
 import sys
+import threading
 import unittest
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from scripts.trial_guard import execution
+from scripts.trial_guard import catalog_execution as catalog
 from scripts.trial_guard.__main__ import FIXED
 from scripts.trial_guard.adapters import ArmTransport, BlobJournal, digest, encoded
 from scripts.trial_guard.lifecycle import Controller as Lifecycle, Denied, parse
@@ -33,12 +35,16 @@ from scripts.trial_guard.workflow import closure_proven
 from scripts.trial_provision import cli, registry_publish_cli, private_io
 from scripts.trial_provision.configuration import SOURCE_FILES
 from scripts.trial_provision.journal import Journal, ControlBudget
+from scripts.trial_provision.attempt import journal_descriptor, WINDOW_OFFSETS, DESIGN_SHA256, PURPOSE_CAPS
+from scripts.trial_provision.owner_tokens import OwnerTokenPool
 from scripts.trial_provision.operations import create_resolver
 from scripts.trial_provision.registry_publish import verified_publication_images
 from scripts.trial_provision.tests import test_cli as cli_fixture
 from scripts.trial_provision.tests import test_operations as op_fixture
 from scripts.trial_provision.tests import test_registry_publish as publish_fixture
 from scripts.trial_provision.tests import test_rehearsal as rehearsal_fixture
+from scripts.trial_provision.tests import test_attempt as attempt_fixture
+from scripts.trial_guard.test_catalog_execution import Child as CatalogChild
 
 
 def response(status, value=None, headers=None):
@@ -47,7 +53,7 @@ def response(status, value=None, headers=None):
 
 class Clock(publish_fixture.Clock):
     def advance(self, seconds): self.seconds += seconds
-    def iso(self, seconds=0): return (self.start + timedelta(seconds=seconds)).isoformat()
+    def iso(self, seconds=0): return (self.utc() + timedelta(seconds=seconds)).isoformat()
 
 
 class Credential:
@@ -56,7 +62,8 @@ class Credential:
         self.mode, self.principal, self.tenant = mode, principal, tenant
     def token(self, audience, deadline):
         deadline.remaining()
-        return 'fictional-memory-token'
+        return publish_fixture.jwt({'oid':self.principal,'tid':self.tenant,'aud':audience,
+            'exp':parse('2027-02-01T00:00:00Z').timestamp()})
 
 
 class ArmWire:
@@ -213,6 +220,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.config['control_budget'].update(self.config['recovery'])
         self.config['live'] = True
         self.clock = self.f.clock = Clock()
+        self.clock.start += timedelta(days=1)
         self.manifest = json.loads(Path(self.config['sources']['manifest']['path']).read_bytes())
         self.manifest.update(cleanupImageTag='fictional-guardian', imageTag='fictional-runtime')
         source = {k: json.loads(Path(v['path']).read_bytes()) for k,v in self.config['sources'].items()}
@@ -234,6 +242,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.arm = ArmWire(self.manifest, self.clock)
         self.f.wire = self.arm
         self.trace = []
+        self.action_trace = []
+        self.verified = None
         self.enterContext(patch.object(cli, 'policy_verifier', return_value=lambda env: json.loads(env['TRIAL_POLICY_JSON'])))
         self.enterContext(patch.object(registry_publish_cli, 'git', return_value=(self.f.head+'\n').encode()))
         self.enterContext(patch.object(registry_publish_cli, 'local_sources', return_value=self.f.sources))
@@ -244,8 +254,8 @@ class WorkflowContractTests(unittest.TestCase):
             self.config['resource_bindings']['db_secret_digests'][role] = hashlib.sha256(raw).hexdigest()
 
     def journal(self):
-        b=self.config['control_budget']['binding']
-        return Journal(str(self.root), digest(str(self.root)), {k:b[k] for k in ('manifest_sha256','owner_id','task_id')}, require_existing=True)
+        name,binding=journal_descriptor(self.config,self.verified)
+        return Journal(str(self.root), digest(str(self.root)), binding,name=name,require_existing=True)
 
     def snapshot(self):
         with self.journal() as journal:
@@ -255,6 +265,95 @@ class WorkflowContractTests(unittest.TestCase):
             for event in journal.values('runtime_binding'): resolver.bind_runtime(event,receipts,verify_policy=lambda e:json.loads(e['TRIAL_POLICY_JSON']))
             for event in journal.values('cleanup_binding'): resolver.bind_cleanup(event['operation_id'],event['evidence'])
             return resolver,receipts
+
+    def prepare_attempt(self, public):
+        """A fictional signed-off artifact set, passed through the real verifier.
+
+        The prior stopped publication is fixture evidence; this never makes
+        local assertions stand in for a real OWNER approval or Cloud receipt.
+        """
+        data=attempt_fixture.fixture();data['manifest']=deepcopy(self.manifest)
+        self.retained_body=encoded({'fictional':'retained-runtime'})
+        retained='sha256:'+hashlib.sha256(self.retained_body).hexdigest()
+        data['authority']['retained_runtime']['digest']=retained
+        for event,value in data['parent_rows']:
+            if event=='progress' and value.get('operation_id')=='runtimeImagePush':value['properties']['manifest_digest']=retained
+        mh=self.config['sources']['manifest']['sha256'];head=self.f.head
+        base={k:self.config['control_budget']['binding'][k] for k in ('manifest_sha256','owner_id','task_id')}
+        rows=data['parent_rows'];rows[0]=('binding',base)
+        prep=next(value for event,value in rows if event=='publication_preparation')
+        prep.update(manifest_sha256=mh,run_binding_digest=digest(base),registry_id=self.manifest['existing']['registry'],
+            login_server=self.manifest['registry']['loginServer'])
+        for slot,repo_key,tag_key in (('guardian','cleanupImageRepository','cleanupImageTag'),('runtime','imageRepository','imageTag')):
+            fixed=prep['slots'][slot];fixed.update(repository=self.manifest[repo_key],tag=self.manifest[tag_key])
+            prefix='https://'+prep['login_server']+'/v2/'+fixed['repository']+'/manifests/'
+            ns=next(value for event,value in rows if event==slot+'_image_namespace')
+            ns.update(publication_preparation_digest=digest(prep),run_binding_digest=digest(base),registry_id=prep['registry_id'],
+                login_server=prep['login_server'],repository=fixed['repository'],url='https://'+prep['login_server']+'/acr/v1/'+fixed['repository']+'?api-version=2021-07-01')
+            for event,value in rows:
+                if value.get('operation_id')!=slot+'ImagePush':continue
+                if event=='intent':value['url']=prefix+fixed['tag']+'?api-version=2021-07-01'
+                elif event=='progress':
+                    value['object_id']=prefix+value['properties']['manifest_digest']+'?api-version=2021-07-01'
+                    value['properties'].update(registry_id=prep['registry_id'],login_server=prep['login_server'],repository=fixed['repository'])
+        # Both namespace proofs cover the final complete two-slot preparation.
+        for event,value in rows:
+            if event.endswith('_image_namespace'):value['publication_preparation_digest']=digest(prep)
+            if value.get('operation_id')=='guardianImageCleanup':
+                target='https://'+prep['login_server']+'/v2/'+self.manifest['cleanupImageRepository']+'/manifests/'+data['authority']['guardian_prior_digest']+'?api-version=2021-07-01'
+                value['url' if event=='intent' else 'object_id']=target
+        parent_raw,parent_chain=attempt_fixture.chain(rows)
+        self.f.write('trial-provision.jsonl',parent_raw)
+        self.parent_bytes=parent_raw
+        stamp=lambda offset:(self.clock.start+timedelta(seconds=offset)).isoformat().replace('+00:00','Z')
+        windows={key:{'start':stamp(start),'end':stamp(end)} for key,(start,end) in WINDOW_OFFSETS.items()}
+        a=data['authority'];a.update(manifest_sha256=mh,owner_id=base['owner_id'],task_id=base['task_id'],head=head,
+            code_sources_sha256=digest(self.f.sources),budget_binding_sha256=digest(self.config['control_budget']['binding']),
+            publish_from=stamp(0),approved_at=stamp(-600),tags={slot:prep['slots'][slot]['tag']+'-'+head[:12] for slot in ('guardian','runtime')},
+            retained_runtime={'tag':self.manifest['imageTag'],'digest':data['authority']['retained_runtime']['digest']})
+        a['parent']={'journal_sha256':attempt_fixture.sha(parent_raw),'chain_sha256':parent_chain,
+            'final_sha256':attempt_fixture.sha(encoded(data['parent_final']))}
+        public['publication']['publish_until']=windows['publication']['end']
+        for slot in ('guardian','runtime'):
+            fixed=public['publication']['slots'][slot]
+            proof=json.loads(Path(fixed['build_receipt']['path']).read_bytes())
+            proof['image_ref']=prep['login_server']+'/'+prep['slots'][slot]['repository']+':'+a['tags'][slot]
+            raw=encoded(proof);data['artifacts'][slot+'_build']=raw
+            fixed['build_receipt']=self.f.write(slot+'-build.json',raw)
+        data['artifacts']['local_ready']=encoded({'head':head,'design_sha256':DESIGN_SHA256,'code_sources_sha256':digest(self.f.sources)})
+        data['artifacts']['limits']=encoded({'schema':1,'head':head,'counts_before':a['counts_before'],
+            'phase_caps':a['phase_caps'],'unallocated':a['unallocated'],'purpose_caps':PURPOSE_CAPS})
+        a['artifact_sha256']={key:attempt_fixture.sha(raw) for key,raw in data['artifacts'].items()}
+        authority_ref=self.f.write('attempt-authority.json',encoded(a));self.trusted=authority_ref['sha256']
+        activation={'schema':1,'attempt_id':a['attempt_id'],'authority_sha256':self.trusted,'issued_at':stamp(-300),'windows':windows}
+        activation_ref=self.f.write('attempt-activation.json',encoded(activation))
+        evidence={'authority':authority_ref,'parent_final':self.f.write('parent-final.json',encoded(data['parent_final'])),
+            'artifacts':{key:self.f.write('attempt-'+key+'.json',raw) for key,raw in data['artifacts'].items()}}
+        public.update(attempt=activation_ref,attempt_evidence=evidence)
+        self.config.update(attempt=activation_ref,attempt_evidence=evidence,
+            plan_bindings={'guardian_window':windows['guardian'],'owner_window':windows['owner_input']})
+        self.config['cleanup_deadlines'].update(guardian=windows['guardian']['end'],owner_input=windows['owner_input']['end'])
+        self.config['resource_bindings'].update(guardian_deadline=windows['guardian']['end'],deadline=windows['owner_input']['end'])
+        loaded={**public,'authority_bundle':self.authority}
+        self.verified=attempt_fixture.verify_attempt(loaded,self.manifest,authority_raw=encoded(a),activation_raw=encoded(activation),
+            parent_journal_raw=parent_raw,parent_final_raw=encoded(data['parent_final']),artifacts=data['artifacts'],
+            trusted_authority_sha256=self.trusted,now=self.clock.utc())
+        self.pool=OwnerTokenPool(self.verified,self.clock);self.addCleanup(self.pool.close)
+        self.windows=windows
+        budget=self.config['control_budget']
+        with ControlBudget(budget['directory'],budget['directory_digest'],budget['binding'],seed=budget['seed']) as counter:
+            for _ in range(59):counter.consume('owner_arm',600)
+        def run_action(action='prepare',**extra):
+            self.f.write(self.f.config_path.name,self.config)
+            calls=getattr(self.f.wire,'calls',self.arm.calls)
+            before=len(calls)
+            try:
+                return cli.run_command({'config':str(self.f.config_path),'action':action,**extra},clock=self.clock,wire=self.f.wire,
+                    trusted_attempt_authority=self.trusted,owner_token_pool=self.pool)
+            finally:
+                self.action_trace.append({'action':action,'operation':extra.get('operation_id'),
+                    'requests':[(row[0],row[1]) for row in calls[before:]]})
+        self.f.run_action=run_action
 
     def publish_and_prepare(self):
         p=publish_fixture.PublisherTests('runTest')
@@ -268,7 +367,7 @@ class WorkflowContractTests(unittest.TestCase):
         # Reuse strict fake wire/process boundaries, not a mocked publisher result.
         class Audit:
             def values(_, event):
-                return [json.loads(row)['value'] for row in (self.root/'trial-provision.jsonl').read_bytes().splitlines() if json.loads(row)['event']==event]
+                return [json.loads(row)['value'] for row in (self.root/'trial-provision-next.jsonl').read_bytes().splitlines() if json.loads(row)['event']==event]
         p.journal=Audit()
         public={k:deepcopy(self.config[k]) for k in ('schema','live','sources','frozen_head','ci','recovery','control_budget','code_sources')}
         public['publication']={'publish_until':'2026-10-11T01:10:00Z','slots':{}}
@@ -281,22 +380,38 @@ class WorkflowContractTests(unittest.TestCase):
                 'readback_verified':True,'managed_build_sha':self.f.head}
             fixed['build_receipt']=self.f.write(slot+'-build.json',proof)
             public['publication']['slots'][slot]=fixed
+        self.prepare_attempt(public)
+        p.manifest=deepcopy(self.manifest)
+        p.manifest.update(cleanupImageTag=self.verified.authority['tags']['guardian'],imageTag=self.verified.authority['tags']['runtime'])
+        retained=self.verified.authority['retained_runtime']['digest']
+        def retention_wire(method,url):
+            if p.bundle['slot']!='runtime':return None
+            if '/oauth2/' in url:return None
+            if '/acr/v1/' in url:return response(200,{'name':p.repo})
+            if '/manifests/'+self.manifest['imageTag']+'?' in url or '/manifests/'+retained+'?' in url:
+                return {'status':200,'headers':{'Docker-Content-Digest':retained},'body':self.retained_body}
+            if not p.pushes()>=2:return response(404,{'errors':[{'code':'MANIFEST_UNKNOWN'}]})
+            return None
+        p.modify=retention_wire
         ref=self.f.write('publication.local.json',public)
         def command(action,slot=None):
             request={'config':ref['path'],'action':action}
             if slot: request['slot']=slot
-            return registry_publish_cli.run_command(request,clock=self.clock,wire=p.wire,runner=p.runner)
+            return registry_publish_cli.run_command(request,clock=self.clock,wire=p.wire,runner=p.runner,
+                trusted_attempt_authority=self.trusted,owner_token_pool=self.pool)
         self.assertEqual('publication_prepared',command('prepare')['status'])
         self.trace.append('publication_prepare')
         for slot,key in (('guardian','cleanupImageRepository'),('runtime','imageRepository')):
             p.bundle['slot']=slot;p.repo=self.manifest[key]
             self.assertTrue(command('publish',slot)['push_verified']);self.trace.append(slot+'_published')
-        with self.journal() as journal: images=verified_publication_images(journal)
+        with self.journal() as journal: images=verified_publication_images(journal,verified_attempt=self.verified)
         self.assertEqual(2,p.pushes())
         self.config['resource_bindings'].update(images)
+        self.clock.seconds=2100
         self.assertEqual('prepared',self.f.run_action()['status']);self.trace.append('resource_prepare')
         self.publisher=p
-        self.assertEqual(140,self.f.run_action('status')['control_requests_used'])
+        self.assertGreater(self.f.run_action('status')['control_requests_used'],187)
+        self.assertEqual(self.parent_bytes,(self.root/'trial-provision.jsonl').read_bytes())
         with self.journal() as journal:
             self.assertEqual(1,len(journal.values('publication_preparation')))
             self.assertEqual(1,len(journal.values('publication_import')))
@@ -327,13 +442,16 @@ class WorkflowContractTests(unittest.TestCase):
         ref=self.f.write('rehearsal.local.json',{'owner':f.owner,'guardian':f.guardian})
         with patch.multiple(rehearsal_fixture,JOB=job,EXECUTION=execution_id,BLOB=blob,PRINCIPAL=principal,TENANT=owner['tenant_id']):
             wire=rehearsal_fixture.Wire(self.clock,create);wire.replica_rows=[{'name':execution_id.rsplit('/',1)[1]+'-replica'}]
+            start=self.clock.utc();saved_iso=self.clock.iso
+            self.clock.iso=lambda seconds=0:(start+timedelta(seconds=seconds)).isoformat().replace('+00:00','Z')
             old=self.f.wire;self.f.wire=wire
             try:
                 for action in ('start','seed'):
                     self.assertIn(self.f.run_action('rehearsal-'+action,rehearsal_config=ref)['status'],('pending','succeeded'))
-                wire.finish()
+                self.clock.advance(10);wire.job_status='Succeeded';wire.state['version']=1
+                wire.state['rehearsal']={'at':self.clock.iso(5),'reads_and_cas':True,'delete_measured':False}
                 self.assertTrue(self.f.run_action('rehearsal-verify',rehearsal_config=ref)['rehearsal_verified'])
-            finally:self.f.wire=old
+            finally:self.f.wire=old;self.clock.iso=saved_iso
         self.assertEqual('succeeded',self.f.run_action('update',operation_id='guardMainConfiguration',creation_id='guard')['status'])
         self.trace.append('guardian_main_ready')
 
@@ -346,17 +464,19 @@ class WorkflowContractTests(unittest.TestCase):
         p['auth']['origin']=public_trial_origin(self.manifest,receipts['app']['properties']['defaultDomain'])
         p['database']['host']=self.manifest['existing']['db'].rsplit('/',1)[1]+'.postgres.database.azure.com'
         p['cost']['databaseBaselineBytes']=0
+        p.update(startsAt=self.windows['initial']['start'],endsAt=self.windows['initial']['end'])
         p['localOperator']={'recoveryDirectoryDigest':hashlib.sha256(str(self.root).encode()).hexdigest(),'ticketDigest':'a'*64}
         env['TRIAL_POLICY_JSON']=json.dumps(p)
         return env
 
     def guardian_execute(self):
-        self.clock.seconds=3600
+        self.clock.seconds=4800
         # Resource preparation and rehearsal precede the OWNER input window.
         # E1 is needed for bootstrap's fixed callback, and starts inside it.
         self.assertEqual('succeeded',self.f.run_action('create',operation_id='E1')['status'])
         for slot in ('O1','O2'):
             self.assertEqual('succeeded',self.f.run_action('create',operation_id=slot)['status'])
+        self.clock.seconds=5700
         resolver,receipts=self.snapshot();main=resolver.resolve('guardMainConfiguration',receipts)
         self.assertEqual(7,sum(slot.startswith('C') and slot[1:].isdigit() for slot in receipts))
         self.assertEqual(18,sum(slot[0] in 'RGO' and slot[1:].isdigit() for slot in receipts))
@@ -395,24 +515,42 @@ class WorkflowContractTests(unittest.TestCase):
         window={'lifecycleId':binding['lifecycle_id'],'bindingDigest':'c'*64,'guardianNonce':runtime['nonce'],
             'ruleId':rule,'journalUrl':journal_url,'jobStartedAt':iso(0),'useUntil':iso(600)}
         payload={'azureCliPython':str(Path(sys.executable).resolve()),'environment':env,'recoveryDirectory':str(self.root),
-            'requests':[],'access':{'databaseWindow':window,'startsAt':iso(0),'endsAt':iso(3600)},
+            'requests':[],'access':{'databaseWindow':window,'startsAt':self.windows['owner_input']['start'],'endsAt':self.windows['owner_input']['end']},
             'bootstrap':{'mode':'apply','manifest':{'schema':1,'adminUser':'fictional_admin','adminCatalog':'postgres',
-                'cases':[{'id':1,'title':'FICTIONAL TRIAL SAMPLE 1'}]}}}
+                'cases':[{'id':i,'title':'FICTIONAL TRIAL SAMPLE '+str(i)} for i in range(1,5)]}}}
+        db=policy['database']
+        plan={'schema':1,'server':db['host'],'adminUser':'fictional_admin','targetDatabase':db['database'],
+            'roles':{'owner':db['ownerRole'],'migrator':db['migratorUser'],'web':db['webUser'],'worker':db['workerUser']},
+            'excludedDatabases':[{'name':'template0','template':True,'allowConnect':False}],
+            'maximumAuditConnections':6,'builtinManifestSha256':'b'*64,'querySetSha256':'c'*64,'limits':deepcopy(catalog.LIMITS)}
+        policy['localOperator']['catalogPlanDigest']=catalog.catalog_digest(plan);env['TRIAL_POLICY_JSON']=json.dumps(policy)
+        payload.update(catalogPlan=plan,databaseWindow=deepcopy(window),signingPrivateKey='FICTIONAL-SIGNING-KEY',
+            operatorDatabaseUrl='postgresql://'+db['migratorUser']+':FICTIONAL-MIGRATOR@'+db['host']+'/'+db['database'])
+        payload['bootstrap']['credentials']={'adminUrl':'postgresql://fictional_admin:FICTIONAL-ADMIN@'+db['host']+'/postgres',
+            'migratorPassword':'FICTIONAL-MIGRATOR','webPassword':'FICTIONAL-WEB','workerPassword':'FICTIONAL-WORKER'}
+        payload['requests']=[{'command':'initialize-ledger'},{'command':'package-import'}]
+        for case_id in range(1,5):
+            index=len(payload['requests']);payload['requests'].extend([{'command':'sample-save','caseId':case_id},
+                {'command':'setting-save','setting':{'caseId':case_id,
+                    'base':{'$sessionResult':{'requestIndex':index,'field':'base'}},'source':{'$sessionResult':{'requestIndex':index,'field':'source'}}}}])
         compiled=self.root/'.koho-ops'/'managed';(compiled/'scripts').mkdir(parents=True)
         script=compiled/'scripts'/'trial-session.js';script.write_bytes(b'// fictional Node boundary\n')
         node=Path(self.config['policy_verifier_node'])
         pin={'schema':1,'head':self.f.head,'node_sha256':hashlib.sha256(node.read_bytes()).hexdigest(),
             'compiled_root':str(compiled),'entry':'scripts/trial-session.js','source_digest':'b'*64,
             'files':{'scripts/trial-session.js':hashlib.sha256(script.read_bytes()).hexdigest()}}
-        config['worker']={'node':str(node),'script':str(script),'payload':payload,'artifact_pin':pin}
+        config['worker']={'node':str(node),'script':str(script),'payload':payload,'artifact_pin':pin,'mode':catalog.MODE}
+        config['attempt_binding_digest']=self.verified.binding_digest
         config['preflight']={k:binding[k] for k in ('ipv4','server_id','rule_id')}
         config['preflight'].update(ci_head=self.f.head,reviewed_head=self.f.head,checked_at=iso(0),
-            initial_forecast_yen=4311,initial_cap_yen=5000,all_unsettled_retained=True,external_business_acl_verified=True,
-            no_production_change=True,all_evidence_verified=True,
-            evidence_sha256={k:'b'*64 for k in ('network_approval','current_ip','isolation','current_ledger','current_prices','effective_permissions','additional_authority')})
+            initial_forecast_yen=4311,initial_cap_yen=5000,all_unsettled_retained=True,schema=2,catalog_acl='pending_catalog',
+            no_production_change=True,launch_checks_verified=True,
+            evidence_sha256={k:'b'*64 for k in ('network_approval','current_ip','platform_isolation','current_ledger','current_prices','effective_permissions','additional_authority')})
         wire=GuardianWire(config,self.arm,self.clock);runner=None
         def sleep(seconds):
             nonlocal runner
+            # Yield to the real stdout/broker threads at the process boundary.
+            threading.Event().wait(.01)
             self.clock.advance(seconds)
             if wire.state is None:return
             if runner is None:
@@ -430,47 +568,77 @@ class WorkflowContractTests(unittest.TestCase):
             if not wire.state.get('guardian_ready') and not wire.state.get('close_requested'):runner.opening_gate()
             else:runner.step()
         test=self
-        class Child:
-            def __init__(child):child.sent=[];child.stdout=io.BytesIO();child.stdin=child;child.killed=False
-            def write(child,raw):
-                value=json.loads(raw);child.sent.append(value)
-                if len(child.sent)==1:
-                    test.assertTrue(wire.state['guardian_ready']);test.assertTrue(wire.state['usage_allowed'])
-                    actual_window=value['databaseWindow']
-                    final=deepcopy(policy);final['cost']['databaseBaselineBytes']=1024;final['localOperator']['ticketDigest']='b'*64
-                    final_env={**env,'TRIAL_POLICY_JSON':json.dumps(final)}
-                    final_ref=test.f.write('trial-runtime-policy.json',final_env)
-                    name='operator-'+'9'*64+'.jsonl'
-                    step={'schema':1,'intent':'9'*64,'ticketDigest':'c'*64,'startsAt':iso(0),'endsAt':iso(3600),
-                        'status':'outcome_unknown','automaticResend':False}
-                    step_ref=test.f.write(name,encoded(step)+b'\n'+encoded({'terminal':'completed'})+b'\n')
-                    entries=[{'name':name,'sha256':step_ref['sha256']}]
-                    bootstrap={'status':'bootstrapped','databaseBaselineBytes':1024,'cases':1,'automaticResend':False}
-                    proof={'schema':1,'bootstrap':bootstrap,'databaseWindow':actual_window,
-                        'database':{k:final['database'][k] for k in ('host','database','ownerRole','migratorUser','webUser','workerUser')},
-                        'codeSha':test.f.head,'bootstrapManifest':payload['bootstrap']['manifest'],
-                        'receipts':entries,'receiptScope':'verified_steps_this_invocation'}
-                    proof_ref=test.f.write('trial-bootstrap-proof.json',proof)
-                    child.stdout=io.BytesIO(encoded({'status':'completed','completedRequests':0,
-                        'bootstrap':{'schema':1,**bootstrap,'finalRuntimePolicySha256':final_ref['sha256'],
-                            'databaseWindowDigest':digest(actual_window),'receiptSetSha256':digest(entries),
-                            'receiptCount':1,'proofSha256':proof_ref['sha256']}}))
-                    test.final_environment=final_env
-                return len(raw)
-            def flush(child):pass
-            def poll(child):return 0 if len(child.sent)>=2 or child.killed else None
-            def terminate(child):child.killed=True
-            def wait(child,timeout):return 0
-        child=Child()
+        child=CatalogChild();actual_window=None;pass_hashes=[];requested=False
+        def emit_pass(number):
+            value={'schema':1,'pass':number,'codeSha':self.f.head,'auditPlanDigest':catalog.catalog_digest(plan),
+                'querySetDigest':plan['querySetSha256'],'builtinManifestSha256':plan['builtinManifestSha256'],
+                'databaseWindowDigest':catalog.catalog_digest(actual_window),'lifecycleId':actual_window['lifecycleId'],
+                'guardianNonce':actual_window['guardianNonce'],'targetInventoryDigest':'d'*64,'catalogDigest':'e'*64,
+                'startedAt':self.clock.utc().isoformat(),'checkedAt':self.clock.utc().isoformat(),
+                'auditConnectionAttempts':6,'counts':{'databases':6,'queries':114,'rows':6,'bytes':12},
+                'status':'verified','automaticResend':False}
+            ref=self.f.write('trial-catalog-pass-'+str(number)+'.json',catalog.canonical(value)+b'\n')
+            pass_hashes.append(ref['sha256']);child.stdout.feed({'type':'catalog_pass','schema':1,'pass':number,'sha256':ref['sha256']})
+        def flush(value):
+            nonlocal actual_window,requested
+            if value['type']=='catalog_start':
+                test.assertTrue(wire.state['guardian_ready']);test.assertTrue(wire.state['usage_allowed'])
+                test.assertNotIn('signingPrivateKey',value);test.assertNotIn('bootstrap',value)
+                test.assertEqual(set(value['admin']),{'adminUrl','adminUser'})
+                test.assertNotIn('FICTIONAL-WEB',json.dumps(value));actual_window=value['databaseWindow']
+            elif value['type']=='permit' and not requested:
+                requested=True;child.stdout.feed({'type':'permit_request','schema':1,'id':1})
+            elif value['type']=='permit_snapshot':
+                test.assertEqual(value['id'],1);test.assertEqual(value['snapshot']['status'],'active');emit_pass(1)
+            elif value['type']=='bootstrap':
+                rows=[json.loads(row) for row in (self.root/'trial-session.jsonl').read_bytes().splitlines()]
+                test.assertEqual([r['value']['pass'] for r in rows if r['event']=='catalog_verified'],[1])
+                test.assertTrue(any(r['event']=='bootstrap_frame_intent' for r in rows))
+                test.assertEqual(value['payload']['signingPrivateKey'],'FICTIONAL-SIGNING-KEY')
+                test.assertNotIn('catalogPlan',value['payload']);test.assertEqual(value['catalogPass1Sha256'],pass_hashes[0])
+                emit_pass(2)
+                final=deepcopy(policy);final['cost']['databaseBaselineBytes']=1024;final['localOperator']['ticketDigest']='b'*64
+                final_env={**env,'TRIAL_POLICY_JSON':json.dumps(final)};final_ref=test.f.write('trial-runtime-policy.json',final_env)
+                name='operator-'+'9'*64+'.jsonl'
+                step={'schema':1,'intent':'9'*64,'ticketDigest':'c'*64,'startsAt':iso(0),'endsAt':iso(3600),
+                    'status':'outcome_unknown','automaticResend':False}
+                step_ref=test.f.write(name,encoded(step)+b'\n'+encoded({'terminal':'completed'})+b'\n')
+                entries=[{'name':name,'sha256':step_ref['sha256']}]
+                bootstrap={'status':'bootstrapped','databaseBaselineBytes':1024,'cases':4,'automaticResend':False}
+                proof={'schema':1,'bootstrap':bootstrap,'databaseWindow':actual_window,
+                    'database':{k:final['database'][k] for k in ('host','database','ownerRole','migratorUser','webUser','workerUser')},
+                    'codeSha':test.f.head,'bootstrapManifest':payload['bootstrap']['manifest'],
+                    'receipts':entries,'receiptScope':'verified_steps_this_invocation'}
+                proof_ref=test.f.write('trial-bootstrap-proof.json',proof);emit_pass(3)
+                child.stdout.feed({'status':'completed','completedRequests':10,
+                    'bootstrap':{'schema':1,**bootstrap,'finalRuntimePolicySha256':final_ref['sha256'],
+                        'databaseWindowDigest':catalog.catalog_digest(actual_window),'receiptSetSha256':digest(entries),
+                        'receiptCount':1,'proofSha256':proof_ref['sha256']},
+                    'catalog':{'schema':1,'auditPlanDigest':catalog.catalog_digest(plan),'auditConnectionAttempts':6,
+                        **{'pass'+str(i)+'Sha256':pass_hashes[i-1] for i in (1,2,3)}}})
+                test.final_environment=final_env;child.exit(0)
+        child.stdin.on_flush=flush
+        faults=[];original_fault=catalog.CatalogNodeWorker._latch_fault
+        def record_fault(worker):
+            faults.append(str(sys.exc_info()[1]));return original_fault(worker)
         with patch.object(execution,'COMPILED_ROOT',compiled),patch.object(execution,'AzureCredential',Credential),\
             patch('scripts.trial_guard.owner.AzureCredential',Credential),patch.object(execution.time,'sleep',sleep),\
-            patch.object(execution.subprocess,'Popen',return_value=child) as spawn:
-            result=execution.execute(config,clock=self.clock,http=wire)
+            patch.object(execution.subprocess,'Popen',return_value=child) as spawn,\
+            patch.object(catalog.CatalogNodeWorker,'_latch_fault',record_fault):
+            before=(self.root/'trial-control-budget.jsonl').read_bytes()
+            with patch.object(execution,'Receipt',side_effect=AssertionError('unsealed receipt write')) as blocked_receipt:
+                with self.assertRaises(Denied):execution.execute(config,clock=self.clock,http=wire,owner_token_pool=self.pool)
+            blocked_receipt.assert_not_called();spawn.assert_not_called();self.assertEqual(wire.calls,[])
+            self.assertEqual((self.root/'trial-control-budget.jsonl').read_bytes(),before)
+            result=execution.execute(config,clock=self.clock,http=wire,verified_attempt=self.verified,owner_token_pool=self.pool)
         self.assertEqual({'status':'completed','cleanupConfirmed':True,'workComplete':True},result,
-            {'events':[json.loads(r)['event'] for r in (self.root/'trial-session.jsonl').read_bytes().splitlines()],
+            {'faults':faults,'events':[json.loads(r)['event'] for r in (self.root/'trial-session.jsonl').read_bytes().splitlines()],
              'requests':[(m,urlsplit(u).path.rsplit('/',1)[-1]) for m,u in wire.calls[-8:]],
              'state':None if wire.state is None else {k:wire.state.get(k) for k in ('status','blocked','block_reason')}})
         self.assertEqual(1,spawn.call_count);self.assertTrue(closure_proven(wire.state))
+        self.assertEqual(faults,[])
+        session_rows=[json.loads(row) for row in (self.root/'trial-session.jsonl').read_bytes().splitlines()]
+        self.assertEqual([row['value']['pass'] for row in session_rows if row['event']=='catalog_verified'],[1,2,3])
         self.assertEqual(1,sum(m=='POST' and '/start?' in u for m,u in wire.calls))
         self.assertEqual(1,sum(m=='PUT' and urlsplit(u).path==rule for m,u in wire.calls))
         self.assertEqual(1,sum(m=='DELETE' and urlsplit(u).path==rule for m,u in wire.calls))
@@ -546,8 +714,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual('Return401', cfg['globalValidation']['unauthenticatedClientAction'])
         self.assertEqual([self.manifest['owner']['principal_id']], cfg['identityProviders']['azureActiveDirectory']['validation']['defaultAuthorizationPolicy']['allowedPrincipals']['identities'])
         self.assertTrue(self.arm.objects['/v1.0/servicePrincipals/' + op_fixture.guid(3002)]['appRoleAssignmentRequired'])
-        self.assertNotIn(b'fictional-memory-only-auth-secret', (self.root / 'trial-provision.jsonl').read_bytes())
+        self.assertNotIn(b'fictional-memory-only-auth-secret', (self.root / 'trial-provision-next.jsonl').read_bytes())
         self.assertEqual(1, sum(m == 'POST' and p.endswith('/addPassword') for m, p in self.arm.calls))
+        rows=[json.loads(row) for row in (self.root/'trial-control-budget.jsonl').read_bytes().splitlines()]
+        provision=Counter(row['value']['purpose'] for row in rows if row['event']=='request' and row['value'].get('phase')=='provision')
+        # Measured adapter sends: foundation 96 + main PATCH 3 + OWNER 8 +
+        # runtime PATCHes 6 + remaining Graph/secret/auth 22 = 135. The 170
+        # HTTP allocation therefore preserves 35 poll/error observations.
+        self.assertEqual(provision['http'],135)
+        self.assertEqual(provision['owner_token'],1)  # Graph miss; shared ARM token is cached.
+        self.assertLessEqual(provision['owner_token'],10)
+        foundation={'webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app'}
+        foundation.update('C'+str(i) for i in range(1,8));foundation.update('R'+str(i) for i in range(1,11))
+        foundation.update('G'+str(i) for i in range(1,7))
+        actions=[row for row in self.action_trace if row['action']=='create' and row['operation'] in foundation]
+        self.assertEqual(len(actions),32)
+        self.assertTrue(all(Counter(method for method,_ in row['requests'])=={'GET':2,'PUT':1} for row in actions))
+        self.assertEqual(self.parent_bytes,(self.root/'trial-provision.jsonl').read_bytes())
         self.trace.append('owner_auth_enabled')
 
     def cleanup_owner_auth(self):

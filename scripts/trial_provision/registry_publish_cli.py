@@ -14,7 +14,8 @@ from scripts.trial_guard.__main__ import Clock
 from scripts.trial_guard.adapters import AzureCredential, BoundedHttp
 from scripts.trial_guard.lifecycle import Denied
 from .cli import MAX_INPUT, git, local_sources, private_bytes
-from .journal import Journal, ControlBudget, CountedControlHttp
+from .journal import Journal, ControlBudget, CountedControlHttp,scope_for_dispatch
+from .attempt import effective_slot,journal_descriptor
 from .private_io import verify_owner_file
 from .publication_configuration import load_publication_configuration
 from .registry_publish import (prepare_publication, run_registry_publish,
@@ -33,6 +34,7 @@ def validate_build_receipts(config, manifest):
     for slot,repository,tag in (('guardian','cleanupImageRepository','cleanupImageTag'),
                                ('runtime','imageRepository','imageTag')):
         proof=config['build_receipts'][slot]; fixed=config['publication']['slots'][slot]
+        selected=effective_slot(manifest,config['frozen_head'],slot,config.get('verified_attempt'))
         need(isinstance(proof,dict) and set(proof)==keys
             and type(proof['schema']) is int and proof['schema']==1
             and type(proof['attempt']) is int and proof['attempt']==1
@@ -44,16 +46,16 @@ def validate_build_receipts(config, manifest):
             and proof['docker_sha256']==fixed['docker_sha256']
             and proof['docker_host']==fixed['docker_host']
             and proof['image_id']==fixed['local_image_id']
-            and proof['image_ref']==manifest['registry']['loginServer']+'/'+manifest[repository]+':'+manifest[tag]
+            and proof['image_ref']==manifest['registry']['loginServer']+'/'+selected['repository']+':'+selected['tag']
             and isinstance(proof['request_digest'],str)
             and re.fullmatch('[a-f0-9]{64}',proof['request_digest']))
 
 
-def run_command(request, *, clock=None, wire=None, runner=None):
+def run_command(request, *, clock=None, wire=None, runner=None,trusted_attempt_authority=None,owner_token_pool=None):
     need(isinstance(request,dict) and not set(request)-{'config','action','slot','provision'}
         and {'config','action'}<=set(request))
     action=request['action']
-    need(action in ('prepare','status','publish','cleanup-config','bind-provision'))
+    need(action in ('prepare','status','publish','cleanup-config','cleanup-publication','bind-provision'))
     if action=='bind-provision': need('provision' in request)
     else: need('provision' not in request)
     if action in ('publish','cleanup-config'):
@@ -74,23 +76,33 @@ def run_command(request, *, clock=None, wire=None, runner=None):
     # expired publication time must not strand our exact recorded token file.
     # Journal validates its existing immutable binding and every saved hash.
     if action=='cleanup-config':
-        with Journal(recovery['directory'],recovery['directory_digest'],binding,require_existing=True) as journal:
+        name='trial-provision'
+        if 'attempt' in preview:
+            # Local token-file cleanup reads its immutable attempt proof; it
+            # does not claim current CI/source checks or open a send window.
+            cleanup=load_publication_configuration(path,now=clock.utc(),local_head=preview['frozen_head'],
+                owner_context={'mode':'AzureCliCredential','tenant_id':owner['tenant_id'],'principal_id':owner['principal_id']},
+                local_source_digests=preview['code_sources'],trusted_attempt_authority=trusted_attempt_authority)
+            name,binding=journal_descriptor(cleanup,cleanup['verified_attempt'])
+        with Journal(recovery['directory'],recovery['directory_digest'],binding,name=name,require_existing=True) as journal:
             cleanup_docker_config(journal,request['slot'])
         return {'status':'temporary_config_removed','temporary_config_absent':True,'cloud_calls':0}
     head=git(['rev-parse','HEAD']).decode('ascii').strip()
-    sources=local_sources(head,live=action=='publish')
+    sources=local_sources(head,live=action in ('publish','cleanup-publication'))
     loaded=load_publication_configuration(path,now=clock.utc(),local_head=head,
         owner_context={'mode':'AzureCliCredential','tenant_id':owner['tenant_id'],'principal_id':owner['principal_id']},
-        local_source_digests=sources)
+        local_source_digests=sources,trusted_attempt_authority=trusted_attempt_authority)
     validate_build_receipts(loaded,manifest)
     need(loaded['recovery']==recovery and loaded['control_budget']==budget_config and loaded['manifest']==manifest)
-    if action=='publish':
+    if action in ('publish','cleanup-publication'):
         need(loaded.get('live') is True and loaded.get('code_sources')==sources)
+    verified=loaded.get('verified_attempt');name,binding=journal_descriptor(loaded,verified)
     with ExitStack() as stack:
-        journal=stack.enter_context(Journal(recovery['directory'],recovery['directory_digest'],binding,
+        journal=stack.enter_context(Journal(recovery['directory'],recovery['directory_digest'],binding,name=name,
             require_existing=action!='prepare'))
         budget=stack.enter_context(ControlBudget(budget_config['directory'],budget_config['directory_digest'],
-            budget_config['binding'],seed=budget_config['seed'],require_existing=action!='prepare'))
+            budget_config['binding'],seed=budget_config['seed'],require_existing=verified is not None or action!='prepare'))
+        if verified is not None:budget.begin_attempt(verified,initialize=action=='prepare')
         if action=='prepare':
             prepare_publication(loaded,manifest,loaded['config_sha256'],journal)
             return {'status':'publication_prepared','image_slots':2,'cloud_calls':0,
@@ -98,17 +110,28 @@ def run_command(request, *, clock=None, wire=None, runner=None):
         # Revalidation must not append a new preparation on publish or status.
         need(len(journal.values('publication_preparation'))==1)
         prepare_publication(loaded,manifest,loaded['config_sha256'],journal)
+        if action=='cleanup-publication':
+            from .publication_only_cleanup import run
+            scoped=budget
+            if verified is not None:
+                need(owner_token_pool is not None)
+                scoped=scope_for_dispatch(budget,verified,entry_point='registry-cleanup',action='cleanup')
+            credential=AzureCredential('owner',owner['principal_id'],owner['tenant_id'],CountedControlHttp(wire or BoundedHttp(),scoped))
+            if verified is not None:credential=owner_token_pool.bind(credential,scoped,verified)
+            def source_guard():
+                need(local_sources(head,live=True)==sources)
+            return run(loaded,journal,scoped,credential,wire or BoundedHttp(),clock,source_guard)
         if action=='bind-provision':
             from .publication_bridge import prepare_bridge, complete_bridge
             binding=prepare_bridge(loaded,journal,request['provision'],now=clock.utc())
             # Normal preparation reopens these exact files. Never nest their locks.
             stack.close()
-            return complete_bridge(loaded,binding,clock=clock)
+            return complete_bridge(loaded,binding,clock=clock,trusted_attempt_authority=trusted_attempt_authority)
         if action=='status':
             receipts=[journal.latest(k+'ImagePush') or {} for k in ('guardian','runtime')]
-            verified=sum(r.get('state')=='succeeded' and r.get('readback_verified') is True for r in receipts)
-            if verified==2: verified_publication_images(journal)
-            return {'status':'publication_status','verified_images':verified,
+            verified_count=sum(r.get('state')=='succeeded' and r.get('readback_verified') is True for r in receipts)
+            if verified_count==2: verified_publication_images(journal,verified_attempt=verified)
+            return {'status':'publication_status','verified_images':verified_count,
                 'attempts':sum(v['operation_id'] in ('guardianImagePush','runtimeImagePush') for v in journal.values('intent')),
                 'cloud_calls':0,'control_requests_used':budget.count('owner_arm')}
         slot=request['slot']; fixed=loaded['publication']['slots'][slot]
@@ -116,12 +139,16 @@ def run_command(request, *, clock=None, wire=None, runner=None):
         # deadline. A first push is fenced again at every send/process boundary.
         attempted=any(v['operation_id']==slot+'ImagePush' for v in journal.values('intent'))
         if not attempted: need(loaded['gates']['publication_window_open'])
-        counted=CountedControlHttp(wire or BoundedHttp(),budget)
+        scoped=budget
+        if verified is not None:
+            need(owner_token_pool is not None);scoped=scope_for_dispatch(budget,verified,entry_point='publication',action='publish')
+        counted=CountedControlHttp(wire or BoundedHttp(),scoped)
         credential=AzureCredential('owner',owner['principal_id'],owner['tenant_id'],counted)
+        if verified is not None:credential=owner_token_pool.bind(credential,scoped,verified)
         bundle={k:fixed[k] for k in ('docker_path','docker_sha256','docker_host','local_image_id')}
         bundle.update(schema=1,slot=slot,deadline=loaded['publication']['publish_until'])
         kwargs={} if runner is None else {'runner':runner}
-        result=run_registry_publish(bundle,manifest,journal,credential,wire or BoundedHttp(),budget,clock,**kwargs)
+        result=run_registry_publish(bundle,manifest,journal,credential,wire or BoundedHttp(),scoped,clock,verified_attempt=verified,**kwargs)
         return {**result,'control_requests_used':budget.count('owner_arm')}
 
 

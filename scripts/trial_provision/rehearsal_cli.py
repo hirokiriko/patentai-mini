@@ -66,7 +66,7 @@ def _summary(action, receipt):
         'live_delete_verified': False}
 
 
-def run_rehearsal(action, configbundle, journal, resolver, credential, raw_wire, budget, clock):
+def run_rehearsal(action, configbundle, journal, resolver, credential, raw_wire, budget, clock,*,credential_factory=None):
     """Run one start/poll/seed/verify step; return a sanitized, ID-free result.
 
     Trusted generated operations are stored separately from the initial plan.
@@ -122,8 +122,12 @@ def run_rehearsal(action, configbundle, journal, resolver, credential, raw_wire,
         register(op)
         journal.checkpoint(op, receipt)
 
+    kwargs={}
+    if credential_factory is not None:
+        from scripts.trial_guard.owner import OwnerSession
+        kwargs['session_factory']=lambda *args,**kw:OwnerSession(*args,**kw,credential_factory=credential_factory)
     adapter = GuardianRehearsalAdapter(create, created, bundle['owner'], bundle['guardian'],
-        credential, dispatch, fenced, before_send=before_send, checkpoint=checkpoint)
+        credential, dispatch, fenced, before_send=before_send, checkpoint=checkpoint,**kwargs)
     if not old_binding:
         journal.append('rehearsal_config_binding', binding)
     saved = journal.values('rehearsal_operation')

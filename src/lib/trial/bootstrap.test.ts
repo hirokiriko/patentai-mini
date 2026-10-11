@@ -9,6 +9,9 @@ import { TRIAL_START } from "./policy";
 import { bootstrapTrialDatabase, bootstrapManifestSchema } from "./bootstrap";
 import { connectPermitDatabase } from "./database-client";
 vi.mock("./database-client",()=>({connectPermitDatabase:vi.fn()}));
+// This suite tests the installer after the catalog boundary. The real one-use
+// capability and all three catalog passes have their own integration coverage.
+vi.mock("./catalog-runtime",()=>({consumeCatalogBootstrapCapability:vi.fn(()=>({mode:"native-superuser",adminUser:"admin_user",adminOid:10}))}));
 
 const pending:{dir:string;access:OperatorAccess}[]=[];
 async function fixture(){
@@ -22,7 +25,7 @@ async function fixture(){
   const access=new OperatorAccess(ticket,p,{utc:()=>clock,monotonic:()=>clock-start});pending.push({dir,access});
   return{policy:p,access,recoveryDirectory:dir,manifest:{schema:1 as const,adminCatalog:"postgres" as const,adminUser:"admin_user",cases:[{id:1,title:"FICTIONAL TRIAL SAMPLE 1"}]},
     credentials:{adminUrl:`postgresql://admin_user:fictional-admin-only@${p.database.host}/postgres`,migratorPassword:"fictional-migrator-only",webPassword:"fictional-web-only",workerPassword:"fictional-worker-only"},
-    credential:{getToken:async()=>({token:"fixture"})},mode:"apply" as "apply"|"reconcile",advance:(milliseconds:number)=>{clock+=milliseconds;}};
+    credential:{getToken:async()=>({token:"fixture"})},beforeFirstWrite:async()=>({} as never),mode:"apply" as "apply"|"reconcile",advance:(milliseconds:number)=>{clock+=milliseconds;}};
 }
 afterEach(async()=>{vi.clearAllMocks();for(const f of pending.splice(0)){f.access.dispose();await rm(f.dir,{recursive:true,force:true});}});
 function catalog(options:{occupied?:boolean;publicHazard?:boolean;lostAck?:boolean;beforeCreate?:()=>Promise<void>}={}){
@@ -45,6 +48,11 @@ function catalog(options:{occupied?:boolean;publicHazard?:boolean;lostAck?:boole
   return{query,sent,created};
 }
 describe("fixed trial bootstrap",()=>{
+  it("denies a direct call without catalog authorization before connecting",async()=>{
+    const f=await fixture();catalog();
+    await expect(bootstrapTrialDatabase({...f,beforeFirstWrite:undefined})).rejects.toThrow("trial_catalog_capability_required");
+    expect(connectPermitDatabase).not.toHaveBeenCalled();
+  });
   it("accepts only a fixed catalog and fictional numeric case manifest",()=>{
     expect(()=>bootstrapManifestSchema.parse({schema:1,adminCatalog:"other",adminUser:"admin",cases:[]})).toThrow();
     expect(()=>bootstrapManifestSchema.parse({schema:1,adminCatalog:"postgres",adminUser:'admin; drop role x',cases:[{id:1,title:"FICTIONAL TRIAL SAMPLE 1"}]})).toThrow();

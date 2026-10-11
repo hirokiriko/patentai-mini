@@ -46,7 +46,7 @@ def _executable(path, expected):
 
 
 def load_publication_configuration(path, *, now, local_head, owner_context,
-                                   local_source_digests=None, acl_check=verify_owner_file):
+                                   local_source_digests=None, acl_check=verify_owner_file,trusted_attempt_authority=None):
     """Read the same common gates without inventing post-push image digests.
 
     A no-auth prepare may initialize the already-approved common budget once;
@@ -57,7 +57,7 @@ def load_publication_configuration(path, *, now, local_head, owner_context,
     """
     result = _load_common_configuration(path, now=now, local_head=local_head,
         owner_context=owner_context, local_source_digests=local_source_digests,
-        acl_check=acl_check, required_extra={'publication', 'code_sources'})
+        acl_check=acl_check, required_extra={'publication', 'code_sources'},trusted_attempt_authority=trusted_attempt_authority)
     _need(bool(result['code_sources']) and result['gates']['code_pins_checked'], 'publication_source_pins')
     publication = result['publication']
     _keys(publication, {'publish_until', 'slots'})
@@ -86,4 +86,7 @@ def load_publication_configuration(path, *, now, local_head, owner_context,
         receipts[slot] = _json(_read_ref(binding['build_receipt'], acl_check))
     result['build_receipts'] = receipts
     result['gates']['publication_window_open'] = _time(now) < until
+    if 'verified_attempt' in result:
+        start=result['verified_attempt'].activation['windows']['publication']['start']
+        result['gates']['publication_window_open']=_time(start)<=_time(now)<until
     return result
