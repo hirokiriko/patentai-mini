@@ -1,6 +1,8 @@
 """Continuous lifecycle with the real controller/owner session and mock I/O."""
 import tempfile
 import json
+import os
+import stat
 import unittest
 from copy import deepcopy
 from datetime import timedelta
@@ -13,6 +15,94 @@ from .runner import GuardianRunner
 from .workflow import Receipt,Workflow,closure_proven
 from .execution import CountedHttp,AzureJobStarter,NodeWorker,validate_launch_preflight
 from .test_lifecycle import Clock,Journal,Transport
+from scripts.trial_provision.private_io import create_owner_file,verify_owner_file
+
+
+class ReceiptPermissionTests(unittest.TestCase):
+    def setUp(self):
+        self.directory=Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+
+    def receipt(self,directory=None):
+        directory=directory or self.directory
+        return Receipt(str(directory),digest(str(directory)),'fictional-configuration')
+
+    def test_new_owner_files_remain_private_after_locked_reopen(self):
+        first=self.receipt()
+        try:
+            for path in (first.lock_path,first.path):verify_owner_file(path)
+            with self.assertRaisesRegex(Denied,'concurrent_writer'):self.receipt()
+            first.append('work_intent',{'fictional':True})
+            original=first.path.read_bytes()
+        finally:first.close()
+        reopened=self.receipt()
+        try:
+            self.assertEqual(original,reopened.path.read_bytes())
+            self.assertEqual([{'fictional':True}],reopened.find('work_intent'))
+            for path in (reopened.lock_path,reopened.path):verify_owner_file(path)
+        finally:reopened.close()
+
+    @unittest.skipIf(os.name=='nt','POSIX mode contract; Windows uses OWNER ACLs')
+    def test_new_files_are_0600_under_default_and_permissive_umasks(self):
+        for mask in (0o022,0o000):
+            with self.subTest(umask=oct(mask)):
+                directory=self.directory/str(mask);directory.mkdir(mode=0o700)
+                previous=os.umask(mask)
+                try:
+                    receipt=self.receipt(directory)
+                    try:
+                        for path in (receipt.lock_path,receipt.path):
+                            self.assertEqual(0o600,stat.S_IMODE(path.stat().st_mode))
+                            verify_owner_file(path)
+                    finally:receipt.close()
+                finally:os.umask(previous)
+
+    @unittest.skipIf(os.name=='nt','POSIX unsafe mode fixture')
+    def test_existing_0644_is_rejected_without_writes_or_peer_creation(self):
+        for name in ('trial-session.lock','trial-session.jsonl'):
+            with self.subTest(name=name):
+                directory=self.directory/name;directory.mkdir(mode=0o700)
+                path=directory/name;path.write_bytes(b'fictional existing evidence');path.chmod(0o644)
+                with self.assertRaisesRegex(OSError,'private_file_permissions'):self.receipt(directory)
+                self.assertEqual(b'fictional existing evidence',path.read_bytes())
+                self.assertEqual(0o644,stat.S_IMODE(path.stat().st_mode))
+                self.assertEqual([name],sorted(p.name for p in directory.iterdir()))
+
+    @unittest.skipIf(os.name=='nt','POSIX unsafe mode fixture')
+    def test_unsafe_journal_does_not_modify_existing_private_lock(self):
+        lock=self.directory/'trial-session.lock';os.close(create_owner_file(lock))
+        lock.write_bytes(b'fictional lock evidence')
+        journal=self.directory/'trial-session.jsonl';journal.write_bytes(b'fictional journal');journal.chmod(0o644)
+        with self.assertRaisesRegex(OSError,'private_file_permissions'):self.receipt()
+        self.assertEqual(b'fictional lock evidence',lock.read_bytes())
+        self.assertEqual(b'fictional journal',journal.read_bytes())
+        verify_owner_file(lock)
+        self.assertEqual(0o644,stat.S_IMODE(journal.stat().st_mode))
+
+    def test_initial_append_interruption_closes_handles_and_releases_lock(self):
+        captured=[]
+        def interrupt(receipt,*args):
+            captured.append(receipt)
+            raise KeyboardInterrupt()
+        with patch.object(Receipt,'append',interrupt),self.assertRaises(KeyboardInterrupt):self.receipt()
+        self.assertTrue(captured[0].stream.closed);self.assertTrue(captured[0].lock.closed)
+        reopened=self.receipt()
+        try:self.assertEqual(1,len(reopened.records))
+        finally:reopened.close()
+
+    def test_initial_fsync_failure_releases_lock_without_rewriting_chain(self):
+        captured=[];append=Receipt.append
+        def observed(receipt,*args):
+            captured.append(receipt)
+            return append(receipt,*args)
+        with patch.object(Receipt,'append',observed),patch('scripts.trial_guard.workflow.os.fsync',side_effect=OSError('fixture fsync')):
+            with self.assertRaisesRegex(OSError,'fixture fsync'):self.receipt()
+        self.assertTrue(captured[0].stream.closed);self.assertTrue(captured[0].lock.closed)
+        original=captured[0].path.read_bytes()
+        reopened=self.receipt()
+        try:
+            self.assertEqual(original,reopened.path.read_bytes())
+            self.assertEqual(1,len(reopened.records))
+        finally:reopened.close()
 
 
 class Harness:

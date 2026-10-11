@@ -13,6 +13,7 @@ from datetime import timedelta
 from pathlib import Path
 from .adapters import digest, encoded
 from .lifecycle import Denied, parse, may_use
+from scripts.trial_provision.private_io import create_owner_file, verify_owner_file
 
 
 class Receipt:
@@ -29,17 +30,28 @@ class Receipt:
         if digest(str(p))!=expected_directory_digest:raise Denied('receipt_directory_binding')
         self.path=p/'trial-session.jsonl';self.lock_path=p/'trial-session.lock'
         if self.path.is_symlink() or self.lock_path.is_symlink():raise Denied('receipt_symlink')
-        self.lock=open(self.lock_path,'a+b');self.lock.seek(0);self.lock.write(b'0');self.lock.flush();self.lock.seek(0)
+        self.lock=self.stream=None
         try:
-            if os.name=='nt':
-                import msvcrt
-                msvcrt.locking(self.lock.fileno(),msvcrt.LK_NBLCK,1)
-            else:
-                import fcntl
-                fcntl.flock(self.lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except Exception:
-            self.lock.close();raise Denied('concurrent_writer') from None
-        try:
+            # Reject existing unsafe evidence before creating or writing either
+            # file. Never repair its permissions or recreate it with open().
+            for path in (self.lock_path,self.path):
+                if path.exists():verify_owner_file(path)
+            for path in (self.lock_path,self.path):
+                if not path.exists():
+                    try:os.close(create_owner_file(path))
+                    except FileExistsError:pass
+                verify_owner_file(path)
+            self.lock=self.lock_path.open('r+b',buffering=0)
+            self.lock.seek(0)
+            try:
+                if os.name=='nt':
+                    import msvcrt
+                    msvcrt.locking(self.lock.fileno(),msvcrt.LK_NBLCK,1)
+                else:
+                    import fcntl
+                    fcntl.flock(self.lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except OSError:raise Denied('concurrent_writer') from None
+            self.lock.write(b'0');self.lock.flush();self.lock.seek(0)
             self.records=[];self.previous='0'*64
             if self.path.exists():
                 if self.path.stat().st_size>16*1024*1024:raise Denied('receipt_limit')
@@ -50,10 +62,11 @@ class Receipt:
                     if row.get('sequence')!=len(self.records) or row.get('previous')!=self.previous or digest(row)!=proof:raise Denied('receipt_chain')
                     self.previous=proof;self.records.append(row)
             if self.records and self.records[0].get('value')!={'configuration_digest':configuration_digest}:raise Denied('receipt_configuration')
-            self.stream=open(self.path,'ab',buffering=0)
+            self.stream=self.path.open('r+b',buffering=0)
+            self.stream.seek(0,os.SEEK_END)
             if not self.records:self.append('configuration',{'configuration_digest':configuration_digest})
-        except Exception:
-            self.lock.close();raise
+        except BaseException:
+            self.close();raise
 
     def append(self,event,value=None):
         if len(self.records)>=15000 or not re.fullmatch('[a-z_]{1,40}',event):raise Denied('receipt_limit')
@@ -66,7 +79,11 @@ class Receipt:
     def consume(self,kind,limit):
         if self.count(kind)>=limit:raise Denied('request_budget')
         self.append('request',{'kind':kind})
-    def close(self):self.stream.close();self.lock.close()
+    def close(self):
+        try:
+            if self.stream is not None:self.stream.close()
+        finally:
+            if self.lock is not None:self.lock.close()
 
 
 def closure_proven(s):

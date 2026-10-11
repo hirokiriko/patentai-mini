@@ -530,3 +530,21 @@ Actual resource admission, effective permissions, Job execution, database
 bootstrap, OWNER browser login, real AI, PDF/CSV row/page comparison, expiry
 refusal, cold start and invoice reconciliation still require separate recorded
 live evidence. Do not mark these complete from a prepared plan or unit tests.
+
+## Local session receipt permissions
+
+The OWNER session creates its lock and journal with the same private file
+writer as provisioning: POSIX mode0600 or the current OWNER's Windows ACL,
+before writing any bytes. Existing files are verified before either file is
+created or written; unsafe permissions are rejected without chmod or ACL
+repair. Subsequent opens cannot recreate a missing file. The writer acquires
+the OS lock before writing its marker, and initialization failure closes both
+handles even on interruption or fsync failure.
+
+This fixes the Linux CI bootstrap rejection caused by ordinary file creation
+under umask022 producing mode0644. Regression coverage checks umask022/000,
+unchanged refusal of existing0644 evidence, concurrent writers, reopen and
+initialization failure. Bootstrap tests now let the real receipt writer create
+its files; they do not precreate private files to hide the permission contract.
+The downstream proof and OWNER permission checks remain unchanged. Successful
+fixture tests do not authorize Cloud operations or establish live acceptance.

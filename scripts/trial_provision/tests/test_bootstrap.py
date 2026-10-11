@@ -104,8 +104,6 @@ class BootstrapBridgeTests(unittest.TestCase):
         self.output={'status':'completed','completedRequests':0,'bootstrap':{'schema':1,**self.proof['bootstrap'],
             'finalRuntimePolicySha256':self.sha('trial-runtime-policy.json'),'databaseWindowDigest':digest(self.window),
             'receiptSetSha256':digest(self.proof['receipts']),'receiptCount':1,'proofSha256':self.sha('trial-bootstrap-proof.json')}}
-        for name in ('trial-session.jsonl','trial-session.lock'):
-            if not (self.directory/name).exists():os.close(create_owner_file(self.directory/name))
         receipt=Receipt(str(self.directory),digest(str(self.directory)),digest(execution_binding(self.config)))
         runtime={'execution_id':'/fictional/jobs/guard/executions/guard-one','principal_id':'fictional-guardian','nonce':'fictional-nonce',
             'image_digest':'sha256:'+'a'*64,'job_started_at':'2026-10-11T00:00:00Z','job_deadline':'2026-10-11T00:30:00Z'}
