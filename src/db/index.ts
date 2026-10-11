@@ -47,3 +47,11 @@ export const db = new Proxy({} as Database, {
     return (getDb() as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
+
+/** Trial communication reservations share the existing Web pool. Each statement
+ * runs independently of a route's business transaction. No new credentials. */
+export async function trialNetworkQuery(text: string, values?: unknown[]) {
+  if (!trialConfigured()) throw new TrialError();
+  const client = (getDb() as Database & { $client: Pool }).$client;
+  return client.query(text, values);
+}

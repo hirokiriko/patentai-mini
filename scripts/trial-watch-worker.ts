@@ -6,6 +6,7 @@ import { assertTrialDatabase, readTrialPolicy, requireTrialActive } from "../src
 import { TrialLedger } from "../src/lib/trial/ledger";
 import { executeTrialWatch, trialJobRequestSchema, verifyTrialBuild } from "../src/lib/trial/job";
 import { inspectTrialCloudDatabase } from "../src/lib/patent-watch/managed-cloud-db";
+import { TrialNetworkBudget,withTrialNetworkBudget } from "../src/lib/trial/network-budget";
 
 export async function trialWorker() {
   const p=readTrialPolicy();requireTrialActive(p);await verifyTrialBuild(p);
@@ -22,7 +23,8 @@ export async function trialWorker() {
   client.on("error",()=>undefined);
   try {
     await client.connect();await inspectTrialCloudDatabase(client,{host:p.database.host,port:5432,database:p.database.database,user:p.database.workerUser});
-    await executeTrialWatch(new ManagedWatchRepository(drizzle(client,{schema})),request,execution,TrialLedger.configured());
+    await withTrialNetworkBudget(new TrialNetworkBudget(p,client),()=>
+      executeTrialWatch(new ManagedWatchRepository(drizzle(client,{schema})),request,execution,TrialLedger.configured()));
   }finally{await client.end().catch(()=>undefined);}
 }
 if(require.main===module){

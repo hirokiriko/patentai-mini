@@ -24,6 +24,7 @@ import { OperatorAccess,operatorTicketSchema } from "../src/lib/trial/operator-a
 import { beginOperatorReceipt } from "../src/lib/trial/operator-journal";
 import { connectPermitDatabase } from "../src/lib/trial/database-client";
 import { ownerStorageBudget } from "../src/lib/trial/storage-budget";
+import { TrialNetworkBudget } from "../src/lib/trial/network-budget";
 
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("initialize-ledger")}).strict(),
@@ -93,8 +94,14 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
     decodeURIComponent(url.pathname.slice(1))!==p.database.database||decodeURIComponent(url.username)!==p.database.migratorUser||!url.password||url.search||url.hash)throw new TrialError();
   const credential=operatorStorageCredential(p,access);
   const storageBudget=ownerStorageBudget(input.recoveryDirectory!,access);
+  const {client,close}=await connectPermitDatabase({url:url.href,host:p.database.host,database:p.database.database,user:p.database.migratorUser},access,credential);
+  try{
+  if(!/^[a-z][a-z0-9_]{1,62}$/.test(p.database.ownerRole))throw new TrialError();
+  await client.query(`SET ROLE "${p.database.ownerRole}"`);
+  if((await client.query("select current_user as usr")).rows[0]?.usr!==p.database.ownerRole)throw new TrialError("trial_database_identity_invalid");
+  const networkBudget=new TrialNetworkBudget(p,client);
   const container=(purpose:"originals"|"artifacts"|"budget")=>new ContainerClient(`https://${p.storage.account}.blob.core.windows.net/${p.storage[purpose]}`,credential,
-    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p,globalThis.fetch,access,storageBudget)});
+    {retryOptions:{maxTries:1,tryTimeoutInMs:20000},httpClient:trialStorageHttp(purpose,p,globalThis.fetch,access,storageBudget,networkBudget)});
   const budgetContainer=container("budget"),ledger=new TrialLedger(p,new TrialBlobLedgerIO(budgetContainer));
   if(input.request.command==="initialize-ledger"){
     requireTrialActive(p);await assertTrialPrivate(budgetContainer);
@@ -102,16 +109,11 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
       conditions:{ifNoneMatch:"*"},abortSignal:AbortSignal.timeout(20000),blobHTTPHeaders:{blobContentType:"application/json",blobCacheControl:"private, no-store"}});
     await ledger.read();return{status:"initialized"};
   }
-  const {client,close}=await connectPermitDatabase({url:url.href,host:p.database.host,database:p.database.database,user:p.database.migratorUser},access,credential);
-  try{
-    if(!/^[a-z][a-z0-9_]{1,62}$/.test(p.database.ownerRole))throw new TrialError();
-    await client.query(`SET ROLE "${p.database.ownerRole}"`);
-    if((await client.query("select current_user as usr")).rows[0]?.usr!==p.database.ownerRole)throw new TrialError("trial_database_identity_invalid");
     const database=drizzle(client,{schema}),originals=container("originals");
     const readOriginal=async(caseId:number,_category:string,key:string)=>{
       if(!key.startsWith(`cases/${caseId}/prior-art/`))throw new TrialError();await assertTrialPrivate(originals);
       const blob=originals.getBlobClient(key),props=await blob.getProperties();if(!props.etag||!props.contentLength||props.contentLength>1024**2)throw new TrialError();
-      return{bytes:await blob.downloadToBuffer(0,props.contentLength,{conditions:{ifMatch:props.etag}}),contentType:"application/xml"};
+      return{bytes:await blob.downloadToBuffer(0,props.contentLength,{conditions:{ifMatch:props.etag},concurrency:1,maxRetryRequestsPerBlock:0}),contentType:"application/xml"};
     };
     const watch=new ManagedWatchRepository(database,readOriginal),request=input.request;
     if("sourcePath" in request && request.command!=="sample-save"){
@@ -122,7 +124,7 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
       const verify=async()=>{
         await assertTrialPrivate(originals);const props=await blob.getProperties();
         if(props.contentLength!==bytes.length||!props.etag)throw new TrialError();
-        const stored=await blob.downloadToBuffer(0,bytes.length,{conditions:{ifMatch:props.etag}});
+        const stored=await blob.downloadToBuffer(0,bytes.length,{conditions:{ifMatch:props.etag},concurrency:1,maxRetryRequestsPerBlock:0});
         if(trialHash(stored)!==request.sha256)throw new TrialError();
         await saveKohoImportPlan(database,pkg.plan,true,"reused",pkg.managed.sources,pkg.managed.receipt,true);
       };
@@ -146,7 +148,7 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
     const caseId=request.command==="setting-save"?request.setting.caseId:request.caseId;
     const sample=p.samples.find(s=>s.caseId===caseId);if(!sample)throw new TrialError("trial_sample_not_ready");
     if(request.command==="status")return{runs:await watch.history(caseId),deliveries:await new ManagedDeliveryRepository(database).list(caseId),ledgerRevision:(await ledger.read()).state.revision};
-    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),operatorStorageCredential(p,access,"https://management.azure.com/"),access));
+    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),operatorStorageCredential(p,access,"https://management.azure.com/"),access,networkBudget));
     if(request.command==="delivery-reconcile")return{status:await reconcileManagedDelivery(new ManagedDeliveryRepository(database),new ManagedPrivateStorage(container("artifacts")),caseId,request.deliveryId,request.abandonPartial,ledger)};
     requireTrialActive(p);
     if(request.command==="setting-save"){

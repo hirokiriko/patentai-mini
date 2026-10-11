@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ContainerClient } from "@azure/storage-blob";
 import { readTrialPolicy, requireTrialActive, trialPolicyDigest, TrialError, type TrialPolicy } from "./policy";
 import { assertTrialPrivate, trialContainer } from "./storage";
+import { TRIAL_NETWORK_DATABASE_BYTES } from "./network-budget";
 
 const quantity = z.number().int().nonnegative().safe();
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -79,7 +80,7 @@ function checkCaps(s: TrialLedgerState, p: TrialPolicy, now: number) {
   const retained = sum(ops.filter(o => o.phase === "trial"), "yen") + s.costFloor.retained;
   const monthly = sum(ops.filter(o => o.phase === "trial" && o.month === month), "yen") + s.costFloor.months[month];
   if (initial > 4500 || retained >= 9000 || monthly >= 1800 || initial + retained > 15000 ||
-    initial+retained > cost.sharedRemainingYen || sum(ops,"bytes") + 4*1024**2 > 3 * 1024 ** 3 || sum(ops,"dbBytes") > 192*1024**2 ||
+    initial+retained > cost.sharedRemainingYen || sum(ops,"bytes") + 4*1024**2 > 3 * 1024 ** 3 || sum(ops,"dbBytes") + TRIAL_NETWORK_DATABASE_BYTES > 192*1024**2 ||
     ops.reduce((n,o)=>n+o.packages,0)>2||ops.reduce((n,o)=>n+o.sourceBytes,0)>2*1024**3)
     throw new TrialError("trial_budget_stopped");
 }
@@ -95,7 +96,7 @@ export class TrialBlobLedgerIO implements TrialLedgerIO {
       const blob = this.container.getBlobClient(TRIAL_LEDGER_KEY);
       const props = await blob.getProperties({ abortSignal: AbortSignal.timeout(20_000) });
       if (!props.etag || !props.contentLength || props.contentLength > 4 * 1024 ** 2) throw new TrialError();
-      const bytes = await blob.downloadToBuffer(0, props.contentLength, { conditions: { ifMatch: props.etag }, abortSignal: AbortSignal.timeout(20_000) });
+      const bytes = await blob.downloadToBuffer(0, props.contentLength, { conditions: { ifMatch: props.etag }, abortSignal: AbortSignal.timeout(20_000), concurrency:1,maxRetryRequestsPerBlock:0 });
       return { state: trialLedgerSchema.parse(JSON.parse(bytes.toString("utf8"))), etag: props.etag };
     } catch { throw new TrialError("trial_ledger_unavailable"); }
   }

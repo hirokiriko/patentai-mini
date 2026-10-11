@@ -46,6 +46,9 @@ describe("trial manual Job lifecycle",()=>{
     const settled=await startTrialWatch(f.repository,1,f.request.runId,"reconcile",restarted,f.arm);
     expect(settled.status).toBe("completed");expect(f.current().operations[0]).toMatchObject({terminal:true,seconds:60});
     expect(f.arm.mock.calls.filter(c=>c[1]==="POST")).toHaveLength(1);
+    const revision=f.current().revision,calls=f.arm.mock.calls.length;
+    const repeated=await startTrialWatch(f.repository,1,f.request.runId,"reconcile",restarted,f.arm);
+    expect(repeated).toMatchObject({executionStatus:"Terminal"});expect(f.arm).toHaveBeenCalledTimes(calls);expect(f.current().revision).toBe(revision);
   });
   it("closes an unclaimed prepared DB run only with exact terminal execution evidence",async()=>{
     const f=fixture();await startTrialWatch(f.repository,1,f.request.runId,"start",f.ledger,f.arm);

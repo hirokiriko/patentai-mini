@@ -215,17 +215,19 @@ failure and cold-start checks, not a requirement to spend them.
 ## Conservative cost and exact missing reads
 
 Saved exchange rate is 173.305 JPY/USD. Use no free-tier credit without a matched
-meter/path. Saved raw model is 4,288.72326784 yen. The implementation integer reservation model is **4,311 yen**: normal24 x87 + mini12 x13 + Job12 x19 + other1,839. Integer rates are normal434/2,600 and mini130/780 per million tokens, Job38/hour. This includes contingency1,000 yen:
+meter/path. Use the current approved private forecast rather than an older
+document subtotal. Integer rates are normal434/2,600 and mini130/780 per million
+tokens, Job38/hour. The forecast includes contingency1,000 yen:
 guardian 500 + other 500, **not two additional amounts**. Start threshold is
-4,500 yen, absolute initial cap 5,000; the **189 yen** headroom is not a new
-reserve. Existing project forecast 38,331 includes unsettled 11,527, all retained.
+4,500 yen, absolute initial cap 5,000; unused headroom is not a new reserve.
+Existing project reservations and unsettled amounts remain retained.
 October project allocation model remains 38,331 + 5,000 + 10,000 = 53,331 yen. Issue148 initial plus trial/retention remains cumulative15,000 yen; trial/retention10,000 is not a monthly regrant.
 
 | Guardian input | Conservative quantity |
 |---|---:|
 | Compute | rehearsal 300s + main 1,800s + 600s billing allowance; allowance does not extend execution |
-| Blob operations, priced all as writes | 100,000 (48,347 guardian + 5,250 OWNER heartbeat + 40,000 DB permit + 3,000 OWNER control + 3,403 OWNER data) |
-| ARM requests | 7,000 (6,309 guardian + at most600 wrapper + at most32 operator = 6,941; remaining59) |
+| Blob operations, priced all as writes | 100,000 (48,347 guardian + 5,250 OWNER heartbeat + 40,000 DB permit + 3,000 OWNER control + 3,403 shared OWNER/Web/worker data, including Blob ledger traffic) |
+| ARM requests | 7,000 (6,309 guardian + at most600 wrapper + at most91 shared OWNER/Web/worker; the former59 unallocated requests are included, not added) |
 | Journal payload | write ≤64KiB; response-body read ≤64KiB + one overflow-detection byte |
 | Logs / log retention | 0.1GB / 0.3GB-month |
 | ACR incremental / journal retained | 1GB-month / 0.01GB-month |
@@ -237,7 +239,7 @@ At saved rates guardian known subtotal is **173.20968225 yen**, leaving
 guardian pulls ≤2, pushes ≤2), Blob and ARM. Proposed overall transfer envelope
 is 100GiB = guardian 32 + other 68. Header/App/AI response/PDF/CSV/extra-pull
 mapping is not yet demonstrated; **100GiB is not an enforced/verified cap**.
-The 3,403 OWNER data calls reserve at most4MiB in each direction; remaining96,597 Blob calls use64KiB in each direction. Accepted Blob bodies total38.37756348GiB, ARM13.671875GiB and images20GiB. Remaining27.95056GiB must cover mapped stream overrun, headers/TLS, App, AI responses, reports and logs. These application limits are not a wire billing cap. Image layers must be measured before their update. Normal/mini AI request
+The 3,403 data calls share a durable32GiB request-plus-response reservation across OWNER/Web/worker; remaining96,597 Blob calls use64KiB in each direction. Accepted Blob bodies total43.79162598GiB, ARM13.671875GiB and images20GiB. Remaining22.53649902GiB must cover mapped stream overrun, headers/TLS, App, AI responses, reports and logs. This replaces the earlier OWNER-only38.37756348GiB subtotal; do not keep that smaller subtotal after enabling runtime reads. These application limits are not a wire billing cap. Image layers must be measured before their update. Normal/mini AI request
 bodies total at most 3,905,088 bytes for this input; responses are separate.
 
 Define E_guard and E_other as sums over distinct billed paths of bytes/1e9 times
@@ -345,3 +347,44 @@ before expiry, or refuse new paid work at expiry. Do not extend stale evidence
 to formal trial end or invent a fresh monthly allocation.
 
 Directory binding formats are explicit: Python recovery_directory_digest uses SHA256 of the canonical JSON string path; the signed TS recoveryDirectoryDigest uses SHA256 of the raw resolved path. Do not interchange the two.
+
+## Shared lifetime communication counter
+
+The trial-only bootstrap creates `public.trial_network_budget` inside T-DB,
+with two fixed quota rows and append-only request identities. Web and worker
+reuse their existing database credentials. Their grants are SELECT, INSERT and
+UPDATE only on requests, reserved_bytes, observed_bytes and http_status; neither
+gets table DELETE, DDL, or permission to edit binding/slot/request metadata.
+The migrator uses the existing guarded connection. No Azure role or credential
+is added. Standard migrations and production schemas are unchanged.
+
+Every final Blob SDK send, including ledger HEAD/GET/PUT, failed sends, range
+downloads and SDK recovery, first reserves one request and its full accepted
+body ceiling in one SQL statement. ARM Job requests use the same mechanism.
+The shared lifetime allocations are3,403 Blob requests/32GiB and91 ARM
+requests/182MiB; the latter reuses the existing7,000-request/2MiB-per-request
+ARM model, including its former59 unallocated requests.
+The allocation is shared across roles, policies, phases, retries and restarts;
+it is never renewed by a process-local counter or a new ticket. OWNER's existing
+fsynced file counter remains an additional restriction, not a second allocation.
+A separate transaction-status query must prove the reservation committed before
+HTTP begins. SQL timeout, lost acknowledgement, an outer uncommitted transaction,
+missing table or exhausted allowance means no HTTP send. Observation records
+status/accepted bytes but never refunds a request or byte reservation, including
+unknown outcomes. No lease or Blob write is needed to meter a Blob ledger read.
+
+The table allocation is8MiB within the existing192MiB DB growth allowance, not
+additional capacity. Each HTTP attempt uses at most three accounting SQL calls:
+reserve, committed proof, observation. OWNER calls pass the existing10-minute
+database/guardian guards and consume their existing permit-read allowance;
+there is no new deadline or allowance. Initializing the Blob ledger now requires
+the guarded T-DB connection. Worker reuses its one client; Web uses its existing
+two-connection pool. Bootstrap verifies the exact table owner, columns, defaults,
+PK/CHECK constraints and absence of user triggers/inheritance before accepting
+an uncertain DDL readback. No reconciliation recreates or resets quota rows.
+
+The source-enforced ceilings are accepted application bodies, not billed wire
+bytes. Headers, TLS, stream overshoot, App/AI responses, image pulls and transfer
+path pricing still need the current private cost gate. The historical forecast
+above is not a substitute for that gate. Live PG16 behavior, ten-minute timing
+and effective permissions must pass on the exact candidate head before launch.

@@ -12,6 +12,7 @@ import { TrialLedger, trialHash, trialCallYen } from "./ledger";
 import { trialIdentity } from "./identity";
 import { verifyTrialBuild } from "./runtime";
 import type { OperatorAccess } from "./operator-access";
+import { configuredTrialNetworkBudget, type TrialNetworkAllowance } from "./network-budget";
 export { verifyTrialBuild } from "./runtime";
 
 export const trialJobRequestSchema = z.object({ schema:z.literal(1),kind:z.literal("trial-watch"),
@@ -20,20 +21,27 @@ export const trialJobRequestSchema = z.object({ schema:z.literal(1),kind:z.liter
 export type TrialJobRequest = z.infer<typeof trialJobRequestSchema>;
 const VERSION = "2025-07-01";
 export type TrialArm = (suffix: string, method:"GET" | "POST", body?:unknown) => Promise<{status:number;body:unknown}>;
-export function trialArm(p: TrialPolicy, signal: AbortSignal, identity=trialIdentity(p,"web","https://management.azure.com/"),access?:OperatorAccess): TrialArm {
+export function trialArm(p: TrialPolicy, signal: AbortSignal, identity=trialIdentity(p,"web","https://management.azure.com/"),access?:OperatorAccess,networkBudget?:TrialNetworkAllowance): TrialArm {
   return async (suffix,method,body) => {
     if ((suffix === "/start") !== (method === "POST") || !["","/start","/executions"].includes(suffix)&&!/^\/executions\/[a-z0-9-]{1,100}$/.test(suffix)) throw new TrialError();
     const token = await identity.getToken();
     if (method === "POST") { requireTrialActive(p); if (trialPolicyDigest(readTrialPolicy()) !== trialPolicyDigest(p)) throw new TrialError(); }
     const url=`https://management.azure.com${p.jobResourceId}${suffix}?api-version=${VERSION}`;
     access?.arm(url,method);
+    const encoded=body===undefined?undefined:JSON.stringify(body);
+    if(encoded!==undefined&&Buffer.byteLength(encoded)>1024**2)throw new TrialError();
+    const reservation=await (networkBudget??configuredTrialNetworkBudget(p)).reserve({service:"arm",purpose:"job",method,
+      requestBytes:encoded===undefined?0:Buffer.byteLength(encoded),responseLimit:1024**2});
+    if(method==="POST"){requireTrialActive(p);if(trialPolicyDigest(readTrialPolicy())!==trialPolicyDigest(p))throw new TrialError();}
+    access?.check();signal.throwIfAborted();
     const response = await fetch(url, {
       method,headers:{Authorization:`Bearer ${token.token}`,"Content-Type":"application/json"},redirect:"error",
-      signal:AbortSignal.any([signal,AbortSignal.timeout(30_000),...(access?[access.signal]:[])]),...(body === undefined ? {} : {body:JSON.stringify(body)}) });
+      signal:AbortSignal.any([signal,AbortSignal.timeout(30_000),...(access?[access.signal]:[])]),...(encoded === undefined ? {} : {body:encoded}) });
     const reader = response.body?.getReader(), parts:Uint8Array[]=[]; let size=0;
     try { if (reader) for (;;) { const r=await reader.read(); if(r.done)break; size+=r.value.length;
       if(size>1024**2)throw new TrialError(); parts.push(r.value); } }
     finally { if(reader){await reader.cancel().catch(()=>undefined);reader.releaseLock();} }
+    await reservation.observed(size,response.status);
     return {status:response.status,body:size?JSON.parse(Buffer.concat(parts).toString("utf8")):null};
   };
 }
@@ -87,6 +95,9 @@ export async function startTrialWatch(repository: ManagedWatchRepository, caseId
 export async function reconcileTrialWatch(repository:ManagedWatchRepository,request:TrialJobRequest,ledger:TrialLedger,arm:TrialArm){
   const p=ledger.policy,id=trialHash(request.runId),o=await ledger.inspect(id);if(!o)throw new TrialError();
   let execution=o.execution??o.receiptExecution;
+  // Already-confirmed terminal executions never cause another ARM poll or a
+  // duplicate ledger PUT. The inspection above is still metered Storage I/O.
+  if(o.terminal&&execution)return {operationId:request.runId,status:trialPublicStatus(o.status),executionStatus:"Terminal"};
   const match=(value:unknown)=>{
     const parsed=z.object({id:z.string(),name:z.string(),properties:z.object({status:z.string(),startTime:z.string().optional(),endTime:z.string().optional(),
       template:z.object({containers:z.array(containerSchema).length(1)}).passthrough()}).passthrough()}).passthrough().parse(value);

@@ -48,7 +48,8 @@ export class ManagedPrivateStorage{
     const m=validateManagedArtifactManifest(manifest,manifest.caseId,manifest.deliveryId),a=m.artifacts.find(a=>a.kind===kind)!;
     try{await this.assertPrivate();const blob=this.container.getBlobClient(managedArtifactName(m.caseId,m.deliveryId,kind));
       const p=await blob.getProperties({abortSignal:this.signal()});if(p.contentLength!==a.bytes||!p.etag)throw Error();
-      const bytes=await blob.downloadToBuffer(0,a.bytes,{conditions:{ifMatch:p.etag},abortSignal:this.signal()});
+      const bytes=await blob.downloadToBuffer(0,a.bytes,{conditions:{ifMatch:p.etag},abortSignal:this.signal(),
+        ...(trialConfigured()?{concurrency:1,maxRetryRequestsPerBlock:0}:{})});
       if(bytes.length!==a.bytes||sha(bytes)!==a.sha256)throw Error();return bytes;
     }catch(error){
       if(isAzureBlobNotFound(error))return null;

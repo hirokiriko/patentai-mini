@@ -9,6 +9,7 @@ import { TRIAL_START } from "./policy";
 import { trialFixture, signedTrialEnvironment } from "./policy.test-support";
 import { trialStorageHttp } from "./storage";
 import { OwnerStorageBudget, ownerStorageBudget, OWNER_STORAGE_BODY_LIMIT, OWNER_STORAGE_REQUEST_LIMIT } from "./storage-budget";
+import { networkBudgetFixture } from "./network-budget.test-support";
 
 const start = Date.parse(TRIAL_START);
 const cleanup: Array<{ directory: string; access: OperatorAccess; budget?: OwnerStorageBudget }> = [];
@@ -29,7 +30,7 @@ function setup(limits: { requests?: number; reservedBodyBytes?: number } = {}) {
 function client(p: typeof trialFixture, access: OperatorAccess, budget: OwnerStorageBudget | undefined, transport: typeof fetch) {
   return new ContainerClient(`https://${p.storage.account}.blob.core.windows.net/${p.storage.budget}`,
     { getToken: async () => ({ token: "fictional", expiresOnTimestamp: start + 7_200_000 }) },
-    { retryOptions: { maxTries: 1 }, httpClient: trialStorageHttp("budget", p, transport, access, budget) });
+    { retryOptions: { maxTries: 1 }, httpClient: trialStorageHttp("budget", p, transport, access, budget,networkBudgetFixture(p).budget) });
 }
 afterEach(() => {
   for (const item of cleanup.splice(0)) {

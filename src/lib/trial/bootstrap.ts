@@ -6,7 +6,8 @@ import { readMigrationFiles } from "drizzle-orm/migrator";
 import type { Client } from "pg";
 import { z } from "zod";
 import { TrialError, TRIAL_END, type TrialPolicy } from "./policy";
-import { trialHash } from "./ledger";
+import { trialHash,trialBinding } from "./ledger";
+import { TRIAL_NETWORK_DDL,TRIAL_NETWORK_TABLE,TRIAL_ARM_REQUEST_LIMIT,TRIAL_ARM_RESERVED_BYTES,verifyTrialNetworkTable } from "./network-budget";
 import { type OperatorAccess } from "./operator-access";
 import { beginOperatorReceipt } from "./operator-journal";
 import { connectPermitDatabase } from "./database-client";
@@ -227,7 +228,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       if(!(await client.query("select to_regclass('drizzle.__drizzle_migrations') is not null as present")).rows[0].present)return false;
       const rows=(await client.query("select hash,created_at from drizzle.__drizzle_migrations order by created_at")).rows;
       if(rows.length!==migrations.length||rows.some((r,i)=>r.hash!==migrations[i].hash||Number(r.created_at)!==migrations[i].folderMillis))return false;
-      const objects=(await client.query("select c.relname,pg_get_userbyid(c.relowner) as owner from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') order by c.relname")).rows;
+      const objects=(await client.query("select c.relname,pg_get_userbyid(c.relowner) as owner from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname<>$1 order by c.relname",[TRIAL_NETWORK_TABLE])).rows;
       return objects.length===TABLES.length&&objects.every(o=>TABLES.includes(o.relname)&&o.owner===owner);
     };
     await step(activeStep,async()=>{
@@ -255,6 +256,15 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       }};
       await migrate(drizzle(adapter as unknown as Client),{migrationsFolder});
     },migrationValid);
+    // Trial-only durable communication accounting. Standard migrations and
+    // production schemas remain unchanged. Each DDL/seed has the same no-resend
+    // intent/readback discipline as the rest of this fixed installer.
+    await ddl("network-budget-table",TRIAL_NETWORK_DDL,()=>verifyTrialNetworkTable(client,owner));
+    await ddl("network-budget-seed",`INSERT INTO public.trial_network_budget(binding,service,slot,purpose,method,request_bytes,response_limit)
+      VALUES (${literal(trialBinding(p))},'blob',0,'quota','QUOTA',0,0),(${literal(trialBinding(p))},'arm',0,'quota','QUOTA',0,0)`,async()=>{
+      const rows=(await client.query("select service,requests,reserved_bytes from public.trial_network_budget where binding=$1 and slot=0 order by service",[trialBinding(p)])).rows;
+      return rows.length===2&&rows[0].service==="arm"&&rows[1].service==="blob"&&rows.every(r=>Number.isSafeInteger(r.requests)&&r.requests>=0&&r.requests<=(r.service==="arm"?TRIAL_ARM_REQUEST_LIMIT:3403)&&Number(r.reserved_bytes)>=0&&Number(r.reserved_bytes)<=(r.service==="arm"?TRIAL_ARM_RESERVED_BYTES:32*1024**3));
+    });
     // Defaults apply solely to objects created by this new owner inside T-DB.
     for(const kind of ["TABLES","SEQUENCES","FUNCTIONS"] as const) await ddl(`defaults-${kind}`,`ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(owner)} REVOKE ALL ON ${kind} FROM PUBLIC`,async()=>{
       const k=kind==="TABLES"?"r":kind==="SEQUENCES"?"S":"f";
@@ -269,6 +279,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
       for(const table of READ_TABLES)grants.push({user,kind:"TABLE",object:table,privileges:"SELECT"});
     }
     const add=(user:string,object:string,privileges:string)=>grants.push({user,kind:"TABLE",object,privileges});
+    for(const user of [web,worker])add(user,TRIAL_NETWORK_TABLE,"SELECT, INSERT, UPDATE (requests, reserved_bytes, observed_bytes, http_status)");
     add(web,"cases","INSERT, UPDATE (title, updated_at)");
     add(web,"draft_patents","INSERT, UPDATE (extracted_claims_json)");
     add(web,"managed_watch_runs","INSERT");

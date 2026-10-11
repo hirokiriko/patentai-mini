@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -8,10 +8,11 @@ import { bootstrapTrialDatabase } from "../src/lib/trial/bootstrap";
 import { connectPermitDatabase } from "../src/lib/trial/database-client";
 import { DatabasePermit, guardDatabasePermit } from "../src/lib/trial/database-permit";
 import { OperatorAccess, operatorPolicyBinding, operatorTicketDigest, guardOperatorDatabase, type OperatorTicket } from "../src/lib/trial/operator-access";
-import { trialFixture } from "../src/lib/trial/policy.test-support";
+import { trialFixture,signedTrialEnvironment } from "../src/lib/trial/policy.test-support";
 import { TRIAL_START } from "../src/lib/trial/policy";
 import { trialHash } from "../src/lib/trial/ledger";
 import { inspectTrialCloudDatabase } from "../src/lib/patent-watch/managed-cloud-db";
+import { TrialNetworkBudget } from "../src/lib/trial/network-budget";
 vi.mock("../src/lib/trial/database-client",()=>({connectPermitDatabase:vi.fn()}));
 
 /** Uses only the existing isolated localhost PG16 helper (--pull never).
@@ -22,6 +23,7 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("trial bootstrap i
   const dirs:string[]=[];
   beforeAll(async()=>{env=await isolatedPg16(129);},120000);
   afterAll(async()=>{await env?.cleanup();for(const dir of dirs)await rm(dir,{recursive:true,force:true});},60000);
+  afterEach(()=>vi.unstubAllEnvs());
   async function fixture(suffix:string){
     const p=structuredClone(trialFixture),id="11111111-1111-4111-8111-111111111111",start=Date.parse(TRIAL_START),began=performance.now();
     const salt=env.connection.database.slice(-16),prefix=`bt_${suffix}_${salt}`;
@@ -83,6 +85,23 @@ describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("trial bootstrap i
         await expect(web.query("delete from cases where case_id=1")).rejects.toMatchObject({code:"42501"});
         await expect(web.query("insert into koho_import_runs(package_type,source_sha256) values('JPA','fixture')")).rejects.toMatchObject({code:"42501"});
         await expect(web.query(`SET ROLE "${f.policy.database.ownerRole}"`)).rejects.toMatchObject({code:"42501"});
+        for(const[k,v]of Object.entries(signedTrialEnvironment(f.policy)))vi.stubEnv(k,v);
+        const budget=new TrialNetworkBudget(f.policy,web),request={service:"blob" as const,purpose:"budget" as const,method:"GET" as const,requestBytes:0,responseLimit:4096};
+        const reservation=await budget.reserve(request);await reservation.observed(12,200);
+        expect((await web.query("select requests,reserved_bytes::text as bytes from trial_network_budget where service='blob' and slot=0")).rows[0]).toEqual({requests:1,bytes:"4096"});
+        await expect(web.query("update trial_network_budget set binding=repeat('a',64)")).rejects.toMatchObject({code:"42501"});
+        await expect(web.query("delete from trial_network_budget")).rejects.toMatchObject({code:"42501"});
+        await web.query("BEGIN");
+        await expect(budget.reserve({...request,service:"arm",purpose:"job"})).rejects.toThrow("trial_network_budget_unavailable");
+        await web.query("ROLLBACK");
+        expect((await web.query("select requests from trial_network_budget where service='arm' and slot=0")).rows[0].requests).toBe(0);
+        const second=await f.localClient(f.policy.database.webUser,f.policy.database.database,f.credentials.webPassword);await second.connect();
+        try{
+          await web.query("update trial_network_budget set requests=3402 where service='blob' and slot=0");
+          const results=await Promise.allSettled([budget.reserve(request),new TrialNetworkBudget(f.policy,second).reserve(request)]);
+          expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(1);
+          await expect(new TrialNetworkBudget(f.policy,second).reserve(request)).rejects.toThrow();
+        }finally{await second.end();}
       }finally{await web.end();}
       const worker=await f.localClient(f.policy.database.workerUser,f.policy.database.database,f.credentials.workerPassword);await worker.connect();
       try{

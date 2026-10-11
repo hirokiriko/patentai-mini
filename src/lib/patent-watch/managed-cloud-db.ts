@@ -38,9 +38,9 @@ export async function inspectManagedCloudDatabase(client: Client, target: Manage
 
 // Trial workers claim an existing run. They do not create runs, mutate settings,
 // review findings, or use the standard worker's job-start reservation table.
-const trialReadTables = ["cases", "draft_patents", "prior_art_documents", "koho_import_documents", "koho_import_runs", "managed_publication_claims",
+const trialReadTables = ["trial_network_budget", "cases", "draft_patents", "prior_art_documents", "koho_import_documents", "koho_import_runs", "managed_publication_claims",
   "managed_import_receipts", "managed_distribution_snapshots", "managed_watch_settings", "managed_watch_runs", "managed_watch_dispatches", "managed_watch_findings", "managed_watch_deliveries"];
-const trialInsertTables = ["managed_watch_dispatches", "managed_watch_findings"];
+const trialInsertTables = ["trial_network_budget", "managed_watch_dispatches", "managed_watch_findings"];
 const trialUpdateTables = ["managed_watch_runs", "managed_watch_dispatches"];
 const trialSequences = ["managed_watch_dispatches_dispatch_id_seq", "managed_watch_findings_finding_id_seq"];
 
@@ -62,6 +62,11 @@ export async function inspectTrialCloudDatabase(client: Client, target: ManagedC
     (select bool_and(has_table_privilege('public.'||t,'SELECT')) from unnest($1::text[]) t) as read_required,
     (select bool_and(has_table_privilege('public.'||t,'INSERT')) from unnest($2::text[]) t) as insert_required,
     (select bool_and(has_table_privilege('public.'||t,'UPDATE')) from unnest($3::text[]) t) as update_required,
+    (select bool_and(has_column_privilege('public.trial_network_budget',c,'UPDATE'))
+      from unnest(array['requests','reserved_bytes','observed_bytes','http_status']) c)
+      and not has_table_privilege('public.trial_network_budget','UPDATE')
+      and not exists(select 1 from pg_attribute where attrelid='public.trial_network_budget'::regclass and attnum>0 and not attisdropped
+        and attname<>all(array['requests','reserved_bytes','observed_bytes','http_status']) and has_column_privilege(attrelid,attnum,'UPDATE')) as network_columns,
     (select bool_and(has_sequence_privilege('public.'||s,'USAGE')) from unnest($4::text[]) s) as sequence_required,
     not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f') and (
@@ -71,7 +76,7 @@ export async function inspectTrialCloudDatabase(client: Client, target: ManagedC
           (has_table_privilege(c.oid,'SELECT') or has_any_column_privilege(c.oid,'SELECT'))) or
         ((n.nspname<>'public' or c.relname<>all($2::text[])) and
           (has_table_privilege(c.oid,'INSERT') or has_any_column_privilege(c.oid,'INSERT'))) or
-        ((n.nspname<>'public' or c.relname<>all($3::text[])) and
+        ((n.nspname<>'public' or (c.relname<>all($3::text[]) and c.relname<>'trial_network_budget')) and
           (has_table_privilege(c.oid,'UPDATE') or has_any_column_privilege(c.oid,'UPDATE'))))) as tables_bounded,
     not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind='S' and (
@@ -88,7 +93,7 @@ export async function inspectTrialCloudDatabase(client: Client, target: ManagedC
         (p.proowner=(select oid from pg_roles where rolname=current_user) or (p.prosecdef and has_function_privilege(p.oid,'EXECUTE')))) as no_definer`,
     [trialReadTables, trialInsertTables, trialUpdateTables, trialSequences])).rows[0];
   check(access?.no_create && access.read_required && access.insert_required && access.update_required && access.sequence_required &&
-    access.tables_bounded && access.sequences_bounded && access.no_grant_option && access.no_definer);
+    access.tables_bounded && access.sequences_bounded && access.no_grant_option && access.no_definer && access.network_columns);
 }
 
 /** Uses only the fixed app LOGIN and bounded TLS connection, never a generic DATABASE_URL. */
