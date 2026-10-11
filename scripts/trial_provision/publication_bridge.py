@@ -86,9 +86,9 @@ def compose_configuration(publication, journal, inputs):
                       'db_secret_digests': {'web': refs['trial-web-database']['sha256'],
                                            'worker': refs['trial-worker-database']['sha256']}})
     _validate_windows(config)
-    need((parse(windows['guardian_window']['end']) -
-          parse(windows['guardian_window']['start'])).total_seconds() <= 1800
-         and parse(preparation['publish_until']) <= parse(windows['owner_window']['end'])
+    # These are the approved IAM windows (guardian <=8h, OWNER <=1h),
+    # validated above. The main Job's independent runtime stays at 1800s.
+    need(parse(preparation['publish_until']) <= parse(windows['owner_window']['end'])
          and parse(windows['owner_window']['start']) < parse(inputs['deadline'])
          <= parse(windows['owner_window']['end']))
     # Refuse invalid resource scopes before freezing any output or intent.

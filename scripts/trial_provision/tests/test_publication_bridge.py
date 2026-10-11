@@ -433,13 +433,30 @@ class PublicationBridgeTests(unittest.TestCase):
         self.assertFalse(self.values('provision_bridge_intent'))
         self.assert_no_external_calls()
 
-    def test_minimum_windows_and_deadline_cannot_be_extended(self):
+    def test_approved_iam_windows_preserve_separate_job_runtime(self):
+        inputs = deepcopy(self.inputs)
+        inputs['plan_bindings']['guardian_window']['end'] = '2026-10-11T09:00:00Z'
+        inputs['plan_bindings']['owner_window']['end'] = '2026-10-11T02:01:00Z'
+        reference = self.fixture.write('approved-iam-windows.json', inputs)
+        self.assertEqual('provision_prepared', self.bind(reference)['status'])
+        output = json.loads(self.output.read_bytes())
+        self.assertEqual(inputs['plan_bindings'], output['plan_bindings'])
+        operations = self.values('plan')[0]['operations']
+        self.assertEqual(1800, operations['job']['body']['properties']['configuration']['replicaTimeout'])
+        self.assertEqual(300, operations['guard']['body']['properties']['configuration']['replicaTimeout'])
+        self.assert_prepared_once()
+
+    def test_iam_limits_and_publication_deadline_are_not_extended(self):
         invalid = []
-        for key, end in (('guardian_window', '2026-10-11T01:30:01Z'),
+        for key, end in (('guardian_window', '2026-10-11T09:00:01Z'),
                          ('owner_window', '2026-10-11T01:09:59Z')):
             value = deepcopy(self.inputs)
             value['plan_bindings'][key]['end'] = end
             invalid.append(value)
+        value = deepcopy(self.inputs)
+        value['plan_bindings']['guardian_window']['end'] = '2026-10-11T09:00:00Z'
+        value['plan_bindings']['owner_window']['end'] = '2026-10-11T02:01:01Z'
+        invalid.append(value)
         for deadline in ('2026-10-11T01:01:00Z', '2026-10-11T01:20:01Z'):
             invalid.append(dict(self.inputs, deadline=deadline))
         for index, value in enumerate(invalid):

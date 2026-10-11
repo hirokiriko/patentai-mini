@@ -23,6 +23,7 @@ class _Clock:
         past += [parse(v['observed_at']) for v in journal.values('progress') if 'observed_at' in v]
         now = clock.utc()
         self.wall, self.tick = max([now] + past), clock.monotonic()
+        self.observed_wall = now
         self.unsafe = bool(journal.values('clock_revoked'))
         if now < self.wall:
             self._revoke()
@@ -32,8 +33,12 @@ class _Clock:
             self.journal.append('clock_revoked', {'at': self.wall.isoformat()})
     def utc(self):
         now, tick = self.clock.utc(), self.clock.monotonic()
-        if now < self.wall or tick < self.tick:
+        # The effective deadline clock may lead the wall clock between coarse
+        # UTC ticks. Compare rollback with the previous raw UTC observation,
+        # while retaining monotonic elapsed time for every deadline check.
+        if now < self.observed_wall or tick < self.tick:
             self._revoke()
+        self.observed_wall = now
         self.wall, self.tick = max(now, self.wall + timedelta(seconds=max(0, tick - self.tick))), tick
         return self.wall
     def monotonic(self): return self.clock.monotonic()

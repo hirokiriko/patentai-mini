@@ -213,6 +213,33 @@ class WorkflowTests(unittest.TestCase):
         self.h.on_sleep=rollback
         self.h.worker.poll.side_effect=None;self.h.worker.poll.return_value=None
         self.assertFalse(self.h.workflow.run()['workComplete']);self.h.worker.stop.assert_called()
+    def test_raw_clock_rollback_during_status_cannot_start_db_worker(self):
+        real=self.h.session.action;injected=[]
+        def action(name):
+            value=real(name)
+            if name in ('status','heartbeat') and value['snapshot'].get('usage_allowed') and not injected:
+                self.h.clock.wall-=timedelta(microseconds=1);injected.append(True)
+            return value
+        self.h.session.action=action
+        result=self.h.workflow.run()
+        self.assertTrue(injected);self.assertFalse(result['workComplete'])
+        self.h.worker.start.assert_not_called();self.h.worker.permit.assert_not_called()
+        self.assertTrue(self.h.receipt.find('close_intent'))
+    def test_monotonic_rollback_during_status_stops_worker_without_new_permit(self):
+        real=self.h.session.action;injected=[]
+        self.h.worker.poll.side_effect=None;self.h.worker.poll.return_value=None
+        def action(name):
+            value=real(name)
+            if name in ('status','heartbeat') and self.h.worker.start.called and not injected:
+                current=self.h.clock.monotonic()
+                self.h.clock.monotonic=lambda:current-1;injected.append(self.h.worker.permit.call_count)
+            return value
+        self.h.session.action=action
+        result=self.h.workflow.run()
+        self.assertTrue(injected);self.assertFalse(result['workComplete'])
+        self.h.worker.start.assert_called_once();self.h.worker.stop.assert_called()
+        self.assertEqual(injected[0],self.h.worker.permit.call_count)
+        self.assertTrue(self.h.receipt.find('close_intent'))
     def test_parent_loss_lease_expires_and_guardian_cleans_without_local_loop(self):
         self.h.journal.initialize(self.h.state);self.h.clock.advance(2);self.h.runner.opening_gate()
         self.h.session.action('open');self.h.runner.step()

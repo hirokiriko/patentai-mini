@@ -32,6 +32,7 @@ class Controller:
         historical=[parse(v['at']) for v in journal.values('intent')]
         historical += [parse(v['at']) for v in journal.values('clock_observation')]
         self.wall,self.mono=max([actual]+historical),clock.monotonic()
+        self.observed_wall=actual
         self.clock_unsafe=bool(journal.values('clock_revoked'))
         if actual<self.wall:self._revoke_clock()
 
@@ -43,7 +44,10 @@ class Controller:
     def now(self):
         actual=self.clock.utc();tick=self.clock.monotonic()
         derived=self.wall+timedelta(seconds=max(0,tick-self.mono))
-        if actual<self.wall or tick<self.mono:self._revoke_clock()
+        # Elapsed monotonic time can advance self.wall between raw UTC ticks.
+        # That conservative deadline estimate is not a clock rollback.
+        if actual<self.observed_wall or tick<self.mono:self._revoke_clock()
+        self.observed_wall=actual
         self.wall,self.mono=max(actual,derived),tick
         return self.wall
 

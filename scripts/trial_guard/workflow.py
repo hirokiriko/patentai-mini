@@ -114,14 +114,17 @@ class Workflow:
         self.r,self.starter,self.session_factory,self.worker=receipt,starter,session_factory,worker
         self.clock,self.sleep,self.report=clock,sleep,report
         self.wall,self.mono=clock.utc(),clock.monotonic()
+        self.observed_wall=self.wall
         self.closing=False;self.worker_started=False;self.work_complete=False;self.worker_stopped=True
         self.interrupted=False;self.warned=False;self.session=None;self.failures=0
         self.result=None
 
     def now(self):
-        actual=self.clock.utc();derived=self.wall+timedelta(seconds=max(0,self.clock.monotonic()-self.mono))
-        if actual<self.wall:self.closing=True
-        self.wall,self.mono=max(actual,derived,self.wall),self.clock.monotonic()
+        actual=self.clock.utc();tick=self.clock.monotonic()
+        derived=self.wall+timedelta(seconds=max(0,tick-self.mono))
+        if actual<self.observed_wall or tick<self.mono:self.closing=True
+        self.observed_wall=actual
+        self.wall,self.mono=max(actual,derived,self.wall),tick
         return self.wall
 
     def interrupt(self):
@@ -193,10 +196,10 @@ class Workflow:
 
     def _permit(self,s):
         if any(s.get(k)!=self.expected.get(k) for k in ('binding_digest','lifecycle_id','rule_id','cleanup_at','cloud_guard')):raise Denied('snapshot_binding')
-        self.wall=max(self.now(),parse(s['last_now']))
-        if not may_use(s,at=self.now().isoformat(),lifecycle_id=self.expected['lifecycle_id']):return None
+        at=self.wall=max(self.now(),parse(s['last_now']))
+        if self.closing or not may_use(s,at=at.isoformat(),lifecycle_id=self.expected['lifecycle_id']):return None
         until=parse(s['use_lease_until']);begin=parse(s['use_lease_from'])
-        if until-begin>timedelta(seconds=10) or until>self.cutoff or until-self.now()<timedelta(seconds=3):return None
+        if until-begin>timedelta(seconds=10) or until>self.cutoff or until-at<timedelta(seconds=3):return None
         return {'type':'permit','lifecycleId':s['lifecycle_id'],'bindingDigest':s['binding_digest'],
             'guardianNonce':s['cloud_guard']['nonce'],'useUntil':parse(s['cleanup_at']).isoformat().replace('+00:00','Z'),
             'permitUntil':until.isoformat().replace('+00:00','Z')}
@@ -233,6 +236,7 @@ class Workflow:
             except Exception:self.closing=True;self._event('open_unknown');self._abort()
             return
         permit=self._permit(s)
+        if self.closing:self._abort();return
         if not permit:return
         if not self.worker_started:
             if not self.r.find('open_ack') or self.r.find('work_intent'):raise Denied('work_resume_denied')

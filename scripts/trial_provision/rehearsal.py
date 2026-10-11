@@ -60,6 +60,7 @@ class GuardianRehearsalAdapter:
         self.credential, self.http, self.clock = credential, http, clock
         self.before_send, self.checkpoint, self.session_factory = before_send, checkpoint, session_factory
         self.wall, self.mono = clock.utc(), clock.monotonic()
+        self.observed_wall = self.wall
         self.unsafe, self.attempted = False, set()
         self.operations = {}
         self._initial_send = None
@@ -137,8 +138,9 @@ class GuardianRehearsalAdapter:
 
     def _now(self):
         now, mono = self.clock.utc(), self.clock.monotonic()
-        if now < self.wall or mono < self.mono:
+        if now < self.observed_wall or mono < self.mono:
             self.unsafe = True
+        self.observed_wall = now
         self.wall = max(now, self.wall + timedelta(seconds=max(0, mono - self.mono)))
         self.mono = mono
         return self.wall

@@ -435,6 +435,11 @@ OWNER-only ACL. A restarted process cannot repeat an attempted write. A matching
 GET after an unknown write does not establish ownership. Known asynchronous
 responses retain their exact operation URL for bounded GET-only continuation.
 Detected clock rollback remains recorded across restarts and blocks new writes.
+Rollback detection compares consecutive raw UTC observations. Deadline checks
+still take the maximum of UTC and monotonic elapsed time: a repeated UTC tick
+must not be mistaken for rollback merely because that conservative deadline
+clock has advanced. Actual UTC or monotonic rollback still stops new work.
+Previously recorded revocations are not cleared or reinterpreted by this fix.
 Exact-owned cleanup continues after its original removal due time; this does
 not extend a grant, credential or trial-use window.
 
@@ -503,6 +508,10 @@ same journal fixes the input, image receipts, output hash and completed plan.
 An interrupted run resumes only that exact binding; unknown publication or an
 unowned output remains a hold. This bridge performs no Cloud request and carries
 forward the already-fixed publication live flag without enabling it itself.
+The bridge uses the approved IAM bounds of eight hours for guardian access and
+one hour for OWNER input access. These windows do not change the separate
+300-second rehearsal, 1800-second main Job or 600-second DB work limits. Once
+prepared, the exact windows remain immutable; this is not a renewal path.
 
 These offline tests establish the compiler, transport and restart behavior.
 The cross-entrypoint contract now also drives the actual CLI, resolver and
