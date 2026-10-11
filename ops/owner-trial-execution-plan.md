@@ -403,3 +403,130 @@ bytes. Headers, TLS, stream overshoot, App/AI responses, image pulls and transfe
 path pricing still need the current private cost gate. The historical forecast
 above is not a substitute for that gate. Live PG16 behavior, ten-minute timing
 and effective permissions must pass on the exact candidate head before launch.
+
+## Private provisioning controller
+
+`python -m scripts.trial_provision` accepts one JSON command on private stdin.
+Run live commands with the existing Azure CLI Python described above. The
+command supplies an OWNER-only configuration-file path, an action and, when
+needed, an operation slot. It never accepts an arbitrary resource URL, cloud
+request body, token or credential command. Output contains only classifications
+and aggregate counts. Keep configuration, receipts, identifiers and IP addresses
+out of public issues, PRs and cloud research chats.
+
+The pure compiler verifies the six original authority files and constructs nine
+resource operations, seven role definitions, eighteen assignments and four Entra
+operations. Resource creation and grants follow their actual dependencies;
+there is no requirement to finish every resource before creating every grant.
+Noncredential GUIDs are allocated once in the private journal. Graph IDs are
+accepted only from a known create acknowledgement plus exact metadata readback.
+
+`prepare` and `status` do not acquire a credential or make an HTTP request.
+Live `create`, `update`, `reconcile` and `cleanup` require the configured exact
+head, successful required CI jobs, tracked source bytes and fixed authority
+hashes. Preparation's OWNER match verifies configuration, not a live login.
+The actual credential checks the normal OWNER token's tenant and principal
+before each resource request. A missing CLI, unverified token or changed source
+does not select another authentication chain.
+
+`trial-provision.jsonl` records durable allocation, immutable plans, write intent
+and acknowledgement/readback progress under an OS writer lock and protected
+OWNER-only ACL. A restarted process cannot repeat an attempted write. A matching
+GET after an unknown write does not establish ownership. Known asynchronous
+responses retain their exact operation URL for bounded GET-only continuation.
+Detected clock rollback remains recorded across restarts and blocks new writes.
+Exact-owned cleanup continues after its original removal due time; this does
+not extend a grant, credential or trial-use window.
+
+Provisioning, Graph, registry control and guardian OWNER traffic share the
+existing lifetime control allowance. The physical `trial-control-budget.jsonl`
+is seeded from the private counted-history review (including conservative
+holds), then charged and fsynced before every send. It is not a second budget.
+Guardian and OWNER recovery require the same nonempty existing file, binding
+and seed; neither can recreate an absent counter or refund an unknown request.
+
+The App starts with internal ingress and the fixed runtime database secret.
+After the App hostname, managed identities and Entra application are known,
+`bind-runtime` validates the existing signed policy using the repository's
+policy verifier and saves a separate immutable binding. The original plan does
+not change. Runtime template updates precede the one Entra secret creation.
+That secret stays in memory during direct delivery to the fixed App platform
+secret. A lost delivery is unresolved and does not generate another secret.
+OWNER-only authentication, assignment-required and one audience/callback are
+verified before enabling external ingress. The final FQDN must match the
+callback derived from the same App's observed internal FQDN, following the
+[documented ACA naming rule](https://learn.microsoft.com/en-us/azure/container-apps/connect-apps#external-and-internal-fqdns).
+
+Cleanup operations are generated from confirmed creation and update receipts.
+They close external ingress before removing authentication references and the
+one credential. Assignment/custom-role, App/Job and registry cleanup require
+their corresponding exact ownership and reference proofs. Original documents,
+artifacts, budget state and the guardian journal are retained; the controller
+does not expose automatic container deletion. The 300-second guardian rehearsal
+proves bounded execution, journal CAS and lease release. It does not claim a
+live firewall DELETE was tested. The same Job's 1,800-second configuration is
+permitted only after that confirmed rehearsal.
+
+`bind-bootstrap` imports the actual guarded Node result and the closed guardian
+session from protected local files. It rechecks the final signed policy, the
+measured database baseline and verified SQL step receipts before allowing either
+runtime template update. Reconciliation proves the observed database state; it
+does not manufacture ownership for later database deletion. The normal CLI
+Python executable is fixed in the Node request and invoked without a shell or
+PATH fallback. Both recovery directories are checked before launching Node.
+On Windows, inherited files are accepted only when their actual ACL and their
+protected parent directory grant access solely to the current OWNER.
+
+`registry-cleanup` requires a known image publication and authenticated repository
+absence evidence from the same journal. It checks all images in the fixed App,
+worker Job and guardian Job, including inactive revisions and active executions,
+before deleting the exact digest. Pagination, errors and unknown image references
+cannot count as zero references. A known delete acknowledgement can be checked
+after the original removal due time; an unknown delete is not retried.
+
+The publication entry point prepares the fixed two image slots before the
+resource plan exists. Each approved local build is bound to its actual image ID
+and exact source head. One Docker push records its positive acknowledgement and
+the registry's actual manifest digest; authenticated readback checks the manifest
+body and its config image ID. Only those confirmed results populate the later
+resource plan. A local image ID is never substituted for a registry manifest
+digest. Publication and provisioning reuse the same private journal and lifetime
+control counter. The runtime image is retained; only the dedicated guardian image
+has the immediate cleanup route described above.
+
+After both image slots have known publication and readback receipts, the
+publication CLI's `bind-provision` action takes a SHA256-bound `provision` input
+reference. It validates the approved windows and resource/core plan, writes the
+OWNER-only `provision-config.json` without replacing an existing file, then
+releases its locks and invokes the actual normal `prepare` entry point. The
+same journal fixes the input, image receipts, output hash and completed plan.
+An interrupted run resumes only that exact binding; unknown publication or an
+unowned output remains a hold. This bridge performs no Cloud request and carries
+forward the already-fixed publication live flag without enabling it itself.
+
+These offline tests establish the compiler, transport and restart behavior.
+The cross-entrypoint contract now also drives the actual CLI, resolver and
+authentication adapters through the one secret callback, OWNER authentication,
+external ingress and exact authentication cleanup after expiry. Its HTTP,
+credential and Node boundaries use fictional fixtures; it is not live acceptance.
+
+New Entra writes and authentication installation must fit the OWNER input
+window. The credential expiry and approved cleanup due date remain unchanged.
+A previously saved plan with a wider creation deadline is refused rather than
+rewritten or adopted. Transport checks the absolute deadline again after durable
+request accounting. Resource mutations also recheck current-object and required
+zero-reference evidence at that final send boundary. Location polling accepts a
+final resource only when its fixed target and body match; contradictory or
+nonterminal deletion responses cannot turn a later 404 into completed cleanup.
+
+A recorded positive write acknowledgement can continue fixed-target GET or LRO
+verification after its creation window closes. Each attempt remains bounded to
+30 seconds, is charged to the same lifetime counter and retains the original
+request and ownership binding. An unknown initial response cannot use this
+route, and recovery cannot resend a mutation or redeliver an Entra secret.
+The completed readback then permits only the previously defined cleanup path.
+
+Actual resource admission, effective permissions, Job execution, database
+bootstrap, OWNER browser login, real AI, PDF/CSV row/page comparison, expiry
+refusal, cold start and invoice reconciliation still require separate recorded
+live evidence. Do not mark these complete from a prepared plan or unit tests.

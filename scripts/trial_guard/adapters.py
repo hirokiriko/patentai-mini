@@ -118,7 +118,8 @@ class AzureCredential:
         self.http, self.env = http, os.environ if environment is None else environment
 
     def token(self, audience, deadline):
-        if audience not in ('https://management.azure.com/', 'https://storage.azure.com/'):
+        if audience not in ('https://management.azure.com/', 'https://storage.azure.com/') and not (
+                self.mode == 'owner' and audience == 'https://graph.microsoft.com/'):
             raise Denied('token_audience')
         if self.mode == 'owner':
             try:
@@ -151,10 +152,24 @@ class AzureCredential:
             # Public Azure ARM has these two registered resource identifiers.
             # Only canonical strings (with zero or one final slash) are accepted;
             # Storage retains its single resource and never receives ARM aliases.
-            audiences = ('https://management.azure.com', 'https://management.azure.com/',
-                'https://management.core.windows.net', 'https://management.core.windows.net/') if audience == 'https://management.azure.com/' else (
-                'https://storage.azure.com', 'https://storage.azure.com/')
+            # Graph's public API GUID is confirmed by the Microsoft MSAL team:
+            # https://github.com/AzureAD/microsoft-authentication-library-for-js/issues/5672
+            # Claims can identify a resource by URI or client ID:
+            # https://learn.microsoft.com/entra/identity-platform/access-token-claims-reference
+            audiences = {
+                'https://management.azure.com/': ('https://management.azure.com', 'https://management.azure.com/',
+                    'https://management.core.windows.net', 'https://management.core.windows.net/'),
+                'https://storage.azure.com/': ('https://storage.azure.com', 'https://storage.azure.com/'),
+                'https://graph.microsoft.com/': ('https://graph.microsoft.com', 'https://graph.microsoft.com/',
+                    '00000003-0000-0000-c000-000000000000'),
+            }[audience]
             if not isinstance(token,str) or not 0<len(token)<=32768 or any(c.isspace() for c in token):
+                raise ValueError()
+            # This private CLI identity-binding check does not replace Graph's
+            # resource-side validation. Graph tokens can be opaque/proprietary;
+            # retain the existing claim checks and stop on unsupported formats.
+            # https://learn.microsoft.com/entra/identity-platform/access-tokens
+            if audience == 'https://graph.microsoft.com/' and len(token.split('.')) != 3:
                 raise ValueError()
             claims = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==='))
             if claims['oid'].lower() != self.principal or claims['tid'].lower() != self.tenant or claims['aud'] not in audiences or claims['exp'] <= time.time() + deadline.remaining():

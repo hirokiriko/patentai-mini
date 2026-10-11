@@ -4,6 +4,8 @@ The sole real child is a temporary Python program that sleeps without reading
 stdin. It holds no credentials, database connection, or external capability.
 """
 import json
+import hashlib
+import os
 import sys
 import tempfile
 import threading
@@ -15,10 +17,11 @@ from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from .adapters import Deadline, digest, encoded
-from .execution import AzureJobStarter, CountedHttp, NodeWorker
+from .execution import AzureJobStarter, CountedHttp, NodeWorker, open_control_budget, execute, validate_worker_artifact, execution_binding, guardian_configuration
 from .lifecycle import Denied
 from .test_lifecycle import Clock
 from .workflow import Receipt
+from scripts.trial_provision.journal import ControlBudget, CountedControlHttp
 
 
 class ArmFixture:
@@ -93,6 +96,56 @@ class AzureJobExecutionTests(unittest.TestCase):
         self.credential_class = self.credentials.start()
         self.credential_class.return_value.token.return_value = 'fictional-token'
         self.addCleanup(self.credentials.stop)
+
+    def main_configuration(self,f):
+        c=f.config;j=c['guardian_job'];base=deepcopy(f.template)
+        base['containers'][0].update(command=['python','-m','trial_guard'],resources={'cpu':0.25,'memory':'0.5Gi'},env=[])
+        f.template=base;j['template']=deepcopy(base);j['template_digest']=digest(base)
+        f.job_reply['properties']['template']=deepcopy(base)
+        c.update(binding={'mode':'guardian','lifecycle_id':'fixed-life','rule_id':'fixed-rule'},owner_access={'fixed':'owner'},cleanup_targets_digest='b'*64,journal_url='https://fictional.blob.core.windows.net/guard/state.json')
+        c['cloud_guard']={'execution_id':f.job+'/executions/$CURRENT','replica_name':'$CURRENT','image_digest':j['image_digest'],
+            'principal_id':j['principal_id'],'nonce':'fictional-nonce-with-length','job_started_at':'$CURRENT','job_deadline':'$CURRENT'}
+        fixed={k:'$CURRENT' for k in ('prepared_at','cleanup_at','deadline','ready_until')}
+        fixed.update(lifecycle_id='fixed-life',rule_id='fixed-rule',cleanup_strategy='single_job',owner_access=deepcopy(c['owner_access']),
+            cleanup_targets_digest=c['cleanup_targets_digest'],cloud_guard=deepcopy(c['cloud_guard']),successor_id=None,successor_nonce=None,successor_runtime=None)
+        c['guardian_config']={k:deepcopy(c[k]) for k in ('live_enabled','tenant_id','journal_url','prearm_until','seed_not_before','binding')}
+        c['guardian_config'].update(mode='main',job_name='guard',immutable=fixed)
+        f.execution_reply['properties']['template']=f.starter()._template(f.request_id)
+
+    def test_main_start_supplies_exact_guardian_override_without_changing_base_template(self):
+        self.main_configuration(self.f)
+        result=self.f.starter().start(self.f.request_id)
+        self.assertEqual(result['execution_id'],self.f.execution_id)
+        env=self.f.posts()[0][2]['containers'][0]['env']
+        self.assertEqual(json.loads(env[0]['value']),self.f.config['guardian_config'])
+        self.assertEqual(env[1],{'name':'TRIAL_GUARD_REQUEST_ID','value':self.f.request_id})
+        self.assertEqual(self.f.config['guardian_job']['template']['containers'][0]['env'],[])
+
+    def test_main_wrong_owner_binding_placeholder_scope_or_extra_field_blocks_credentials(self):
+        self.main_configuration(self.f)
+        for path,value in ((('mode',),'rehearsal'),(('tenant_id',),'different'),(('immutable','owner_access'),{}),
+                (('immutable','cloud_guard','execution_id'),self.f.execution_id),(('immutable','deadline'),'fictional'),(('extra',),True)):
+            c=deepcopy(self.f.config);target=c['guardian_config']
+            for key in path[:-1]:target=target[key]
+            target[path[-1]]=value;self.credential_class.reset_mock()
+            with self.assertRaisesRegex(Denied,'guardian_configuration'):AzureJobStarter(c,self.f.wire,self.f.clock)
+            self.credential_class.assert_not_called()
+
+    def test_main_unknown_start_recovery_rejects_wrong_guardian_override_without_resend(self):
+        self.main_configuration(self.f);starter=self.f.starter();self.f.post_error=TimeoutError()
+        with self.assertRaises(TimeoutError):starter.start(self.f.request_id)
+        env=self.f.execution_reply['properties']['template']['containers'][0]['env']
+        env[0]['value']='{}'
+        with self.assertRaisesRegex(Denied,'start_reconciliation_unknown'):starter.recover(self.f.request_id,None)
+        self.assertEqual(len(self.f.posts()),1)
+
+    def test_main_oversized_config_and_nonfixed_container_are_rejected(self):
+        self.main_configuration(self.f);c=deepcopy(self.f.config)
+        c['binding']['large']='x'*65536;c['guardian_config']['binding']=deepcopy(c['binding'])
+        with self.assertRaisesRegex(Denied,'guardian_configuration'):guardian_configuration(c)
+        self.f.config['guardian_job']['template']['containers'][0]['env']=[{'name':'OTHER','value':'x'}]
+        self.f.config['guardian_job']['template_digest']=digest(self.f.config['guardian_job']['template'])
+        with self.assertRaisesRegex(Denied,'job_template'):self.f.starter()._template(self.f.request_id)
 
     def test_exact_job_template_identity_and_replica_are_verified_before_runtime_is_returned(self):
         runtime = self.f.starter().start(self.f.request_id)
@@ -244,6 +297,218 @@ class AzureJobExecutionTests(unittest.TestCase):
                 self.assertEqual(second.count('owner_arm'), 1)
             finally: second.close()
             wire.assert_called_once()
+
+
+class SharedLifetimeBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        path=str(Path(self.temp.name).resolve())
+        self.config={'live_enabled':True,'owner_id':'11111111-1111-4111-8111-111111111111',
+            'control_budget':{'directory':path,'directory_digest':digest(path),
+                'binding':{'manifest_sha256':'a'*64,'owner_id':'11111111-1111-4111-8111-111111111111',
+                    'task_id':'fictional-lifetime-task','source_sha256':'b'*64},
+                'seed':{'owner_arm':128,'owner_control_blob':32,'heartbeat_blob':0}}}
+
+    def establish(self):
+        c=self.config['control_budget']
+        return ControlBudget(c['directory'],c['directory_digest'],c['binding'],seed=c['seed'])
+
+    def execution_config(self):
+        value=deepcopy(self.config)
+        value.update({key:{} for key in ('guardian_job','binding','owner_access')})
+        value.update(cleanup_strategy='single_job',journal_url='fictional-journal',prearm_until='fictional',
+            seed_not_before='fictional',worker={'payload':{'requests':[],'azureCliPython':str(Path(sys.executable).resolve())}},
+            recovery_directory=self.config['control_budget']['directory'],
+            recovery_directory_digest=self.config['control_budget']['directory_digest'])
+        return value
+
+    def test_guardian_cannot_initialize_or_reset_missing_lifetime_file(self):
+        with self.assertRaisesRegex(Denied,'shared_control_budget_unconfirmed'):
+            open_control_budget(self.config)
+        self.assertFalse((Path(self.temp.name)/'trial-control-budget.jsonl').exists())
+        changed=deepcopy(self.config);changed.pop('control_budget')
+        with self.assertRaisesRegex(Denied,'shared_control_budget_unconfirmed'):
+            open_control_budget(changed)
+
+    def test_missing_existing_lock_is_not_recreated_by_guardian(self):
+        with self.establish():pass
+        lock=Path(self.temp.name)/'trial-control-budget.lock'
+        lock.unlink()
+        with self.assertRaises(Denied):open_control_budget(self.config)
+        self.assertFalse(lock.exists())
+
+    def test_empty_existing_ledger_is_not_reinitialized(self):
+        with self.establish():pass
+        ledger=Path(self.temp.name)/'trial-control-budget.jsonl'
+        ledger.write_bytes(b'')
+        with self.assertRaises(Denied):open_control_budget(self.config)
+        self.assertEqual(b'',ledger.read_bytes())
+
+    def test_provision_and_guardian_share_counts_across_reopen_and_unknown(self):
+        with self.establish() as budget:
+            CountedControlHttp(Mock(return_value={}),budget)(
+                'GET','https://graph.microsoft.com/v1.0/fictional',{},None,Deadline(1))
+            self.assertEqual(129,budget.count('owner_arm'))
+        phase=Mock();wire=Mock(side_effect=TimeoutError('unknown'))
+        with open_control_budget(self.config) as budget:
+            counted=CountedHttp(wire,phase,shared_budget=budget)
+            for host,heartbeat in (('management.azure.com',False),('fictional.blob.core.windows.net',False),
+                    ('fictional.blob.core.windows.net',True)):
+                counted.heartbeat=heartbeat
+                with self.assertRaises(TimeoutError):
+                    counted('GET','https://'+host+'/fixed',{},None,Deadline(1))
+        with open_control_budget(self.config) as budget:
+            self.assertEqual([130,33,1],[budget.count(k) for k in ('owner_arm','owner_control_blob','heartbeat_blob')])
+        self.assertEqual(3,wire.call_count)
+        self.assertEqual([('owner_arm',600),('owner_control_blob',3000),('heartbeat_blob',5250)],
+            [c.args for c in phase.consume.call_args_list])
+
+    def test_lifetime_exhaustion_blocks_new_phase_before_audit_and_wire(self):
+        with self.establish() as budget:
+            for _ in range(600-128):budget.consume('owner_arm',600)
+        phase,wire=Mock(),Mock()
+        with open_control_budget(self.config) as budget:
+            with self.assertRaisesRegex(Denied,'request_budget'):
+                CountedHttp(wire,phase,shared_budget=budget)(
+                    'GET','https://management.azure.com/fixed',{},None,Deadline(1))
+        phase.consume.assert_not_called();wire.assert_not_called()
+
+    def test_phase_audit_failure_keeps_one_lifetime_reservation_without_send(self):
+        phase=Mock();phase.consume.side_effect=OSError('audit-unknown');wire=Mock()
+        with self.establish():pass
+        with open_control_budget(self.config) as budget:
+            with self.assertRaises(OSError):
+                CountedHttp(wire,phase,shared_budget=budget)(
+                    'GET','https://management.azure.com/fixed',{},None,Deadline(1))
+            self.assertEqual(129,budget.count('owner_arm'))
+        wire.assert_not_called()
+
+    def test_changed_owner_manifest_task_source_seed_or_directory_cannot_rebind(self):
+        with self.establish():pass
+        changes=[('owner_id','other'),('manifest_sha256','c'*64),('task_id','different-task'),('source_sha256','c'*64)]
+        for key,value in changes:
+            changed=deepcopy(self.config);changed['control_budget']['binding'][key]=value
+            with self.subTest(field=key),self.assertRaises(Denied):open_control_budget(changed)
+        changed=deepcopy(self.config);changed['control_budget']['seed']['owner_arm']=0
+        with self.assertRaises(Denied):open_control_budget(changed)
+        changed=deepcopy(self.config);changed['control_budget']['directory_digest']='c'*64
+        with self.assertRaises(Denied):open_control_budget(changed)
+        with open_control_budget(self.config) as budget:self.assertEqual(128,budget.count('owner_arm'))
+
+    def test_head_or_time_window_change_does_not_reset_lifetime_binding(self):
+        with self.establish() as budget:budget.consume('owner_arm',600)
+        changed={**self.config,'new_head':'c'*40,'prearm_until':'different-window'}
+        with open_control_budget(changed) as budget:self.assertEqual(129,budget.count('owner_arm'))
+
+    def test_live_execute_requires_budget_before_receipt_auth_or_worker(self):
+        config=self.execution_config();config.pop('control_budget')
+        with patch(__package__+'.execution.validate_worker_directories'),patch(__package__+'.execution.Receipt') as receipt,patch(__package__+'.execution.AzureJobStarter') as starter,patch(__package__+'.execution.NodeWorker') as worker:
+            with self.assertRaisesRegex(Denied,'shared_control_budget_unconfirmed'):execute(config)
+        receipt.assert_not_called();starter.assert_not_called();worker.assert_not_called()
+
+    def test_live_preflight_failure_releases_existing_budget_lock_without_send(self):
+        with self.establish():pass
+        config=self.execution_config();wire=Mock()
+        with patch(__package__+'.execution.validate_worker_directories'),patch(__package__+'.execution.validate_launch_preflight',side_effect=Denied('offline-preflight')):
+            with self.assertRaisesRegex(Denied,'offline-preflight'):execute(config,http=wire)
+        wire.assert_not_called()
+        with open_control_budget(self.config) as budget:self.assertEqual(128,budget.count('owner_arm'))
+
+    def test_invalid_control_host_never_charges_lifetime_or_audit(self):
+        budget,phase,wire=Mock(),Mock(),Mock()
+        counted=CountedHttp(wire,phase,shared_budget=budget)
+        for url in ('http://management.azure.com/fixed','https://user@management.azure.com/fixed',
+                'https://management.azure.com:444/fixed','https://management.azure.com/fixed#x',
+                'https://graph.microsoft.com/v1.0/fixed'):
+            with self.subTest(url=url),self.assertRaises(Denied):counted('GET',url,{},None,Deadline(1))
+        budget.consume.assert_not_called();phase.consume.assert_not_called();wire.assert_not_called()
+
+
+class ArtifactPinTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name).resolve()/'.koho-ops'/'managed';(self.root/'scripts').mkdir(parents=True)
+        self.script=self.root/'scripts'/'trial-session.js';self.script.write_bytes(b'// fictional source\n')
+        self.node=Path(self.temp.name).resolve()/'node.exe';self.node.write_bytes(b'fictional node, never executed')
+        self.pin={'schema':1,'head':'a'*40,'node_sha256':hashlib.sha256(self.node.read_bytes()).hexdigest(),
+            'compiled_root':str(self.root),'entry':'scripts/trial-session.js','files':{'scripts/trial-session.js':hashlib.sha256(self.script.read_bytes()).hexdigest()},'source_digest':'b'*64}
+        p=patch(__package__+'.execution.COMPILED_ROOT',self.root);p.start();self.addCleanup(p.stop)
+    def validate(self,pin=None):validate_worker_artifact(str(self.node),str(self.script),self.pin if pin is None else pin,verify_files=True)
+    def test_exact_binary_and_complete_emit_are_verified_without_process(self):
+        with patch(__package__+'.execution.subprocess.Popen') as child:self.validate()
+        child.assert_not_called()
+    def test_changed_binary_changed_emit_extra_emit_and_missing_emit_all_fail(self):
+        for path,raw in ((self.node,b'changed'),(self.script,b'changed'),(self.root/'extra.js',b'//extra')):
+            old=path.read_bytes() if path.exists() else None;path.write_bytes(raw)
+            with self.subTest(kind=path.name),self.assertRaisesRegex(Denied,'worker_artifact_unconfirmed'):self.validate()
+            if old is None:path.unlink()
+            else:path.write_bytes(old)
+        self.script.unlink()
+        with self.assertRaises(Denied):self.validate()
+    def test_noncanonical_and_case_alias_paths_cannot_escape_or_expand_fixed_root(self):
+        for name in ('../outside.js','scripts/../outside.js','/root.js','scripts\\other.js','scripts//other.js','scripts/./other.js','scripts/other.js:stream','Scripts/trial-session.js'):
+            p=deepcopy(self.pin);p['files'][name]='c'*64
+            with self.subTest(name=name),self.assertRaises(Denied):self.validate(p)
+        p=deepcopy(self.pin);p['compiled_root']=str(self.root.parent)
+        with self.assertRaises(Denied):self.validate(p)
+    def test_symlink_or_reparse_entry_rejected_before_hash(self):
+        actual=Path.lstat
+        def lstat(path,*a,**k):
+            value=actual(path,*a,**k)
+            if path==self.script:
+                from types import SimpleNamespace
+                return SimpleNamespace(st_file_attributes=1024,st_mode=value.st_mode)
+            return value
+        with patch.object(Path,'lstat',lstat),self.assertRaises(Denied):self.validate()
+    def test_mutation_after_constructor_is_rejected_before_child_spawn(self):
+        worker=NodeWorker(str(self.node),str(self.script),{'requests':[]},artifact_pin=self.pin)
+        self.script.write_bytes(b'changed-after-validation')
+        with patch(__package__+'.execution.subprocess.Popen') as child,self.assertRaises(Denied):worker.start({}, {})
+        child.assert_not_called()
+    def test_inherited_node_options_and_search_path_block_new_start_not_cleanup(self):
+        for name in ('NODE_OPTIONS','NODE_PATH'):
+            with patch.dict(os.environ,{name:'fictional-injection'}):
+                worker=NodeWorker(str(self.node),str(self.script),{'requests':[]},artifact_pin=self.pin)
+                self.assertTrue(worker.stop())
+                with self.assertRaises(Denied):self.validate()
+                with patch(__package__+'.execution.subprocess.Popen') as child,self.assertRaisesRegex(Denied,'worker_node_environment'):worker.start({}, {})
+                child.assert_not_called()
+    def test_cleanup_constructor_accepts_missing_artifacts_but_start_never_does(self):
+        self.script.unlink();self.node.unlink()
+        worker=NodeWorker(str(self.node),str(self.script),{'requests':[]},artifact_pin=self.pin)
+        self.assertTrue(worker.stop())
+        with patch(__package__+'.execution.subprocess.Popen') as child,self.assertRaises(Denied):worker.start({}, {})
+        child.assert_not_called()
+    def test_binding_changes_for_each_pin_network_and_guardian_input(self):
+        c={k:{} for k in ('guardian_job','binding','owner_access','cleanup_strategy','journal_url','prearm_until','seed_not_before')}
+        c['worker']={'payload':{'requests':[]},'artifact_pin':deepcopy(self.pin)}
+        baseline=execution_binding(c)
+        c['worker']['artifact_pin']['source_digest']='c'*64
+        self.assertNotEqual(baseline,execution_binding(c))
+        c['worker']['artifact_pin']=deepcopy(self.pin);c['network_source_binding']={'source_sha256':'c'*64}
+        self.assertNotEqual(baseline,execution_binding(c))
+        c.pop('network_source_binding');c['guardian_config']={'mode':'main'}
+        self.assertNotEqual(baseline,execution_binding(c))
+    def test_execute_new_artifact_failure_precedes_credential_and_job(self):
+        c={k:{} for k in ('guardian_job','binding','owner_access','cleanup_strategy','journal_url','prearm_until','seed_not_before')}
+        c.update(live_enabled=True,recovery_directory='fictional',recovery_directory_digest='a'*64)
+        c['worker']={'node':str(self.node),'script':str(self.script),'payload':{'requests':[],'azureCliPython':str(Path(sys.executable).resolve())},'artifact_pin':deepcopy(self.pin)}
+        receipt=Mock();receipt.find.return_value=[];self.script.write_bytes(b'changed')
+        with patch(__package__+'.execution.validate_worker_directories'),patch(__package__+'.execution.validate_launch_preflight'),patch(__package__+'.execution.open_control_budget'),patch(__package__+'.execution.Receipt',return_value=receipt),patch(__package__+'.execution.AzureJobStarter') as starter,patch(__package__+'.execution.NodeWorker') as worker:
+            with self.assertRaises(Denied):execute(c)
+        starter.assert_not_called();worker.assert_not_called();receipt.close.assert_called_once()
+    def test_execute_existing_intent_can_resume_cleanup_after_artifacts_disappear(self):
+        c={k:{} for k in ('guardian_job','binding','owner_access','cleanup_strategy','journal_url','prearm_until','seed_not_before')}
+        c.update(live_enabled=True,recovery_directory='fictional',recovery_directory_digest='a'*64)
+        c['worker']={'node':str(self.node),'script':str(self.script),'payload':{'requests':[],'azureCliPython':str(Path(sys.executable).resolve())},'artifact_pin':deepcopy(self.pin)}
+        receipt=Mock();receipt.find.side_effect=lambda event:[{'request_id':'existing'}] if event=='start_intent' else []
+        self.node.unlink();self.script.unlink()
+        with patch(__package__+'.execution.validate_worker_directories'),patch(__package__+'.execution.validate_launch_preflight') as preflight,patch(__package__+'.execution.guardian_configuration'),patch(__package__+'.execution.open_control_budget'),patch(__package__+'.execution.Receipt',return_value=receipt),patch(__package__+'.execution.AzureJobStarter') as starter,patch(__package__+'.execution.Workflow') as workflow,patch(__package__+'.execution.subprocess.Popen') as child,patch.dict(os.environ,{'NODE_OPTIONS':'fictional-injection'}):
+            workflow.return_value.run.return_value={'status':'reconciliation_required','cleanupConfirmed':True,'workComplete':False}
+            self.assertTrue(execute(c)['cleanupConfirmed'])
+        preflight.assert_not_called();child.assert_not_called()
+        self.assertTrue(starter.call_args.kwargs['recovery_only'])
+        self.assertIsInstance(workflow.call_args.args[3],NodeWorker)
 
 
 class NodeWorkerPipeTests(unittest.TestCase):

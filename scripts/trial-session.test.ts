@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { readTrialPolicy, trialPolicyBytes, type TrialPolicy } from "../src/lib/trial/policy";
 import { operatorPolicyBinding, operatorTicketDigest, type OperatorTicket } from "../src/lib/trial/operator-access";
-import { bindTrialSessionBaseline, executeTrialSession, MAX_BOOTSTRAP_BASELINE_BYTES, MAX_SESSION_REQUESTS, prepareTrialSession, runTrialSessionStdin, saveTrialRuntimePolicy, SessionPermit, type RuntimePolicyIO, type SessionClock } from "./trial-session";
+import { bindTrialSessionBaseline, executeTrialSession, MAX_BOOTSTRAP_BASELINE_BYTES, MAX_SESSION_REQUESTS, prepareTrialSession, runTrialSessionStdin, saveTrialRuntimePolicy, saveTrialBootstrapProof, trialProofCanonical, SessionPermit, type RuntimePolicyIO, type SessionClock } from "./trial-session";
 
 // Fixed fictional test material. This test never generates a key pair or opens a credential file.
 const key = createPrivateKey({ key: Buffer.from("302e020100300506032b657004220420" + "01".repeat(32), "hex"), format: "der", type: "pkcs8" });
@@ -36,6 +36,7 @@ function fixture() {
     packages: [], samples: [], artifacts: [], databaseWindow: window };
   p.localOperator = { ticketDigest: operatorTicketDigest(access), recoveryDirectoryDigest: "c".repeat(64) };
   return {
+    azureCliPython: resolve("fixture-cli", process.platform === "win32" ? "python.exe" : "python"),
     environment: { DEPLOYMENT_KIND: "trial" as const, TRIAL_POLICY_JSON: JSON.stringify(p), TRIAL_POLICY_SIGNATURE: sign(null, trialPolicyBytes(p), key).toString("base64"),
       TRIAL_POLICY_PUBLIC_KEY: createPublicKey(key).export({ type: "spki", format: "pem" }).toString() },
     access, signingPrivateKey: key.export({ type: "pkcs8", format: "pem" }).toString(),
@@ -50,7 +51,7 @@ function fixture() {
 function grant(window: ReturnType<typeof fixture>["databaseWindow"], until = wall + 9000) {
   return { type: "permit", lifecycleId: window.lifecycleId, bindingDigest: window.bindingDigest, guardianNonce: window.guardianNonce, useUntil: window.useUntil, permitUntil: iso(until) };
 }
-const bootstrapSuccess = () => ({ status: "bootstrapped", databaseBaselineBytes: 8192, cases: 1, automaticResend: false });
+const bootstrapSuccess = () => ({ status: "bootstrapped", databaseBaselineBytes: 8192, cases: 1, automaticResend: false, receipts: [{name: "operator-" + "d".repeat(64) + ".jsonl", sha256: "f".repeat(64)}] });
 const artifactSuccess = async () => ({ sha256: "e".repeat(64) });
 const operatorSuccess = (value: unknown) => (value as { request: { command: string } }).request.command === "status" ?
   { runs: [], deliveries: [], ledgerRevision: 0 } : { status: "initialized" };
@@ -85,6 +86,8 @@ describe("signed stdin trial session", () => {
       localOperator: { ...oldPolicy.localOperator, ticketDigest: operatorTicketDigest(ticket) } });
     expect(ticket).toEqual({ ...input.access, policyDigest: operatorPolicyBinding(p), databaseWindow: input.databaseWindow });
     expect(prepared.common.environment.TRIAL_POLICY_PUBLIC_KEY).toBe(input.environment.TRIAL_POLICY_PUBLIC_KEY);
+    expect(prepared.bootstrap.azureCliPython).toBe(input.azureCliPython);
+    expect(prepared.common.azureCliPython).toBe(input.azureCliPython);
     expect(prepared).not.toHaveProperty("signingPrivateKey");
   });
   it("refuses unsigned policy, changed ticket, missing signed DB binding, and a different existing key", () => {
@@ -106,7 +109,7 @@ describe("signed stdin trial session", () => {
   it("caps invocations at one bootstrap plus sixteen operators before any adapter dispatch", async () => {
     const input = fixture(); input.requests = Array.from({ length: MAX_SESSION_REQUESTS }, () => ({ command: "status", caseId: 1 }));
     const { prepared, permit } = controlled(input), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
-    try { expect(await executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap, operator })).toEqual({ status: "completed", completedRequests: 16 });
+    try { expect(await executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap, operator })).toMatchObject({ status: "completed", completedRequests: 16 });
       expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).toHaveBeenCalledTimes(16); }
     finally { permit.dispose(); }
     input.requests.push({ command: "status", caseId: 1 }); expect(() => prepareTrialSession(input, clock)).toThrow();
@@ -115,14 +118,14 @@ describe("signed stdin trial session", () => {
     const { prepared, permit } = controlled(), calls: string[] = []; let release: () => void = () => undefined;
     const bootstrap = vi.fn(async () => { calls.push("bootstrap"); await new Promise<void>(r => { release = r; }); return bootstrapSuccess(); });
     const operator = vi.fn(async (v: unknown) => { calls.push((v as { request: { command: string } }).request.command); throw Error("private adapter failure"); });
-    const work = executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap, operator });
+    const work = executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap, operator });
     try { await vi.advanceTimersByTimeAsync(0); expect(calls).toEqual(["bootstrap"]); release();
       await expect(work).rejects.toThrow(); expect(calls).toEqual(["bootstrap", "initialize-ledger"]); expect(operator).toHaveBeenCalledOnce(); }
     finally { permit.dispose(); }
   });
   it("starts no command after bootstrap completes beyond the current permit", async () => {
     const { prepared, permit, stop } = controlled(), operator = vi.fn(async () => ({}));
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap: async () => { mono += 9000; return {}; }, operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => { mono += 9000; return {}; }, operator })).rejects.toThrow();
       expect(operator).not.toHaveBeenCalled(); expect(stop).toHaveBeenCalledOnce(); }
     finally { permit.dispose(); }
   });
@@ -136,7 +139,7 @@ describe("signed stdin trial session", () => {
     const bootstrap = vi.fn(async () => bootstrapSuccess());
     const operator = vi.fn(async (v: unknown) => { seen.push(v); return seen.length === 1 ? result : { status: "saved" }; });
     try {
-      expect(await executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap, operator })).toEqual({ status: "completed", completedRequests: 2 });
+      expect(await executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap, operator })).toMatchObject({ status: "completed", completedRequests: 2 });
       expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).toHaveBeenCalledTimes(2);
       const setting = (seen[1] as { request: { setting: { base: unknown; source: unknown } } }).request.setting;
       expect(setting.base).toEqual(result.base); expect(setting.source).toEqual(result.source);
@@ -146,7 +149,7 @@ describe("signed stdin trial session", () => {
   it.each(["unknown", "malformed-source"])("does not dispatch setting after %s sample result", async mode => {
     const { input, result } = sampleFixture(), { prepared, permit } = controlled(input);
     const operator = vi.fn(async () => mode === "unknown" ? { status: "reconciliation_required" } : { ...result, source: { documentId: 0 } });
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator })).rejects.toThrow();
       expect(operator).toHaveBeenCalledOnce(); } finally { permit.dispose(); }
   });
   it.each(["different-case", "forward-reference", "cross-field", "extra-setting-key"])("preflights invalid result references: %s", mode => {
@@ -159,16 +162,16 @@ describe("signed stdin trial session", () => {
   });
   it("does not equate a resolved unknown bootstrap or operator result with success", async () => {
     const first = controlled(), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
-    try { await expect(executeTrialSession(first.prepared, first.permit, { runtimePolicy: artifactSuccess, bootstrap: async () => ({ status: "outcome_unknown" }), operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(first.prepared, first.permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => ({ status: "outcome_unknown" }), operator })).rejects.toThrow();
       expect(operator).not.toHaveBeenCalled(); } finally { first.permit.dispose(); }
     const second = controlled(), unknown = vi.fn(async () => ({ status: "outcome_unknown" }));
-    try { await expect(executeTrialSession(second.prepared, second.permit, { runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator: unknown })).rejects.toThrow();
+    try { await expect(executeTrialSession(second.prepared, second.permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator: unknown })).rejects.toThrow();
       expect(unknown).toHaveBeenCalledOnce(); } finally { second.permit.dispose(); }
   });
   it("does not count a pending Job reconciliation as completed work", async () => {
     const input = fixture(); input.requests = [{ command: "job-reconcile", caseId: 1, runId: id }];
     const { prepared, permit } = controlled(input), operator = vi.fn(async () => ({ operationId: id, status: "accepted", executionStatus: "Running" }));
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => bootstrapSuccess(), operator })).rejects.toThrow();
       expect(operator).toHaveBeenCalledOnce(); } finally { permit.dispose(); }
   });
 });
@@ -196,20 +199,20 @@ describe("process permit and stdin lifetime", () => {
   });
   it("processes private initial and permit lines without requiring EOF and returns only fixed summary", async () => {
     const input = fixture(), stream = new PassThrough(), stop = vi.fn(), bootstrap = vi.fn(async () => ({ ...bootstrapSuccess(), secret: "must-not-output" }));
-    const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { runtimePolicy: artifactSuccess, bootstrap, operator: async value => ({ ...operatorSuccess(value), secret: "must-not-output" }) } });
+    const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap, operator: async value => ({ ...operatorSuccess(value), secret: "must-not-output" }) } });
     stream.write(JSON.stringify(input) + "\n" + JSON.stringify(grant(input.databaseWindow)) + "\n");
-    const result = await work; expect(result).toEqual({ status: "completed", completedRequests: 2 }); expect(stop).not.toHaveBeenCalled();
+    const result = await work; expect(result).toMatchObject({ status: "completed", completedRequests: 2 }); expect(stop).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain("secret"); expect(bootstrap).toHaveBeenCalledOnce(); stream.destroy();
   });
   it("bridges the full stdin payload through bootstrap/sample/setting with the actual signed window", async () => {
     const { input, result } = sampleFixture(), stream = new PassThrough(), stop = vi.fn(), calls: unknown[] = [];
     const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: {
-      runtimePolicy: artifactSuccess,
+      bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess,
       bootstrap: async value => { calls.push(value); return bootstrapSuccess(); },
       operator: async value => { calls.push(value); return calls.length === 2 ? result : { status: "saved" }; },
     } });
     stream.write(JSON.stringify(input) + "\n" + JSON.stringify(grant(input.databaseWindow)) + "\n");
-    expect(await work).toEqual({ status: "completed", completedRequests: 2 });
+    expect(await work).toMatchObject({ status: "completed", completedRequests: 2 });
     expect(calls).toHaveLength(3); expect(stop).not.toHaveBeenCalled();
     for (const call of calls) {
       const c = call as { environment: Record<string, string>; access: OperatorTicket };
@@ -221,7 +224,7 @@ describe("process permit and stdin lifetime", () => {
   });
   it("parent EOF stops an in-flight bootstrap and dispatches no operator", async () => {
     const input = fixture(), stream = new PassThrough(), stop = vi.fn(), entered = vi.fn(), operator = vi.fn(async () => ({}));
-    const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { runtimePolicy: artifactSuccess, bootstrap: async () => { entered(); return new Promise(() => undefined); }, operator } });
+    const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap: async () => { entered(); return new Promise(() => undefined); }, operator } });
     const assertion = expect(work).rejects.toThrow("trial_session_reconciliation_required");
     stream.write(JSON.stringify(input) + "\n" + JSON.stringify(grant(input.databaseWindow)) + "\n");
     await vi.advanceTimersByTimeAsync(0); expect(entered).toHaveBeenCalledOnce(); stream.end();
@@ -230,7 +233,7 @@ describe("process permit and stdin lifetime", () => {
   it("missing first permit, malformed frames and input exceeding 2MiB all fail closed", async () => {
     for (const mode of ["no-permit", "bad-frame", "too-large"] as const) {
       const input = fixture(), stream = new PassThrough(), stop = vi.fn(), bootstrap = vi.fn(async () => ({}));
-      const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { runtimePolicy: artifactSuccess, bootstrap, operator: async () => ({}) } });
+      const work = runTrialSessionStdin(stream, { clock, onStop: stop, adapters: { bootstrapProof: artifactSuccess, runtimePolicy: artifactSuccess, bootstrap, operator: async () => ({}) } });
       const assertion = expect(work).rejects.toThrow();
       stream.write(mode === "too-large" ? Buffer.alloc(2 * 1024 ** 2 + 1) : JSON.stringify(input) + "\n");
       if (mode === "bad-frame") stream.write("not-json\n");
@@ -283,16 +286,17 @@ describe("owner-private runtime policy artifact", () => {
     const { prepared, permit } = controlled(); let finish: () => void = () => undefined;
     const runtimePolicy = vi.fn(async (_prepared: unknown, phase: "pending" | "final") => {
       if (phase === "pending") await new Promise<void>(resolve => { finish = resolve; });
+      return artifactSuccess();
     });
     const bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
-    const work = executeTrialSession(prepared, permit, { runtimePolicy, bootstrap, operator });
+    const work = executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy, bootstrap, operator });
     try { await vi.advanceTimersByTimeAsync(0); expect(runtimePolicy).toHaveBeenCalledOnce(); expect(bootstrap).not.toHaveBeenCalled(); expect(operator).not.toHaveBeenCalled();
-      finish(); await expect(work).resolves.toEqual({ status: "completed", completedRequests: 2 }); }
+      finish(); await expect(work).resolves.toMatchObject({ status: "completed", completedRequests: 2 }); }
     finally { permit.dispose(); }
   });
   it("dispatches no DB adapter after the artifact save is unconfirmed", async () => {
     const { prepared, permit } = controlled(), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: async () => { throw Error("unknown save"); }, bootstrap, operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: async () => { throw Error("unknown save"); }, bootstrap, operator })).rejects.toThrow();
       expect(bootstrap).not.toHaveBeenCalled(); expect(operator).not.toHaveBeenCalled(); }
     finally { permit.dispose(); }
   });
@@ -305,6 +309,38 @@ describe("owner-private runtime policy artifact", () => {
     await expect(saveTrialRuntimePolicy(prepared, "final", io)).rejects.toThrow(); expect(files).toHaveLength(1);
     await saveTrialRuntimePolicy(bindTrialSessionBaseline(prepared, 8192), "final", io);
     expect(files[1]).toBe(join(input.recoveryDirectory, "trial-runtime-policy.json"));
+  });
+  it("writes a fixed canonical bootstrap proof privately and keeps all secrets out", async () => {
+    const { input, prepared } = preparedArtifact(); let saved = "";
+    const sync = vi.fn(async () => undefined), close = vi.fn(async () => undefined);
+    const create = vi.fn(async () => ({ writeFile: async (value: string) => { saved = value; }, sync, close }));
+    const result = await saveTrialBootstrapProof(prepared, bootstrapSuccess(), {
+      inspect: async () => ({ isDirectory: () => true, isSymbolicLink: () => false }), create });
+    expect(create).toHaveBeenCalledWith(join(input.recoveryDirectory, "trial-bootstrap-proof.json"), "wx", 0o600);
+    expect(sync).toHaveBeenCalledOnce(); expect(close).toHaveBeenCalledOnce();
+    expect(JSON.parse(saved)).toMatchObject({ schema: 1, receiptScope: "verified_steps_this_invocation",
+      databaseWindow: prepared.databaseWindow, bootstrap: { databaseBaselineBytes: 8192, automaticResend: false } });
+    expect(saved).toBe(trialProofCanonical(JSON.parse(saved)) + "\n");
+    expect(result.sha256).toBe(createHash("sha256").update(saved).digest("hex"));
+    expect(saved).not.toContain("PRIVATE KEY");
+    for (const secret of Object.values(input.bootstrap.credentials)) expect(saved).not.toContain(secret);
+  });
+  it("cannot emit completion or dispatch operators after an uncertain proof save", async () => {
+    const { prepared, permit } = controlled(), operator = vi.fn(async () => ({status:"initialized"}));
+    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess,
+      bootstrap: async () => bootstrapSuccess(), bootstrapProof: async () => { throw Error("fsync unknown"); }, operator })).rejects.toThrow();
+      expect(operator).not.toHaveBeenCalled(); }
+    finally { permit.dispose(); }
+  });
+  it("returns only bound proof hashes/counts and never receipt filenames", async () => {
+    const { prepared, permit } = controlled();
+    try { const result = await executeTrialSession(prepared, permit, { runtimePolicy: artifactSuccess, bootstrapProof: artifactSuccess,
+      bootstrap: async () => bootstrapSuccess(), operator: async value => operatorSuccess(value) });
+      expect(result.bootstrap).toMatchObject({ schema:1, status:"bootstrapped", databaseBaselineBytes:8192, cases:1,
+        automaticResend:false, finalRuntimePolicySha256:"e".repeat(64), proofSha256:"e".repeat(64), receiptCount:1 });
+      expect(result.bootstrap.databaseWindowDigest).toBe(createHash("sha256").update(trialProofCanonical(prepared.databaseWindow)).digest("hex"));
+      expect(JSON.stringify(result)).not.toContain("operator-"); expect(JSON.stringify(result)).not.toContain("PRIVATE KEY");
+    } finally { permit.dispose(); }
   });
 });
 
@@ -326,7 +362,7 @@ describe("measured baseline binding before ledger initialization", () => {
   });
   it.each([-1, 0.5, NaN, Infinity, MAX_BOOTSTRAP_BASELINE_BYTES + 1])("rejects invalid/unapproved measured capacity %s before any operator", async bytes => {
     const { prepared, permit } = controlled(), operator = vi.fn(async (value: unknown) => operatorSuccess(value)), artifact = vi.fn(artifactSuccess);
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifact,
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifact,
       bootstrap: async () => ({ ...bootstrapSuccess(), databaseBaselineBytes: bytes }), operator })).rejects.toThrow();
       expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledOnce(); }
     finally { permit.dispose(); }
@@ -334,21 +370,21 @@ describe("measured baseline binding before ledger initialization", () => {
   it("orders pending, bootstrap, measured final and every operator with one shared final signed policy", async () => {
     const { prepared, permit } = controlled(), order: string[] = [], environments: string[] = [];
     try { await expect(executeTrialSession(prepared, permit, {
-      runtimePolicy: async (p, phase) => { order.push(phase); const policy = readTrialPolicy(p.common.environment);
-        expect(policy.cost!.databaseBaselineBytes).toBe(phase === "pending" ? 1024 : 8192); if (phase === "final") environments.push(JSON.stringify(p.common.environment)); },
+      bootstrapProof: async () => { order.push("proof"); return artifactSuccess(); }, runtimePolicy: async (p, phase) => { order.push(phase); const policy = readTrialPolicy(p.common.environment);
+        expect(policy.cost!.databaseBaselineBytes).toBe(phase === "pending" ? 1024 : 8192); if (phase === "final") environments.push(JSON.stringify(p.common.environment)); return artifactSuccess(); },
       bootstrap: async () => { order.push("bootstrap"); return bootstrapSuccess(); },
       operator: async value => { order.push("operator"); const v = value as { environment: Record<string, string>; access: OperatorTicket };
         environments.push(JSON.stringify(v.environment)); const policy = readTrialPolicy(v.environment);
         expect(policy.cost!.databaseBaselineBytes).toBe(8192); expect(operatorPolicyBinding(policy)).toBe(v.access.policyDigest);
         expect(policy.localOperator!.ticketDigest).toBe(operatorTicketDigest(v.access)); return operatorSuccess(value); },
-    })).resolves.toEqual({ status: "completed", completedRequests: 2 });
-      expect(order).toEqual(["pending", "bootstrap", "final", "operator", "operator"]); expect(new Set(environments).size).toBe(1);
+    })).resolves.toMatchObject({ status: "completed", completedRequests: 2 });
+      expect(order).toEqual(["pending", "bootstrap", "final", "proof", "operator", "operator"]); expect(new Set(environments).size).toBe(1);
     } finally { permit.dispose(); }
   });
   it("retains unknown overall and sends no operator when measured final save fails", async () => {
     const { prepared, permit } = controlled(), bootstrap = vi.fn(async () => bootstrapSuccess()), operator = vi.fn(async (value: unknown) => operatorSuccess(value));
     const artifact = vi.fn(async (_p: unknown, phase: "pending" | "final") => { if (phase === "final") throw Error("fsync unknown"); });
-    try { await expect(executeTrialSession(prepared, permit, { runtimePolicy: artifact, bootstrap, operator })).rejects.toThrow();
+    try { await expect(executeTrialSession(prepared, permit, { bootstrapProof: artifactSuccess, runtimePolicy: artifact, bootstrap, operator })).rejects.toThrow();
       expect(bootstrap).toHaveBeenCalledOnce(); expect(operator).not.toHaveBeenCalled(); expect(artifact).toHaveBeenCalledTimes(2); }
     finally { permit.dispose(); }
   });

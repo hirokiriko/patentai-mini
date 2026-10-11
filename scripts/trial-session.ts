@@ -9,6 +9,8 @@ import { OperatorAccess, operatorPolicyBinding, operatorTicketDigest, operatorTi
 import { readTrialPolicy, trialPolicyBytes, trialPolicySchema, TrialError } from "../src/lib/trial/policy";
 import { managedSettingSchema } from "../src/lib/patent-watch/managed-types";
 
+import { trialAzureCliPythonSchema } from "./trial-owner-token";
+
 const MAX_INPUT = 2 * 1024 ** 2;
 export const MAX_SESSION_REQUESTS = 16; // Bootstrap consumes up to four of the process-wide 20 connections.
 export const MAX_BOOTSTRAP_BASELINE_BYTES = 64 * 1024 ** 2;
@@ -17,9 +19,9 @@ type DatabaseWindow = z.infer<typeof databaseWindowSchema>;
 const environmentSchema = z.object({ DEPLOYMENT_KIND: z.literal("trial"), TRIAL_POLICY_JSON: z.string(),
   TRIAL_POLICY_SIGNATURE: z.string(), TRIAL_POLICY_PUBLIC_KEY: z.string() }).strict();
 export const trialSessionInput = z.object({
-  environment: environmentSchema, access: operatorTicketSchema,
+  azureCliPython: trialAzureCliPythonSchema, environment: environmentSchema, access: operatorTicketSchema,
   signingPrivateKey: z.string().min(1).max(8192), databaseWindow: databaseWindowSchema,
-  bootstrap: trialBootstrapInput.omit({ environment: true, access: true, recoveryDirectory: true }),
+  bootstrap: trialBootstrapInput.omit({ environment: true, access: true, recoveryDirectory: true, azureCliPython: true }),
   operatorDatabaseUrl: z.string().min(1).max(8192), recoveryDirectory: z.string().min(1),
   requests: z.array(z.unknown()).max(MAX_SESSION_REQUESTS),
 }).strict();
@@ -29,7 +31,7 @@ const permitSchema = z.object({ type: z.literal("permit"), lifecycleId: z.uuidv4
 export type SessionClock = { utc(): number; monotonic(): number };
 const systemClock: SessionClock = { utc: () => Date.now(), monotonic: () => performance.now() };
 const failure = () => new TrialError("trial_session_reconciliation_required");
-type SessionCommon = { environment: z.infer<typeof environmentSchema>; access: z.infer<typeof operatorTicketSchema>;
+type SessionCommon = { azureCliPython: string; environment: z.infer<typeof environmentSchema>; access: z.infer<typeof operatorTicketSchema>;
   databaseUrl: string; recoveryDirectory: string };
 // Keep the already-verified private KeyObject only in a captured, single-use
 // signer. It cannot be serialized into the prepared state or a runtime artifact.
@@ -92,8 +94,8 @@ export function prepareTrialSession(value: unknown, clock: SessionClock = system
     TRIAL_POLICY_SIGNATURE: sign(null, trialPolicyBytes(policy), privateKey).toString("base64") };
   const verified = readTrialPolicy(environment), checked = new OperatorAccess(access, verified, clock);
   try { checked.check(0); } finally { checked.dispose(); }
-  const bootstrap = trialBootstrapInput.parse({ ...input.bootstrap, environment, access, recoveryDirectory: input.recoveryDirectory });
-  const common = { environment, access, databaseUrl: input.operatorDatabaseUrl, recoveryDirectory: input.recoveryDirectory };
+  const bootstrap = trialBootstrapInput.parse({ ...input.bootstrap, azureCliPython: input.azureCliPython, environment, access, recoveryDirectory: input.recoveryDirectory });
+  const common = { azureCliPython: input.azureCliPython, environment, access, databaseUrl: input.operatorDatabaseUrl, recoveryDirectory: input.recoveryDirectory };
   // References are restricted to the prior sample's exact case and its two result
   // fields. Fully materialized requests are validated before bootstrap starts.
   input.requests.forEach((request, index) => {
@@ -200,7 +202,41 @@ export async function saveTrialRuntimePolicy(prepared: PreparedSession, phase: "
   try { await handle.writeFile(serialized); await handle.sync(); } finally { await handle.close(); }
   return { sha256: hash(serialized) };
 }
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const bootstrapReceiptsSchema = z.array(z.object({ name: z.string().regex(/^operator-[a-f0-9]{64}\.jsonl$/), sha256: sha256Schema }).strict()).min(1).max(512);
+export function trialProofCanonical(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(trialProofCanonical).join(",") + "]";
+  if (value && typeof value === "object") return "{" + Object.keys(value).sort().map(key => JSON.stringify(key) + ":" + trialProofCanonical(record(value)[key])).join(",") + "}";
+  const serialized = JSON.stringify(value); if (serialized === undefined || (typeof value === "number" && !Number.isFinite(value))) throw failure();
+  return serialized;
+}
+const proofHash = (value: string) => createHash("sha256").update(value).digest("hex");
+function bootstrapProof(prepared: PreparedSession, result: Record<string, unknown>) {
+  if (!measuredSessions.has(prepared)) throw failure();
+  const receipts = bootstrapReceiptsSchema.parse(result.receipts);
+  if (new Set(receipts.map(r => r.name)).size !== receipts.length || receipts.some((r, i) => i > 0 && receipts[i - 1].name >= r.name)) throw failure();
+  const policy = readTrialPolicy(prepared.common.environment), d = policy.database;
+  if (result.status !== (prepared.bootstrap.mode === "apply" ? "bootstrapped" : "reconciled") || result.automaticResend !== false ||
+    result.cases !== prepared.bootstrap.manifest.cases.length || !Number.isSafeInteger(result.databaseBaselineBytes) ||
+    result.databaseBaselineBytes !== policy.cost?.databaseBaselineBytes || Number(result.databaseBaselineBytes) < 0 ||
+    Number(result.databaseBaselineBytes) > MAX_BOOTSTRAP_BASELINE_BYTES) throw failure();
+  return { schema: 1 as const, receiptScope: "verified_steps_this_invocation" as const,
+    bootstrap: { status: String(result.status), databaseBaselineBytes: Number(result.databaseBaselineBytes), cases: Number(result.cases), automaticResend: false as const },
+    databaseWindow: prepared.databaseWindow,
+    database: { host: d.host, database: d.database, ownerRole: d.ownerRole, migratorUser: d.migratorUser, webUser: d.webUser, workerUser: d.workerUser },
+    codeSha: policy.codeSha, bootstrapManifest: prepared.bootstrap.manifest, receipts };
+}
+export async function saveTrialBootstrapProof(prepared: PreparedSession, result: Record<string, unknown>, io: RuntimePolicyIO = { inspect: lstat, create: open }) {
+  const proof = bootstrapProof(prepared, result), policy = readTrialPolicy(prepared.common.environment), directory = prepared.common.recoveryDirectory;
+  if (!isAbsolute(directory) || proofHash(resolve(directory)) !== policy.localOperator?.recoveryDirectoryDigest) throw failure();
+  const st = await io.inspect(directory); if (!st.isDirectory() || st.isSymbolicLink()) throw failure();
+  const serialized = trialProofCanonical(proof) + "\n"; if (Buffer.byteLength(serialized) > 131072) throw failure();
+  const handle = await io.create(join(directory, "trial-bootstrap-proof.json"), "wx", 0o600);
+  try { await handle.writeFile(serialized); await handle.sync(); } finally { await handle.close(); }
+  return { sha256: proofHash(serialized) };
+}
 export type SessionAdapters = { runtimePolicy(prepared: PreparedSession, phase: "pending" | "final"): Promise<unknown>;
+  bootstrapProof(prepared: PreparedSession, result: Record<string, unknown>): Promise<unknown>;
   bootstrap(value: unknown): Promise<unknown>; operator(value: unknown): Promise<unknown> };
 function requireOperatorResult(request: unknown, value: unknown) {
   const r = record(request), result = record(value);
@@ -217,7 +253,7 @@ function requireOperatorResult(request: unknown, value: unknown) {
 
 /** Exactly one bootstrap followed by at most 16 explicit commands, no retry loop. */
 export async function executeTrialSession(prepared: ReturnType<typeof prepareTrialSession>, permit: SessionPermit,
-  adapters: SessionAdapters = { runtimePolicy: saveTrialRuntimePolicy, bootstrap: runTrialBootstrap, operator: runTrialOperator }) {
+  adapters: SessionAdapters = { runtimePolicy: saveTrialRuntimePolicy, bootstrapProof: saveTrialBootstrapProof, bootstrap: runTrialBootstrap, operator: runTrialOperator }) {
   await permit.wait(); permit.check();
   await abortable(adapters.runtimePolicy(prepared, "pending"), permit.signal); permit.check();
   const bootstrapResult = record(await abortable(adapters.bootstrap(prepared.bootstrap), permit.signal)); permit.check();
@@ -226,7 +262,11 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
     Number(bootstrapResult.databaseBaselineBytes) < 0 || Number(bootstrapResult.databaseBaselineBytes) > MAX_BOOTSTRAP_BASELINE_BYTES ||
     bootstrapResult.automaticResend !== false) throw failure();
   const final = bindTrialSessionBaseline(prepared, Number(bootstrapResult.databaseBaselineBytes));
-  await abortable(adapters.runtimePolicy(final, "final"), permit.signal); permit.check();
+  const artifact = record(await abortable(adapters.runtimePolicy(final, "final"), permit.signal)); permit.check();
+  const finalRuntimePolicySha256 = sha256Schema.parse(artifact.sha256), proof = bootstrapProof(final, bootstrapResult);
+  const savedProof = record(await abortable(adapters.bootstrapProof(final, bootstrapResult), permit.signal)); permit.check();
+  const bootstrap = { schema: 1, ...proof.bootstrap, finalRuntimePolicySha256, databaseWindowDigest: proofHash(trialProofCanonical(proof.databaseWindow)),
+    receiptSetSha256: proofHash(trialProofCanonical(proof.receipts)), receiptCount: proof.receipts.length, proofSha256: sha256Schema.parse(savedProof.sha256) };
   const results: unknown[] = [];
   for (const [index, template] of prepared.requests.entries()) {
     permit.check(); const request = structuredClone(template), refs = validateReferences(request, index, prepared.requests);
@@ -239,7 +279,7 @@ export async function executeTrialSession(prepared: ReturnType<typeof prepareTri
     permit.check(); const result = await abortable(adapters.operator(input), permit.signal); permit.check();
     requireOperatorResult(request, result); results.push(result);
   }
-  return { status: "completed" as const, completedRequests: results.length };
+  return { status: "completed" as const, completedRequests: results.length, bootstrap };
 }
 
 /** NDJSON: first line is the private payload, later lines are short permit frames.

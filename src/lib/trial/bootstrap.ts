@@ -44,6 +44,28 @@ const MIGRATION_HASHES = ["dc1bb0863395a82a7ef09c35aeceb2b42ac6f22e6b2c5e4e3fabe
   "7a96df7b6d42f4b7e4c248e77446afc5506f1fdd266cb8e6577054413a97841a"] as const;
 const MIGRATION_TIMES=[1779317966922,1787810352336,1788308618345,1790130246645,1790134041760,1790135478643,1790137307292,1790140467704,1790141320855];
 
+/** Exact verified steps of this invocation. A catalog-verified outer migration
+ * step may reconcile earlier SQL uncertainty; old inner unknown receipts are
+ * retained unchanged and are not claimed to have received an acknowledgement. */
+export async function collectTrialBootstrapReceipts(directory: string, binding: string, steps: string[]) {
+  if (!/^[a-f0-9]{64}$/.test(binding) || !steps.length || steps.length > 512 || new Set(steps).size !== steps.length ||
+    steps.some(step => !/^[A-Za-z0-9_-]{1,160}$/.test(step))) throw new TrialError("trial_bootstrap_receipt_invalid");
+  const receipts: { name: string; sha256: string }[] = [];
+  for (const step of steps) {
+    const intent = trialHash(JSON.stringify({ operation: "trial-bootstrap-v1", binding, step }));
+    const name = `operator-${intent}.jsonl`, path = join(directory, name), st = await lstat(path);
+    if (!st.isFile() || st.isSymbolicLink() || st.size > 65536) throw new TrialError("trial_bootstrap_receipt_invalid");
+    const bytes = await readFile(path);
+    if (!bytes.length || bytes.length > 65536 || bytes.at(-1) !== 10) throw new TrialError("trial_bootstrap_receipt_invalid");
+    const rows = bytes.toString("utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
+    if (rows.length < 2 || rows[0]?.schema !== 1 || rows[0]?.intent !== intent || rows[0]?.automaticResend !== false ||
+      rows.at(-1)?.terminal !== "completed" || rows.some(row => row.intent !== undefined && (row.intent !== intent || row.automaticResend !== false)))
+      throw new TrialError("trial_bootstrap_receipt_invalid");
+    receipts.push({ name, sha256: trialHash(bytes) });
+  }
+  return receipts.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+}
+
 /** This is a Local-only fixed installer, not a SQL executor. Only the launcher
  * supplies the normal admin binding and existing dedicated credential material.
  * No secret generation, fallback target, DROP, shared ACL edit or admin GRANT. */
@@ -117,6 +139,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     const connection = await connectPermitDatabase({ url: url.href, host: d.host, database: db, user }, access, credential);
     connections.push(connection);connected.set(key,connection.client); return connection.client;
   };
+  const verifiedSteps = new Set<string>();
   const request = (step: string) => ({ operation: "trial-bootstrap-v1", binding, step });
   const removeOrphanStepLock = async(id:string)=>{
     if(!recoveredStaleLock)return;
@@ -135,18 +158,19 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
   };
   const step = async (id: string, write: () => Promise<unknown>, verify: () => Promise<boolean>) => {
     check(); const prior = await state(id);
-    if (prior === "completed") { if (!await verify()) throw new TrialError("trial_bootstrap_readback_mismatch"); return; }
+    if (prior === "completed") { if (!await verify()) throw new TrialError("trial_bootstrap_readback_mismatch"); verifiedSteps.add(id); return; }
     if (prior === "unknown" || mode === "reconcile") {
       if (prior === "absent" || !await verify()) throw new TrialError("trial_bootstrap_reconciliation_required");
       if (mode !== "reconcile") throw new TrialError("trial_bootstrap_reconciliation_required");
       await removeOrphanStepLock(id);
       const receipt = await beginOperatorReceipt(directory, p.localOperator!.recoveryDirectoryDigest, access.ticket, request(id), true);
-      await receipt.finish(true); return;
+      await receipt.finish(true); verifiedSteps.add(id); return;
     }
     const receipt = await beginOperatorReceipt(directory, p.localOperator!.recoveryDirectoryDigest, access.ticket, request(id));
     let complete = false;
     try { check(); await write(); complete = await verify(); if (!complete) throw new TrialError("trial_bootstrap_readback_mismatch"); }
     finally { await receipt.finish(complete); }
+    verifiedSteps.add(id);
   };
   const readRole = async (client: Client, user: string) => (await client.query(
     "select rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,rolinherit,rolconnlimit,rolvaliduntil,rolconfig from pg_roles where rolname=$1", [user])).rows[0];
@@ -251,7 +275,7 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
           if(select||rollback)return await Reflect.apply(client.query,client,args);
           check();const id=`migration-statement-${n++}-${trialHash(text)}`;
           const receipt=await beginOperatorReceipt(directory,p.localOperator!.recoveryDirectoryDigest,access.ticket,request(id));
-          let ack=false;try{check();const result=await Reflect.apply(client.query,client,args);ack=true;return result;}finally{await receipt.finish(ack);}
+          let ack=false;try{check();const result=await Reflect.apply(client.query,client,args);ack=true;return result;}finally{await receipt.finish(ack);if(ack)verifiedSteps.add(id);}
         }finally{inflight=false;}
       }};
       await migrate(drizzle(adapter as unknown as Client),{migrationsFolder});
@@ -327,7 +351,8 @@ export async function bootstrapTrialDatabase(options: { policy: TrialPolicy; acc
     const size=Number((await client.query("select pg_database_size(current_database()) as bytes")).rows[0].bytes);
     if(!Number.isSafeInteger(size)||size<0)throw new TrialError("trial_bootstrap_size_unconfirmed");
     return{status:mode==="apply"?"bootstrapped":"reconciled",databaseBaselineBytes:size,cases:manifest.cases.length,
-      requiresExternalBusinessAclAudit:true,automaticResend:false} as const;
+      requiresExternalBusinessAclAudit:true,automaticResend:false,
+      receipts:await collectTrialBootstrapReceipts(directory,binding,[...verifiedSteps])} as const;
   }catch(e){
     // Do not attach a pg error/cause: it may contain SQL, password or a target.
     throw new TrialError(e instanceof TrialError ? e.code : `trial_bootstrap_failed_${activeStep.replace(/[^a-zA-Z0-9_-]/g,"")}`);

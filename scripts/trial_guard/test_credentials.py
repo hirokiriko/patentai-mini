@@ -16,6 +16,8 @@ from .lifecycle import Denied
 
 ARM='https://management.azure.com/'
 STORAGE='https://storage.azure.com/'
+GRAPH='https://graph.microsoft.com/'
+GRAPH_ID='00000003-0000-0000-c000-000000000000'
 OWNER='11111111-1111-4111-8111-111111111111'
 TENANT='22222222-2222-4222-8222-222222222222'
 
@@ -78,10 +80,66 @@ class AzureCredentialTests(unittest.TestCase):
             self.owner(token('https://storage.azure.com//')).token(STORAGE,Deadline(10))
 
     def test_request_resource_stays_fixed_and_does_not_use_the_claim_alias(self):
-        for audience in ('https://management.core.windows.net/','https://graph.microsoft.com/',STORAGE+'other'):
+        for audience in ('https://management.core.windows.net/','https://graph.microsoft.com',GRAPH_ID,STORAGE+'other'):
             with self.subTest(audience=audience),self.assertRaisesRegex(Denied,'token_audience'):
                 self.owner(token()).token(audience,Deadline(10))
         self.run.assert_not_called();self.http.assert_not_called()
+
+    def test_owner_graph_accepts_only_canonical_url_or_public_api_guid_claim(self):
+        for audience in ('https://graph.microsoft.com',GRAPH,GRAPH_ID):
+            with self.subTest(audience=audience):
+                self.run.reset_mock();value=token(audience)
+                self.assertEqual(self.owner(value).token(GRAPH,Deadline(10)),value)
+                args,kwargs=self.run.call_args
+                self.assertEqual(args[0],[sys.executable,'-I','-m','azure.cli','account','get-access-token',
+                    '--resource',GRAPH,'--output','json','--only-show-errors'])
+                self.assertIs(kwargs['shell'],False);self.assertIs(kwargs['capture_output'],True)
+                self.assertNotIn('env',kwargs);self.assertNotIn('cwd',kwargs)
+                self.run.assert_called_once();self.http.assert_not_called()
+
+    def test_graph_does_not_accept_wrong_resource_or_noncanonical_claims(self):
+        for audience in (ARM,STORAGE,'https://graph.windows.net/',
+                '00000002-0000-0000-c000-000000000000',GRAPH_ID+'/',GRAPH_ID.upper(),
+                GRAPH+'/',GRAPH+'v1.0','http://graph.microsoft.com/',
+                'https://graph.microsoft.com.evil.invalid/','https://graph.microsoft.com:443/',
+                GRAPH+'?x=1',GRAPH+'#x','https://GRAPH.microsoft.com/',' '+GRAPH,[GRAPH]):
+            with self.subTest(audience=audience),self.assertRaisesRegex(Denied,'identity_binding'):
+                self.owner(token(audience)).token(GRAPH,Deadline(10))
+        for audience in (ARM,STORAGE):
+            with self.subTest(requested=audience),self.assertRaisesRegex(Denied,'identity_binding'):
+                self.owner(token(GRAPH_ID)).token(audience,Deadline(10))
+        self.http.assert_not_called()
+
+    def test_guardian_graph_request_is_rejected_before_cli_or_identity_endpoint(self):
+        credential=AzureCredential('guardian',OWNER,TENANT,self.http,
+            {'IDENTITY_ENDPOINT':'http://127.0.0.1:4123/msi/token','IDENTITY_HEADER':'fictional'})
+        with self.assertRaisesRegex(Denied,'token_audience'):
+            credential.token(GRAPH,Deadline(10))
+        self.run.assert_not_called();self.http.assert_not_called()
+
+    def test_graph_opaque_or_malformed_token_is_private_and_has_no_fallback(self):
+        marker='FICTIONAL_PRIVATE_CANARY'
+        for value in (marker,marker+'.opaque',token(GRAPH_ID)+'.extra.parts',
+                'fictional.invalid-json.fixture',None):
+            with self.subTest(kind=type(value).__name__):
+                self.run.reset_mock();output=io.StringIO()
+                with redirect_stdout(output),redirect_stderr(output),self.assertRaisesRegex(Denied,'identity_binding') as caught:
+                    self.owner(value).token(GRAPH,Deadline(10))
+                self.assertEqual(output.getvalue(),'');self.assertNotIn(marker,str(caught.exception))
+                self.run.assert_called_once();self.http.assert_not_called()
+
+    def test_graph_preserves_owner_tenant_expiry_and_post_cli_deadline(self):
+        for changes in ({'oid':TENANT},{'tid':OWNER},{'exp':0},{'exp':int(time.time())+1}):
+            with self.subTest(changes=list(changes)),self.assertRaisesRegex(Denied,'identity_binding'):
+                self.owner(token(GRAPH_ID,**changes)).token(GRAPH,Deadline(10))
+        now=[0];deadline=Deadline(1,lambda:now[0]);value=token(GRAPH_ID)
+        def delayed(*args,**kwargs):
+            now[0]=2
+            return SimpleNamespace(stdout=encoded({'accessToken':value}),stderr=b'')
+        self.run.side_effect=delayed
+        with self.assertRaisesRegex(Denied,'identity_binding'):
+            AzureCredential('owner',OWNER,TENANT,self.http).token(GRAPH,deadline)
+        self.http.assert_not_called()
 
     def test_missing_cli_failed_cli_timeout_and_invalid_output_are_private_no_fallback(self):
         marker='FICTIONAL_PRIVATE_CANARY'

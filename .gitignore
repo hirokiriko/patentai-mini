@@ -50,3 +50,7 @@ data/
 # local config
 .claude/accounts.local.json
 .envrc
+
+# Python operation tools
+__pycache__/
+*.py[cod]

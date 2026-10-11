@@ -1,12 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { readFile,lstat } from "node:fs/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { and,eq } from "drizzle-orm";
 import { ContainerClient } from "@azure/storage-blob";
 import { z } from "zod";
 import * as schema from "../src/db/schema";
-import { readTrialPolicy,requireTrialActive,TrialError,type TrialPolicy } from "../src/lib/trial/policy";
+import { readTrialPolicy,requireTrialActive,TrialError } from "../src/lib/trial/policy";
 import { trialStorageHttp,assertTrialPrivate } from "../src/lib/trial/storage";
 import { emptyTrialLedger,TrialBlobLedgerIO,TrialLedger,TRIAL_LEDGER_KEY,trialHash } from "../src/lib/trial/ledger";
 import { reserveTrialDatabase } from "../src/lib/trial/database-capacity";
@@ -19,12 +17,13 @@ import { verifyTrialBuild } from "../src/lib/trial/runtime";
 import { prepareTrialPackage,TRIAL_PACKAGE_BYTES } from "../src/lib/trial/package";
 import { saveKohoImportPlan } from "../src/repositories/drizzle";
 import { trialArm,startTrialWatch } from "../src/lib/trial/job";
-import type { TrialAudience } from "../src/lib/trial/identity";
 import { OperatorAccess,operatorTicketSchema } from "../src/lib/trial/operator-access";
 import { beginOperatorReceipt } from "../src/lib/trial/operator-journal";
 import { connectPermitDatabase } from "../src/lib/trial/database-client";
 import { ownerStorageBudget } from "../src/lib/trial/storage-budget";
 import { TrialNetworkBudget } from "../src/lib/trial/network-budget";
+
+import { trialAzureCliPythonSchema, trialOwnerCredential } from "./trial-owner-token";
 
 const commands=z.discriminatedUnion("command",[
   z.object({command:z.literal("initialize-ledger")}).strict(),
@@ -37,25 +36,8 @@ const commands=z.discriminatedUnion("command",[
     publicationDate:z.string().regex(/^\d{8}$/),sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),
   z.object({command:z.literal("delivery-reconcile"),caseId:z.number().int().positive(),deliveryId:z.uuidv4(),abandonPartial:z.boolean()}).strict(),
 ]);
-export const trialOperatorInput=z.object({environment:z.record(z.string(),z.string()),databaseUrl:z.string(),request:commands,
+export const trialOperatorInput=z.object({azureCliPython:trialAzureCliPythonSchema,environment:z.record(z.string(),z.string()),databaseUrl:z.string(),request:commands,
   access:operatorTicketSchema.optional(),recoveryDirectory:z.string().optional()}).strict();
-const exec=promisify(execFile);
-/** Local only. CLI output is consumed in memory and never forwarded or logged. */
-function operatorStorageCredential(p:TrialPolicy,access:OperatorAccess,audience:TrialAudience="https://storage.azure.com/"){
-let cached:{token:string;expiresOnTimestamp:number}|undefined;
-return{async getToken(){
-  access.check(30_000);
-  if(cached&&cached.expiresOnTimestamp>Date.now()+60_000)return cached;
-  const result=await exec(process.platform==="win32"?"az.cmd":"az",["account","get-access-token","--resource",audience,"--output","json","--only-show-errors"],
-    {windowsHide:true,shell:process.platform==="win32",timeout:30_000,maxBuffer:65536,signal:access.signal});
-  access.check();
-  const token=JSON.parse(result.stdout);
-  if(typeof token.accessToken!=="string"||token.tenant?.toLowerCase()!==p.auth.tenantId.toLowerCase())throw new TrialError();
-  const claims=JSON.parse(Buffer.from(token.accessToken.split(".")[1],"base64url").toString("utf8"));
-  if(claims.oid?.toLowerCase()!==p.auth.ownerId.toLowerCase()||claims.tid?.toLowerCase()!==p.auth.tenantId.toLowerCase()||
-    claims.aud?.replace(/\/$/,"")!==audience.replace(/\/$/,"")||!Number.isFinite(Number(token.expires_on))||Number(token.expires_on)*1000<=Date.now()+60_000)throw new TrialError();
-  cached={token:token.accessToken,expiresOnTimestamp:Number(token.expires_on)*1000};return cached;
-}};}
 export async function runTrialOperator(value:unknown){
   const input=trialOperatorInput.parse(value),p=readTrialPolicy(input.environment);
   if(input.request.command==="package-preview")return executeTrialOperator(input);
@@ -92,7 +74,7 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
   const url=new URL(input.databaseUrl);
   if(url.protocol!=="postgresql:"||url.hostname!==p.database.host||Number(url.port||5432)!==5432||
     decodeURIComponent(url.pathname.slice(1))!==p.database.database||decodeURIComponent(url.username)!==p.database.migratorUser||!url.password||url.search||url.hash)throw new TrialError();
-  const credential=operatorStorageCredential(p,access);
+  const credential=trialOwnerCredential(p,access,input.azureCliPython);
   const storageBudget=ownerStorageBudget(input.recoveryDirectory!,access);
   const {client,close}=await connectPermitDatabase({url:url.href,host:p.database.host,database:p.database.database,user:p.database.migratorUser},access,credential);
   try{
@@ -148,7 +130,7 @@ async function executeTrialOperator(value:unknown,access?:OperatorAccess){
     const caseId=request.command==="setting-save"?request.setting.caseId:request.caseId;
     const sample=p.samples.find(s=>s.caseId===caseId);if(!sample)throw new TrialError("trial_sample_not_ready");
     if(request.command==="status")return{runs:await watch.history(caseId),deliveries:await new ManagedDeliveryRepository(database).list(caseId),ledgerRevision:(await ledger.read()).state.revision};
-    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),operatorStorageCredential(p,access,"https://management.azure.com/"),access,networkBudget));
+    if(request.command==="job-reconcile")return startTrialWatch(watch,caseId,request.runId,"reconcile",ledger,trialArm(p,AbortSignal.timeout(60000),trialOwnerCredential(p,access,input.azureCliPython,"https://management.azure.com/"),access,networkBudget));
     if(request.command==="delivery-reconcile")return{status:await reconcileManagedDelivery(new ManagedDeliveryRepository(database),new ManagedPrivateStorage(container("artifacts")),caseId,request.deliveryId,request.abandonPartial,ledger)};
     requireTrialActive(p);
     if(request.command==="setting-save"){
