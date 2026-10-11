@@ -87,6 +87,17 @@ Provision separately caps HTTP at 170 and token misses at 10. Count and fsync
 before every send; retain charges for failed or unknown outcomes. A shared
 memory-only token pool binds OWNER/tenant/audience and revokes on time faults.
 
+The existing lifetime journal also contains one historical debit marker pair:
+intent at row 1, three ordinary OWNER ARM request rows, and completion at row 5
+(zero-based after the binding row). Replay validates the exact historical source
+hashes, same-directory references, matching intent/completion and 128-to-131
+counts. The two markers are metadata and add no charge; their three request
+rows are counted once normally. Thus the 62-row prefix remains seed 128/32/0
+plus 59 requests, totaling 187/32/0. No record, seed or existing charge is
+rewritten. Unknown, partial, duplicate, reordered or inconsistent markers are
+rejected before the new phase plan or any send. Historical source files are
+not reread as current evidence merely to replay this already recorded debit.
+
 Before and after publishing the new runtime image, authenticate reads proving
 the old tag and digest are unchanged. New-tag preexistence or an unknown upload
 stops forward work. A positively acknowledged guardian publication can still

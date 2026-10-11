@@ -175,6 +175,43 @@ def _budget_need(ok,reason):
     if not ok:raise Denied(reason)
 def _nonnegative_int(value):return type(value) is int and value>=0
 
+_HISTORY_SOURCE_SHA256='b02afe5570cc0999c243050378831b6665f5bc9ffc1a2d4a9bb633e5de21a13b'
+_HISTORY_SOURCES=(('preflight.local.json','92a0d1d45bef5d58cd5b23cd51f2361321ddb0bc71ddedcc04e7f0c9136e32c9'),
+    ('network-summary.local.json','7c6fdbac1c5e88195586ff84a82202b3b41482b30afd97b303d91ff983e87645'))
+
+def validated_history_marker_indexes(records,*,binding,seed,directory):
+    """Validate the one historical three-request debit without charging it again.
+
+    The original producer stored intent, three ordinary requests, then complete
+    at positions 1..5. Their source hashes are historical provenance; the source
+    files may since have changed. This function performs no filesystem access.
+    """
+    starts=[i for i,r in enumerate(records) if r['event']=='history_debit_intent']
+    ends=[i for i,r in enumerate(records) if r['event']=='history_debit_complete']
+    _budget_need(all(not r['event'].startswith('history_') or r['event'] in
+        ('history_debit_intent','history_debit_complete') for r in records),'budget_history_event')
+    if not starts and not ends:return frozenset()
+    _budget_need(starts==[1] and ends==[5],'budget_history_pair')
+    _budget_need(seed==_ORIGINAL_SEED and all(type(v) is int for v in seed.values())
+        and binding.get('source_sha256')==_HISTORY_SOURCE_SHA256,'budget_history_binding')
+    start,end=records[1]['value'],records[5]['value']
+    common={'source_sha256','subsequent_sources','kind','requests'}
+    _budget_need(type(start) is dict and type(end) is dict and set(start)==common|{'start_count'}
+        and set(end)==common|{'end_count'},'budget_history_schema')
+    _budget_need(start['source_sha256']==_HISTORY_SOURCE_SHA256 and start['kind']=='owner_arm'
+        and type(start['requests']) is int and start['requests']==3 and type(start['start_count']) is int and start['start_count']==128
+        and type(end['requests']) is int and type(end['end_count']) is int and end['end_count']==131
+        and {k:end[k] for k in common}=={k:start[k] for k in common},'budget_history_values')
+    sources=start['subsequent_sources'];root=Path(directory)
+    _budget_need(root.is_absolute() and type(sources) is list and len(sources)==2,'budget_history_sources')
+    for item,(name,checksum) in zip(sources,_HISTORY_SOURCES):
+        _budget_need(type(item) is dict and set(item)=={'path','sha256'} and type(item['path']) is str
+            and item['sha256']==checksum,'budget_history_sources')
+        path=Path(item['path'])
+        _budget_need(path.is_absolute() and path.parent==root and path.name==name and '..' not in path.parts,'budget_history_sources')
+    _budget_need(all(r['event']=='request' and r['value']=={'kind':'owner_arm'} for r in records[2:5]),'budget_history_requests')
+    return frozenset((1,5))
+
 class ControlBudget:
     """Original lifetime ledger with one append-only verified attempt plan."""
     LIMITS={'owner_arm':600,'owner_control_blob':3000,'heartbeat_blob':5250}
@@ -216,7 +253,9 @@ class ControlBudget:
     def _replay(self,verified=None):
         self._plan=None;self._counts=deepcopy(self.seed);self._used=self._blank_usage();self._purpose_used=self._blank_purposes()
         with self.journal.mutex:records=deepcopy(self.journal.records)
-        for record in records[1:]:
+        markers=validated_history_marker_indexes(records,binding=self.binding,seed=self.seed,directory=self.journal.path.parent)
+        for index,record in enumerate(records[1:],1):
+            if index in markers:continue
             event,value=record['event'],record['value']
             if event=='phase_plan':
                 _budget_need(self._plan is None,'budget_plan_repeated');self._validate_plan(value);_budget_need(value['counts_before']==self._counts,'budget_plan_snapshot');self._plan=deepcopy(value);continue
