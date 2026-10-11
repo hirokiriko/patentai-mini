@@ -348,6 +348,21 @@ to formal trial end or invent a fresh monthly allocation.
 
 Directory binding formats are explicit: Python recovery_directory_digest uses SHA256 of the canonical JSON string path; the signed TS recoveryDirectoryDigest uses SHA256 of the raw resolved path. Do not interchange the two.
 
+OWNER guardian commands must run under the existing approved Azure CLI Python.
+Token acquisition invokes that same `sys.executable -I -m azure.cli account
+get-access-token` once, with no shell, PATH wrapper, installation or fallback.
+The normal OWNER profile/broker is inherited; stdout/stderr stay captured and
+the existing absolute deadline applies. A missing CLI module stops this path.
+Only ARM token claims accept the canonical `management.azure.com` and
+`management.core.windows.net` resource identifiers (with zero or one final
+slash). Storage keeps only `https://storage.azure.com` with that same slash
+handling. Tenant, principal and expiry checks remain mandatory. Microsoft
+documents the ARM resource identifier separately from its request endpoint in
+the [REST reference](https://learn.microsoft.com/en-us/rest/api/azure/) and
+[CLI endpoint list](https://learn.microsoft.com/en-us/cli/azure/azure-cli-endpoints).
+Recovery's exact execution GET must return the requested execution ID before
+replica inspection; a different execution with the same template is insufficient.
+
 ## Shared lifetime communication counter
 
 The trial-only bootstrap creates `public.trial_network_budget` inside T-DB,

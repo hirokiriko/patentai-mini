@@ -13,6 +13,7 @@ import json
 import multiprocessing
 import os
 import subprocess
+import sys
 import time
 import uuid
 from copy import deepcopy
@@ -104,7 +105,12 @@ def json_body(response):
 
 
 class AzureCredential:
-    """Normal existing CLI chain or ACA-injected MI; no credential creation."""
+    """Existing CLI Python/OWNER profile or ACA-injected MI; no fallback.
+
+    OWNER must launch this workflow with its existing Azure CLI interpreter.
+    Isolated module execution ignores cwd/PYTHONPATH without replacing that
+    interpreter's installed CLI, normal OWNER profile or configured broker.
+    """
     def __init__(self, mode, principal_id, tenant_id, http, environment=None):
         if mode not in ('owner', 'guardian'):
             raise ValueError('credential_mode')
@@ -115,11 +121,20 @@ class AzureCredential:
         if audience not in ('https://management.azure.com/', 'https://storage.azure.com/'):
             raise Denied('token_audience')
         if self.mode == 'owner':
-            result = subprocess.run(['az.cmd' if os.name == 'nt' else 'az', 'account', 'get-access-token',
-                '--resource', audience, '--output', 'json', '--only-show-errors'], capture_output=True,
-                timeout=deadline.remaining(), check=True, creationflags=0x08000000 if os.name == 'nt' else 0)
-            value = json.loads(result.stdout)
-            token = value.get('accessToken', '')
+            try:
+                # One fixed executable and command. Never use PATH discovery,
+                # a shell/batch wrapper, a second chain or a caller CLI path.
+                result = subprocess.run([sys.executable, '-I', '-m', 'azure.cli', 'account', 'get-access-token',
+                    '--resource', audience, '--output', 'json', '--only-show-errors'], capture_output=True,
+                    stdin=subprocess.DEVNULL, shell=False, timeout=deadline.remaining(), check=True,
+                    creationflags=0x08000000 if os.name == 'nt' else 0)
+                if len(result.stdout)>131072:
+                    raise ValueError()
+                value = json.loads(result.stdout)
+                token = value.get('accessToken', '')
+            except Exception:
+                # CLI stderr/stdout can contain private profile/token material.
+                raise Denied('owner_credential_unavailable') from None
         else:
             endpoint = self.env.get('IDENTITY_ENDPOINT', '')
             u = urlsplit(endpoint)
@@ -133,8 +148,16 @@ class AzureCredential:
                 raise Denied('identity_response')
             token = value.get('access_token', '')
         try:
+            # Public Azure ARM has these two registered resource identifiers.
+            # Only canonical strings (with zero or one final slash) are accepted;
+            # Storage retains its single resource and never receives ARM aliases.
+            audiences = ('https://management.azure.com', 'https://management.azure.com/',
+                'https://management.core.windows.net', 'https://management.core.windows.net/') if audience == 'https://management.azure.com/' else (
+                'https://storage.azure.com', 'https://storage.azure.com/')
+            if not isinstance(token,str) or not 0<len(token)<=32768 or any(c.isspace() for c in token):
+                raise ValueError()
             claims = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==='))
-            if claims['oid'].lower() != self.principal or claims['tid'].lower() != self.tenant or claims['aud'].rstrip('/') != audience.rstrip('/') or claims['exp'] <= time.time() + deadline.remaining():
+            if claims['oid'].lower() != self.principal or claims['tid'].lower() != self.tenant or claims['aud'] not in audiences or claims['exp'] <= time.time() + deadline.remaining():
                 raise ValueError()
         except Exception:
             raise Denied('identity_binding') from None

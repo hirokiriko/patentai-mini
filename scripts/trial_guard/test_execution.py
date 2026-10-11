@@ -192,6 +192,19 @@ class AzureJobExecutionTests(unittest.TestCase):
                 self.assertEqual(starter.status, status)
                 self.assertEqual([(method, suffix) for method, suffix, _ in self.f.calls], [('GET', '/executions/guard-one')])
 
+    def test_exact_get_rejects_another_execution_even_with_identical_template(self):
+        for discover in (False,True):
+            with self.subTest(discover=discover):
+                f=ArmFixture()
+                # A matching collection must not let the following exact GET
+                # substitute a different execution from the same Job/template.
+                f.collection={'value':[deepcopy(f.execution_reply)]}
+                f.execution_reply['id']=f.job+'/executions/guard-other'
+                with self.assertRaisesRegex(Denied,'execution_binding'):
+                    f.starter().recover(f.request_id,None if discover else f.execution_id)
+                self.assertEqual(f.posts(),[])
+                self.assertFalse(any(suffix.endswith('/replicas') for _,suffix,_ in f.calls))
+
     def test_running_recovery_still_checks_current_replica_and_does_not_assert_historical_liveness(self):
         runtime = self.f.starter().start(self.f.request_id)
         self.f.clock.advance(310); self.f.calls.clear(); self.f.replicas = {'value': []}

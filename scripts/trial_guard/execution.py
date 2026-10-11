@@ -138,7 +138,7 @@ class AzureJobStarter:
         if not self._execution(execution_id):raise Denied('execution_target')
         name=execution_id.split('/')[-1]
         r,value=self.request('/executions/'+name)
-        if r['status']!=200 or not self._match(value,request_id):raise Denied('execution_binding')
+        if r['status']!=200 or value.get('id')!=execution_id or not self._match(value,request_id):raise Denied('execution_binding')
         p=value['properties'];start=parse(p['startTime'])
         self.status=p.get('status')
         if self.status not in (('Running','Succeeded','Failed','Stopped') if self.recovery_only else ('Running',)) or not parse(self.c['seed_not_before'])<=start<=self.clock.utc():raise Denied('execution_not_running')
