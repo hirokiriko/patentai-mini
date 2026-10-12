@@ -348,6 +348,21 @@ class PublicationBridgeTests(unittest.TestCase):
         self.assertEqual(1, self.fixture.git.call_count)
         self.assert_prepared_once()
 
+    def test_verified_v3_child_routes_to_distinct_durable_output(self):
+        from scripts.trial_provision import attempt
+        from scripts.trial_provision.tests import test_published_succession as v3
+        data=v3.published_fixture(self.directory)
+        descriptor=attempt.journal_descriptor(data['new']['config'],v3.verified(data))
+        publication=self.publication()
+        with self.journal() as journal,self.budget(),patch.object(attempt,'journal_descriptor',return_value=descriptor):
+            binding=bridge.prepare_bridge(publication,journal,self.reference,now=self.clock.utc())
+        output=self.directory/'provision-successor-v3-config.json'
+        self.assertEqual(binding['output']['path'],str(output))
+        self.assertEqual(binding['output']['sha256'],hashlib.sha256(output.read_bytes()).hexdigest())
+        self.assertFalse(self.output.exists())
+        self.assertEqual(len(self.values('core_plan')),1)
+        self.credential.assert_not_called();self.http.assert_not_called();self.wire.assert_not_called()
+
     def test_clock_advancing_past_start_reuses_frozen_core_and_allocations(self):
         publication = self.publication()
         with self.journal() as journal, self.budget():

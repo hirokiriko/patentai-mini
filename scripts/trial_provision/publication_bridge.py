@@ -128,7 +128,8 @@ def prepare_bridge(publication, journal, reference, *, now):
     child_name, _ = journal_descriptor(publication,publication.get('verified_attempt'))
     output = directory / {'trial-provision':OUTPUT_NAME,
         'trial-provision-next':'provision-next-config.json',
-        'trial-provision-successor':'provision-successor-config.json'}[child_name]
+        'trial-provision-successor':'provision-successor-config.json',
+        'trial-provision-successor-v3':'provision-successor-v3-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')
