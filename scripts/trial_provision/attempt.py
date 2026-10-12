@@ -133,10 +133,13 @@ def verify_attempt(config,manifest,*,authority_raw,activation_raw,parent_journal
     except (KeyError,TypeError,ValueError,AttributeError,IndexError,OverflowError):raise Denied('attempt_binding') from None
 def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,parent_final_raw,artifacts,trusted_hash,now):
     _need(_sha(authority_raw)==_hex(trusted_hash),'attempt_trusted_authority');a,activation=_json(authority_raw),_json(activation_raw)
-    _keys(a,('schema','approval','decision','design_sha256','attempt_id','manifest_sha256','owner_id','task_id','head','code_sources_sha256',
+    successor=type(a.get('schema')) is int and a['schema']==2
+    fields=('schema','approval','decision','design_sha256','attempt_id','manifest_sha256','owner_id','task_id','head','code_sources_sha256',
         'budget_binding_sha256','parent','tags','retained_runtime','guardian_prior_digest','artifact_sha256','publish_from','approved_at',
-        'counts_before','phase_caps','unallocated','initial_forecast_yen','catalog_options'))
-    _need(type(a['schema']) is int and a['schema']==1 and a['approval']=='ISSUE148_LINKED_ATTEMPT_V1' and a['decision']=='APPROVED'
+        'counts_before','phase_caps','unallocated','initial_forecast_yen','catalog_options')
+    _keys(a,fields+(('succession',) if successor else ()))
+    _need(type(a['schema']) is int and a['schema']==(2 if successor else 1)
+        and a['approval']==('ISSUE148_LINKED_ATTEMPT_V2' if successor else 'ISSUE148_LINKED_ATTEMPT_V1') and a['decision']=='APPROVED'
         and a['design_sha256']==DESIGN_SHA256 and isinstance(a['attempt_id'],str) and re.fullmatch('[A-Za-z0-9_-]{1,128}',a['attempt_id']),'attempt_authority')
     _need(type(a['initial_forecast_yen']) is int and 0<a['initial_forecast_yen']<=4500,'attempt_cost')
     options=a['catalog_options'];_keys(options,('temporary_owner_set','excluded_databases'))
@@ -197,14 +200,23 @@ def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,pare
         _need(config['runtime_deadline']==FORMAL_END and config['auth_deadline']==AUTH_END and config['cleanup_deadlines']=={
             'guardian':w['guardian']['end'],'owner_input':w['owner_input']['end'],'runtime':FORMAL_END,'auth':AUTH_END},'attempt_cleanup_deadline')
         if 'resource_bindings' in config:_need(config['resource_bindings']['code_sha']==a['head'] and config['resource_bindings']['guardian_deadline']==w['guardian']['end'],'attempt_resource_binding')
-    return VerifiedAttempt({'authority':a,'activation':activation,'authority_sha256':trusted_hash,'activation_sha256':_sha(activation_raw),'manifest_digest':digest(manifest)},_SEAL)
+    proof={'authority':a,'activation':activation,'authority_sha256':trusted_hash,'activation_sha256':_sha(activation_raw),'manifest_digest':digest(manifest)}
+    if successor:
+        from .succession import validate_proof
+        proof['succession']=validate_proof(a,parsed['local_ready'],config,manifest,
+            parent_journal_raw=parent_journal_raw,parent_final_raw=parent_final_raw,now=now)
+    return VerifiedAttempt(proof,_SEAL)
 def journal_descriptor(config,verified=None):
     b=config['control_budget']['binding'];base={'manifest_sha256':config['sources']['manifest']['sha256'],'owner_id':b['owner_id'],'task_id':b['task_id']}
     if 'attempt' not in config:_need(verified is None,'attempt_not_configured');return 'trial-provision',base
     proof=_proof(verified);a=proof['authority']
     _need(config['attempt']['sha256']==proof['activation_sha256'] and config['frozen_head']==a['head'] and digest(b)==a['budget_binding_sha256']
         and base=={'manifest_sha256':a['manifest_sha256'],'owner_id':a['owner_id'],'task_id':a['task_id']},'attempt_descriptor')
-    return CHILD_JOURNAL,{**base,'attempt':{'schema':1,'id':a['attempt_id'],'binding_digest':verified.binding_digest,'authority_sha256':proof['authority_sha256'],
+    name=CHILD_JOURNAL
+    if 'succession' in proof:
+        from .succession import CHILD_NAME
+        name=CHILD_NAME
+    return name,{**base,'attempt':{'schema':1,'id':a['attempt_id'],'binding_digest':verified.binding_digest,'authority_sha256':proof['authority_sha256'],
         'activation_sha256':proof['activation_sha256'],'parent':deepcopy(a['parent'])}}
 def effective_slot(manifest,head,slot,verified=None):
     if verified is None:

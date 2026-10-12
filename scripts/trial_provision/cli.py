@@ -30,7 +30,7 @@ ROOT=Path(__file__).resolve().parents[2]
 MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
-    'trial_provision':('attempt','attempt_dispatch','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
+    'trial_provision':('attempt','attempt_dispatch','succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
         'providers','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}

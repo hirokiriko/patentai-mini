@@ -111,6 +111,54 @@ unchanged total ceilings and existing unsettled reservations. A proposed
 reallocation of the initial non-AI allowance is an approval delta, not an
 automatic change to the live ledger. Do not treat missing billing as zero.
 
+## Local Docker readiness and a stopped attempt
+
+An image build receipt does not establish that the same local Docker engine is
+still running at publication time. Before a first publication, inspect the
+fixed image using the pinned Docker executable, named pipe, tag and image ID,
+an exclusive OWNER-only empty credential configuration and a maximum twenty
+second timeout. Keep the existing authenticated inspect as a second check.
+There is no fallback context/pipe, automatic engine start, pull, retag or push
+retry. A missing engine, timeout, malformed output or wrong image stops before
+OWNER authentication, registry HTTP and request debits. Preparation must also
+check both local images before fresh metadata collection.
+
+Empty probe configurations have their own durable path and file identities.
+Cleanup removes only the known files and directory, without recursive deletion
+or adoption of an unrecorded path. Local cleanup remains available after the
+publication window. Previous slot/probe history prevents another first attempt
+before authentication. Positively acknowledged uploads can still use the
+existing GET-only readback recovery without a running Docker engine.
+
+The stopped pre-push attempt retains its seven-row child journal and all 71
+control-budget rows: the original seed, the 62-row historical prefix, the first
+phase plan and eight charged requests. Its totals are 195/32/0. Neither Docker
+startup nor successful local inspection authorizes continuing that attempt.
+
+A separately approved V2 succession may append exactly one transition to the
+same physical budget and use `trial-provision-successor` as its new child. Its
+sealed proof binds the original V1 authority, activation, publication, child and
+counter bytes. Only the exact stopped-before-push history is eligible; any
+write intent, unknown outcome, changed bytes, duplicate transition or partial
+record fails closed. Original completed-parent evidence remains at 187/32/0;
+it is not relabeled as the new starting state.
+
+The successor inherits only unspent allocations: OWNER ARM fresh reads 18,
+publication 22, provision 180, run 42, cleanup 120 and unallocated 23; a separately
+hash-bound `succession.phase_reallocation` may explicitly transfer exactly six
+unspent OWNER ARM requests from provision to fresh reads, producing 24/22/174/42/120
+with unallocated 23. The fixed normal provision inventory uses 135 HTTP requests
+and at most ten OWNER token misses, leaving 29 of those 174 requests for additional
+HTTP observations (not 29 poll invocations); exceeding this allowance stops forward
+work while cleanup remains reserved.
+With or without this fixed transfer, the spent 195 and remaining allocations sum
+to the unchanged 600 ceiling. The non-cleanup
+ceiling remains 457. Existing cost estimates, reserves and unsettled amounts
+are retained. A new reviewed HEAD, exact local builds, tests, independent
+review, CI and a consolidated approval with explicit fixed windows are required
+before issuing any successor activation or writing the real transition. Local
+tests use copies/fictional journals and never append to the 71-row original.
+
 ## Verification and remaining live acceptance
 
 CI runs lint, type checks, both Python suites, the managed build, Vitest and

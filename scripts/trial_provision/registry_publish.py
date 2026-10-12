@@ -28,7 +28,7 @@ from urllib.parse import urlencode
 from scripts.trial_guard.adapters import Deadline, digest, encoded
 from scripts.trial_guard.lifecycle import Denied, parse
 from .journal import CountedControlHttp
-from .private_io import create_owner_file, verify_owner_file, _owner_security_attributes
+from .private_io import create_owner_file, verify_owner_file, verify_owner_directory, _owner_security_attributes
 from .registry import _binding, HEX, MAX_BODY, ACCEPT
 from .rehearsal_cli import _Clock
 
@@ -47,55 +47,89 @@ def sha(raw): return hashlib.sha256(raw).hexdigest()
 
 def _identity(path):
     value = path.lstat()
-    need(not path.is_symlink())
+    need(not path.is_symlink() and not getattr(value,'st_file_attributes',0)&1024)
     return [value.st_dev, value.st_ino]
 
 
-def _mkdir(path):
+def _mkdir(path, *, directory=False):
     if os.name != 'nt':
         path.mkdir(mode=0o700)
         return
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, wintypes.LPVOID]
     kernel.CreateDirectoryW.restype = wintypes.BOOL
-    with _owner_security_attributes() as attributes:
+    with _owner_security_attributes(directory=directory) as attributes:
         if not kernel.CreateDirectoryW(str(path), ctypes.byref(attributes)):
             raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _config_path(journal, slot="guardian"):
+def _config_path(journal, slot="guardian", *, probe=False):
     need(slot in ("guardian", "runtime"))
-    return journal.path.parent / ('trial-' + slot + '-docker-' + digest(journal.values('binding')[0])[:16])
+    return journal.path.parent / ('trial-' + slot + ('-docker-probe-' if probe else '-docker-') + digest(journal.values('binding')[0])[:16])
 
 
-def cleanup_docker_config(journal, slot="guardian"):
+def cleanup_docker_config(journal, slot="guardian", *, probe=False):
     """Local-only recovery: remove just our recorded file/directory, no recurse."""
-    path = _config_path(journal,slot)
-    values = journal.values(slot + '_docker_config')
-    dirs = journal.values(slot + '_docker_directory')
+    path = _config_path(journal,slot,probe=probe)
+    prefix = slot + ('_docker_probe' if probe else '_docker')
+    values = journal.values(prefix + '_config')
+    dirs = journal.values(prefix + '_directory')
     need(len(values) <= 1 and len(dirs) <= 1)
     if not dirs:
-        need(not path.exists())
+        need(not os.path.lexists(path))
         return True
     need(dirs[0]['path_digest'] == digest(str(path)))
-    if path.exists():
+    if os.path.lexists(path):
         need(path.is_dir() and _identity(path) == dirs[0]['identity'])
+        if probe: verify_owner_directory(path)
         file = path / 'config.json'
-        if file.exists():
+        if os.path.lexists(file):
             need(len(values) == 1 and values[0]['identity'] == _identity(file))
             verify_owner_file(file)
             file.unlink()
         # An unexpected file is never enumerated or recursively deleted.
         path.rmdir()
-    need(not path.exists() and not (path / 'config.json').exists())
-    if not journal.values(slot + '_docker_config_absent'):
-        journal.append(slot + '_docker_config_absent', {'path_digest': digest(str(path)), 'absent': True})
+    need(not os.path.lexists(path) and not os.path.lexists(path / 'config.json'))
+    if not journal.values(prefix + '_config_absent'):
+        journal.append(prefix + '_config_absent', {'path_digest': digest(str(path)), 'absent': True})
     return True
+
+
+def _write_empty_probe(journal, slot):
+    """One exclusive empty config, with durable ownership before file bytes.
+
+    Existing paths/history are never adopted, even if they appear empty. A
+    partial creation can only use local cleanup; it cannot authorize a resend.
+    """
+    path = _config_path(journal,slot,probe=True)
+    prefix = slot + '_docker_probe'
+    need(not os.path.lexists(path) and not any(journal.values(prefix + suffix)
+        for suffix in ('_directory','_config','_config_absent','_result')))
+    _mkdir(path,directory=True)
+    journal.append(prefix + '_directory', {'path_digest':digest(str(path)), 'identity':_identity(path)})
+    verify_owner_directory(path)
+    file = path / 'config.json'
+    fd = create_owner_file(file)
+    try:
+        journal.append(prefix + '_config', {'identity':_identity(file)})
+        with os.fdopen(fd,'wb') as stream:
+            fd = None
+            stream.write(encoded({'auths':{}})); stream.flush(); os.fsync(stream.fileno())
+        verify_owner_file(file)
+    finally:
+        if fd is not None: os.close(fd)
+    return path
+
+
+def _docker_environment(config):
+    environment = {k:os.environ[k] for k in ('SYSTEMROOT','WINDIR','TEMP','TMP') if k in os.environ}
+    environment.update(DOCKER_CONFIG=str(config), PATH='')
+    return environment
 
 
 def _write_config(journal, host, token, slot):
     path = _config_path(journal,slot)
-    need(not path.exists() and not journal.values(slot + '_docker_directory'))
+    need(not os.path.lexists(path) and not journal.values(slot + '_docker_directory'))
     _mkdir(path)
     journal.append(slot + '_docker_directory', {'path_digest': digest(str(path)), 'identity': _identity(path)})
     file = path / 'config.json'
@@ -407,11 +441,38 @@ class _Publisher:
 
     def command(self, config, args):
         # No default context, DOCKER_* override, plugin directory or helper PATH.
-        environment = {k:os.environ[k] for k in ('SYSTEMROOT','WINDIR','TEMP','TMP') if k in os.environ}
-        environment['DOCKER_CONFIG'] = str(config)
-        environment['PATH'] = ''
         return self.runner([self.bundle['docker_path'],'--config',str(config),'--host',self.bundle['docker_host'],*args],
-            timeout=min(self.time(),self.exp-self.clock.utc().timestamp()-5),environment=environment)
+            timeout=min(self.time(),self.exp-self.clock.utc().timestamp()-5),environment=_docker_environment(config))
+
+    def local_preflight(self):
+        """Exact local image check before the first credential or HTTP request."""
+        reason = 'local_config'
+        try:
+            config = _write_empty_probe(self.journal,self.slot)
+            reason = 'process'
+            code, output = self.runner([self.bundle['docker_path'],'--config',str(config),
+                '--host',self.bundle['docker_host'],'image','inspect','--format','{{json .Id}}',self.tag],
+                timeout=min(20,self.time()),environment=_docker_environment(config))
+            reason = 'exit_code'; need(type(code) is int and code == 0)
+            reason = 'image_id'; need(json.loads(output) == self.bundle['local_image_id'])
+            self.time()
+            reason = 'verified'
+        except Exception as error:
+            # Store classifications only; subprocess output may contain private
+            # paths/registry names and is never copied into the journal.
+            if isinstance(error,subprocess.TimeoutExpired): reason = 'timeout'
+            elif isinstance(error,OSError): reason = 'process_unavailable'
+            raise Denied('docker_local_preflight_' + reason) from None
+        finally:
+            cleanup_docker_config(self.journal,self.slot,probe=True)
+            self.journal.append(self.slot + '_docker_probe_result', {'schema':1,
+                'publication_preparation_digest':self.preparation,'run_binding_digest':self.run_digest,
+                'docker_sha256':self.bundle['docker_sha256'],'docker_host':self.bundle['docker_host'],
+                'tag_sha256':sha(self.tag.encode()),'local_image_id':self.bundle['local_image_id'],
+                'empty_config_sha256':sha(encoded({'auths':{}})),
+                'checked_at':self.clock.utc().isoformat(),'status':reason,
+                'temporary_config_absent':True,'new_owner_token_calls':0,'new_http_requests':0,
+                'automatic_retry':False})
 
     def run(self):
         intents = [v for v in self.journal.values('intent') if v['operation_id'] == self.ident]
@@ -425,6 +486,14 @@ class _Publisher:
             try: return self.readback(receipt)
             except Exception: return receipt
         need(not self.journal.values(self.slot + '_image_namespace'))
+        # Fail before authentication on any previous first-publication history.
+        # Cleanup/absence does not grant another attempt or another token pair.
+        need(not any(self.journal.values(self.slot + suffix) for suffix in
+            ('_docker_directory','_docker_config','_docker_config_absent',
+             '_docker_probe_directory','_docker_probe_config','_docker_probe_config_absent','_docker_probe_result')))
+        # Validate the existing budget object's integrity without spending.
+        need(self.budget.count('owner_arm') < 600)
+        self.local_preflight()
         self.authenticate()
         try:
             config = _write_config(self.journal,self.binding['login_server'],self.access,self.slot)

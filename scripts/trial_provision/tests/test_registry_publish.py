@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -14,6 +15,7 @@ from unittest.mock import Mock, patch
 from scripts.trial_guard.adapters import digest, encoded
 from scripts.trial_guard.lifecycle import Denied
 from scripts.trial_provision.journal import Journal, ControlBudget
+from scripts.trial_provision import registry_publish as publisher
 from scripts.trial_provision.registry_publish import run_registry_publish, registry_cleanup_bundle, cleanup_docker_config, _config_path, prepare_publication, verified_publication_images, bind_publication, docker_command
 from scripts.trial_provision.registry_cli import _prepare
 from scripts.trial_provision.private_io import verify_owner_file
@@ -103,10 +105,17 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(argv[3:5],['--host',self.bundle['docker_host']])
         config=Path(argv[2]);verify_owner_file(config/'config.json')
         value=json.loads((config/'config.json').read_bytes());self.config_observed=value
-        self.assertEqual({'auths'},set(value));self.assertEqual({self.host},set(value['auths']))
-        self.assertEqual({'auth'},set(value['auths'][self.host]))
-        self.assertEqual('00000000-0000-0000-0000-000000000000:'+self.access,
-            base64.b64decode(value['auths'][self.host]['auth']).decode())
+        self.assertEqual({'auths'},set(value))
+        if value['auths']=={}:
+            self.assertTrue(config.name.startswith('trial-'+self.bundle['slot']+'-docker-probe-'))
+            tag=self.manifest['cleanupImageTag' if self.bundle['slot']=='guardian' else 'imageTag']
+            self.assertEqual(['image','inspect','--format','{{json .Id}}',self.host+'/'+self.repo+':'+tag],argv[5:])
+            self.assertLessEqual(timeout,20)
+        else:
+            self.assertEqual({self.host},set(value['auths']))
+            self.assertEqual({'auth'},set(value['auths'][self.host]))
+            self.assertEqual('00000000-0000-0000-0000-000000000000:'+self.access,
+                base64.b64decode(value['auths'][self.host]['auth']).decode())
         self.assertEqual('',environment['PATH']);self.assertEqual(str(config),environment['DOCKER_CONFIG'])
         self.assertFalse({'DOCKER_CONTEXT','DOCKER_HOST','DOCKER_AUTH_CONFIG','HOME','USERPROFILE'} & set(environment))
         self.assertGreater(timeout,0)
@@ -131,6 +140,27 @@ class PublisherTests(unittest.TestCase):
         self.assertNotIn(self.access or 'UNUSED_TOKEN',text)
         self.assertNotIn('fixture-owner-token',text)
         self.assertFalse(_config_path(self.journal).exists())
+        self.assertFalse(_config_path(self.journal,probe=True).exists())
+
+    def assert_before_auth_failure(self):
+        self.credential.token.assert_not_called();self.assertFalse(self.calls)
+        self.assertEqual(128,self.budget.count('owner_arm'))
+        self.assertFalse(self.journal.values('intent'));self.assertEqual(0,self.pushes())
+        self.assertFalse(self.journal.values('guardian_image_namespace'))
+
+    def assert_probe_failure(self,outcome,status):
+        self.process_modify=lambda _argv:outcome
+        with self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assert_private()
+        rows=self.journal.values('guardian_docker_probe_result')
+        self.assertEqual(1,len(rows));self.assertEqual(status,rows[0]['status'])
+        self.assertTrue(rows[0]['temporary_config_absent'])
+        self.assertEqual(0,rows[0]['new_owner_token_calls']);self.assertEqual(0,rows[0]['new_http_requests'])
+        self.assertFalse(rows[0]['automatic_retry'])
+        self.assertNotIn('private diagnostic',json.dumps(self.journal.records))
+        before=len(self.processes)
+        with self.assertRaises(Denied):self.publish()
+        self.assertEqual(before,len(self.processes));self.assert_before_auth_failure()
 
     def test_real_journal_budget_known_ack_readback_cleanup_contract(self):
         result=self.publish();self.assertTrue(result['push_verified']);self.assertTrue(result['temporary_config_absent'])
@@ -151,13 +181,18 @@ class PublisherTests(unittest.TestCase):
         self.modify=lambda m,u:OSError('private') if '/manifests/' in u else None
         self.assertEqual('pending',self.publish()['status']);self.assert_private()
         self.assertTrue(self.journal.latest('guardianImagePush')['write_terminal'])
-        self.modify=None;self.assertTrue(self.publish()['push_verified']);self.assertEqual(1,self.pushes())
+        self.modify=None
+        with patch.object(self,'runner',side_effect=AssertionError('known ACK cannot inspect or push')) as runner:
+            self.assertTrue(self.publish()['push_verified']);runner.assert_not_called()
+        self.assertEqual(1,self.pushes());self.assertEqual(1,len(self.journal.values('guardian_docker_probe_result')))
 
     def test_known_ack_readback_after_original_deadline_no_repush(self):
         self.modify=lambda m,u:OSError('private') if '/manifests/' in u else None
         self.assertEqual('pending',self.publish()['status'])
         self.clock.seconds=3601;self.modify=None
-        self.assertTrue(self.publish()['push_verified']);self.assertEqual(1,self.pushes())
+        with patch.object(self,'runner',side_effect=AssertionError('expired ACK cannot inspect or push')) as runner:
+            self.assertTrue(self.publish()['push_verified']);runner.assert_not_called()
+        self.assertEqual(1,self.pushes())
 
     def test_two_actual_images_import_and_real_cleanup_consumer(self):
         self.assertTrue(self.publish()['push_verified'])
@@ -206,9 +241,144 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(0,self.pushes());self.assert_private()
 
     def test_wrong_local_image_prevents_namespace_and_push(self):
-        self.process_modify=lambda p:(0,encoded('sha256:'+'0'*64)) if 'inspect' in p else None
+        self.assert_probe_failure((0,encoded('sha256:'+'0'*64)),'image_id')
+
+    def test_engine_unavailable_preflight_spends_nothing_and_cannot_retry(self):
+        self.assert_probe_failure((1,b'private diagnostic: missing pipe'),'exit_code')
+
+    def test_local_spawn_failure_spends_nothing_and_cannot_retry(self):
+        self.assert_probe_failure(OSError('private diagnostic'),'process_unavailable')
+
+    def test_local_timeout_spends_nothing_and_cannot_retry(self):
+        self.assert_probe_failure(subprocess.TimeoutExpired('private diagnostic',20),'timeout')
+
+    def test_local_non_json_output_spends_nothing_and_cannot_retry(self):
+        self.assert_probe_failure((0,b'private diagnostic'),'image_id')
+
+    def test_local_bool_exit_is_not_exit_zero(self):
+        self.assert_probe_failure((False,encoded(self.bundle['local_image_id'])),'exit_code')
+
+    def test_successful_probe_is_removed_before_auth_and_post_auth_inspect_remains(self):
+        observed=[]
+        def observe(_method,url):
+            if url.endswith('/oauth2/exchange'):
+                self.assertEqual(1,len(self.processes));self.assertEqual({'auths':{}},self.config_observed)
+                self.assertFalse(_config_path(self.journal,probe=True).exists())
+                self.assertEqual('verified',self.journal.values('guardian_docker_probe_result')[0]['status'])
+                observed.append('authentication_after_probe_cleanup')
+        self.modify=observe
+        self.assertTrue(self.publish()['push_verified'])
+        self.assertEqual(['authentication_after_probe_cleanup'],observed)
+        self.assertEqual(['inspect','inspect','push'],[p[6] for p in self.processes])
+        self.assert_private()
+
+    def test_post_auth_inspect_failure_preserves_spend_and_refuses_retry(self):
+        def fail_authenticated(argv):
+            if 'inspect' in argv and '-docker-probe-' not in Path(argv[2]).name:
+                return 1,b'private diagnostic'
+        self.process_modify=fail_authenticated
         with self.assertRaises(Denied):self.publish()
-        self.assertEqual(0,self.pushes());self.assertFalse(any('/acr/v1/' in u for _,u in self.calls));self.assert_private()
+        self.assertEqual(2,len(self.calls));self.assertEqual(131,self.budget.count('owner_arm'))
+        self.credential.token.assert_called_once();self.assertFalse(self.journal.values('intent'));self.assert_private()
+        before=(len(self.calls),len(self.processes))
+        with self.assertRaises(Denied):self.publish()
+        self.assertEqual(before,(len(self.calls),len(self.processes)));self.assertEqual(131,self.budget.count('owner_arm'))
+
+    def test_previous_cleaned_token_slot_stops_before_auth_or_probe(self):
+        publisher._write_config(self.journal,self.host,'fictional-short-lived-token','guardian')
+        cleanup_docker_config(self.journal)
+        with self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assertFalse(self.processes)
+        self.assertFalse(self.journal.values('guardian_docker_probe_result'))
+
+    def test_deadline_reached_during_probe_prevents_auth(self):
+        def expire(_argv):self.clock.seconds=601
+        self.process_modify=expire
+        with self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assert_private()
+
+    def test_probe_cleanup_failure_never_authenticates_or_claims_absence(self):
+        def foreign_file(argv):
+            (Path(argv[2])/'foreign').write_bytes(b'leave this file')
+        self.process_modify=foreign_file
+        with self.assertRaises(OSError):self.publish()
+        self.assert_before_auth_failure()
+        self.assertTrue((_config_path(self.journal,probe=True)/'foreign').exists())
+        self.assertFalse(self.journal.values('guardian_docker_probe_config_absent'))
+        self.assertFalse(self.journal.values('guardian_docker_probe_result'))
+
+    def test_probe_result_fsync_failure_prevents_auth_after_cleanup(self):
+        append=self.journal.append
+        def reject_result(event,value):
+            if event=='guardian_docker_probe_result':raise OSError('fictional durability failure')
+            return append(event,value)
+        with patch.object(self.journal,'append',side_effect=reject_result),self.assertRaises(OSError):self.publish()
+        self.assert_before_auth_failure();self.assert_private()
+
+    def test_durable_probe_directory_survives_creation_error_for_local_cleanup(self):
+        append=self.journal.append
+        def after_directory(event,value):
+            result=append(event,value)
+            if event=='guardian_docker_probe_directory':raise OSError('fictional crash after durable identity')
+            return result
+        with patch.object(self.journal,'append',side_effect=after_directory),self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assert_private()
+        self.assertTrue(self.journal.values('guardian_docker_probe_config_absent'))
+
+    def test_durable_probe_file_identity_allows_cleanup_before_first_byte(self):
+        append=self.journal.append
+        def after_file(event,value):
+            result=append(event,value)
+            if event=='guardian_docker_probe_config':raise OSError('fictional crash before bytes')
+            return result
+        with patch.object(self.journal,'append',side_effect=after_file),self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assert_private()
+        self.assertTrue(self.journal.values('guardian_docker_probe_config_absent'))
+
+    def test_complete_probe_creation_error_still_cleans_exact_identity(self):
+        write=publisher._write_empty_probe
+        def after_write(*args):
+            write(*args);raise OSError('fictional crash after empty config fsync')
+        with patch.object(publisher,'_write_empty_probe',side_effect=after_write),self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assert_private();self.assertFalse(self.processes)
+
+    def test_unrecorded_probe_directory_is_never_adopted_or_removed(self):
+        append=self.journal.append
+        def before_directory(event,value):
+            if event=='guardian_docker_probe_directory':raise OSError('fictional crash before durable identity')
+            return append(event,value)
+        with patch.object(self.journal,'append',side_effect=before_directory),self.assertRaises(Denied):self.publish()
+        self.assert_before_auth_failure();self.assertTrue(_config_path(self.journal,probe=True).is_dir())
+        self.assertFalse(self.journal.values('guardian_docker_probe_config_absent'))
+        self.assertFalse(self.journal.values('guardian_docker_probe_result'))
+
+    def test_replaced_probe_file_is_never_deleted(self):
+        path=publisher._write_empty_probe(self.journal,'guardian')
+        original=path/'config.json';old=path/'original.json';original.rename(old)
+        original.write_bytes(b'foreign replacement')
+        with self.assertRaises(Denied):cleanup_docker_config(self.journal,probe=True)
+        self.assertEqual(b'foreign replacement',original.read_bytes());self.assertTrue(old.exists())
+        self.assertFalse(self.journal.values('guardian_docker_probe_config_absent'))
+
+    def test_dangling_unrecorded_path_is_not_reported_absent(self):
+        # Model a dangling link without requiring Windows symlink privileges.
+        for probe in (False,True):
+            with self.subTest(probe=probe),patch.object(Path,'exists',return_value=False),\
+                    patch.object(publisher.os.path,'lexists',return_value=True),\
+                    patch.object(Path,'rmdir') as remove,self.assertRaises(Denied):
+                cleanup_docker_config(self.journal,probe=probe)
+            remove.assert_not_called()
+            suffix='_docker_probe_config_absent' if probe else '_docker_config_absent'
+            self.assertFalse(self.journal.values('guardian'+suffix))
+
+    def test_recorded_dangling_probe_cannot_create_false_absence_receipt(self):
+        path=publisher._write_empty_probe(self.journal,'guardian')
+        # Existing directory identity replaced by a dangling/non-directory path.
+        with patch.object(Path,'exists',return_value=False),patch.object(Path,'is_dir',return_value=False),\
+                self.assertRaises(Denied):
+            cleanup_docker_config(self.journal,probe=True)
+        self.assertTrue(path.exists());self.assertTrue((path/'config.json').exists())
+        self.assertFalse(self.journal.values('guardian_docker_probe_config_absent'))
 
     def test_wrong_remote_digest_keeps_known_ack_pending(self):
         self.modify=lambda m,u:{'status':200,'headers':{'Docker-Content-Digest':self.image},'body':b'changed'} if '/manifests/' in u else None
@@ -235,7 +405,7 @@ class PublisherTests(unittest.TestCase):
     def test_expired_deadline_prevents_credential_and_process(self):
         self.clock.seconds=601
         with self.assertRaises(Denied):self.publish()
-        self.credential.token.assert_not_called();self.assertFalse(self.calls)
+        self.credential.token.assert_not_called();self.assertFalse(self.calls);self.assertFalse(self.processes)
 
     def test_stale_namespace_after_fsync_prevents_push(self):
         append=self.journal.append

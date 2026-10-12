@@ -124,7 +124,11 @@ def prepare_bridge(publication, journal, reference, *, now):
     config = compose_configuration(publication, journal, inputs)
     directory = Path(publication['recovery']['directory'])
     verify_owner_directory(directory)
-    output = directory / ('provision-next-config.json' if 'attempt' in publication else OUTPUT_NAME)
+    from .attempt import journal_descriptor
+    child_name, _ = journal_descriptor(publication,publication.get('verified_attempt'))
+    output = directory / {'trial-provision':OUTPUT_NAME,
+        'trial-provision-next':'provision-next-config.json',
+        'trial-provision-successor':'provision-successor-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')

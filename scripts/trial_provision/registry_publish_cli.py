@@ -85,7 +85,9 @@ def run_command(request, *, clock=None, wire=None, runner=None,trusted_attempt_a
                 local_source_digests=preview['code_sources'],trusted_attempt_authority=trusted_attempt_authority)
             name,binding=journal_descriptor(cleanup,cleanup['verified_attempt'])
         with Journal(recovery['directory'],recovery['directory_digest'],binding,name=name,require_existing=True) as journal:
-            cleanup_docker_config(journal,request['slot'])
+            # Always attempt token cleanup even when the empty probe is damaged.
+            try: cleanup_docker_config(journal,request['slot'])
+            finally: cleanup_docker_config(journal,request['slot'],probe=True)
         return {'status':'temporary_config_removed','temporary_config_absent':True,'cloud_calls':0}
     head=git(['rev-parse','HEAD']).decode('ascii').strip()
     sources=local_sources(head,live=action in ('publish','cleanup-publication'))
