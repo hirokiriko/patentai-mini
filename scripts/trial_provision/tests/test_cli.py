@@ -274,11 +274,13 @@ class LocalSourceTests(unittest.TestCase):
         self.module_metadata = SimpleNamespace(modules={})
         self.enterContext(patch.object(cli, 'sys', self.module_metadata))
 
-    def git_output(self, arguments):
+    def git_output(self, arguments, *, input=None):
         if arguments[0] == 'ls-files':
             return ('\n'.join(self.names) + '\n').encode()
-        if arguments[0] == 'show':
-            return self.committed
+        if arguments == ['cat-file','--batch']:
+            self.assertEqual(input,''.join('a'*40+':'+name+'\n' for name in self.names).encode())
+            blob=self.committed;size=str(len(blob)).encode();oid=hashlib.sha1(b'blob '+size+b'\0'+blob).hexdigest().encode()
+            return (oid+b' blob '+size+b'\n'+blob+b'\n')*len(self.names)
         raise AssertionError('unexpected local Git operation')
 
     def test_crlf_is_canonical_for_head_comparison_but_raw_bytes_remain_pinned(self):
@@ -286,6 +288,13 @@ class LocalSourceTests(unittest.TestCase):
         self.assertEqual(set(hashes), cli.REQUIRED_SOURCES)
         self.assertEqual(set(hashes.values()), {hashlib.sha256(self.current).hexdigest()})
         self.assertNotEqual(hashlib.sha256(self.current).hexdigest(), hashlib.sha256(self.committed).hexdigest())
+        self.assertEqual(self.git.call_count,2)
+
+    def test_missing_nonblob_truncated_extra_or_changed_batch_is_refused(self):
+        normal=self.git_output(['cat-file','--batch'],input=''.join('a'*40+':'+n+'\n' for n in self.names).encode())
+        for raw in (b'fictional missing\n',normal.replace(b' blob ',b' tree ',1),normal[:-1],normal+b'extra',normal.replace(b'fictional',b'different',1)):
+            with self.subTest(prefix=raw[:45]),patch.object(cli,'git',side_effect=[('\n'.join(self.names)+'\n').encode(),raw]):
+                with self.assertRaisesRegex(Denied,'source_batch'):LOCAL_SOURCES('a'*40,live=True)
 
     def test_untracked_required_dependency_is_refused(self):
         self.names.remove('scripts/trial_provision/rehearsal_cli.py')

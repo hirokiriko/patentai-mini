@@ -10,6 +10,20 @@ or new public-access setting is included.
 
 ## Prepare before starting the clock
 
+Keep the approved manifest bytes unchanged. The reviewed display-region alias
+`Japan East` maps to ARM location `japaneast` only in derived requests, expected
+readbacks, authentication/origin bindings and PostgreSQL LRO scope. Other display
+spellings remain rejected; normal canonical location IDs keep their existing
+validation. Include the original approved region spelling in the offline
+bridge/compiler/resolver checks before publication.
+
+Real UTC clock observations may include fractional seconds. Compare the exact
+observation with approval and fixed-window boundaries; do not round admission
+checks. Preserve the exact bridge `checked_at`. The compiler rounds only its
+serialized preparation and credential-start timestamps up to the next whole
+second. Approved window/source timestamps remain whole seconds, and a replay
+reuses the saved observation and allocations without renewing any window.
+
 Finish local tests, isolated PostgreSQL 16 regression, independent review,
 exact-commit CI and automatic Preview first. Build both images locally from
 that commit with an empty Docker credential configuration and save image-ID
@@ -173,3 +187,27 @@ launcher phases without reissuing clocks, broadening IAM, or switching paths.
 Unconfirmed writes retain their reservations and recovery obligations. Save
 public-safe CI/review evidence in this Draft PR and account-specific receipts
 only in the OWNER-private Local record.
+### Closed publication continuation
+
+`ISSUE148_LINKED_ATTEMPT_V3` is a separate, independently approved continuation
+of V2 only after both publications are acknowledged, the exact guardian DELETE
+has a 202 acknowledgement and authenticated 404, and all four Docker/probe
+configurations are absent. The verifier replays V1 and V2, rejects provisioning
+or unknown writes, and validates the cleanup observation at its historical
+DELETE time. It cannot refresh evidence, renew an old execution window, reset a
+counter, or authorize a third successor.
+
+The original lifetime budget and every charged request remain intact. The V3
+authority must explicitly bind its balanced phase transfer and release of the
+23 unallocated control requests; a previous six-request transfer is not approval
+for this change. The global 600-request cap, 120-request cleanup reservation and
+all monetary reservations remain. Non-cleanup requests stop at 480. Preparation
+alone never issues this authority. The new child journal is fixed to
+`trial-provision-successor-v3`, with a single transition appended while both the
+counter and previous-child locks are held.
+
+Live source validation reads exact Git blobs with one bounded `cat-file --batch`
+process, validates every blob hash and compares every current file. Loaded-module
+paths remain checked on each call. No archive export transformations or cached
+approval booleans can replace the committed-byte proof. This keeps source checks
+inside the existing evidence freshness limits without extending those limits.

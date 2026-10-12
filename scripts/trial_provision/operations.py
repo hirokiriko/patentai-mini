@@ -13,7 +13,7 @@ import re
 from scripts.trial_guard.adapters import digest
 from scripts.trial_guard.lifecycle import Denied, parse
 from scripts.trial_provision import plan as core
-from scripts.trial_provision.resources import build_resource_operations, build_runtime_operations, build_guard_main_operation
+from scripts.trial_provision.resources import build_resource_operations, build_runtime_operations, build_guard_main_operation, canonical_region
 from scripts.trial_provision.auth import build_auth_operations
 
 
@@ -89,7 +89,7 @@ class ApprovedOperations:
             self._cleanup_bindings = {}
             self._resolved = {}
             self._auth_binding = {**deepcopy(core_plan['auth_binding']),
-                'environment_id': manifest['existing']['environment'], 'location': manifest['region'],
+                'environment_id': manifest['existing']['environment'], 'location': canonical_region(manifest['region']),
                 'runtime_secret_names': ['trial-web-database']}
             self._auth_deadline = core_plan['windows']['owner_input']['end']
             initial = {'schema': 1, 'core_plan_sha256': core_plan['plan_sha256'],

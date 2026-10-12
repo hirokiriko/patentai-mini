@@ -12,7 +12,7 @@ import copy
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 from uuid import UUID
 
@@ -79,12 +79,12 @@ def _sha(value: Any) -> str:
     return value.lower()
 
 
-def _utc(value: Any) -> datetime:
+def _utc(value: Any, *, allow_fractional: bool = False) -> datetime:
     try:
         result = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
         _need(result.tzinfo is not None and result.utcoffset().total_seconds() == 0,
               "non_utc_time")
-        _need(result.microsecond == 0, "fractional_time")
+        _need(allow_fractional or result.microsecond == 0, "fractional_time")
         return result.astimezone(timezone.utc)
     except (TypeError, ValueError, AttributeError):
         raise PlanError("invalid_time") from None
@@ -205,7 +205,11 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
           and _at(approved, "approved.maximumGuardianAssignmentSeconds") == 28800, "approved_limits")
 
     _keys(bindings, {"guardian_window", "owner_window", "prerequisite_digests"}, {"allocated_ids"})
-    current = _utc(now)
+    current = _utc(now, allow_fractional=True)
+    # Keep the observed instant for every admission check. Only serialized
+    # preparation/credential starts use a conservative whole-second ceiling.
+    # Approved windows and other source timestamps remain strictly whole seconds.
+    compiled_at = current.replace(microsecond=0) + timedelta(seconds=bool(current.microsecond))
     _need(_utc(_at(latest, "approvedAt")) <= current < _utc(FORMAL_END), "approval_time")
     guardian = _window(bindings["guardian_window"], current, 28800)
     owner_window = _window(bindings["owner_window"], current, 3600)
@@ -375,7 +379,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
                              "description": "Dedicated trial OWNER", "displayName": "OWNER", "isEnabled": True, "value": "OWNER"}]},
         "E2": {"appId": _ref("E1", "appId"), "appRoleAssignmentRequired": True},
         "E3": {"principalId": owner, "resourceId": _ref("E2", "servicePrincipalObjectId"), "appRoleId": allocation["OWNER_APP_ROLE"]},
-        "E4": {"passwordCredential": {"displayName": app_name + "-owner-login", "startDateTime": _stamp(current), "endDateTime": AUTH_END}},
+        "E4": {"passwordCredential": {"displayName": app_name + "-owner-login", "startDateTime": _stamp(compiled_at), "endDateTime": AUTH_END}},
     }
     urls = {"E1": GRAPH + "/applications", "E2": GRAPH + "/servicePrincipals",
             "E3": {"$graph_url": ["E2", "servicePrincipalObjectId", "servicePrincipals", "appRoleAssignedTo"]},
@@ -400,7 +404,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
                                "application_display_name": app_name + "-auth", "credential_display_name": app_name + "-owner-login",
                                "credential_expires_at": AUTH_END, "target_app_id": ids["app"],
                                "platform_secret_name": _at(auth, "platformSecretName")},
-              "prepared_at": _stamp(current)}
+              "prepared_at": _stamp(compiled_at)}
     result["callback_binding"] = {"names": {"app": app_name}, "region": _at(m, "region")}
     result["plan_sha256"] = digest(result)
     return result

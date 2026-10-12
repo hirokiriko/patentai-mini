@@ -6,9 +6,11 @@ GET-only reconciliation; there is no automatic retry, grant renewal or sweep.
 from contextlib import ExitStack
 from copy import deepcopy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -21,7 +23,7 @@ from .journal import Journal, ControlBudget, CountedControlHttp, scope_for_dispa
 from .attempt import journal_descriptor,check_window
 from .private_io import verify_owner_file
 from .plan import build_plan
-from .resources import build_resource_operations
+from .resources import build_resource_operations, canonical_region
 from .operations import create_resolver
 from .providers import BoundedArmProvider
 from .auth import GraphAdapter, EasyAuthAdapter
@@ -30,7 +32,7 @@ ROOT=Path(__file__).resolve().parents[2]
 MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
-    'trial_provision':('attempt','attempt_dispatch','succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
+    'trial_provision':('attempt','attempt_dispatch','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
         'providers','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
@@ -42,10 +44,10 @@ REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs'
     'src/lib/trial/catalog-pg16-builtins.json','src/lib/trial/strict-json.ts','src/lib/trial/database-permit.ts','src/lib/trial/database-client.ts'))
 
 
-def git(arguments):
+def git(arguments, *, input=None):
     try:
         result=subprocess.run(['git','-C',str(ROOT),*arguments],capture_output=True,
-            stdin=subprocess.DEVNULL,check=True,timeout=30,
+            **({'stdin':subprocess.DEVNULL} if input is None else {'input':input}),check=True,timeout=30,
             creationflags=0x08000000 if os.name=='nt' else 0)
         if len(result.stdout)>8*1024*1024:raise ValueError()
         return result.stdout
@@ -81,10 +83,27 @@ def local_sources(head, *, live):
             module=sys.modules.get('scripts.'+package+('' if name=='__init__' else '.'+name))
             if module is not None and Path(module.__file__).resolve()!=(ROOT/'scripts'/package/(name+'.py')).resolve():
                 raise Denied('loaded_source_path')
+    # One Git process preserves exact committed-byte comparison without making
+    # every provider send spend its evidence freshness window on 100+ processes.
+    if not re.fullmatch('[a-f0-9]{40}',head) or len(names)!=len(set(names)) or any(
+            not n or any(ord(c)<32 for c in n) or ':' in n for n in names):raise Denied('source_batch')
+    specs=''.join(head+':'+name+'\n' for name in names).encode('utf-8')
+    stream=io.BytesIO(git(['cat-file','--batch'],input=specs));committed_sources={}
+    for name in names:
+        header=stream.readline(128)
+        match=re.fullmatch(rb'([a-f0-9]{40}) blob ([0-9]{1,8})\n',header)
+        if match is None:raise Denied('source_batch')
+        size=int(match[2])
+        if size>4*1024*1024:raise Denied('source_batch')
+        blob=stream.read(size)
+        if len(blob)!=size or stream.read(1)!=b'\n' or hashlib.sha1(b'blob '+str(size).encode()+b'\0'+blob).hexdigest().encode()!=match[1]:
+            raise Denied('source_batch')
+        committed_sources[name]=blob
+    if stream.read(1):raise Denied('source_batch')
     hashes={}
     for name in names:
         current=(ROOT/name).read_bytes()
-        committed=git(['show',head+':'+name])
+        committed=committed_sources[name]
         if live and current.replace(b'\r\n',b'\n')!=committed.replace(b'\r\n',b'\n'):
             raise Denied('source_not_committed')
         hashes[name]=hashlib.sha256(current).hexdigest()
@@ -251,7 +270,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         provider=BoundedArmProvider(credential,counted,clock,secret)
         auth_binding=deepcopy(core['auth_binding'])
         # The builder fixes these from the same manifest and approved safe body.
-        auth_binding.update(location=manifest['region'],environment_id=manifest['existing']['environment'],
+        auth_binding.update(location=canonical_region(manifest['region']),environment_id=manifest['existing']['environment'],
             runtime_secret_names=['trial-web-database'])
         graph=auth=None
         requested_operation=requested_operation or resolver.resolve(request.get('operation_id'),journal.receipts())

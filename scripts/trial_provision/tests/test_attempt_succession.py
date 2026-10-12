@@ -29,9 +29,9 @@ def seal(data):
     return data
 
 
-def proof_fixture(directory):
+def proof_fixture(directory, *, base=None):
     """Canonical source shape, including historical marker provenance."""
-    old=fixture();config=old['config'];directory=str(directory)
+    old=fixture() if base is None else deepcopy(base);config=old['config'];directory=str(directory)
     for key in ('recovery','control_budget'):
         config[key]['directory']=directory;config[key]['directory_digest']=digest(directory)
     binding=config['control_budget']['binding'];binding['source_sha256']=_HISTORY_SOURCE_SHA256

@@ -65,8 +65,9 @@ def _allocations(authority):
         _keys(caps[kind],PHASES)
         _need(all(type(v) is int and v>=0 for v in caps[kind].values()) and type(reserve[kind]) is int and reserve[kind]>=0
             and sum(caps[kind].values())+reserve[kind]<=LIMITS[kind]-before[kind],'attempt_allocation')
+    published=authority.get('schema')==3
     _need(all(caps['owner_arm'][phase]<=maximum for phase,maximum in OWNER_CAPS.items())
-        and caps['owner_arm']['cleanup']>=120 and reserve['owner_arm']>=23,'attempt_cleanup_reservation')
+        and caps['owner_arm']['cleanup']>=120 and (reserve['owner_arm']==0 if published else reserve['owner_arm']>=23),'attempt_cleanup_reservation')
 def _slot(manifest,head,slot):
     _need(slot in ('guardian','runtime'),'attempt_slot')
     repo_key,tag_key=('cleanupImageRepository','cleanupImageTag') if slot=='guardian' else ('imageRepository','imageTag')
@@ -133,13 +134,13 @@ def verify_attempt(config,manifest,*,authority_raw,activation_raw,parent_journal
     except (KeyError,TypeError,ValueError,AttributeError,IndexError,OverflowError):raise Denied('attempt_binding') from None
 def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,parent_final_raw,artifacts,trusted_hash,now):
     _need(_sha(authority_raw)==_hex(trusted_hash),'attempt_trusted_authority');a,activation=_json(authority_raw),_json(activation_raw)
-    successor=type(a.get('schema')) is int and a['schema']==2
+    successor=type(a.get('schema')) is int and a['schema'] in (2,3)
     fields=('schema','approval','decision','design_sha256','attempt_id','manifest_sha256','owner_id','task_id','head','code_sources_sha256',
         'budget_binding_sha256','parent','tags','retained_runtime','guardian_prior_digest','artifact_sha256','publish_from','approved_at',
         'counts_before','phase_caps','unallocated','initial_forecast_yen','catalog_options')
     _keys(a,fields+(('succession',) if successor else ()))
-    _need(type(a['schema']) is int and a['schema']==(2 if successor else 1)
-        and a['approval']==('ISSUE148_LINKED_ATTEMPT_V2' if successor else 'ISSUE148_LINKED_ATTEMPT_V1') and a['decision']=='APPROVED'
+    _need(type(a['schema']) is int and a['schema'] in (1,2,3)
+        and a['approval']=='ISSUE148_LINKED_ATTEMPT_V'+str(a['schema']) and a['decision']=='APPROVED'
         and a['design_sha256']==DESIGN_SHA256 and isinstance(a['attempt_id'],str) and re.fullmatch('[A-Za-z0-9_-]{1,128}',a['attempt_id']),'attempt_authority')
     _need(type(a['initial_forecast_yen']) is int and 0<a['initial_forecast_yen']<=4500,'attempt_cost')
     options=a['catalog_options'];_keys(options,('temporary_owner_set','excluded_databases'))
@@ -202,7 +203,8 @@ def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,pare
         if 'resource_bindings' in config:_need(config['resource_bindings']['code_sha']==a['head'] and config['resource_bindings']['guardian_deadline']==w['guardian']['end'],'attempt_resource_binding')
     proof={'authority':a,'activation':activation,'authority_sha256':trusted_hash,'activation_sha256':_sha(activation_raw),'manifest_digest':digest(manifest)}
     if successor:
-        from .succession import validate_proof
+        if a['schema']==3:from .published_succession import validate_proof
+        else:from .succession import validate_proof
         proof['succession']=validate_proof(a,parsed['local_ready'],config,manifest,
             parent_journal_raw=parent_journal_raw,parent_final_raw=parent_final_raw,now=now)
     return VerifiedAttempt(proof,_SEAL)
@@ -214,7 +216,8 @@ def journal_descriptor(config,verified=None):
         and base=={'manifest_sha256':a['manifest_sha256'],'owner_id':a['owner_id'],'task_id':a['task_id']},'attempt_descriptor')
     name=CHILD_JOURNAL
     if 'succession' in proof:
-        from .succession import CHILD_NAME
+        if a['schema']==3:from .published_succession import CHILD_NAME
+        else:from .succession import CHILD_NAME
         name=CHILD_NAME
     return name,{**base,'attempt':{'schema':1,'id':a['attempt_id'],'binding_digest':verified.binding_digest,'authority_sha256':proof['authority_sha256'],
         'activation_sha256':proof['activation_sha256'],'parent':deepcopy(a['parent'])}}
@@ -234,7 +237,7 @@ def check_phase_send(verified,kind,phase,counts,used):
     a=_proof(verified)['authority'];check_budget_snapshot(verified,counts)
     _need(kind in LIMITS and phase in PHASES and type(used) is int and used>=0 and used<a['phase_caps'][kind][phase]
         and counts[kind]<LIMITS[kind]-a['unallocated'][kind],'attempt_phase_exhausted')
-    if kind=='owner_arm' and phase!='cleanup':_need(counts[kind]<457,'attempt_cleanup_reserved')
+    if kind=='owner_arm' and phase!='cleanup':_need(counts[kind]<(480 if a['schema']==3 else 457),'attempt_cleanup_reserved')
 def check_window(verified,name,now,request_seconds=0):
     windows=_proof(verified)['activation']['windows'];_need(name in windows and type(request_seconds) in (int,float)
         and math.isfinite(request_seconds) and request_seconds>=0,'attempt_window_argument')

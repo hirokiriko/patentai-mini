@@ -37,6 +37,14 @@ def _require(ok):
         raise Denied('resource_plan_binding')
 
 
+def canonical_region(value):
+    """Derive the ARM location without rewriting approved manifest bytes."""
+    if value == 'Japan East':
+        return 'japaneast'
+    _require(isinstance(value, str) and bool(re.fullmatch(r'[a-z0-9]{1,40}', value)))
+    return value
+
+
 def _time(value):
     _require(isinstance(value, str) and bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z', value)))
     return parse(value)
@@ -49,7 +57,7 @@ def _manifest(manifest, authority):
     _require(set(ids) == set(SLOTS) and set(names) == set(SLOTS))
     rg = manifest['resourceGroupId']
     _require(bool(re.fullmatch(RG, rg)))
-    _require(bool(re.fullmatch(r'[a-z0-9]{1,40}', manifest['region'])))
+    canonical_region(manifest['region'])
     for slot in SLOTS:
         name = names[slot]
         _require(isinstance(name, str) and bool(re.fullmatch(r'[a-z][a-z0-9-]{1,61}[a-z0-9]', name)) and '--' not in name)
@@ -128,11 +136,12 @@ def build_resource_operations(manifest, authority_bundle, bindings):
     """
     try:
         ids = _manifest(manifest, authority_bundle)
+        region = canonical_region(manifest['region'])
         _bindings(manifest, bindings)
         result = []
         for slot in SLOTS:
             if slot.endswith('Identity'):
-                body = {'location': manifest['region']}
+                body = {'location': region}
                 op = _operation(slot, 'Microsoft.ManagedIdentity', 'userAssignedIdentities', ids[slot],
                     '2023-01-31', body, bindings['deadline'], [], {'location': body['location']},
                     receipt_properties=['principalId', 'tenantId', 'clientId'])
@@ -155,7 +164,7 @@ def build_resource_operations(manifest, authority_bundle, bindings):
                 else:
                     configuration.update(triggerType='Manual', replicaTimeout=300 if guard else 1800, replicaRetryLimit=0,
                         manualTriggerConfig={'replicaCompletionCount': 1, 'parallelism': 1})
-                body = {'location': manifest['region'],
+                body = {'location': region,
                         'identity': {'type': 'SystemAssigned'} if guard else {'type': 'UserAssigned', 'userAssignedIdentities': {identity: {}}},
                         'properties': {'environmentId': manifest['existing']['environment'],
                             'workloadProfileName': 'Consumption', 'configuration': configuration, 'template': template}}
@@ -170,7 +179,7 @@ def build_resource_operations(manifest, authority_bundle, bindings):
                     props['identity.userAssignedIdentities'] = {identity: {}}
                 op = _operation(slot, 'Microsoft.App', 'containerApps' if app else 'jobs', ids[slot],
                     '2025-07-01', body, bindings['deadline'], [] if guard else [role + 'Identity', 'R8' if app else 'R9'],
-                    props, location=manifest['region'])
+                    props, location=region)
                 if app:
                     op['expected']['receipt_properties'] = ['defaultDomain']
                 elif guard:
@@ -205,7 +214,7 @@ def public_trial_origin(manifest, observed_fqdn):
     ``internal`` label. No custom domain, other region or different App passes.
     External enablement must later read back exactly this derived hostname.
     """
-    name, region = manifest['names']['app'], manifest['region']
+    name, region = manifest['names']['app'], canonical_region(manifest['region'])
     pattern = re.escape(name) + r'\.(?:internal\.)?([a-z0-9][a-z0-9-]*\.' + re.escape(region) + r'\.azurecontainerapps\.io)'
     _require(isinstance(observed_fqdn, str))
     matched = re.fullmatch(pattern, observed_fqdn)

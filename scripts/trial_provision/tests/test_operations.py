@@ -13,10 +13,10 @@ from scripts.trial_provision.resources import build_resource_operations
 from scripts.trial_provision.tests.test_plan import fixture as core_fixture, guid
 
 
-def fixture():
+def fixture(*, region='japaneast'):
     manifest, authority, bindings = core_fixture()
     rg = manifest['resourceGroupId']
-    manifest['region'] = 'japaneast'
+    manifest['region'] = region
     manifest['names'] = {k: v.rsplit('/', 1)[1] for k, v in manifest['ids'].items()}
     manifest['existing']['storage'] = manifest['ids']['originals'].split('/blobServices/')[0]
     manifest['existing']['environment'] = rg + '/providers/Microsoft.App/managedEnvironments/fictional-env'

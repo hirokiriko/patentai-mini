@@ -32,7 +32,7 @@ class PublicationBridgeTests(unittest.TestCase):
     def setUp(self):
         self.set_up_fixture()
 
-    def set_up_fixture(self, *, tenant_id=None, live=True):
+    def set_up_fixture(self, *, tenant_id=None, live=True, region=None):
         fixture = cli_fixtures.CliTests('runTest')
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
@@ -49,6 +49,8 @@ class PublicationBridgeTests(unittest.TestCase):
         self.config['code_sources'] = self.code_sources
         self.manifest = json.loads(Path(self.config['sources']['manifest']['path']).read_bytes())
         self.manifest.update(cleanupImageTag='fictional-guardian', imageTag='fictional-runtime')
+        if region is not None:
+            self.manifest['region'] = region
         if tenant_id is not None:
             self.manifest['owner']['tenant_id'] = tenant_id
         self.rehash_authority()
@@ -252,7 +254,7 @@ class PublicationBridgeTests(unittest.TestCase):
         self.assertEqual(self.inputs['deadline'], operation['deadline'])
         expected_id = self.manifest['ids']['webIdentity']
         expected_url = 'https://management.azure.com' + expected_id + '?api-version=2023-01-31'
-        expected_body = {'location': self.manifest['region']}
+        expected_body = {'location': 'japaneast'}
         self.assertEqual(expected_url, operation['url'])
         self.assertEqual(expected_body, operation['body'])
         self.clock.utc.return_value = parse('2026-10-11T01:02:00Z')

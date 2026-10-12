@@ -27,7 +27,9 @@ class MemoryJournal:
         return next(v for e, v in self.rows if e == event)
 
 
-def publication_fixture(data=None):
+def publication_fixture(data=None, *, verified=None, offset=0):
+    from scripts.trial_provision.tests.test_attempt import stamp as base_stamp
+    stamp=lambda seconds=0:base_stamp(seconds+offset)
     data = fixture() if data is None else deepcopy(data)
     old_body = encoded({'schemaVersion': 2, 'fictional': 'retained runtime manifest'})
     old_digest = 'sha256:' + sha(old_body)
@@ -42,7 +44,7 @@ def publication_fixture(data=None):
         return value
     data['parent_rows'] = replace(data['parent_rows'])
     data['authority']['retained_runtime']['digest'] = old_digest
-    verified = verify(data)
+    verified = verify(data) if verified is None else verified
     data['config']['attempt']['sha256'] = sha(encoded(verified.activation))
     _, binding = journal_descriptor(data['config'], verified)
     prep = deepcopy(next(v for e, v in data['parent_rows'] if e == 'publication_preparation'))

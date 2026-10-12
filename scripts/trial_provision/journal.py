@@ -37,7 +37,7 @@ class Journal:
     """Hash chain and OS writer lock; a partial/changed chain cannot be reset."""
     def __init__(self, directory, directory_digest, binding, *, name='trial-provision', require_existing=False):
         self.mutex = threading.RLock()
-        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor'):
+        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor','trial-provision-successor-v3'):
             raise Denied('journal_name')
         directory = Path(directory)
         if (not directory.is_absolute() or not directory.is_dir() or directory.is_symlink()
@@ -225,7 +225,7 @@ class ControlBudget:
         try:self._replay()
         except BaseException:self.close();raise
     def _assert_open(self):_budget_need(not self._closed and not self._poisoned,'budget_unavailable')
-    def _validate_plan(self,plan):
+    def _validate_plan(self,plan,*,published_successor=False):
         _budget_need(isinstance(plan,dict) and set(plan)=={'schema','attempt','limits','counts_before','phase_caps','unallocated','purpose_caps','budget_binding_sha256'}
             and type(plan['schema']) is int and plan['schema']==1 and isinstance(plan['attempt'],str) and re.fullmatch('[a-f0-9]{64}',plan['attempt']) is not None
             and plan['limits']==self.LIMITS and plan['purpose_caps']==_PURPOSE_CAPS and plan['budget_binding_sha256']==digest(self.binding) and self.seed==_ORIGINAL_SEED,'budget_phase_plan')
@@ -235,7 +235,8 @@ class ControlBudget:
             _budget_need(type(before) is int and self.seed[kind]<=before<=limit and _nonnegative_int(reserve) and isinstance(caps,dict) and set(caps)==set(_PHASES)
                 and all(_nonnegative_int(v) for v in caps.values()) and sum(caps.values())+reserve<=limit-before,'budget_phase_allocation')
         owner_caps=plan['phase_caps']['owner_arm']
-        _budget_need(all(owner_caps[phase]<=cap for phase,cap in _OWNER_PHASE_MAX.items()) and owner_caps['cleanup']==120 and plan['unallocated']['owner_arm']>=23,'budget_owner_reservation')
+        _budget_need(all(owner_caps[phase]<=cap for phase,cap in _OWNER_PHASE_MAX.items()) and owner_caps['cleanup']==120
+            and (plan['unallocated']['owner_arm']==0 if published_successor else plan['unallocated']['owner_arm']>=23),'budget_owner_reservation')
     def _blank_usage(self):return {kind:{phase:0 for phase in _PHASES} for kind in self.LIMITS}
     def _blank_purposes(self):return {kind:{phase:{purpose:0 for purpose in _PURPOSES} for phase in _PHASES} for kind in self.LIMITS}
     def _admit(self,kind,phase,purpose,*,verified=None):
@@ -243,7 +244,7 @@ class ControlBudget:
         _budget_need(plan is not None and kind in self.LIMITS and phase in _PHASES and purpose in _PURPOSES and (purpose!='owner_token' or kind=='owner_arm'),'budget_scope')
         count=self._counts[kind];_budget_need(count<self.LIMITS[kind],'request_budget');_budget_need(count<self.LIMITS[kind]-plan['unallocated'][kind],'budget_unallocated_reserved')
         _budget_need(self._used[kind][phase]<plan['phase_caps'][kind][phase],'budget_phase_exhausted')
-        if kind=='owner_arm' and phase!='cleanup':_budget_need(count<457,'budget_cleanup_reserved')
+        if kind=='owner_arm' and phase!='cleanup':_budget_need(count<(480 if self._published_plan else 457),'budget_cleanup_reserved')
         if kind=='owner_arm' and phase=='provision':_budget_need(self._purpose_used[kind][phase][purpose]<_PURPOSE_CAPS[phase][purpose],'budget_purpose_exhausted')
         if verified is not None:
             from .attempt import check_phase_send
@@ -254,7 +255,8 @@ class ControlBudget:
             phase,purpose=row['phase'],row['purpose'];self._used[kind][phase]+=1;self._purpose_used[kind][phase][purpose]+=1
     def _replay(self,verified=None,*,raw=None):
         from .attempt import _journal
-        self._plan=None;self._transition=None;self._counts=deepcopy(self.seed);self._used=self._blank_usage();self._purpose_used=self._blank_purposes()
+        self._plan=None;self._transition=None;self._transitions=[];self._published_plan=False
+        self._counts=deepcopy(self.seed);self._used=self._blank_usage();self._purpose_used=self._blank_purposes()
         with self.journal.mutex:
             records=deepcopy(self.journal.records)
             if raw is None:raw=self.journal.path.read_bytes()
@@ -268,11 +270,22 @@ class ControlBudget:
             if event=='phase_plan':
                 _budget_need(self._plan is None,'budget_plan_repeated');self._validate_plan(value);_budget_need(value['counts_before']==self._counts,'budget_plan_snapshot');self._plan=deepcopy(value);continue
             if event=='attempt_transition':
-                from .succession import validate_transition, PREFIX_ROWS
-                _budget_need(self._transition is None and index==PREFIX_ROWS,'budget_transition_repeated')
+                from .attempt import _proof
+                active=verified if verified is not None and value.get('plan',{}).get('attempt')==verified.binding_digest else None
+                published=len(self._transitions)==1
+                if published:
+                    from .published_succession import validate_transition
+                    _budget_need(index>71 and value.get('kind')=='STOPPED_AFTER_PUBLICATION_V2','budget_transition_repeated')
+                else:
+                    from .succession import validate_transition, PREFIX_ROWS
+                    _budget_need(not self._transitions and index==PREFIX_ROWS,'budget_transition_repeated')
+                    if verified is not None and _proof(verified)['authority']['schema']==3:
+                        _budget_need(value==_proof(verified)['succession']['previous_transition'],'budget_previous_transition_changed')
+                _budget_need(len(self._transitions)<2,'budget_transition_repeated')
                 plan=validate_transition(value,prefix_raw=b''.join(raw.splitlines(keepends=True)[:index]),
-                    previous_plan=self._plan,counts=self._counts,used=self._used,verified=verified)
-                self._validate_plan(plan);self._plan=plan;self._transition=deepcopy(value)
+                    previous_plan=self._plan,counts=self._counts,used=self._used,verified=active)
+                self._validate_plan(plan,published_successor=published);self._plan=plan;self._transition=deepcopy(value)
+                self._transitions.append(deepcopy(value));self._published_plan=published
                 self._used=self._blank_usage();self._purpose_used=self._blank_purposes();continue
             _budget_need(event=='request' and isinstance(value,dict),'budget_event');kind=value.get('kind');_budget_need(kind in self.LIMITS,'budget_kind')
             if self._plan is None:_budget_need(set(value)=={'kind'} and self._counts[kind]<self.LIMITS[kind],'budget_legacy_request')
@@ -300,29 +313,34 @@ class ControlBudget:
         from .attempt import phase_plan,check_budget_snapshot,_proof
         expected=phase_plan(verified)
         with self.mutex:
-            self._assert_open();self._unchanged();self._validate_plan(expected)
+            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=_proof(verified)['authority']['schema']==3)
             if self._plan is None:
                 _budget_need('succession' not in _proof(verified),'budget_succession_prefix_required')
                 _budget_need(initialize is True,'budget_plan_not_prepared')
                 _budget_need(expected['counts_before']==self._counts,'budget_plan_snapshot');check_budget_snapshot(verified,deepcopy(self._counts),initializing=True)
                 self._append('phase_plan',expected);self._plan=deepcopy(expected)
             elif self._plan!=expected:
-                _budget_need(initialize is True and self._transition is None and 'succession' in _proof(verified),'budget_phase_plan_changed')
+                expected_transitions=1 if _proof(verified)['authority']['schema']==3 else 0
+                _budget_need(initialize is True and len(self._transitions)==expected_transitions and 'succession' in _proof(verified),'budget_phase_plan_changed')
                 self._begin_successor(verified)
             self._replay(verified);check_budget_snapshot(verified,deepcopy(self._counts),initializing=False);self._verified=verified
     def _begin_successor(self,verified):
         """One append while both counter and previous-child OS locks are held."""
         from .attempt import _proof,_sha,CHILD_JOURNAL
-        from .succession import transition_value,validate_transition
+        if _proof(verified)['authority']['schema']==3:
+            from .published_succession import transition_value,validate_transition
+        else:from .succession import transition_value,validate_transition
         proof=_proof(verified)['succession'];value=transition_value(verified)
         raw=self.journal.path.read_bytes()
         validate_transition(value,prefix_raw=raw,previous_plan=self._plan,
             counts=self._counts,used=self._used,verified=verified)
         directory=self.journal.path.parent
-        with Journal(directory,digest(str(directory)),proof['child_binding'],name=CHILD_JOURNAL,require_existing=True) as prior:
+        with Journal(directory,digest(str(directory)),proof['child_binding'],name=proof.get('child_name',CHILD_JOURNAL),require_existing=True) as prior:
             _budget_need(_sha(prior.path.read_bytes())==proof['child_sha256'] and prior.previous==proof['child_tail'],'budget_succession_child_changed')
-            config_path=Path(proof['docker_path'])
-            _budget_need(config_path.parent==directory and not os.path.lexists(config_path),'budget_succession_config_present')
+            paths=proof['docker_paths'] if 'docker_paths' in proof else [proof['docker_path']]
+            for value_path in paths:
+                config_path=Path(value_path)
+                _budget_need(config_path.parent==directory and not os.path.lexists(config_path),'budget_succession_config_present')
             # Refuse a changed prefix under the same OS counter lock. A failed
             # append poisons this object; it never retries or alters old rows.
             _budget_need(self.journal.path.read_bytes()==raw,'budget_outside_writer')
