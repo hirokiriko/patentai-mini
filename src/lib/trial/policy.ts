@@ -1,5 +1,6 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { z } from "zod";
+import { trialFictionalManifestSchema } from "./fictional-manifest";
 
 export const TRIAL_APPROVAL = "LIGHTWEIGHT_GROUP_TRIAL_V3";
 export const TRIAL_START = "2026-10-17T00:00:00Z";
@@ -43,6 +44,7 @@ export const trialPolicySchema = z.object({
     recoveryDirectoryDigest:z.string().regex(/^[a-f0-9]{64}$/),catalogPlanDigest:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict().optional(),
   samples: z.array(z.object({ caseId: z.number().int().positive().max(2_147_483_647),
     from: z.iso.date(), through: z.iso.date() }).strict().refine(v => v.from <= v.through)).max(5),
+  fictionalDistribution: trialFictionalManifestSchema.optional(),
 }).strict().superRefine((p, ctx) => {
   const start = Date.parse(p.startsAt), end = Date.parse(p.endsAt);
   if (start >= end || (p.phase === "trial" && (p.startsAt !== TRIAL_START || p.endsAt !== TRIAL_END)) ||
@@ -52,6 +54,10 @@ export const trialPolicySchema = z.object({
     ctx.addIssue({ code: "custom", message: "invalid_separation" });
   const roles=[p.database.webUser,p.database.workerUser,p.database.migratorUser,p.database.ownerRole].filter(Boolean);
   if(new Set(roles).size!==roles.length)ctx.addIssue({code:"custom",message:"invalid_separation"});
+  const fixture = p.fictionalDistribution;
+  if (fixture && (fixture.records.length !== p.samples.length || p.samples.some(sample =>
+    !fixture.records.some(row => row.caseId === sample.caseId) || sample.from !== fixture.period.from || sample.through !== fixture.period.to)))
+    ctx.addIssue({ code: "custom", message: "fictional_manifest_unconfirmed" });
 });
 export type TrialPolicy = z.infer<typeof trialPolicySchema>;
 export class TrialError extends Error { constructor(public readonly code = "trial_unavailable") { super(code); this.name = "TrialError"; } }

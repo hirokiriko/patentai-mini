@@ -492,7 +492,9 @@ class _Publisher:
             ('_docker_directory','_docker_config','_docker_config_absent',
              '_docker_probe_directory','_docker_probe_config','_docker_probe_config_absent','_docker_probe_result')))
         # Validate the existing budget object's integrity without spending.
-        need(self.budget.count('owner_arm') < 600)
+        from .attempt import effective_limits
+        limit=effective_limits(self.verified_attempt)['owner_arm'] if self.verified_attempt is not None else 600
+        need(self.budget.count('owner_arm') < limit)
         self.local_preflight()
         self.authenticate()
         try:

@@ -10,6 +10,7 @@ const date = z.string().refine(x => { try { managedDate(x); return true; } catch
 const position = z.object({ claimNo: managedId, start: count, end: z.number().int().positive() }).strict();
 const score = z.number().min(0).max(1);
 export const managedDeliverySchema = z.object({ schema: z.literal(1), deliveryId: z.uuidv4(), caseId: managedId, version: z.number().int().positive(),
+  provenance: z.literal("fictional_trial").optional(),
   previousDeliveryId: z.uuidv4().nullable(), reason: z.enum(["initial", "late_publication", "correction", "review_update"]),
   period: z.object({ from: date, to: date }).strict(), generatedAt: z.iso.datetime(), deliveryDueOn: date, deliveredOn: date.nullable(),
   contractSignedOn: date, monitoringStartsOn: date, contractEndsOn: date.nullable(),
@@ -69,15 +70,20 @@ export function projectManagedDeliveryDisplay(value: ManagedDelivery): ManagedDe
 }
 export const MANAGED_NOTICE = "指定した監視元請求項の全文と必要な参照請求項を、採用候補の請求項全文と比較しています。語彙選別は最大100件、AI詳細採用は最大20件です。対象外を全文AI比較済みとは扱いません。法的判断ではなく、人による原文確認が必要です。";
 export const MANAGED_SOURCE_NOTICE = "公開番号を用いてJ-PlatPat等の正規原文を確認してください。自社公報は番号・出願対応で確認できたものだけを区別し、出願人不明を他社確定にしません。比較結果は記載不存在・権利非侵害を示すものではなく、人による原文確認が必要です。";
+export const FICTIONAL_TRIAL_NOTICE = "完全架空の試用資料です。確認範囲は承認済みの架空資料集合に限られ、公式公報の取得・網羅性や実在の出願を示しません。";
+export const FICTIONAL_TRIAL_SOURCE_NOTICE = "この試用環境に保存した架空の原本と根拠位置を照合してください。架空の番号をJ-PlatPat等の実在公報として扱わないでください。";
+const sourceNotice = (r: ManagedDelivery) => r.provenance === "fictional_trial" ? FICTIONAL_TRIAL_SOURCE_NOTICE : MANAGED_SOURCE_NOTICE;
+const scopeNotice = (r: ManagedDelivery) => r.provenance === "fictional_trial" ? `${FICTIONAL_TRIAL_NOTICE} ${MANAGED_NOTICE}` : MANAGED_NOTICE;
 export function managedIncompleteMessage(value:ManagedDelivery):string|null{
   const r=validateManagedDelivery(value);if(r.coverage.complete)return null;
-  return `対象公開期間 ${r.period.from}〜${r.period.to} の定例報告について、取得・解析・比較の確認が完了していないため、候補の有無は確定していません。`+
+  return (r.provenance === "fictional_trial" ? `${FICTIONAL_TRIAL_NOTICE} ` : "") + `対象公開期間 ${r.period.from}〜${r.period.to} の定例報告について、取得・解析・比較の確認が完了していないため、候補の有無は確定していません。`+
     `配布一覧 ${r.coverage.expectedPackages}号中の保存確認 ${r.coverage.availablePackages}号、全文不足 ${r.coverage.incompleteDocuments}件、未解決補正 ${r.coverage.unresolvedCorrections}件、`+
     `失敗 ${r.coverage.failedRuns}件、未完了 ${r.coverage.activeRuns}件です。確認が済み次第、この第${r.version}版に対応する補足・訂正版をご案内します。`;
 }
 export function* managedDeliveryBlocks(value: ManagedDelivery): Generator<ReportBlock> {
   const r = projectManagedDeliveryDisplay(value), text = (text: string) => ({ text }), heading = (text: string) => ({ text, heading: true });
   yield heading("標準特許ウォッチ 定例報告");
+  if (r.provenance === "fictional_trial") yield heading(FICTIONAL_TRIAL_NOTICE);
   yield text(`案件 #${r.caseId} ／ 納品版 ${r.version} ／ ${r.coverage.complete ? "対象範囲の処理確認済み" : "未完了・要確認"}`);
   yield text(`対象公開期間: ${r.period.from} 〜 ${r.period.to}（元の公開日で帰属）`);
   yield text(`契約日: ${r.contractSignedOn} ／ 監視開始日: ${r.monitoringStartsOn}`);
@@ -95,7 +101,7 @@ export function* managedDeliveryBlocks(value: ManagedDelivery): Generator<Report
     yield heading("不足時の連絡用文案（運営者が確認して手動送信）");yield text(managedIncompleteMessage(r)!);
   }
   else if (!r.findings.length) yield text("確認済みの対象範囲で新規の詳細比較候補は0件です。全公報の全件AI精読や記載不存在を保証するものではありません。");
-  yield text(MANAGED_NOTICE);
+  yield text(scopeNotice(r));
   for (const f of r.findings) {
     yield heading(`候補 #${f.findingId}: ${f.publicationNumber} ／ ${f.inventionTitle}`);
     yield text(`公開日: ${f.publicationDate} ／ 検出日時: ${f.detectedAt}`);
@@ -107,7 +113,7 @@ export function* managedDeliveryBlocks(value: ManagedDelivery): Generator<Report
       yield text(c.explanation);
     }
   }
-  yield heading("原文確認と利用範囲"); yield text(MANAGED_SOURCE_NOTICE);
+  yield heading("原文確認と利用範囲"); yield text(sourceNotice(r));
   yield text("確認状態はこの納品版の生成時点です。後の確認・追加公報は別版として保存され、以前の納品版を変更しません。");
 }
 export const generateManagedDeliveryPdf = (report: ManagedDelivery) => generateReportBlocksPdf(managedDeliveryBlocks(report), "標準特許ウォッチ 定例報告");
@@ -116,16 +122,16 @@ export function managedDeliveryCsv(value: ManagedDelivery): Buffer {
   const r = projectManagedDeliveryDisplay(value);
   const header = ["案件", "納品版", "公開期間開始", "公開期間終了", "生成日時", "処理状態", "公開番号", "公開日", "検出日時", "区分", "確認状態", "監視元請求項", "候補請求項", "語彙", "要素", "意味", "構造", "監視元根拠位置", "候補根拠位置", "説明", "注意文"];
   const rows: unknown[][] = [];
-  const common = [r.caseId,r.version,r.period.from,r.period.to,r.generatedAt,r.coverage.complete ? "処理確認済み" : "未完了・要確認"];
+  const common = [r.caseId,r.version,r.period.from,r.period.to,r.generatedAt,r.coverage.complete ? (r.provenance === "fictional_trial" ? "架空資料範囲の処理確認済み" : "処理確認済み") : "未完了・要確認"];
   for (const f of r.findings) for (const c of f.comparisons) rows.push([...common,f.publicationNumber,f.publicationDate,f.detectedAt,f.relation,f.reviewStatus,
     c.baseClaimNo,c.candidateClaimNo,c.lexicalScore,c.elementScore,c.semanticScore,c.structuralScore,
-    `${c.baseEvidence.claimNo}:${c.baseEvidence.start}-${c.baseEvidence.end}`, `${c.candidateEvidence.claimNo}:${c.candidateEvidence.start}-${c.candidateEvidence.end}`,c.explanation,MANAGED_NOTICE]);
-  if (!rows.length) rows.push([...common,...Array(13).fill(""),r.coverage.complete ? "詳細比較候補0件" : "未完了のため候補の有無は未確定",MANAGED_NOTICE]);
+    `${c.baseEvidence.claimNo}:${c.baseEvidence.start}-${c.baseEvidence.end}`, `${c.candidateEvidence.claimNo}:${c.candidateEvidence.start}-${c.candidateEvidence.end}`,c.explanation,scopeNotice(r)]);
+  if (!rows.length) rows.push([...common,...Array(13).fill(""),r.coverage.complete ? "詳細比較候補0件" : "未完了のため候補の有無は未確定",scopeNotice(r)]);
   header.push("監視元公開番号","監視元版","指定請求項","契約日","監視開始日","契約終了日","取得確認日時","比較確認日時","納品期限","納品日",
     "配布一覧対象号数","保存確認号数","取込文献数","選別候補数","全文比較候補数","全文不足数","取得補正数","未解決補正数","完了run数","失敗run数","未完了run数","原文確認方法","不足連絡用文案");
   const metadata=[r.base.publicationNumber,r.base.version,r.base.selectedClaimNos.join("、"),r.contractSignedOn,r.monitoringStartsOn,r.contractEndsOn,r.coverage.acquiredAt,r.coverage.comparedAt,r.deliveryDueOn,r.deliveredOn,
     r.coverage.expectedPackages,r.coverage.availablePackages,r.coverage.importedDocuments,r.coverage.prefiltered,r.coverage.compared,r.coverage.incompleteDocuments,r.coverage.observedCorrections,r.coverage.unresolvedCorrections,
-    r.coverage.completedRuns,r.coverage.failedRuns,r.coverage.activeRuns,MANAGED_SOURCE_NOTICE,managedIncompleteMessage(r)];
+    r.coverage.completedRuns,r.coverage.failedRuns,r.coverage.activeRuns,sourceNotice(r),managedIncompleteMessage(r)];
   for(const row of rows)row.push(...metadata);
   return Buffer.from("\uFEFF"+[header,...rows].map(row=>row.map(cell).join(",")).join("\r\n")+"\r\n");
 }

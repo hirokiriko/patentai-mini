@@ -8,7 +8,7 @@ its recorded hash; a different input or any unowned output is never replaced.
 from copy import deepcopy
 import hashlib
 import os
-from pathlib import Path
+from pathlib import Path,PurePosixPath,PureWindowsPath
 import uuid
 
 from scripts.trial_guard.adapters import digest, encoded
@@ -49,7 +49,7 @@ def _output_bytes(reference):
     return raw
 
 
-def compose_configuration(publication, journal, inputs):
+def compose_configuration(publication, journal, inputs, *, verify_local_node=True):
     """Use explicit approved windows and only acknowledged registry digests."""
     need(isinstance(inputs, dict) and set(inputs) == INPUT_KEYS
          and type(inputs['schema']) is int and inputs['schema'] == 1
@@ -64,7 +64,14 @@ def compose_configuration(publication, journal, inputs):
     for ref in refs.values():
         _file_ref(ref)  # Reference syntax only; never opens a credential file.
     node = inputs['policy_verifier_node']
-    executable = _path(node)
+    need(type(verify_local_node) is bool)
+    if verify_local_node:executable = _path(node)
+    else:
+        # Historical closed-attempt verification is pure. Its signed path is
+        # syntax-checked without consulting today's filesystem or invoking it.
+        need(type(node) is str and not any(ord(c)<32 for c in node))
+        executable = PureWindowsPath(node) if PureWindowsPath(node).is_absolute() else PurePosixPath(node)
+        need(executable.is_absolute() and '..' not in executable.parts)
     need(executable.name.lower() in ('node', 'node.exe'))
     common = {'schema', 'sources', 'frozen_head', 'ci', 'recovery', 'control_budget'}
     need(common <= set(publication) and type(publication.get('live', False)) is bool)
@@ -129,7 +136,8 @@ def prepare_bridge(publication, journal, reference, *, now):
     output = directory / {'trial-provision':OUTPUT_NAME,
         'trial-provision-next':'provision-next-config.json',
         'trial-provision-successor':'provision-successor-config.json',
-        'trial-provision-successor-v3':'provision-successor-v3-config.json'}[child_name]
+        'trial-provision-successor-v3':'provision-successor-v3-config.json',
+        'trial-provision-successor-v4':'provision-successor-v4-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')

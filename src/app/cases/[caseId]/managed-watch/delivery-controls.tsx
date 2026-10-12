@@ -44,19 +44,19 @@ export function WatchStart({ caseId, runId, reserved }: { caseId: number; runId:
     <button className={control} disabled={busy} onClick={() => void act("reconcile")}>比較の状態を確認</button>
   </div><p role="status">{message}</p></div>;
 }
-export function DeliveryCreate({caseId,fixedPeriod}:{caseId:number;fixedPeriod?:FixedPeriod}){
+export function DeliveryCreate({caseId,fixedPeriod,fictional=false}:{caseId:number;fixedPeriod?:FixedPeriod;fictional?:boolean}){
   const router=useRouter(),[busy,setBusy]=useState(false),[attempted,setAttempted]=useState(false),[message,setMessage]=useState("");
   async function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(busy||attempted)return;
     const form=new FormData(event.currentTarget),id=crypto.randomUUID();let sent=false;setBusy(true);
     try{
-      setMessage("公式配布一覧を確認しています。");
+      setMessage(fictional ? "承認済みの架空資料集合を確認しています。" : "公式配布一覧を確認しています。");
       const distribution=await post(`/api/cases/${caseId}/managed-watch/distribution`,{});
       sent=true;setAttempted(true);
       setMessage("クラウドで納品版を作成しています。応答待ちの間は再操作しないでください。");
       const result=await post(`/api/cases/${caseId}/managed-watch/deliveries`,{deliveryId:id,period:{from:form.get("from"),to:form.get("to")},
         distributionTableSha256:distribution.sha256,reason:form.get("reason"),deliveredOn:form.get("deliveredOn")||null});
-      setMessage(result.complete?"納品版を保存しました。PDF・CSVを確認してから手動で納品してください。":"未完了の範囲を明記した版を保存しました。候補0件とは扱わず、不足を確認してください。");router.refresh();
+      setMessage(result.complete ? (fictional ? "架空資料の試用版を保存しました。PDF・CSVと保存内容を確認してください。" : "納品版を保存しました。PDF・CSVを確認してから手動で納品してください。") : "未完了の範囲を明記した版を保存しました。候補0件とは扱わず、不足を確認してください。");router.refresh();
     }catch(error){if(sent&&error instanceof RejectedInput){setAttempted(false);setMessage("対象期間・納品日を確認して修正してください。納品版の作成は受け付けられていません。");}
       else setMessage(sent?`結果の照合が必要です。作成を再送せず、一覧の保存状態を確認してください。照合番号: ${id}`:"配布一覧を確認できませんでした。納品版の作成は送信していません。再度確認できます。");router.refresh();}
     finally{setBusy(false);}

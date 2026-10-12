@@ -4,7 +4,7 @@ import { requireOwner } from "@/lib/owner-http";
 import { caseRepo, draftPatentRepo, priorArtDocumentRepo } from "@/repositories";
 import { managedCaseId, managedDeliveryRepository, managedWatchRepository } from "@/lib/patent-watch/managed-api";
 import { boundedPatentWatchPublicText } from "@/lib/patent-watch/domain";
-import { MANAGED_NOTICE } from "@/lib/patent-watch/managed-delivery";
+import { FICTIONAL_TRIAL_NOTICE, MANAGED_NOTICE } from "@/lib/patent-watch/managed-delivery";
 import { parseUploadedOriginalFileMetadata } from "@/lib/original-file-metadata";
 import { isScopedOriginalName } from "@/lib/blob-storage";
 import { DeliveryCreate, DeliveryReconcile, WatchPrepare, WatchStart } from "./delivery-controls";
@@ -20,7 +20,9 @@ export default async function ManagedWatchPage({ params }: { params: Promise<{ c
   try { caseId = managedCaseId((await params).caseId); } catch { notFound(); }
   if (!await caseRepo.findById(caseId)) notFound();
   const trial = trialConfigured();
-  const fixedPeriod = trial ? readTrialPolicy().samples.find(s => s.caseId === caseId) : undefined;
+  const policy = trial ? readTrialPolicy() : undefined;
+  const fixedPeriod = policy?.samples.find(s => s.caseId === caseId);
+  const fictional = policy?.fictionalDistribution !== undefined;
   const [setting, runs, deliveries, drafts, priorArt] = await Promise.all([
     managedWatchRepository().setting(caseId), managedWatchRepository().history(caseId), managedDeliveryRepository().list(caseId),
     draftPatentRepo.findByCaseId(caseId), priorArtDocumentRepo.findByCaseId(caseId),
@@ -36,13 +38,14 @@ export default async function ManagedWatchPage({ params }: { params: Promise<{ c
   return <main className="mx-auto max-w-5xl space-y-8 px-6 py-8">
     <Link className="text-blue-700 underline" href={`/cases/${caseId}`}>案件 #{caseId} に戻る</Link>
     <header><h1 className="text-3xl font-bold">標準特許ウォッチ</h1><p className="mt-3 text-gray-700">公開期間ごとの比較状況と、生成時点を固定した納品版を確認できます。</p></header>
+    {fictional && <p className="rounded border border-amber-500 bg-amber-50 p-5">{FICTIONAL_TRIAL_NOTICE}</p>}
     {setting ? <section className="space-y-2 rounded border p-5">
       <h2 className="text-xl font-semibold">監視設定</h2>
       <p>監視元: {boundedPatentWatchPublicText(setting.base.publicationNumber, 100)} ／ 版: {boundedPatentWatchPublicText(setting.base.version, 100)}</p>
       <p>指定請求項: {setting.selectedClaimNos.join("、")} ／ {setting.enabled ? "有効" : "停止中"}</p>
       <p>契約日: {setting.contractSignedOn} ／ 監視開始日: {setting.monitoringStartsOn} ／ 終了日: {setting.contractEndsOn ?? "未設定"}</p>
     </section> : <p className="rounded border p-5">監視設定はまだありません。運営者の標準手順で登録してください。</p>}
-    {setting&&<><WatchPrepare caseId={caseId} fixedPeriod={fixedPeriod}/><DeliveryCreate caseId={caseId} fixedPeriod={fixedPeriod}/></>}
+    {setting&&<><WatchPrepare caseId={caseId} fixedPeriod={fixedPeriod}/><DeliveryCreate caseId={caseId} fixedPeriod={fixedPeriod} fictional={fictional}/></>}
     <section className="space-y-3"><h2 className="text-xl font-semibold">保存した納品版</h2>
       {!deliveries.length && <p>納品版はまだありません。候補0件を意味するものではありません。</p>}
       <ul className="space-y-3">{deliveries.map(d => <li className="rounded border p-4" key={d.deliveryId}>

@@ -56,16 +56,32 @@ def _ref(value):
     _keys(value,('path','sha256'));path=value['path']
     _need(isinstance(path,str) and 0<len(path)<=4096 and (PureWindowsPath(path).is_absolute() or PurePosixPath(path).is_absolute())
         and '..' not in PureWindowsPath(path).parts and not any(ord(c)<32 for c in path),'attempt_reference');_hex(value['sha256'])
-def _counts(value):
-    _keys(value,LIMITS);_need(all(type(value[k]) is int and 0<=value[k]<=LIMITS[k] for k in LIMITS),'attempt_counts')
+def _authority_limits(authority):
+    # Historical authorities and the lifetime journal header remain at 600.
+    # Only the independently trusted V4 authority can add these 31 requests.
+    limits=deepcopy(LIMITS)
+    if authority.get('schema')==4:
+        amendment=authority['limit_amendment']
+        _keys(amendment,('schema','kind','previous','current','delta','approval_sha256'))
+        _need(all(type(amendment[k]) is int for k in ('schema','previous','current','delta'))
+            and {k:amendment[k] for k in ('schema','kind','previous','current','delta')}==
+            {'schema':1,'kind':'owner_arm','previous':600,'current':631,'delta':31},'attempt_limit_amendment')
+        _hex(amendment['approval_sha256']);limits['owner_arm']=631
+    return limits
+
+def effective_limits(verified):return _authority_limits(_proof(verified)['authority'])
+
+def _counts(value,limits=LIMITS):
+    _keys(value,limits);_need(all(type(value[k]) is int and 0<=value[k]<=limits[k] for k in limits),'attempt_counts')
 def _allocations(authority):
     before,caps,reserve=(authority[k] for k in ('counts_before','phase_caps','unallocated'))
-    _counts(before);_keys(caps,LIMITS);_keys(reserve,LIMITS)
-    for kind in LIMITS:
+    limits=_authority_limits(authority)
+    _counts(before,limits);_keys(caps,limits);_keys(reserve,limits)
+    for kind in limits:
         _keys(caps[kind],PHASES)
         _need(all(type(v) is int and v>=0 for v in caps[kind].values()) and type(reserve[kind]) is int and reserve[kind]>=0
-            and sum(caps[kind].values())+reserve[kind]<=LIMITS[kind]-before[kind],'attempt_allocation')
-    published=authority.get('schema')==3
+            and sum(caps[kind].values())+reserve[kind]<=limits[kind]-before[kind],'attempt_allocation')
+    published=authority.get('schema') in (3,4)
     _need(all(caps['owner_arm'][phase]<=maximum for phase,maximum in OWNER_CAPS.items())
         and caps['owner_arm']['cleanup']>=120 and (reserve['owner_arm']==0 if published else reserve['owner_arm']>=23),'attempt_cleanup_reservation')
 def _slot(manifest,head,slot):
@@ -134,12 +150,12 @@ def verify_attempt(config,manifest,*,authority_raw,activation_raw,parent_journal
     except (KeyError,TypeError,ValueError,AttributeError,IndexError,OverflowError):raise Denied('attempt_binding') from None
 def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,parent_final_raw,artifacts,trusted_hash,now):
     _need(_sha(authority_raw)==_hex(trusted_hash),'attempt_trusted_authority');a,activation=_json(authority_raw),_json(activation_raw)
-    successor=type(a.get('schema')) is int and a['schema'] in (2,3)
+    successor=type(a.get('schema')) is int and a['schema'] in (2,3,4)
     fields=('schema','approval','decision','design_sha256','attempt_id','manifest_sha256','owner_id','task_id','head','code_sources_sha256',
         'budget_binding_sha256','parent','tags','retained_runtime','guardian_prior_digest','artifact_sha256','publish_from','approved_at',
         'counts_before','phase_caps','unallocated','initial_forecast_yen','catalog_options')
-    _keys(a,fields+(('succession',) if successor else ()))
-    _need(type(a['schema']) is int and a['schema'] in (1,2,3)
+    _keys(a,fields+(('succession',) if successor else ())+(('limit_amendment',) if a.get('schema')==4 else ()))
+    _need(type(a['schema']) is int and a['schema'] in (1,2,3,4)
         and a['approval']=='ISSUE148_LINKED_ATTEMPT_V'+str(a['schema']) and a['decision']=='APPROVED'
         and a['design_sha256']==DESIGN_SHA256 and isinstance(a['attempt_id'],str) and re.fullmatch('[A-Za-z0-9_-]{1,128}',a['attempt_id']),'attempt_authority')
     _need(type(a['initial_forecast_yen']) is int and 0<a['initial_forecast_yen']<=4500,'attempt_cost')
@@ -185,6 +201,7 @@ def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,pare
                 and fixed['docker_sha256']==proof.get('docker_sha256') and fixed['docker_host']==proof.get('docker_host'),'attempt_build_binding')
     _allocations(a);_need(all(a['counts_before'][k]>=final['counters'][k] for k in LIMITS),'attempt_counts_reset')
     expected_limits={'schema':1,'head':a['head'],'counts_before':a['counts_before'],'phase_caps':a['phase_caps'],'unallocated':a['unallocated'],'purpose_caps':PURPOSE_CAPS}
+    if a['schema']==4:expected_limits.update(limits=_authority_limits(a),limit_amendment=a['limit_amendment'])
     _need(parsed['limits']==expected_limits,'attempt_limits_artifact')
     _keys(activation,('schema','attempt_id','authority_sha256','issued_at','windows'))
     _need(type(activation['schema']) is int and activation['schema']==1 and activation['attempt_id']==a['attempt_id'] and activation['authority_sha256']==trusted_hash,'attempt_activation')
@@ -203,7 +220,8 @@ def _verify(config,manifest,authority_raw,activation_raw,parent_journal_raw,pare
         if 'resource_bindings' in config:_need(config['resource_bindings']['code_sha']==a['head'] and config['resource_bindings']['guardian_deadline']==w['guardian']['end'],'attempt_resource_binding')
     proof={'authority':a,'activation':activation,'authority_sha256':trusted_hash,'activation_sha256':_sha(activation_raw),'manifest_digest':digest(manifest)}
     if successor:
-        if a['schema']==3:from .published_succession import validate_proof
+        if a['schema']==4:from .input_succession import validate_proof
+        elif a['schema']==3:from .published_succession import validate_proof
         else:from .succession import validate_proof
         proof['succession']=validate_proof(a,parsed['local_ready'],config,manifest,
             parent_journal_raw=parent_journal_raw,parent_final_raw=parent_final_raw,now=now)
@@ -216,7 +234,8 @@ def journal_descriptor(config,verified=None):
         and base=={'manifest_sha256':a['manifest_sha256'],'owner_id':a['owner_id'],'task_id':a['task_id']},'attempt_descriptor')
     name=CHILD_JOURNAL
     if 'succession' in proof:
-        if a['schema']==3:from .published_succession import CHILD_NAME
+        if a['schema']==4:from .input_succession import CHILD_NAME
+        elif a['schema']==3:from .published_succession import CHILD_NAME
         else:from .succession import CHILD_NAME
         name=CHILD_NAME
     return name,{**base,'attempt':{'schema':1,'id':a['attempt_id'],'binding_digest':verified.binding_digest,'authority_sha256':proof['authority_sha256'],
@@ -228,16 +247,16 @@ def effective_slot(manifest,head,slot,verified=None):
     proof=_proof(verified);a=proof['authority'];_need(digest(manifest)==proof['manifest_digest'],'attempt_manifest_changed');result=_slot(manifest,head,slot)
     _need(a['head']==head and a['tags'][slot]==result['tag'] and a['owner_id']==manifest['owner']['principal_id'],'attempt_slot_binding');return result
 def phase_plan(verified):
-    a=_proof(verified)['authority'];return {'schema':1,'attempt':verified.binding_digest,'limits':deepcopy(LIMITS),'counts_before':deepcopy(a['counts_before']),
+    a=_proof(verified)['authority'];return {'schema':1,'attempt':verified.binding_digest,'limits':effective_limits(verified),'counts_before':deepcopy(a['counts_before']),
         'phase_caps':deepcopy(a['phase_caps']),'unallocated':deepcopy(a['unallocated']),'budget_binding_sha256':a['budget_binding_sha256'],'purpose_caps':deepcopy(PURPOSE_CAPS)}
 def check_budget_snapshot(verified,counts,initializing=False):
-    a=_proof(verified)['authority'];_counts(counts);_need(type(initializing) is bool and all(counts[k]>=a['counts_before'][k] for k in LIMITS),'attempt_budget_reset')
+    a=_proof(verified)['authority'];_counts(counts,effective_limits(verified));_need(type(initializing) is bool and all(counts[k]>=a['counts_before'][k] for k in LIMITS),'attempt_budget_reset')
     if initializing:_need(counts==a['counts_before'],'attempt_budget_snapshot')
 def check_phase_send(verified,kind,phase,counts,used):
-    a=_proof(verified)['authority'];check_budget_snapshot(verified,counts)
+    a=_proof(verified)['authority'];check_budget_snapshot(verified,counts);limits=effective_limits(verified)
     _need(kind in LIMITS and phase in PHASES and type(used) is int and used>=0 and used<a['phase_caps'][kind][phase]
-        and counts[kind]<LIMITS[kind]-a['unallocated'][kind],'attempt_phase_exhausted')
-    if kind=='owner_arm' and phase!='cleanup':_need(counts[kind]<(480 if a['schema']==3 else 457),'attempt_cleanup_reserved')
+        and counts[kind]<limits[kind]-a['unallocated'][kind],'attempt_phase_exhausted')
+    if kind=='owner_arm' and phase!='cleanup':_need(counts[kind]<(limits[kind]-120 if a['schema'] in (3,4) else 457),'attempt_cleanup_reserved')
 def check_window(verified,name,now,request_seconds=0):
     windows=_proof(verified)['activation']['windows'];_need(name in windows and type(request_seconds) in (int,float)
         and math.isfinite(request_seconds) and request_seconds>=0,'attempt_window_argument')

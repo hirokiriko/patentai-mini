@@ -56,6 +56,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: docker pull postgres:16
       # Fictional fixtures only. No Azure credentials, secrets, or external DB.
-      - run: pnpm exec vitest run scripts/trial-local.test.ts scripts/trial-operator-local.test.ts scripts/trial-bootstrap-local.test.ts scripts/trial-catalog-local.test.ts scripts/trial-catalog-bootstrap-local.test.ts scripts/trial-catalog-complete-local.test.ts scripts/managed-watch-local.test.ts scripts/managed-setting-capacity-local.test.ts scripts/managed-retention-local.test.ts --maxWorkers=1
+      - run: pnpm exec vitest run scripts/trial-local.test.ts scripts/trial-operator-local.test.ts scripts/trial-bootstrap-local.test.ts scripts/trial-catalog-local.test.ts scripts/trial-catalog-bootstrap-local.test.ts scripts/trial-catalog-complete-local.test.ts scripts/trial-fixture-compatibility-local.test.ts scripts/managed-watch-local.test.ts scripts/managed-setting-capacity-local.test.ts scripts/managed-retention-local.test.ts --maxWorkers=1
         env:
           WATCH_REPORT_LOCAL_DB_TEST: '1'

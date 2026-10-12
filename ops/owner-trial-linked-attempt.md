@@ -211,3 +211,29 @@ process, validates every blob hash and compares every current file. Loaded-modul
 paths remain checked on each call. No archive export transformations or cached
 approval booleans can replace the committed-byte proof. This keeps source checks
 inside the existing evidence freshness limits without extending those limits.
+
+### Input-contract correction after a closed V3
+
+The explicitly approved V4 continuation retains all 148 counter rows and the
+270/32/0 usage. It verifies the closed V3 publications, local preparation bridge,
+and acknowledged guardian removal through the normal operation builders. No
+foundation, DB, IAM or runtime write may be present in that predecessor. The
+original 71-row prefix and both earlier transitions remain independently bound.
+
+Only the separately hash-bound human amendment permits the third transition to
+raise the effective OWNER request cap from 600 to 631. The original journal
+header and V1–V3 limits remain 600. The new allocation is fresh reads 24,
+publication 22, provision 153, run 42 and cleanup 120, with no unallocated
+requests. Its 31-request addition exactly matches the closed V3 consumption;
+no previous debit is refunded. Non-cleanup admission stops at 511. Existing
+callers still pass the nominal 600 request-class argument; the verified active
+plan alone determines cumulative admission. A fourth transition is rejected.
+
+The dedicated child is `trial-provision-successor-v4`. New code requires exact
+HEAD checks and image builds, while unchanged evidence is reused. The corrected
+fictional input contract is described in [owner trial](owner-trial.md).
+Image cost is recalculated from all retained images and the new build; a higher
+forecast within the start gate does not itself approve a larger cost allowance.
+Monetary caps and unsettled reservations remain separate approval constraints.
+The amendment sets no start time or response deadline and does not establish
+live acceptance. Readiness and an ample new execution window precede activation.

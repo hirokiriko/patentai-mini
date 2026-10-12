@@ -14,6 +14,32 @@ DB待ち中にも残実装・Local検証・独立レビュー・CIを進める�
 
 ## 実装境界
 
+### 架空資料の固定集合
+
+完全架空の試用入力は、公式配布CSVとは別の署名policy項目
+`fictionalDistribution`で固定する。`prepareTrialFictionalManifest`は変更しない
+ZIPと各案件のXMLを実際の解析器へ渡し、ZIP内の原本bytes、文書・全文請求項、
+receipt、sourceKey、案件と原本SHAの一対一対応を確認する。公開期間は従来の
+25日締め契約を満たす値にする。月末を新たな締め日として許可しない。
+
+既存distribution routeは有効な署名policyと案件がある場合だけ、この固定集合を
+明示したJSON/URNをprivate snapshotへ保存する。JPOへ取得要求を出さず、架空CSVを
+公式情報として扱わない。通常環境の公式取得・receipt/件数検証は維持する。
+run準備・Job開始・workerのAI送信前は案件原本と承認source集合を照合し、帳票では
+全件の保存・処理状態を照合する。無変更の後続runは新規sourceが空でもよい。
+
+新しい架空帳票はsnapshotに`provenance: fictional_trial`を保存する。PDF、44列CSV、
+保存版画面は保存済み由来から架空資料であることを表示し、公式網羅性や実在出願を
+確認したとは表示しない。再取得は同じ署名済み集合との一致を要求する。
+旧来の由来項目なし帳票に既定値を追加せず、既存snapshot hashを保持する。
+Local運営者の期限後照合は署名・固定集合の一致と独立した有効な運用者ticketを
+要求する。公開画面・API・PDF/CSV取得の期限後拒否は変わらない。
+
+この変更は追加HTTP route、DB schema、権限、予算、試用期間を増やさない。
+ローカルPG16試験は4原本の投入・設定、候補のある比較結果、実PDF/CSVの保存、
+改訂と旧版不変を確認する。CIは公開用の合成架空fixture、Localは任意の承認済み
+入力を外部のSHA固定で検証できる。模擬AI/Blob transportの試験を実環境受入と呼ばない。
+
 - Ed25519署名policyがtenant/OWNER/audience/origin、DB/roles、Storage3用途、Web/worker別MI、AI deployment、Job/environment、code SHA/image digest、公開sample/期間を固定。HTTP入力で接続先を選ばない。
 - 正式期間は2026-10-17 09:00以上〜2026-10-31 09:00未満JST。初期実機policyは最大30分。終了後の業務API/帳票取得は拒否し、データなしの終了案内を出す。既取得データの回収は保証しない。
 - 案件はsampleを含む最大5件、title入力のみ。managed比較は署名sample限定・固定公開期間。持込draftのmini抽出とsample比較を分ける。原本/抽出結果、比較履歴、固定納品版、根拠、現在の確認状態を画面に接続する。

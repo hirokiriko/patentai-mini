@@ -7,11 +7,19 @@ import { TRIAL_START,TRIAL_END,trialPolicyDigest } from "./policy";
 import type { ManagedRun } from "../patent-watch/managed-types";
 import type { ManagedWatchRepository } from "../../repositories/managed-watch";
 afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs();});
-function fixture(){
-  const p=pricedTrial(),f=ledgerFixture(p);vi.useFakeTimers();vi.setSystemTime(new Date(TRIAL_START));
+function fixture(fictional=false){
+  const p=pricedTrial();
+  if(fictional){
+    p.samples=[{caseId:1,from:"2026-09-01",through:"2026-09-25"}];
+    p.fictionalDistribution={schema:1,kind:"fictional_trial",packageSha256:"a".repeat(64),period:{from:"2026-09-01",to:"2026-09-25"},
+      issueNumber:"2026-148",cumulativeIssue:"01115",publicationDate:"2026-09-01",publishedCount:1,translatedCount:0,
+      records:[{caseId:1,originalXmlSha256:"c".repeat(64),sourceKey:"d".repeat(64),publicationDate:"2026-09-01",kind:"A1"}]};
+  }
+  const f=ledgerFixture(p);vi.useFakeTimers();vi.setSystemTime(new Date(TRIAL_START));
   const env=signedTrialEnvironment(p);for(const[k,v]of Object.entries(env))vi.stubEnv(k,v);
   const request=trialJobRequestSchema.parse({schema:1,kind:"trial-watch",caseId:1,runId:"66666666-6666-4666-8666-666666666666",snapshotDigest:"b".repeat(64),policyDigest:trialPolicyDigest(p)});
   const run={...request,status:"prepared",executionId:null,snapshot:{candidates:[]},plan:null} as unknown as ManagedRun;
+  if(fictional)Object.assign(run.snapshot,{period:p.fictionalDistribution!.period,sourceKeys:[],setting:{caseId:1,source:{sha256:"c".repeat(64)}}});
   const repo={run:vi.fn(async()=>run),claimTrial:vi.fn(async()=>{run.status="running";run.executionId="trial-job-one";return run;}),
     finalize:vi.fn(async()=>{run.status="completed";}),fail:vi.fn(async()=>{run.status="failed";}),hasUnknownDispatch:vi.fn(async()=>false),
     failUnstartedTrial:vi.fn(async()=>{run.status="failed";})};
@@ -25,6 +33,27 @@ function fixture(){
   return{...f,p,request,run,repo,repository:repo as unknown as ManagedWatchRepository,job,observed,arm};
 }
 describe("trial manual Job lifecycle",()=>{
+  it("rejects a swapped original or unapproved source before any ARM call or reservation",async()=>{
+    const f=fixture(true), original=f.run.snapshot.setting.source.sha256;
+    f.run.snapshot.setting.source.sha256="e".repeat(64);
+    await expect(startTrialWatch(f.repository,1,f.request.runId,"start",f.ledger,f.arm)).rejects.toThrow("trial_fixture_unconfirmed");
+    f.run.snapshot.setting.source.sha256=original;f.run.snapshot.sourceKeys=["e".repeat(64)];
+    await expect(startTrialWatch(f.repository,1,f.request.runId,"start",f.ledger,f.arm)).rejects.toThrow("trial_fixture_unconfirmed");
+    expect(f.arm).not.toHaveBeenCalled();expect(f.current().operations).toHaveLength(0);
+  });
+  it("rejects substituted worker input before AI and retains the uncertain allowance",async()=>{
+    const f=fixture(true);await startTrialWatch(f.repository,1,f.request.runId,"start",f.ledger,f.arm);
+    f.run.snapshot.setting.source.sha256="e".repeat(64);
+    const analysis={screening:vi.fn(),detail:vi.fn()};
+    await expect(executeTrialWatch(f.repository,f.request,"trial-job-one",f.ledger,analysis)).rejects.toThrow("trial_comparison_incomplete");
+    expect(analysis.screening).not.toHaveBeenCalled();expect(analysis.detail).not.toHaveBeenCalled();
+    expect(f.repo.fail).toHaveBeenCalledOnce();expect(f.current().operations[0].status).toBe("unknown");
+  });
+  it("allows a signed unchanged run with no new sources",async()=>{
+    const f=fixture(true);await startTrialWatch(f.repository,1,f.request.runId,"start",f.ledger,f.arm);
+    await executeTrialWatch(f.repository,f.request,"trial-job-one",f.ledger);
+    expect(f.repo.finalize).toHaveBeenCalledOnce();
+  });
   it("accepts ARM optional null fields and rejects altered resources, identity or image",()=>{
     const f=fixture();expect(trialJobTemplate(f.job,f.p,f.request).containers).toHaveLength(1);
     for(const alter of [()=>{f.job.properties.template.containers[0].resources.cpu=4;},()=>{f.job.properties.template.containers[0].image="other";}]){

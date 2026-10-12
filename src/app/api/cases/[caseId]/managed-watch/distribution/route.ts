@@ -9,7 +9,7 @@ export const POST=withOwnerRoute(async(_request:Request,{params}:{params:Promise
   try{const caseId=managedCaseId((await params).caseId);
     return await withManagedDeliveryDatabase(async db=>{
       if(!await new ManagedWatchRepository(db).setting(caseId))return Response.json({error:"not_found"},{status:404});
-      return Response.json(await new ManagedDeliveryRepository(db).acquireDistribution());
+      return Response.json(await new ManagedDeliveryRepository(db).acquireDistribution(caseId));
     });
   }catch(error){return managedApiError(error);}
 });

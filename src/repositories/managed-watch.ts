@@ -19,6 +19,7 @@ import { managedWatchAiBudgetSchema, requireManagedWatchCost, type ManagedWatchA
 import { isManagedFailureCode } from "../lib/patent-watch/managed-failure";
 import { readTrialPolicy, requireTrialActive, trialConfigured } from "../lib/trial/policy";
 import { reserveTrialDatabase,checkTrialDatabaseSize } from "../lib/trial/database-capacity";
+import { assertTrialFictionalSetting, assertTrialFictionalRun } from "../lib/trial/fictional-run";
 
 type Database = NodePgDatabase<typeof schema>;
 const S = schema.managedWatchSettings, R = schema.managedWatchRuns, D = schema.managedWatchDispatches, F = schema.managedWatchFindings;
@@ -144,6 +145,7 @@ export class ManagedWatchRepository {
     validateManagedPeriod(period);
     if(trialConfigured()){
       const setting=await this.setting(caseId);requireState(setting?.enabled,"invalid_setting");
+      assertTrialFictionalSetting(readTrialPolicy(), setting, period);
       const expected=managedPeriodForPublication(setting.monitoringStartsOn,period.to);
       requireState(expected?.from===period.from&&expected.to===period.to,"invalid_setting");
       const active=await this.database.select({id:R.runId}).from(R).where(and(eq(R.caseId,caseId),inArray(R.status,ACTIVE))).limit(1);
@@ -154,6 +156,7 @@ export class ManagedWatchRepository {
       await tx.execute(sql`select pg_advisory_xact_lock(${LOCK}::bigint)`);
       const [row] = await tx.select().from(S).where(eq(S.caseId, caseId)); requireState(row, "not_found");
       const setting = settingFrom(row); requireState(setting.enabled, "invalid_setting");
+      if (trialConfigured()) assertTrialFictionalSetting(readTrialPolicy(), setting, period);
       const expected = managedPeriodForPublication(setting.monitoringStartsOn, period.to);
       requireState(expected && expected.from === period.from && expected.to === period.to, "invalid_setting");
       const active = await tx.select({ runId: R.runId }).from(R).where(and(eq(R.settingId, setting.settingId), inArray(R.status, ACTIVE))).limit(1);
@@ -215,6 +218,7 @@ export class ManagedWatchRepository {
       const snapshot: ManagedRunSnapshot = { schema: 1, setting, period, sourceKeys: [...sourceKeys], candidates,
         scannedDocuments: sourceKeys.size, incompleteDocuments, sourceBytes };
       validateManagedSnapshot(snapshot);
+      if (trialConfigured()) assertTrialFictionalRun(readTrialPolicy(), snapshot);
       const snapshotJson = JSON.stringify(snapshot); requireState(Buffer.byteLength(snapshotJson) <= (trialConfigured()?1:64) * 1024 ** 2, "limit");
       const [saved] = await tx.insert(R).values({ runId: randomUUID(), settingId: setting.settingId, caseId, status: "prepared",
         periodFrom: period.from, periodTo: period.to, baseDigest: setting.baseDigest, snapshotJson, snapshotDigest: managedDigest(snapshot),sourceDocumentId:setting.source.documentId,

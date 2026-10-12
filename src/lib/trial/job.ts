@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertTrialFictionalRun } from "./fictional-run";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../db/schema";
 import { ManagedWatchRepository } from "../../repositories/managed-watch";
@@ -71,6 +72,7 @@ export async function startTrialWatch(repository: ManagedWatchRepository, caseId
   const p=ledger.policy; if(action==="start")requireTrialActive(p);
   if(!p.samples.some(s=>s.caseId===caseId))throw new TrialError("trial_sample_not_ready");
   const run=await repository.run(caseId,runId);
+  if (action === "start") assertTrialFictionalRun(p, run.snapshot);
   const request=trialJobRequestSchema.parse({schema:1,kind:"trial-watch",caseId,runId,snapshotDigest:run.snapshotDigest,policyDigest:trialPolicyDigest(p)});
   const id=trialHash(runId), prior=await ledger.inspect(id);
   if(prior) {
@@ -146,6 +148,7 @@ export async function executeTrialWatch(repository:ManagedWatchRepository,reques
   try {
     await ledger.claimWorker(id,execution);
     run=await repository.claimTrial(request.caseId,request.runId,execution,request.snapshotDigest,saved.expiresAt);
+    assertTrialFictionalRun(p, run.snapshot);
     const claimed=run;
     await withTrialAiBudget({kind:"compare",deadlineAt:Date.parse(saved.createdAt)+15*60_000,journal:{
       reserve:async e=>{await ledger.reserveCall(id,e);if(!current)throw new TrialError();await current.reserve(e);},
