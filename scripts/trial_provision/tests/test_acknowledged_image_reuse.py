@@ -275,8 +275,8 @@ class ReusedImageTests(unittest.TestCase):
             'plan_bindings':{'guardian_window':{'start':'2026-10-14T00:35:00Z','end':'2026-10-14T08:35:00Z'},
                 'owner_window':{'start':'2026-10-14T01:20:00Z','end':'2026-10-14T02:20:00Z'}},
             'deadline':'2026-10-14T02:20:00Z','secret_sources':{
-                'trial-web-database':{'path':'C:/fictional/web.secret','sha256':'a'*64},
-                'trial-worker-database':{'path':'C:/fictional/worker.secret','sha256':'b'*64}}}
+                'trial-web-database':{'path':str(p.Path('fictional/web.secret').absolute()),'sha256':'a'*64},
+                'trial-worker-database':{'path':str(p.Path('fictional/worker.secret').absolute()),'sha256':'b'*64}}}
         with patch.object(bridge,'build_resource_operations',return_value=[]) as resource_schema:
             result=bridge.compose_configuration(publication,self.journal,inputs,verify_local_node=False)
         self.assertEqual(self.newhead,result['frozen_head']);self.assertEqual(self.oldhead,result['resource_bindings']['code_sha'])
