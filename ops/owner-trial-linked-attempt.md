@@ -227,7 +227,8 @@ publication 22, provision 153, run 42 and cleanup 120, with no unallocated
 requests. Its 31-request addition exactly matches the closed V3 consumption;
 no previous debit is refunded. Non-cleanup admission stops at 511. Existing
 callers still pass the nominal 600 request-class argument; the verified active
-plan alone determines cumulative admission. A fourth transition is rejected.
+plan alone determines cumulative admission. V4 alone cannot authorize a fourth
+transition.
 
 The dedicated child is `trial-provision-successor-v4`. New code requires exact
 HEAD checks and image builds, while unchanged evidence is reused. The corrected
@@ -237,3 +238,44 @@ forecast within the start gate does not itself approve a larger cost allowance.
 Monetary caps and unsettled reservations remain separate approval constraints.
 The amendment sets no start time or response deadline and does not establish
 live acceptance. Readiness and an ample new execution window precede activation.
+
+### An unacknowledged V4 publication
+
+A Docker push can fail after its intent has been persisted but before its
+positive exit status and manifest digest are recorded. A local image inspection
+does not test the Docker daemon's registry connection. Preserve that outcome as
+UNKNOWN; a later repository listing, including an OWNER's Portal observation,
+does not establish the original process acknowledgement, absence of uploaded
+blobs, successful cleanup, or zero cost. Never repeat that old intent.
+
+The narrowly scoped V5 succession supports only the stopped V4 publication
+history: all 158 budget rows, 279/32/0 usage, the original 71- and 148-row
+prefixes, and the 16-row predecessor child with one unacknowledged guardian
+intent. The old UNKNOWN remains an unresolved historical operation. Its
+reservations are not released, and no delete authority is inferred from it.
+The original authorities and all three prior transitions remain verifiable.
+
+An independently approved fourth transition may move six **unspent** provision
+requests to fresh reads. The proposed allocation is fresh 24, publication 19,
+provision 147, run 42 and cleanup 120: 352 remaining requests plus 279 already
+used equals the existing 631 ceiling. Publication's usual inventory is 15 HTTP
+requests and at most two OWNER token requests; provision's is 135 HTTP requests
+and at most ten token requests. Each leaves only two extra requests. These are
+request margins, not promises that an asynchronous operation will complete in
+time. Keep the 120-request cleanup reserve and stop before exceeding any cap.
+
+This succession requires a separately approved new HEAD, new image tags and
+exact build evidence, a new child journal and fixed execution windows. It does
+not reopen V4 or grant a general UNKNOWN retry. Immediately before a newly
+authorized guardian publication, the existing authenticated exact-repository
+check must still return NAME_UNKNOWN. Existence, an unconfirmed response, stale
+evidence or a changed predecessor stops before the new push. A new push still
+requires its own positive Docker exit and digest, followed by authenticated
+manifest readback. Existing runtime retention and scoped cleanup rules apply.
+
+Local implementation, fictional tests and independent review grant no live
+authority. Keep old schedules paused and choose new dates only after readiness
+and the OWNER's consolidated approval. Reuse unchanged application tests and
+evidence; rebuild only for actual source changes. Actual OWNER login, real AI,
+PDF/CSV retrieval, saved redisplay, expiry rejection and cleanup remain separate
+unfinished acceptance steps until observed in the trial environment.

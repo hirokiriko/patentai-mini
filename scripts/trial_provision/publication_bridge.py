@@ -137,7 +137,8 @@ def prepare_bridge(publication, journal, reference, *, now):
         'trial-provision-next':'provision-next-config.json',
         'trial-provision-successor':'provision-successor-config.json',
         'trial-provision-successor-v3':'provision-successor-v3-config.json',
-        'trial-provision-successor-v4':'provision-successor-v4-config.json'}[child_name]
+        'trial-provision-successor-v4':'provision-successor-v4-config.json',
+        'trial-provision-successor-v5':'provision-successor-v5-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')

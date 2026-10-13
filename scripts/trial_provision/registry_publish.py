@@ -444,6 +444,33 @@ class _Publisher:
         return self.runner([self.bundle['docker_path'],'--config',str(config),'--host',self.bundle['docker_host'],*args],
             timeout=min(self.time(),self.exp-self.clock.utc().timestamp()-5),environment=_docker_environment(config))
 
+    def push_digest(self, config):
+        """Classify a failed command without persisting output or manufacturing ACK."""
+        classification = 'process_error'
+        try:
+            code, output = self.command(config,['image','push',self.tag])
+            need(type(code) is int)
+            classification = 'nonzero_exit'
+            need(code == 0)
+            classification = 'missing_or_ambiguous_ack'
+            need(type(output) is bytes)
+            matches = re.findall(r'^' + re.escape(self.tag.rsplit(':',1)[1]) +
+                r': digest: (sha256:[a-f0-9]{64}) size: ([0-9]+)\s*$',output.decode('utf8'),re.MULTILINE)
+            need(len(matches) == 1)
+            return matches[0][0]
+        except Exception as error:
+            if isinstance(error,(subprocess.TimeoutExpired,TimeoutError)):
+                classification = 'timeout'
+            # This event explains a missing ACK only. It is never a receipt,
+            # remote absence evidence, or permission to dispatch again. The
+            # runner's stderr remains discarded and stdout stays in memory.
+            self.journal.append(self.slot + '_docker_push_failure', {'schema':1,
+                'operation_id':self.ident,'request_digest':digest(self.op),
+                'publication_preparation_digest':self.preparation,'run_binding_digest':self.run_digest,
+                'classification':classification,'additional_control_http_requests':0,
+                'automatic_retry':False})
+            raise Denied('docker_push_' + classification) from None
+
     def local_preflight(self):
         """Exact local image check before the first credential or HTTP request."""
         reason = 'local_config'
@@ -520,13 +547,9 @@ class _Publisher:
             receipt = self.base_receipt(); self.journal.checkpoint(self.op,receipt)
             try:
                 self.time(); need((self.clock.utc()-parse(at)).total_seconds() <= 30)
-                code, output = self.command(config,['image','push',self.tag])
                 # Docker's positive process result plus its reported digest is
                 # the ACK. A later GET alone can never manufacture this fact.
-                matches = re.findall(r'^' + re.escape(self.tag.rsplit(':',1)[1]) +
-                    r': digest: (sha256:[a-f0-9]{64}) size: ([0-9]+)\s*$',output.decode('utf8'),re.MULTILINE)
-                need(code == 0 and len(matches) == 1)
-                self.image_digest = matches[0][0]
+                self.image_digest = self.push_digest(config)
                 receipt.update(state='pending',write_terminal=True,ack_kind='docker_exit0_digest',
                     object_id=self.base+'/v2/'+self.binding['repository']+'/manifests/'+self.image_digest+'?api-version='+VERSION,
                     properties={**{k:self.binding[k] for k in ('registry_id','login_server','repository')},

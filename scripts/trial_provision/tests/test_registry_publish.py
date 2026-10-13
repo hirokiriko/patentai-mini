@@ -162,6 +162,29 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(Denied):self.publish()
         self.assertEqual(before,len(self.processes));self.assert_before_auth_failure()
 
+    def assert_push_failure(self,outcome,classification):
+        self.process_modify=lambda argv:outcome if 'push' in argv else None
+        result=self.publish()
+        self.assertEqual('unknown',result['status']);self.assertFalse(result['terminal'])
+        receipt=self.journal.latest('guardianImagePush')
+        self.assertFalse(receipt['write_terminal']);self.assertFalse(receipt['readback_verified'])
+        rows=self.journal.values('guardian_docker_push_failure');self.assertEqual(1,len(rows))
+        self.assertEqual({'schema','operation_id','request_digest','publication_preparation_digest',
+            'run_binding_digest','classification','additional_control_http_requests','automatic_retry'},set(rows[0]))
+        self.assertEqual(classification,rows[0]['classification'])
+        self.assertEqual(receipt['request_digest'],rows[0]['request_digest'])
+        self.assertEqual('guardianImagePush',rows[0]['operation_id'])
+        self.assertEqual(0,rows[0]['additional_control_http_requests']);self.assertFalse(rows[0]['automatic_retry'])
+        self.assertEqual(132,self.budget.count('owner_arm'));self.assertEqual(3,len(self.calls))
+        self.assertFalse(any('/manifests/' in url for _,url in self.calls))
+        self.assertEqual(1,self.pushes());self.assert_private()
+        self.assertNotIn(self.host,json.dumps(rows));self.assertNotIn('private failure',json.dumps(self.journal.records))
+        before=(len(self.calls),len(self.processes),self.budget.counts())
+        self.assertEqual('unknown',self.publish()['status'])
+        self.assertEqual(before,(len(self.calls),len(self.processes),self.budget.counts()))
+        self.assertEqual(rows,self.journal.values('guardian_docker_push_failure'))
+        with self.assertRaises(Denied):registry_cleanup_bundle(self.manifest,self.journal,self.resolver)
+
     def test_real_journal_budget_known_ack_readback_cleanup_contract(self):
         result=self.publish();self.assertTrue(result['push_verified']);self.assertTrue(result['temporary_config_absent'])
         self.assertEqual(1,self.pushes());self.assertEqual(6,self.budget.count('owner_arm')-128)
@@ -171,16 +194,64 @@ class PublisherTests(unittest.TestCase):
         n=len(self.calls);self.assertEqual(result,self.publish());self.assertEqual(n,len(self.calls));self.assertEqual(1,self.pushes())
 
     def test_unknown_process_is_never_retried_or_get_adopted(self):
-        self.process_modify=lambda p:TimeoutError('private output') if 'push' in p else None
-        self.assertEqual('unknown',self.publish()['status']);self.assert_private()
-        n=len(self.calls);self.assertEqual('unknown',self.publish()['status'])
-        self.assertEqual(n,len(self.calls));self.assertEqual(1,self.pushes())
-        with self.assertRaises(Denied):registry_cleanup_bundle(self.manifest,self.journal,self.resolver)
+        self.assert_push_failure(TimeoutError('private failure'),'timeout')
+
+    def test_push_subprocess_timeout_keeps_output_and_stderr_out_of_diagnostic(self):
+        self.assert_push_failure(subprocess.TimeoutExpired('private failure',10,
+            output=b'private failure',stderr=b'private failure'),'timeout')
+
+    def test_push_process_error_has_only_fixed_classification(self):
+        self.assert_push_failure(OSError('private failure https://user:secret@invalid.example/'),'process_error')
+
+    def test_push_missing_ack_is_unknown_with_no_remote_readback(self):
+        self.assert_push_failure((0,b'private failure: no digest\n'),'missing_or_ambiguous_ack')
+
+    def test_push_ambiguous_ack_is_unknown_with_no_remote_readback(self):
+        line=(self.manifest['cleanupImageTag']+': digest: '+self.image+' size: 1\n').encode()
+        self.assert_push_failure((0,line+line),'missing_or_ambiguous_ack')
+
+    def test_push_non_utf8_output_is_unknown_without_persisting_bytes(self):
+        self.assert_push_failure((0,b'private failure\xff'),'missing_or_ambiguous_ack')
+
+    def test_push_bool_exit_cannot_manufacture_ack(self):
+        line=(self.manifest['cleanupImageTag']+': digest: '+self.image+' size: 1\n').encode()
+        self.assert_push_failure((False,line),'process_error')
+
+    def test_push_diagnostic_fsync_failure_preserves_unknown_and_no_retry(self):
+        self.process_modify=lambda argv:(1,b'private failure') if 'push' in argv else None
+        append=self.journal.append
+        def reject(event,value):
+            if event=='guardian_docker_push_failure':raise OSError('private failure')
+            return append(event,value)
+        with patch.object(self.journal,'append',side_effect=reject):
+            self.assertEqual('unknown',self.publish()['status'])
+        self.assertFalse(self.journal.values('guardian_docker_push_failure'));self.assert_private()
+        self.assertFalse(self.journal.latest('guardianImagePush')['write_terminal'])
+        before=(len(self.calls),len(self.processes),self.budget.counts())
+        self.assertEqual('unknown',self.publish()['status'])
+        self.assertEqual(before,(len(self.calls),len(self.processes),self.budget.counts()))
+        self.assertEqual(1,self.pushes());self.assertEqual(132,self.budget.count('owner_arm'))
+
+    def test_push_durable_diagnostic_followed_by_error_does_not_dispatch_again(self):
+        self.process_modify=lambda argv:(1,b'private failure') if 'push' in argv else None
+        append=self.journal.append
+        def after_durable(event,value):
+            result=append(event,value)
+            if event=='guardian_docker_push_failure':raise OSError('private failure')
+            return result
+        with patch.object(self.journal,'append',side_effect=after_durable):
+            self.assertEqual('unknown',self.publish()['status'])
+        rows=self.journal.values('guardian_docker_push_failure');self.assertEqual(1,len(rows))
+        before=(len(self.calls),len(self.processes),self.budget.counts())
+        self.assertEqual('unknown',self.publish()['status'])
+        self.assertEqual(before,(len(self.calls),len(self.processes),self.budget.counts()))
+        self.assertEqual(rows,self.journal.values('guardian_docker_push_failure'));self.assert_private()
 
     def test_known_ack_readback_failure_resumes_only_reads(self):
         self.modify=lambda m,u:OSError('private') if '/manifests/' in u else None
         self.assertEqual('pending',self.publish()['status']);self.assert_private()
         self.assertTrue(self.journal.latest('guardianImagePush')['write_terminal'])
+        self.assertFalse(self.journal.values('guardian_docker_push_failure'))
         self.modify=None
         with patch.object(self,'runner',side_effect=AssertionError('known ACK cannot inspect or push')) as runner:
             self.assertTrue(self.publish()['push_verified']);runner.assert_not_called()
@@ -223,8 +294,7 @@ class PublisherTests(unittest.TestCase):
         with self.assertRaises(Denied):prepare_publication(changed,self.manifest,'f'*64,self.journal)
 
     def test_nonzero_process_even_matching_output_stays_unknown(self):
-        self.process_modify=lambda p:(1,(self.manifest['cleanupImageTag']+': digest: '+self.image+' size: 1').encode()) if 'push' in p else None
-        self.assertEqual('unknown',self.publish()['status']);self.assert_private()
+        self.assert_push_failure((1,(self.manifest['cleanupImageTag']+': digest: '+self.image+' size: 1').encode()),'nonzero_exit')
 
     def test_wrong_push_digest_is_unknown_and_no_cleanup_receipt(self):
         self.process_modify=lambda p:(0,(self.manifest['cleanupImageTag']+': digest: sha256:'+'0'*64+' size: 1').encode()) if 'push' in p else None
@@ -424,6 +494,7 @@ class PublisherTests(unittest.TestCase):
             return checkpoint(op,r)
         with patch.object(self.journal,'checkpoint',side_effect=fail):self.assertEqual('unknown',self.publish()['status'])
         self.assertEqual('unknown',self.publish()['status']);self.assertEqual(1,self.pushes());self.assert_private()
+        self.assertFalse(self.journal.values('guardian_docker_push_failure'))
 
     def test_budget_exhaustion_never_reaches_docker(self):
         self.budget.seed['owner_arm']=600
@@ -443,6 +514,7 @@ class PublisherTests(unittest.TestCase):
             code,output=docker_command(['fictional-never-executed'],timeout=10,environment={'PATH':''})
         self.assertEqual(0,code);self.assertLessEqual(len(output),65536);self.assertTrue(output.endswith(tail))
         self.assertFalse(popen.call_args.kwargs['shell']);child.terminate.assert_not_called()
+        self.assertIs(subprocess.DEVNULL,popen.call_args.kwargs['stderr'])
 
 
 if __name__=='__main__':unittest.main()
