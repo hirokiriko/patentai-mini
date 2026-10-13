@@ -337,6 +337,13 @@ new readback record links that evidence to V6; it never copies old push ACKs
 into the new child or permits a new push. An interrupted verification is not
 automatically retried. Provision binding requires both fresh successful reads.
 
+For a sealed V6, C7's `AssignableScopes` is the exact AI resource already fixed
+in the approved manifest, matching R6 and R7 even when AI is in another resource
+group. The single Responses data action, role definition ID, assignment targets
+and counts remain unchanged. Earlier plan formats retain their original bytes
+for historical verification. Azure supports a resource instance as an
+[AssignableScope](https://learn.microsoft.com/en-us/azure/role-based-access-control/role-definitions#assignablescopes).
+
 Run admission reserves the remaining normal route rather than the previous
 fixed floor: normal rehearsal, catalog preparation and main execution require
 20 HTTP requests; the 24-HTTP cap allows four additional observations and the

@@ -128,7 +128,8 @@ def _core_plan(publication, config, checked_at, allocate):
     bindings = {**config['plan_bindings'],
                 'prerequisite_digests': {operation['id']: digest(operation) for operation in resources}}
     return build_plan(publication['manifest'], publication['authority_bundle'],
-                      bindings, checked_at, allocate)
+                      bindings, checked_at, allocate,
+                      verified_attempt=publication.get('verified_attempt'))
 
 
 def prepare_bridge(publication, journal, reference, *, now):

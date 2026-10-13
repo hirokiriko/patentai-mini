@@ -155,7 +155,8 @@ def _ref(slot: str, key: str) -> dict:
 
 
 def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
-               now: datetime | str, allocate_id: Callable[[str], str]) -> dict:
+               now: datetime | str, allocate_id: Callable[[str], str], *,
+               verified_attempt=None) -> dict:
     """Compile 7 definitions, 18 assignments and E1-E4 without performing I/O.
 
     authority_bundle's manifest/annex/approval/latest/network_binding and
@@ -163,12 +164,22 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
     delete-only child scope; it grants no network creation or IPv4 substitution.
     bindings contains two start/end windows and the nine prerequisite request
     digests; optional allocated_ids reuses already-persisted noncredential IDs.
+    A sealed V6 narrows C7 to the manifest's fixed AI resource. Earlier plans
+    retain their original bytes for immutable historical proof verification.
     """
     _keys(authority_bundle, {"manifest", "annex", "approval", "latest", "network_binding", "network_approval"})
     sources, hashes = {}, {}
     for name in ("manifest", "annex", "approval", "latest", "network_binding", "network_approval"):
         sources[name], hashes[name] = _load(authority_bundle[name])
     _need(sources["manifest"] == manifest, "manifest_bytes_mismatch")
+    fixed_ai_scope = False
+    if verified_attempt is not None:
+        from .attempt import _proof
+        proof = _proof(verified_attempt)
+        _need(proof['manifest_digest'] == digest(manifest)
+              and proof['authority']['manifest_sha256'] == hashes['manifest'],
+              'attempt_manifest_binding')
+        fixed_ai_scope = proof['authority']['schema'] == 6
     m, a, approved, latest = manifest, sources["annex"], sources["approval"], sources["latest"]
     for actual, expected in (
         (_at(a, "fixedManifestSha256"), hashes["manifest"]),
@@ -325,7 +336,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
         props = {"roleName": app_name + "-" + ROLE_LABELS[n - 1], "type": "CustomRole",
                  "description": "Dedicated trial role; approved scope only.",
                  "permissions": [{"actions": actions, "notActions": [], "dataActions": data_actions, "notDataActions": []}],
-                 "assignableScopes": [subscription if n == 3 else rg]}
+                 "assignableScopes": [subscription if n == 3 else ai if n == 7 and fixed_ai_scope else rg]}
         arm(slot, "roleDefinitions", role_ids[slot], props, guardian["end"] if n <= 4 else FORMAL_END, [])
 
     specs = [

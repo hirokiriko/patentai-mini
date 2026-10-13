@@ -194,7 +194,8 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         else:
             if action!='prepare':raise Denied('plan_not_prepared')
             bindings={**config['plan_bindings'],'prerequisite_digests':{o['id']:digest(o) for o in resource_ops}}
-            core=build_plan(manifest,loaded['authority_bundle'],bindings,clock.utc(),journal.allocate_id)
+            core=build_plan(manifest,loaded['authority_bundle'],bindings,clock.utc(),journal.allocate_id,
+                verified_attempt=verified)
             journal.append('core_plan',core)
         verifier=policy_verifier(config['policy_verifier_node'])
         resolver=create_resolver(core,manifest,loaded['authority_bundle'],config['resource_bindings'])
