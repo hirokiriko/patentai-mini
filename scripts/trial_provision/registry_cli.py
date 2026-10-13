@@ -56,7 +56,19 @@ def _successful(receipt):
 
 def _publication(manifest, resources, journal, resolver, run_digest,verified_attempt=None):
     from .attempt import effective_slot
-    from .registry_publish import verified_publication_images
+    from .registry_publish import (verified_publication_images,reuses_acknowledged_images,
+        verify_reused_import,publication_origin,reused_image_preparation)
+    if reuses_acknowledged_images(verified_attempt):
+        verify_reused_import(journal,resolver,resources,verified_attempt)
+        current=reused_image_preparation(journal,verified_attempt)
+        require(current['run_binding_digest']==run_digest
+            and current['registry_id']==manifest['existing']['registry']==manifest['registry']['id']
+            and current['login_server']==manifest['registry']['loginServer']
+            and current['owner_id']==manifest['owner']['principal_id']
+            and current['tenant_id']==manifest['owner']['tenant_id']
+            and parse(current['publish_until'])<=parse(resources['guardian_deadline'])
+            and parse(current['publish_until'])<=parse(resolver.initial_plan['windows']['owner_input']['end']))
+        return publication_origin(journal,verified_attempt=verified_attempt).values('publication_preparation')[0]
     prepared, imported = journal.values('publication_preparation'), journal.values('publication_import')
     require(len(prepared) == 1 and len(imported) == 1)
     preparation, imported = prepared[0], imported[0]
@@ -119,6 +131,7 @@ def _publication(manifest, resources, journal, resolver, run_digest,verified_att
 
 
 def _prepare(bundle, manifest, resources, journal, resolver, credential,verified_attempt=None):
+    from .registry_publish import publication_origin
     require(isinstance(bundle, dict) and set(bundle) == {'binding', 'push_receipt', 'scope_proof'})
     binding, push, proof = _binding(bundle['binding']), bundle['push_receipt'], bundle['scope_proof']
     ids = [manifest['ids'][k] for k in ('app', 'job', 'guard')]
@@ -147,14 +160,15 @@ def _prepare(bundle, manifest, resources, journal, resolver, credential,verified
         and proof['run_binding_digest'] == run_digest
         and proof['authorized_resource_ids'] == ids
         and digest(proof) == binding['exclusivity_evidence_digest'])
-    namespaces = journal.values('guardian_image_namespace')
+    origin=publication_origin(journal,verified_attempt=verified_attempt)
+    namespaces = origin.values('guardian_image_namespace')
     require(len(namespaces) == 1 and digest(namespaces[0]) == proof['namespace_receipt_digest'])
     namespace = namespaces[0]
     require(set(namespace) == {'publication_preparation_digest', 'run_binding_digest', 'registry_id', 'login_server',
         'repository', 'method', 'url', 'http', 'error_code', 'authenticated', 'response_sha256',
         'observed_at', 'push_operation_id', 'push_request_digest'}
         and namespace['publication_preparation_digest'] == digest(preparation)
-        and namespace['run_binding_digest'] == run_digest
+        and namespace['run_binding_digest'] == preparation['run_binding_digest']
         and all(namespace[k] == binding[k] for k in ('registry_id', 'login_server', 'repository'))
         and namespace['method'] == 'GET'
         and namespace['url'] == 'https://' + binding['login_server'] + '/acr/v1/' + binding['repository'] + '?api-version=2021-07-01'
@@ -163,11 +177,11 @@ def _prepare(bundle, manifest, resources, journal, resolver, credential,verified
         and _sha(namespace['response_sha256']) and namespace['push_operation_id'] == PUSH
         and _sha(namespace['push_request_digest']))
     url = 'https://' + binding['login_server'] + '/v2/' + binding['repository'] + '/manifests/' + image_digest + '?api-version=2021-07-01'
-    require(_successful(push) and push == journal.latest(PUSH) and push['operation_id'] == PUSH
+    require(_successful(push) and push == origin.latest(PUSH) and push['operation_id'] == PUSH
         and push['request_digest'] == namespace['push_request_digest'] and push.get('object_id') == url
         and push['properties'] == {'registry_id': binding['registry_id'], 'login_server': binding['login_server'],
             'repository': binding['repository'], 'manifest_digest': image_digest, 'purpose': 'guardian'})
-    intents = [v for v in journal.values('intent') if v['operation_id'] == PUSH]
+    intents = [v for v in origin.values('intent') if v['operation_id'] == PUSH]
     require(len(intents) == 1 and intents[0]['request_digest'] == push['request_digest']
         and intents[0]['method'] == 'PUT' and intents[0]['url'] == 'https://' + binding['login_server'] + '/v2/'
             + binding['repository'] + '/manifests/' + preparation['slots']['guardian']['tag'] + '?api-version=2021-07-01'

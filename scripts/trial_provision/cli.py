@@ -32,7 +32,7 @@ ROOT=Path(__file__).resolve().parents[2]
 MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
-    'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
+    'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
         'providers','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
@@ -199,7 +199,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         verifier=policy_verifier(config['policy_verifier_node'])
         resolver=create_resolver(core,manifest,loaded['authority_bundle'],config['resource_bindings'])
         journal.fix_plan(resolver.initial_plan)
-        if journal.values('publication_preparation'):
+        if journal.values('publication_preparation') or journal.values('image_reuse_preparation'):
             from .registry_publish import bind_publication
             bind_publication(journal,resolver,config['resource_bindings'],verified_attempt=verified)
         saved=journal.values('runtime_binding')
@@ -211,7 +211,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         if action=='bind-bootstrap':
             from .bootstrap import bind_bootstrap
             bundle=json.loads(private_bytes(request['bootstrap_config']))
-            return bind_bootstrap(bundle,journal,resolver,clock,verify_policy=verifier)
+            return bind_bootstrap(bundle,journal,resolver,clock,verify_policy=verifier,verified_attempt=verified)
         if action=='bind-cleanup':
             ident=request.get('operation_id')
             evidence=json.loads(private_bytes(request['cleanup_evidence']))

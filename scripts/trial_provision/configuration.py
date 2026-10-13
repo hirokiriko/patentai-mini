@@ -276,7 +276,9 @@ def load_configuration(path, *, now, local_head, owner_context,
     _path(result['policy_verifier_node'])
     resources = result['resource_bindings']
     _keys(resources, {'deadline', 'guardian_deadline', 'runtime_image', 'guardian_image', 'db_secret_digests', 'code_sha'})
-    _need(resources['code_sha'] == local_head and resources['guardian_deadline'] == result['plan_bindings']['guardian_window']['end'],
+    from .attempt import effective_image_head
+    image_head = effective_image_head(result.get('verified_attempt'), local_head)
+    _need(resources['code_sha'] == image_head and resources['guardian_deadline'] == result['plan_bindings']['guardian_window']['end'],
           'config_resource_binding')
     # Resource syntax/images/scopes receive full pure-builder validation when
     # root combines the nine resource operations with the core29 operations.

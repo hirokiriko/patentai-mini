@@ -304,3 +304,49 @@ missing historical acknowledgement or cleanup authority. This compatibility
 fix neither resumes a stopped attempt nor changes cleanup admission. Preserve
 its journal, cumulative usage and monetary reservations; an unresolved attempt
 must not be treated as absent or as a verified creation eligible for deletion.
+
+### Reusing acknowledged images after the first Identity stopped
+
+The V6 continuation is limited to a stopped V5 with two positively acknowledged
+image publications and exactly one subsequent Identity PUT with an HTTP 201
+UNKNOWN receipt. It preserves all 182 lifetime rows, usage 302/32/0, the original
+71-row prefix, all earlier transitions, the old child and every monetary reserve.
+An OWNER's later Portal deletion and refreshed absence report is recorded
+separately. It does not supply the missing PUT ACK, an authenticated DELETE or
+404, measured Portal traffic, or permission to retry the old attempt. A newly
+authorized creation must still pass its own authenticated absence check.
+
+Only a separately approved V6 authority can start the new child. Its proposed
+remaining OWNER allocation is fresh reads 24, image verification 8, provision
+145, run 32 and cleanup 120. This moves ten unspent run requests: six to fresh
+reads and four to image verification. The 302 spent plus 329 remaining still
+equals 631; non-cleanup work stops at 511. No debit or reserve is refunded.
+
+The new local HEAD and CI identify the corrected operator code. The old image
+build HEAD, tags, build receipts, managed-build SHA and publication ACKs remain
+unchanged. A hash-bound compatibility review must prove that the application
+and guardian execution sources can be reused. Policy and catalog artifact
+checks use the sealed image build HEAD; local execution sources and CI must
+still match the new HEAD. Unsealed or mismatched inputs fail closed.
+
+Before provisioning, `verify-reused-images` performs pull-only OAuth exchange
+and an authenticated digest-addressed manifest GET for each image: six HTTP
+requests and at most two OWNER token misses. Both the manifest body/digest and
+image config digest must match the historical successful publication. A durable
+new readback record links that evidence to V6; it never copies old push ACKs
+into the new child or permits a new push. An interrupted verification is not
+automatically retried. Provision binding requires both fresh successful reads.
+
+Run admission reserves the remaining normal route rather than the previous
+fixed floor: normal rehearsal, catalog preparation and main execution require
+20 HTTP requests; the 24-HTTP cap allows four additional observations and the
+eight-token cap remains separately enforced. Cleanup's 120-request reserve is
+unchanged. Request margins do not promise successful asynchronous completion.
+Fictional tests measure real consumer calls and assert the lifetime boundary.
+
+This implementation issues no authority or time window. Local readiness,
+source compatibility, independent review and the consolidated approval must
+precede any live V6 transition. Unchanged evidence can be reused; authentication,
+Docker, IP, environment state and image readback need fresh checks. OWNER sign-in,
+real AI, PDF/CSV, persisted redisplay, expiry and scoped cleanup remain unfinished
+until observed in the trial environment.

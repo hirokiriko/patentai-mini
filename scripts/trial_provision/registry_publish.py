@@ -189,6 +189,8 @@ def prepare_publication(config, manifest, configuration_sha256, journal):
     from .attempt import effective_slot
     from .registry_retention import check_attempt
     verified=config.get('verified_attempt');check_attempt(journal,verified)
+    if reuses_acknowledged_images(verified):
+        return _prepare_reused_images(config,manifest,configuration_sha256,journal)
     source = {k:config['sources'][k]['sha256'] for k in SOURCE_FILES}
     need(all(re.fullmatch(HEX,v) for v in source.values()) and re.fullmatch(HEX,configuration_sha256))
     need(re.fullmatch('[a-f0-9]{40}',config['frozen_head']))
@@ -214,6 +216,9 @@ def _verified_images(journal,slots,verified_attempt):
     """Actual acknowledged/read-verified digests only; never local image IDs."""
     from .registry_retention import check_attempt,verify_retention
     check_attempt(journal,verified_attempt)
+    if reuses_acknowledged_images(verified_attempt):
+        images=_verified_reused_images(journal,verified_attempt)
+        return {slot+'_image':images[slot+'_image'] for slot in slots}
     preparations = journal.values('publication_preparation');need(len(preparations) == 1)
     prep = preparations[0];images = {}
     for slot in slots:
@@ -263,6 +268,11 @@ def verified_publication_image(journal,slot,*,verified_attempt=None):
 
 def bind_publication(journal, resolver, resource_bindings,*,verified_attempt=None):
     """Second phase: bind both actual images into the compiled provision plan."""
+    if reuses_acknowledged_images(verified_attempt):
+        event=_reused_import(journal,resolver,resource_bindings,verified_attempt)
+        old=journal.values('publication_import');need(not old or old==[event])
+        if not old:journal.append('publication_import',event)
+        return event
     images=verified_publication_images(journal,verified_attempt=verified_attempt);prep=journal.values('publication_preparation')[0]
     need(all(resource_bindings[k] == v for k,v in images.items())
         and prep['source_sha256'] == resolver.initial_plan['source_sha256']
@@ -281,6 +291,7 @@ class _Publisher:
         from .registry_retention import check_attempt
         from .attempt import effective_slot
         check_attempt(journal,verified_attempt);self.verified_attempt=verified_attempt
+        need(not reuses_acknowledged_images(verified_attempt))
         need(isinstance(bundle, dict) and set(bundle) == {'schema','slot','docker_path','docker_sha256','docker_host','local_image_id','deadline'})
         need(type(bundle['schema']) is int and bundle['schema'] == 1 and bundle['slot'] in ('guardian','runtime'))
         self.slot = bundle['slot']; self.ident = self.slot + 'ImagePush'
@@ -368,7 +379,7 @@ class _Publisher:
             and len(encoded(h)) <= 32768 and not 300 <= r['status'] < 400)
         return {**r,'headers':h}
 
-    def _claims(self, token, refresh=False):
+    def _claims(self, token, refresh=False, *, actions=('pull','push')):
         need(isinstance(token,str) and 0 < len(token) <= 32768 and len(token.split('.')) == 3)
         value = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==='))
         json.dumps(value,allow_nan=False)
@@ -381,8 +392,8 @@ class _Publisher:
             access = value.get('access')
             need(isinstance(access,list) and len(access) == 1 and access[0].get('type') == 'repository'
                 and access[0].get('name') == self.binding['repository']
-                and isinstance(access[0].get('actions'),list) and len(access[0]['actions']) == 2
-                and set(access[0]['actions']) == {'pull','push'})
+                and isinstance(access[0].get('actions'),list) and len(access[0]['actions']) == len(actions)
+                and set(access[0]['actions']) == set(actions))
         return value['exp']
 
     def authenticate(self):
@@ -575,10 +586,13 @@ def run_registry_publish(bundle, manifest, journal, credential, raw_wire, budget
         'temporary_config_absent':not _config_path(journal,publisher.slot).exists()}
 
 
-def registry_cleanup_bundle(manifest, journal, resolver):
+def registry_cleanup_bundle(manifest, journal, resolver,*,verified_attempt=None):
     """Derive cleanup authority only from this same Journal's real publisher."""
-    namespace = journal.values('guardian_image_namespace')
-    push = journal.latest(IDENT)
+    origin=publication_origin(journal,verified_attempt=verified_attempt)
+    if reuses_acknowledged_images(verified_attempt):
+        verify_reused_import(journal,resolver,resolver.initial_plan['resource_bindings'],verified_attempt)
+    namespace = origin.values('guardian_image_namespace')
+    push = origin.latest(IDENT)
     need(len(namespace) == 1 and push is not None and push.get('state') == 'succeeded'
         and all(push.get(k) is True for k in ('terminal','write_terminal','created_by_run','readback_verified')))
     ids = [manifest['ids'][k] for k in ('app','job','guard')]
@@ -588,3 +602,216 @@ def registry_cleanup_bundle(manifest, journal, resolver):
         'repository':manifest['cleanupImageRepository'],'tenant_id':manifest['owner']['tenant_id'],
         'authorized_resource_ids':ids,'exclusivity_evidence_digest':digest(proof)}
     return {'binding':_binding(binding),'push_receipt':deepcopy(push),'scope_proof':proof}
+
+
+def reuses_acknowledged_images(verified):
+    """Only a sealed V6 capability can select the historical-image contract."""
+    if verified is None:return False
+    from .attempt import _proof
+    return _proof(verified)['authority']['schema']==6
+
+
+def _reuse_source(journal,verified):
+    from .attempt import _proof,_ParentView
+    from .acknowledged_image_succession import previous_verified_attempt
+    from .registry_retention import check_attempt
+    need(reuses_acknowledged_images(verified));check_attempt(journal,verified)
+    proof=_proof(verified);source=proof['succession']
+    previous=previous_verified_attempt(verified)
+    origin=_ParentView(source['previous_child_records'])
+    images=verified_publication_images(origin,verified_attempt=previous)
+    preparations=origin.values('publication_preparation')
+    need(len(preparations)==1 and preparations[0]==source['publication_preparation']
+        and images==source['acknowledged_images']
+        and source['image_build_head']==proof['authority']['image_build_head']==previous.authority['head'])
+    # New child records can contain neither an invented ACK nor an old push.
+    need(not journal.values('publication_preparation')
+        and not any(row.get('operation_id') in ('guardianImagePush','runtimeImagePush')
+            for event in ('intent','progress') for row in journal.values(event)))
+    return source,origin,images
+
+
+def publication_origin(journal,*,verified_attempt=None):
+    """Read-only ownership source. It never imports old writes into this run."""
+    if not reuses_acknowledged_images(verified_attempt):return journal
+    return _reuse_source(journal,verified_attempt)[1]
+
+
+def _reuse_event(journal,verified,configuration_sha256):
+    from .attempt import _proof
+    source,origin,_=_reuse_source(journal,verified);proof=_proof(verified)
+    prep=source['publication_preparation'];old=source['previous_publication']
+    need(isinstance(configuration_sha256,str) and re.fullmatch(HEX,configuration_sha256))
+    need(prep['source_sha256']=={k:v['sha256'] for k,v in old['sources'].items()})
+    return {'schema':1,'kind':'acknowledged-image-reuse','configuration_sha256':configuration_sha256,
+        'source_sha256':deepcopy(prep['source_sha256']),'manifest_sha256':prep['manifest_sha256'],
+        'local_code_sha':proof['authority']['head'],'image_build_head':source['image_build_head'],
+        'run_binding_digest':digest(journal.values('binding')[0]),'attempt_binding_digest':verified.binding_digest,
+        'previous_verified_proof_sha256':digest(source['previous_verified_proof']),
+        'previous_child_records_sha256':digest(source['previous_child_records']),
+        'previous_publication_sha256':digest(old),'publication_preparation_sha256':digest(prep),
+        'push_receipt_digests':{k:digest(origin.latest(k+'ImagePush')) for k in ('guardian','runtime')},
+        **{k:deepcopy(prep[k]) for k in ('registry_id','login_server','tenant_id','owner_id','slots')},
+        'publish_from':proof['activation']['windows']['publication']['start'],
+        'publish_until':proof['activation']['windows']['publication']['end']}
+
+
+def _prepare_reused_images(config,manifest,configuration_sha256,journal):
+    verified=config['verified_attempt'];event=_reuse_event(journal,verified,configuration_sha256)
+    need(config['frozen_head']==event['local_code_sha']
+        and {k:v['sha256'] for k,v in config['sources'].items()}==event['source_sha256']
+        and config['publication']['publish_until']==event['publish_until']
+        and manifest['existing']['registry']==manifest['registry']['id']==event['registry_id']
+        and manifest['registry']['loginServer']==event['login_server']
+        and manifest['owner']['tenant_id']==event['tenant_id'] and manifest['owner']['principal_id']==event['owner_id'])
+    for slot in ('guardian','runtime'):
+        actual=config['publication']['slots'][slot];old=event['slots'][slot]
+        need(all(actual[k]==old[k] for k in ('local_image_id','docker_sha256','docker_host'))
+            and sha(actual['docker_path'].encode())==old['docker_path_sha256']
+            and actual['build_receipt']['sha256']==old['build_receipt_sha256'])
+    saved=journal.values('image_reuse_preparation');need(not saved or saved==[event])
+    if not saved:journal.append('image_reuse_preparation',event)
+    return event
+
+
+def reused_image_preparation(journal,verified):
+    saved=journal.values('image_reuse_preparation');need(len(saved)==1)
+    expected=_reuse_event(journal,verified,saved[0].get('configuration_sha256'))
+    need(saved==[expected]);return expected
+
+
+def _reuse_intent(prep):
+    return {'schema':1,'preparation_sha256':digest(prep),'run_binding_digest':prep['run_binding_digest'],
+        'attempt_binding_digest':prep['attempt_binding_digest'],'automatic_retry':False}
+
+
+def _verified_reused_images(journal,verified):
+    prep=reused_image_preparation(journal,verified)
+    source,_,images=_reuse_source(journal,verified)
+    need(journal.values('image_reuse_readback_intent')==[_reuse_intent(prep)]
+        and not journal.values('image_reuse_readback_failure'))
+    saved=journal.values('image_reuse_readback');need(len(saved)==1);event=saved[0]
+    need(isinstance(event,dict) and set(event)=={'schema','preparation_sha256','run_binding_digest','attempt_binding_digest',
+        'automatic_retry','checks'} and {k:v for k,v in event.items() if k!='checks'}==_reuse_intent(prep)
+        and isinstance(event['checks'],dict) and set(event['checks'])=={'guardian','runtime'})
+    for slot in ('guardian','runtime'):
+        row=event['checks'][slot];fixed=prep['slots'][slot];image_digest=images[slot+'_image'].rsplit('@',1)[1]
+        need(isinstance(row,dict) and set(row)=={'slot','url','http','manifest_digest','response_sha256','image_id',
+            'manifest_bytes','compressed_content_bytes','layer_count','observed_at'}
+            and row['slot']==slot and type(row['http']) is int and row['http']==200
+            and row['url']=='https://'+prep['login_server']+'/v2/'+fixed['repository']+'/manifests/'+image_digest+'?api-version='+VERSION
+            and row['manifest_digest']==image_digest and 'sha256:'+row['response_sha256']==image_digest
+            and row['image_id']==fixed['local_image_id']==source['previous_build_artifacts'][slot]['image_id']
+            and all(type(row[k]) is int for k in ('manifest_bytes','compressed_content_bytes','layer_count'))
+            and 0<row['manifest_bytes']<=MAX_BODY and row['compressed_content_bytes']>=0 and 0<=row['layer_count']<=4096
+            and parse(prep['publish_from'])<=parse(row['observed_at'])<parse(prep['publish_until']))
+    return images
+
+
+def _reused_import(journal,resolver,resources,verified):
+    images=_verified_reused_images(journal,verified);prep=reused_image_preparation(journal,verified)
+    need(all(resources[k]==v for k,v in images.items())
+        and resolver.initial_plan['source_sha256']==prep['source_sha256']
+        and resources['code_sha']==prep['image_build_head']
+        and resolver.initial_plan['resource_bindings']==resources)
+    return {'schema':2,'kind':'acknowledged-image-reuse','initial_plan_digest':resolver.plan_digest,
+        'image_reuse_preparation_digest':digest(prep),'image_reuse_readback_digest':digest(journal.values('image_reuse_readback')[0]),
+        'run_binding_digest':prep['run_binding_digest'],'push_receipt_digests':deepcopy(prep['push_receipt_digests'])}
+
+
+def verify_reused_import(journal,resolver,resources,verified):
+    event=_reused_import(journal,resolver,resources,verified)
+    need(journal.values('publication_import')==[event]);return event
+
+
+class _ReuseReadback:
+    """One pull-only, digest-only observation; no Docker or write capability."""
+    def __init__(self,journal,credential,wire,budget,clock,verified,source_guard):
+        self.journal,self.credential,self.budget=journal,credential,budget
+        self.verified_attempt,self.source_guard=verified,source_guard
+        self.prep=reused_image_preparation(journal,verified)
+        self.images=_reuse_source(journal,verified)[2]
+        need(credential.mode=='owner' and credential.principal==self.prep['owner_id'] and credential.tenant==self.prep['tenant_id'])
+        self.clock=_Clock(journal,clock)
+        self.http=CountedControlHttp(wire,budget,registry_host=self.prep['login_server'])
+        self.base='https://'+self.prep['login_server']
+
+    def time(self):
+        from .attempt import check_window
+        now=self.clock.utc();need(not self.clock.unsafe)
+        check_window(self.verified_attempt,'publication',now)
+        return (parse(self.prep['publish_until'])-now).total_seconds()
+
+    def request(self,method,url,body=None,access=None):
+        self.time();deadline=Deadline(min(30,self.time()),self.clock.monotonic)
+        need((method=='POST' and url in (self.base+'/oauth2/exchange',self.base+'/oauth2/token'))
+            or (method=='GET' and url==self.url))
+        headers={'Accept':ACCEPT if method=='GET' else 'application/json'}
+        if body is not None:headers['Content-Type']='application/x-www-form-urlencoded'
+        if access is not None:headers['Authorization']='Bearer '+access
+        self.journal.append('clock_observation',{'at':self.clock.utc().isoformat()})
+        def before_send():
+            self.source_guard();self.time();deadline.remaining()
+        response=self.http.send_guarded(method,url,headers,body,deadline,before_send=before_send)
+        deadline.remaining();self.time()
+        need(isinstance(response,dict) and type(response.get('status')) is int and response['status']==200
+            and isinstance(response.get('body'),bytes) and len(response['body'])<=MAX_BODY
+            and isinstance(response.get('headers'),dict))
+        headers=response['headers'];need(all(isinstance(k,str) and isinstance(v,str) for k,v in headers.items()))
+        lower={k.lower():v for k,v in headers.items()}
+        need(len(lower)==len(headers) and len(encoded(lower))<=32768
+            and not {'location','azure-asyncoperation','www-authenticate'}&set(lower))
+        return {**response,'headers':lower}
+
+    def observe(self,slot):
+        fixed=self.prep['slots'][slot];image_digest=self.images[slot+'_image'].rsplit('@',1)[1]
+        self.binding={k:self.prep[k] for k in ('login_server','tenant_id')};self.binding['repository']=fixed['repository']
+        self.url=self.base+'/v2/'+fixed['repository']+'/manifests/'+image_digest+'?api-version='+VERSION
+        self.source_guard();self.time()
+        aad=self.credential.token('https://management.azure.com/',Deadline(min(30,self.time()),self.clock.monotonic))
+        response=self.request('POST',self.base+'/oauth2/exchange',urlencode({'grant_type':'access_token',
+            'service':self.prep['login_server'],'tenant':self.prep['tenant_id'],'access_token':aad}).encode())
+        refresh=json.loads(response['body']).get('refresh_token');_Publisher._claims(self,refresh,True)
+        response=self.request('POST',self.base+'/oauth2/token',urlencode({'grant_type':'refresh_token',
+            'service':self.prep['login_server'],'scope':'repository:'+fixed['repository']+':pull','refresh_token':refresh}).encode())
+        access=json.loads(response['body']).get('access_token');_Publisher._claims(self,access,actions=('pull',))
+        response=self.request('GET',self.url,access=access)
+        need(response['headers'].get('docker-content-digest')==image_digest and 'sha256:'+sha(response['body'])==image_digest)
+        manifest=json.loads(response['body']);need(isinstance(manifest,dict) and type(manifest.get('schemaVersion')) is int
+            and manifest['schemaVersion']==2 and isinstance(manifest.get('config'),dict)
+            and manifest['config'].get('digest')==fixed['local_image_id']
+            and isinstance(manifest.get('layers'),list) and len(manifest['layers'])<=4096)
+        rows=[manifest['config']]+manifest['layers']
+        need(all(isinstance(row,dict) and type(row.get('size')) is int and 0<=row['size']<=2**53-1
+            and isinstance(row.get('digest'),str) and re.fullmatch('sha256:'+HEX,row['digest']) for row in rows))
+        return {'slot':slot,'url':self.url,'http':200,'manifest_digest':image_digest,'response_sha256':sha(response['body']),
+            'image_id':fixed['local_image_id'],'manifest_bytes':len(response['body']),
+            'compressed_content_bytes':sum(row['size'] for row in rows),'layer_count':len(manifest['layers']),
+            'observed_at':self.clock.utc().isoformat()}
+
+    def run(self):
+        intent=_reuse_intent(self.prep);existing=self.journal.values('image_reuse_readback_intent')
+        if existing:
+            need(existing==[intent])
+            if self.journal.values('image_reuse_readback'):
+                _verified_reused_images(self.journal,self.verified_attempt)
+                return {'status':'reused_images_verified','verified_images':2,'automatic_retry':False,'replayed':True}
+            return {'status':'unknown','verified_images':0,'automatic_retry':False,'replayed':True}
+        need(not self.journal.values('image_reuse_readback') and not self.journal.values('image_reuse_readback_failure'))
+        self.source_guard();self.time()
+        self.journal.append('image_reuse_readback_intent',intent)
+        try:
+            checks={slot:self.observe(slot) for slot in ('guardian','runtime')}
+            self.time();self.journal.append('image_reuse_readback',{**intent,'checks':checks})
+            _verified_reused_images(self.journal,self.verified_attempt)
+            return {'status':'reused_images_verified','verified_images':2,'automatic_retry':False,'replayed':False}
+        except Exception:
+            # No partial observation can replace the old ACK or permit resend.
+            # A failed fsync leaves the intent as the permanent stop boundary.
+            self.journal.append('image_reuse_readback_failure',{'schema':1,'intent_sha256':digest(intent),
+                'classification':'unconfirmed','automatic_retry':False})
+            return {'status':'unknown','verified_images':0,'automatic_retry':False,'replayed':False}
+
+
+def verify_reused_images(journal,credential,wire,budget,clock,*,verified_attempt,source_guard):
+    return _ReuseReadback(journal,credential,wire,budget,clock,verified_attempt,source_guard).run()

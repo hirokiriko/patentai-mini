@@ -19,7 +19,8 @@ from .journal import Journal
 from .operations import create_resolver
 from .plan import build_plan
 from .private_io import create_owner_file, verify_owner_directory, verify_owner_file
-from .registry_publish import verified_publication_images
+from .registry_publish import (verified_publication_images, publication_origin,
+                              reuses_acknowledged_images, reused_image_preparation)
 from .resources import build_resource_operations
 
 
@@ -55,10 +56,17 @@ def compose_configuration(publication, journal, inputs, *, verify_local_node=Tru
          and type(inputs['schema']) is int and inputs['schema'] == 1
          and inputs['publication_config_sha256'] == publication['config_sha256'])
     images = verified_publication_images(journal,verified_attempt=publication.get('verified_attempt'))
-    preparation = journal.values('publication_preparation')[0]
-    need(preparation['code_sha'] == publication['frozen_head']
+    verified=publication.get('verified_attempt')
+    from .attempt import effective_image_head
+    image_head=effective_image_head(verified,publication['frozen_head'])
+    origin=publication_origin(journal,verified_attempt=verified)
+    preparation = origin.values('publication_preparation')[0]
+    need(preparation['code_sha'] == image_head
          and preparation['source_sha256'] ==
          {key: value['sha256'] for key, value in publication['sources'].items()})
+    if reuses_acknowledged_images(verified):
+        preparation=reused_image_preparation(journal,verified)
+        need(preparation['configuration_sha256']==publication['config_sha256'])
     refs = inputs['secret_sources']
     need(isinstance(refs, dict) and set(refs) == SECRET_ALIASES)
     for ref in refs.values():
@@ -92,7 +100,7 @@ def compose_configuration(publication, journal, inputs, *, verify_local_node=Tru
                       'owner_input': windows['owner_window']['end'],
                       'runtime': FORMAL_END, 'auth': AUTH_END},
                   secret_sources=deepcopy(refs), resource_bindings={**images,
-                      'code_sha': publication['frozen_head'], 'deadline': inputs['deadline'],
+                      'code_sha': image_head, 'deadline': inputs['deadline'],
                       'guardian_deadline': windows['guardian_window']['end'],
                       'db_secret_digests': {'web': refs['trial-web-database']['sha256'],
                                            'worker': refs['trial-worker-database']['sha256']}})
@@ -138,7 +146,8 @@ def prepare_bridge(publication, journal, reference, *, now):
         'trial-provision-successor':'provision-successor-config.json',
         'trial-provision-successor-v3':'provision-successor-v3-config.json',
         'trial-provision-successor-v4':'provision-successor-v4-config.json',
-        'trial-provision-successor-v5':'provision-successor-v5-config.json'}[child_name]
+        'trial-provision-successor-v5':'provision-successor-v5-config.json',
+        'trial-provision-successor-v6':'provision-successor-v6-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')
@@ -150,11 +159,12 @@ def prepare_bridge(publication, journal, reference, *, now):
         lambda key: str(uuid.uuid5(uuid.NAMESPACE_URL, 'publication-bridge-preview:' + key)))
     create_resolver(preview_core, publication['manifest'], publication['authority_bundle'],
                     config['resource_bindings'])
+    origin=publication_origin(journal,verified_attempt=publication.get('verified_attempt'))
     binding = {'schema': 1, 'publication_config_sha256': publication['config_sha256'],
                'checked_at': checked_at,
                'input_sha256': reference['sha256'], 'code_sha': publication['frozen_head'],
                'run_binding_digest': digest(journal.values('binding')[0]),
-               'image_receipt_digests': {slot: digest(journal.latest(slot + 'ImagePush'))
+               'image_receipt_digests': {slot: digest(origin.latest(slot + 'ImagePush'))
                                        for slot in ('guardian', 'runtime')},
                'output': {'path': str(output), 'sha256': hashlib.sha256(raw).hexdigest()}}
     if previous:

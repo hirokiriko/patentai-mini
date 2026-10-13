@@ -25,7 +25,7 @@ from .owner import OwnerSession
 from .workflow import Receipt,Workflow
 
 
-def validate_launch_preflight(config,clock):
+def validate_launch_preflight(config,clock,*,verified_attempt=None):
     """Require current private readback receipts before even starting the Job.
 
     This consumes OWNER-reviewed evidence; it does not generate that evidence or
@@ -35,12 +35,15 @@ def validate_launch_preflight(config,clock):
     try:
         p=json.loads(config['worker']['payload']['environment']['TRIAL_POLICY_JSON'])
         sha=p['codeSha'];at=parse(f['checked_at'])
+        from scripts.trial_provision.attempt import effective_image_head
+        local_head=f['ci_head']
+        image_head=effective_image_head(verified_attempt,local_head)
         staged=config['worker'].get('mode')=='catalog_then_bootstrap_v1'
         evidence=('network_approval','current_ip','platform_isolation' if staged else 'isolation','current_ledger','current_prices','effective_permissions','additional_authority')
         audit_ready=(f.get('schema')==2 and type(f.get('schema')) is int and f.get('catalog_acl')=='pending_catalog' and
             f.get('launch_checks_verified') is True and 'external_business_acl_verified' not in f and 'all_evidence_verified' not in f) if staged else (
             f.get('external_business_acl_verified') is True and f.get('all_evidence_verified') is True)
-        if (not re.fullmatch('[a-f0-9]{40}',sha) or f['ci_head']!=sha or f['reviewed_head']!=sha or
+        if (not re.fullmatch('[a-f0-9]{40}',sha) or sha!=image_head or f['reviewed_head']!=local_head or
             not at<=clock.utc()<at+timedelta(minutes=10) or
             f['ipv4']!=config['binding']['ipv4'] or f['server_id']!=config['binding']['server_id'] or f['rule_id']!=config['binding']['rule_id'] or
             type(f['initial_forecast_yen']) is not int or f['initial_forecast_yen']>4500 or f['initial_forecast_yen']<0 or f['initial_cap_yen']!=5000 or
@@ -467,12 +470,13 @@ def execute(config,*,clock=None,http=None,verified_attempt=None,owner_token_pool
     w=config['worker'];pin=w.get('artifact_pin')
     staged=w.get('mode')=='catalog_then_bootstrap_v1'
     if staged:
-        from scripts.trial_provision.attempt import _proof,check_window
+        from scripts.trial_provision.attempt import _proof,check_window,effective_image_head
         from scripts.trial_provision.journal import scope_for_dispatch
         a=_proof(verified_attempt)['authority']
         policy=json.loads(w['payload']['environment']['TRIAL_POLICY_JSON'])
+        image_head=effective_image_head(verified_attempt,config['preflight']['ci_head'])
         if (owner_token_pool is None or config.get('attempt_binding_digest')!=verified_attempt.binding_digest or
-            digest(config['control_budget']['binding'])!=a['budget_binding_sha256'] or policy['codeSha']!=a['head'] or
+            digest(config['control_budget']['binding'])!=a['budget_binding_sha256'] or policy['codeSha']!=image_head or
             config['owner_id']!=a['owner_id']):raise Denied('execution_attempt_binding')
         plan=w['payload']['catalogPlan'];options=a['catalog_options']
         expected_set={'schema':1,'kind':'temporary-owner-set-v1','authoritySha256':_proof(verified_attempt)['authority_sha256']} if options['temporary_owner_set'] else None
@@ -487,7 +491,7 @@ def execute(config,*,clock=None,http=None,verified_attempt=None,owner_token_pool
         receipt=Receipt(config['recovery_directory'],config['recovery_directory_digest'],digest(binding),require_existing=not staged)
         resume=bool(receipt.find('start_intent'))
         if not resume:
-            validate_launch_preflight(config,clock)
+            validate_launch_preflight(config,clock,verified_attempt=verified_attempt)
             if not staged:raise Denied('catalog_stage_required')
         scoped=budget;credential_factory=None
         if staged:
@@ -496,7 +500,7 @@ def execute(config,*,clock=None,http=None,verified_attempt=None,owner_token_pool
             credential_factory=lambda credential:owner_token_pool.bind(credential,scoped,verified_attempt)
         wire=CountedHttp(http or BoundedHttp(),receipt,shared_budget=scoped,accounting_lock=receipt.mutex)
         validate_worker_artifact(w.get('node'),w.get('script'),pin,verify_files=not resume)
-        if not resume and pin['head']!=config['preflight']['ci_head']:raise Denied('worker_artifact_head')
+        if not resume and pin['head']!=image_head:raise Denied('worker_artifact_head')
         guardian_configuration(config)
         saved=receipt.find('start_ack')
         credential_kwargs={} if credential_factory is None else {'credential_factory':credential_factory}

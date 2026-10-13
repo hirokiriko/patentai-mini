@@ -87,7 +87,7 @@ def _observed(receipt):
         receipt.get(k) is True for k in ('terminal', 'readback_verified'))
 
 
-def _validate(config, journal, resolver, verify_policy):
+def _validate(config, journal, resolver, verify_policy, *, verified_attempt=None):
     payload = config['worker']['payload']
     _need(config['live_enabled'] is True and payload['bootstrap']['mode'] in ('apply','reconcile'))
     staged=config['worker'].get('mode')=='catalog_then_bootstrap_v1'
@@ -105,6 +105,9 @@ def _validate(config, journal, resolver, verify_policy):
     _need({k: budget['binding'][k] for k in ('manifest_sha256', 'owner_id', 'task_id')} ==
         {k:local_binding[k] for k in ('manifest_sha256','owner_id','task_id')})
     if 'attempt' in local_binding:_need(config.get('attempt_binding_digest')==local_binding['attempt']['binding_digest'])
+    if verified_attempt is not None:
+        _need(local_binding.get('attempt',{}).get('binding_digest') == verified_attempt.binding_digest ==
+              config.get('attempt_binding_digest'))
     _need(Path(budget['directory']) == journal.path.parent and digest(str(journal.path.parent)) == budget['directory_digest'])
     _need(budget['seed'] == {'owner_arm':128, 'owner_control_blob':32, 'heartbeat_blob':0})
     receipts = journal.receipts()
@@ -183,7 +186,11 @@ def _validate(config, journal, resolver, verify_policy):
         expected['localOperator']['ticketDigest'] = policy['localOperator']['ticketDigest']
         _need(policy == expected and re.fullmatch(HEX, policy['localOperator']['ticketDigest']))
         _need(proof['database'] == {k: policy['database'][k] for k in ('host','database','ownerRole','migratorUser','webUser','workerUser')})
-        _need(proof['codeSha'] == policy['codeSha'] == resolver.initial_plan['resource_bindings']['code_sha'] == config['preflight']['ci_head'] == config['preflight']['reviewed_head'])
+        from .attempt import effective_image_head
+        local_head = config['preflight']['ci_head']
+        image_head = effective_image_head(verified_attempt, local_head)
+        _need(local_head == config['preflight']['reviewed_head'] and
+              proof['codeSha'] == policy['codeSha'] == resolver.initial_plan['resource_bindings']['code_sha'] == image_head)
         entries = proof['receipts']
         _need(isinstance(entries, list) and 1 <= len(entries) <= 1000 and type(b['receiptCount']) is int and len(entries) == b['receiptCount'])
         _need(digest(entries) == b['receiptSetSha256'] and entries == sorted(entries, key=lambda x: x['name']))
@@ -214,7 +221,7 @@ def _validate(config, journal, resolver, verify_policy):
             'observation_only':True, 'cleanup_ownership_proof':False}
 
 
-def bind_bootstrap(bundle, journal, resolver, clock, *, verify_policy):
+def bind_bootstrap(bundle, journal, resolver, clock, *, verify_policy, verified_attempt=None):
     """Import once from fixed local artifacts; no caller success proof accepted.
 
     The CLI ACL/hash-checks the private bundle before calling. A bridge intent
@@ -235,7 +242,7 @@ def bind_bootstrap(bundle, journal, resolver, clock, *, verify_policy):
                 _need(receipt['request_digest'] == digest(op))
                 return {'status':'bootstrap_bound','bootstrapBound':True,'cloud_calls':0}
             return {'status':'unknown','bootstrapBound':False,'cloud_calls':0}
-        properties = _validate(config, journal, resolver, verify_policy)
+        properties = _validate(config, journal, resolver, verify_policy, verified_attempt=verified_attempt)
         # Local observation only, after proof validation. Fsync unknown before
         # the terminal record; a partial append never manufactures success.
         journal.intent(op, clock.utc().isoformat())
