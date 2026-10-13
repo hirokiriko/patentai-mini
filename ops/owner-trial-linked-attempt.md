@@ -279,3 +279,28 @@ and the OWNER's consolidated approval. Reuse unchanged application tests and
 evidence; rebuild only for actual source changes. Actual OWNER login, real AI,
 PDF/CSV retrieval, saved redisplay, expiry rejection and cleanup remain separate
 unfinished acceptance steps until observed in the trial environment.
+
+### Managed Identity acknowledgement compatibility
+
+Managed Identity can return an ARM resource ID with different letter casing,
+including the documented `/resourcegroups/` form. For this provider and the
+`userAssignedIdentities` kind only, acknowledgement and readback compare ASCII
+resource ID strings case-insensitively. The sealed request URL, request digest
+and receipt object ID stay unchanged. Other providers keep exact comparison;
+different subscriptions, groups, names, encoded paths and non-ASCII IDs remain
+unacceptable. A successful write acknowledgement and matching properties on
+readback are both still required.
+
+Identity ID-mismatch and unsupported-LRO rejections record a fixed reason:
+`resource_id_mismatch` or `unsupported_lro_headers`. They do not persist the
+response body, header URI or exception text. See the official
+[Identity create example](https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/msi/resource-manager/Microsoft.ManagedIdentity/ManagedIdentity/stable/2023-01-31/examples/IdentityCreate.json)
+and [ARM naming rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules).
+
+An already persisted HTTP 201 UNKNOWN remains UNKNOWN. Reopening its journal
+does not issue a token or GET, promote it, or permit another PUT. Portal evidence
+of existence and zero visible role assignments is an observation, not the
+missing historical acknowledgement or cleanup authority. This compatibility
+fix neither resumes a stopped attempt nor changes cleanup admission. Preserve
+its journal, cumulative usage and monetary reservations; an unresolved attempt
+must not be treated as absent or as a verified creation eligible for deletion.

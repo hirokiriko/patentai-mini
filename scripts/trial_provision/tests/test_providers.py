@@ -145,6 +145,87 @@ class ProvidersTests(unittest.TestCase):
         self.assertEqual(0, self.credential.calls)
         self.assertEqual([], self.http.calls)
 
+    def test_identity_documented_id_casing_needs_ack_and_readback(self):
+        op = operation('userAssignedIdentities')
+        pre = self.absent(op)
+        value = resource(op)
+        value['id'] = value['id'].replace('/resourceGroups/', '/resourcegroups/')
+        self.http.add(201, value)
+        ack = self.provider.send(op, pre)
+        self.assertEqual('pending', ack['state'])
+        self.assertTrue(ack['write_terminal'])
+        self.assertFalse(ack['terminal'])
+        self.assertFalse(ack['readback_verified'])
+        value['id'] = value['id'].upper()
+        self.http.add(200, value)
+        result = self.provider.readback(op, ack)
+        self.assertEqual('succeeded', result['state'])
+        self.assertTrue(result['readback_verified'])
+        self.assertEqual(op['expected']['resource_id'], result['object_id'])
+        self.assertEqual(UUID, result['properties']['principalId'])
+        self.assertTrue(all(call[1] == op['url'] for call in self.http.calls))
+
+    def test_identity_casing_does_not_relax_scope_paths_or_properties(self):
+        op = operation('userAssignedIdentities')
+        expected = op['expected']['resource_id']
+        invalid = [None, 1, expected.replace('11111111', '33333333'),
+                   expected.replace('/fictional/', '/another/'), expected + '-other',
+                   expected + '/', expected + '?secret=canary-secret',
+                   expected.replace('/resourceGroups/', '/resourceGroups/../'),
+                   expected.replace('/trial-worker', '/trial-wor\u212aer'),
+                   expected.replace('/trial-worker', '/trial%2dworker')]
+        for actual in invalid:
+            with self.subTest(actual=actual):
+                pre = self.absent(op)
+                value = resource(op); value['id'] = actual
+                self.http.add(201, value)
+                ack = self.provider.send(op, pre)
+                self.assertEqual('unknown', ack['state'])
+                self.assertFalse(ack['write_terminal'])
+                self.assertEqual('resource_id_mismatch', ack['ack_rejection'])
+                self.assertNotIn('canary-secret', json.dumps(ack))
+        known = self.created(op)
+        value = resource(op); value['id'] = expected.upper(); value['location'] = 'westus'
+        self.http.add(200, value)
+        self.assertNotEqual('matching', self.provider.inspect_cleanup(op, known)['state'])
+
+    def test_identity_lro_diagnostic_does_not_accept_or_expose_header(self):
+        op = operation('userAssignedIdentities')
+        for header in ('Location', 'Azure-AsyncOperation'):
+            pre = self.absent(op)
+            self.http.add(201, resource(op), {header: 'https://evil.invalid/canary-secret'})
+            ack = self.provider.send(op, pre)
+            self.assertEqual('unknown', ack['state'])
+            self.assertFalse(ack['write_terminal'])
+            self.assertEqual('unsupported_lro_headers', ack['ack_rejection'])
+            self.assertNotIn('canary-secret', json.dumps(ack))
+            self.assertNotIn('operation_url', ack)
+
+    def test_identity_unknown_201_is_not_promoted_by_case_insensitive_get(self):
+        op = operation('userAssignedIdentities')
+        pre = self.absent(op)
+        self.http.add(201, resource(op), {'location': 'https://example.invalid/unsupported'})
+        unknown = self.provider.send(op, pre)
+        unknown.pop('ack_rejection')  # A legacy persisted UNKNOWN has no diagnosis.
+        before = deepcopy(unknown)
+        value = resource(op); value['id'] = value['id'].lower()
+        self.http.add(200, value)
+        result = self.provider.readback(op, unknown)
+        self.assertEqual(before, unknown)
+        self.assertEqual('unknown', result['state'])
+        self.assertFalse(result['terminal'])
+        self.assertFalse(result['write_terminal'])
+        self.assertFalse(result['readback_verified'])
+
+    def test_identity_comparison_change_does_not_broaden_other_providers(self):
+        op = operation('containers')
+        pre = self.absent(op)
+        value = resource(op); value['id'] = value['id'].upper()
+        self.http.add(201, value)
+        ack = self.provider.send(op, pre)
+        self.assertEqual('unknown', ack['state'])
+        self.assertFalse(ack['write_terminal'])
+
     def test_invalid_paths_extra_queries_versions_and_encoded_paths_fail(self):
         for suffix in ('/listKeys', '/..', '%2fsecret', '?extra=1'):
             op = operation()

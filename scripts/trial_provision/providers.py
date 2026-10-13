@@ -58,6 +58,17 @@ PROJECTION = {
 }
 
 
+def _resource_id_matches(op, actual):
+    expected = op['expected']['resource_id']
+    # MSI's documented 201 example returns /resourcegroups/; ARM resource
+    # names are case-insensitive. Normalize only this response comparison,
+    # never the sealed request, receipt identity, scope or transport URL.
+    # https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules
+    if op['provider'] == 'Microsoft.ManagedIdentity' and op['kind'] == 'userAssignedIdentities':
+        return type(actual) is str and actual.isascii() and actual.lower() == expected.lower()
+    return actual == expected
+
+
 def _secret_sources(op):
     """Return only declared metadata placeholders; raw secret values forbidden."""
     declarations = op['expected'].get('secret_bindings', [])
@@ -387,7 +398,7 @@ class BoundedArmProvider:
         return value
 
     def _match(self, op, value):
-        if value.get('id') != op['expected']['resource_id']:
+        if not _resource_id_matches(op, value.get('id')):
             raise Denied('resource_binding')
         for path, expected in op['expected']['properties'].items():
             if not _input_matches(expected, _get(value, path), path):
@@ -436,6 +447,8 @@ class BoundedArmProvider:
         if op['method'] == 'PUT' and code == 200:
             return result
         if op['provider'] != 'Microsoft.App' and (async_url or location):
+            if op['provider'] == 'Microsoft.ManagedIdentity':
+                result['ack_rejection'] = 'unsupported_lro_headers'
             return result
         if op['provider'] == 'Microsoft.App' and (async_url or location):
             if code not in ((200, 201) if op['method'] == 'PUT' else (200, 202)):
@@ -474,7 +487,11 @@ class BoundedArmProvider:
             value = self._value(response)
             if 'error' in value:
                 raise Denied('lro_terminal_conflict')
-            if value.get('id') != op['expected']['resource_id'] or (op['provider'] == 'Microsoft.App' and value.get('properties', {}).get('provisioningState') != 'Succeeded'):
+            if not _resource_id_matches(op, value.get('id')):
+                if op['provider'] == 'Microsoft.ManagedIdentity':
+                    result['ack_rejection'] = 'resource_id_mismatch'
+                return result
+            if op['provider'] == 'Microsoft.App' and value.get('properties', {}).get('provisioningState') != 'Succeeded':
                 return result
             result.update(state='pending', write_terminal=True)
         elif code in (400, 401, 403, 404, 405, 409, 412, 422, 429):

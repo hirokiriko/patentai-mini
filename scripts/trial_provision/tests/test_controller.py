@@ -110,6 +110,30 @@ class ControllerIntegrationTests(unittest.TestCase):
         self.assertEqual('succeeded', self.controller().cleanup(delete['id'], op['id'])['state'])
         self.assertEqual(1, sum(r[0] == 'DELETE' for r in self.http.calls))
 
+    def test_legacy_identity_201_unknown_cannot_reconcile_or_resend_after_restart(self):
+        op = self.add(operation('userAssignedIdentities'))
+        other = self.add(operation())
+        self.journal.intent(op, self.clock.utc().isoformat())
+        # This is the old receipt shape, before diagnostic fields existed.
+        old = {'operation_id': op['id'], 'request_digest': digest(op),
+               'object_id': op['expected']['resource_id'], 'http': 201,
+               'initial_ack_digest': 'a' * 64, 'state': 'unknown',
+               'terminal': False, 'write_terminal': False,
+               'readback_verified': False, 'created_by_run': True,
+               'properties': {}, 'observed_at': self.clock.utc().isoformat()}
+        self.journal.checkpoint(op, old)
+        original = self.journal.path.read_bytes()
+        self.reopen()
+        value = resource(op)
+        value['id'] = value['id'].lower()
+        self.http.add(200, value)
+        self.assertEqual(old, self.controller().reconcile(op['id']))
+        with self.assertRaises(Denied): self.controller().create(op['id'])
+        with self.assertRaises(Denied): self.controller().create(other['id'])
+        self.assertEqual([], self.http.calls)
+        self.assertEqual(0, self.credential.calls)
+        self.assertEqual(original, self.journal.path.read_bytes())
+
     def test_cleanup_after_creation_deadline_keeps_original_creation_binding(self):
         op=self.add(operation())
         delete=deletion(op);delete['deadline']='2026-01-01T01:00:00Z';self.add(delete)
