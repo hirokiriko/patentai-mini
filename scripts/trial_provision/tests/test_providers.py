@@ -94,7 +94,7 @@ def resource(op):
     value = deepcopy(op['body'])
     value['id'] = op['expected']['resource_id']
     if op['provider'] == 'Microsoft.App': value['properties']['provisioningState'] = 'Succeeded'
-    if op['kind'] == 'userAssignedIdentities': value['properties'] = {'principalId': UUID, 'tenantId': UUID}
+    if op['kind'] == 'userAssignedIdentities': value['properties'] = {'principalId': UUID, 'tenantId': UUID, 'clientId': UUID}
     return value
 
 
@@ -200,6 +200,188 @@ class ProvidersTests(unittest.TestCase):
             self.assertEqual('unsupported_lro_headers', ack['ack_rejection'])
             self.assertNotIn('canary-secret', json.dumps(ack))
             self.assertNotIn('operation_url', ack)
+
+    def test_identity_201_self_location_requires_complete_ack_and_fixed_readback(self):
+        op = operation('userAssignedIdentities')
+        for headers in ({}, {'Location': op['url']}, {'location': op['url'].split('?')[0]}):
+            with self.subTest(headers=headers):
+                self.http.calls.clear()
+                pre = self.absent(op)
+                value = resource(op)
+                value['properties']['provisioningState'] = 'Succeeded'
+                self.http.add(201, value, headers)
+                ack = self.provider.send(op, pre)
+                self.assertEqual('pending', ack['state'])
+                self.assertTrue(ack['write_terminal'])
+                self.assertFalse(ack['terminal'])
+                self.assertFalse(ack['readback_verified'])
+                self.assertNotIn('operation_url', ack)
+                self.assertEqual('fixed_resource' if headers else 'absent',
+                                 ack['ack_header_evidence']['location'])
+                self.http.add(200, value)
+                self.assertEqual('succeeded', self.provider.readback(op, ack)['state'])
+                self.assertEqual(['GET', 'PUT', 'GET'], [call[0] for call in self.http.calls])
+                self.assertTrue(all(call[1] == op['url'] for call in self.http.calls))
+
+    def test_identity_location_is_an_exact_finite_set_not_a_redirect(self):
+        op = operation('userAssignedIdentities')
+        url = op['url']
+        invalid = [None, '', 1, [], url.replace('management.azure.com', 'evil.invalid'),
+                   url.replace('management.azure.com', 'management.azure.com:443'),
+                   url.replace('management.azure.com', 'canary-secret@management.azure.com'),
+                   url.replace('11111111', '33333333'), url.replace('/fictional/', '/other/'),
+                   url.replace('trial-worker', 'another'), url + '&canary-secret=1',
+                   url.replace('2023-01-31', '2024-01-31'), url + '#canary-secret',
+                   op['expected']['resource_id'], url.replace('trial-worker', 'trial%2dworker'),
+                   url.replace('trial-worker', 'trial-wor\u212aer'), '\n' + url, url + '\t',
+                   url.replace('/resourceGroups/', '/resourcegroups/'),
+                   url.replace('/trial-worker', '/../trial-worker'),
+                   url.split('?')[0] + '/', url.split('?')[0] + '?']
+        for location in invalid:
+            with self.subTest(location=location):
+                self.http.calls.clear()
+                pre = self.absent(op)
+                self.http.add(201, resource(op), {'Location': location})
+                ack = self.provider.send(op, pre)
+                self.assertEqual('unknown', ack['state'])
+                self.assertFalse(ack['write_terminal'])
+                self.assertEqual('unsupported_lro_headers', ack['ack_rejection'])
+                self.assertEqual('unsupported', ack['ack_header_evidence']['location'])
+                self.assertNotIn('canary-secret', json.dumps(ack))
+                self.assertNotIn('operation_url', ack)
+                self.assertEqual(['GET', 'PUT'], [call[0] for call in self.http.calls])
+
+    def test_identity_async_header_presence_or_duplicate_control_headers_is_unknown(self):
+        op = operation('userAssignedIdentities')
+        cases = [{'Location': op['url'], header: value}
+                 for header in ('Azure-AsyncOperation', 'Operation-Location')
+                 for value in ('', None, 1, op['url'], 'https://evil.invalid/canary-secret')]
+        cases += [{'Location': op['url'], 'location': op['url']},
+                  {'Location': 'https://evil.invalid/canary-secret', 'LOCATION': op['url']}]
+        for headers in cases:
+            with self.subTest(headers=headers):
+                pre = self.absent(op)
+                self.http.add(201, resource(op), headers)
+                ack = self.provider.send(op, pre)
+                self.assertEqual('unknown', ack['state'])
+                self.assertFalse(ack['write_terminal'])
+                self.assertEqual('unsupported_lro_headers', ack['ack_rejection'])
+                self.assertNotIn('operation_url', ack)
+                self.assertNotIn('canary-secret', json.dumps(ack))
+
+    def test_identity_200_and_202_cannot_be_adopted_with_self_location(self):
+        op = operation('userAssignedIdentities')
+        for code in (200, 202):
+            pre = self.absent(op)
+            self.http.add(code, resource(op), {'Location': op['url']})
+            ack = self.provider.send(op, pre)
+            self.assertEqual('unknown', ack['state'])
+            self.assertFalse(ack['write_terminal'])
+            self.http.add(200, resource(op))
+            self.assertEqual('unknown', self.provider.readback(op, ack)['state'])
+
+    def test_identity_ack_and_readback_validate_complete_body_without_projection(self):
+        op = operation('userAssignedIdentities')
+        op['expected']['receipt_properties'] = []
+        op['body']['tags'] = {'trial': 'fixture'}
+        op['expected']['body_sha256'] = digest(op['body'])
+        mutations = [({'location': 'westus'}, None), ({'tags': {}}, None),
+                     ({'error': 'canary-secret'}, None), ({'status': 'Running'}, None),
+                     ({'provisioningState': 'Failed'}, None), ({'properties': []}, None)]
+        mutations += [({}, {key: value}) for key in ('principalId', 'tenantId', 'clientId')
+                      for value in (None, '', 1, 'canary-secret', UUID.replace('-', ''))]
+        mutations += [({}, {key: value}) for key in ('status', 'provisioningState')
+                      for value in ('Creating', 'Failed', None)]
+        mutations += [({}, {'error': 'canary-secret'})]
+        for root, properties in mutations:
+            with self.subTest(root=root, properties=properties):
+                pre = self.absent(op)
+                value = resource(op); value.update(root)
+                if properties is not None:
+                    value['properties'].update(properties)
+                self.http.add(201, value, {'Location': op['url']})
+                rejected = self.provider.send(op, pre)
+                self.assertEqual('unknown', rejected['state'])
+                self.assertEqual('identity_response_mismatch', rejected['ack_rejection'])
+                self.assertFalse(rejected['write_terminal'])
+                self.assertNotIn('canary-secret', json.dumps(rejected))
+                pre = self.absent(op)
+                self.http.add(201, resource(op), {'Location': op['url']})
+                known = self.provider.send(op, pre)
+                self.assertTrue(known['write_terminal'])
+                self.http.add(200, value)
+                result = self.provider.readback(op, known)
+                self.assertEqual('pending', result['state'])
+                self.assertFalse(result['readback_verified'])
+                self.assertFalse(result['terminal'])
+
+    def test_identity_each_missing_uuid_blocks_ack_and_readback(self):
+        op = operation('userAssignedIdentities')
+        op['expected']['receipt_properties'] = []
+        for key in ('principalId', 'tenantId', 'clientId'):
+            with self.subTest(key=key):
+                value = resource(op); del value['properties'][key]
+                pre = self.absent(op)
+                self.http.add(201, value)
+                self.assertFalse(self.provider.send(op, pre)['write_terminal'])
+                pre = self.absent(op)
+                self.http.add(201, resource(op))
+                ack = self.provider.send(op, pre)
+                self.http.add(200, value)
+                self.assertFalse(self.provider.readback(op, ack)['readback_verified'])
+
+    def test_identity_malformed_or_incomplete_ack_keeps_safe_diagnostics(self):
+        op = operation('userAssignedIdentities')
+        for body in (b'{', b'[]', b'', encoded({'id': op['expected']['resource_id']})):
+            pre = self.absent(op)
+            self.http.responses.append({'status': 201, 'headers': {'Location': op['url']}, 'body': body})
+            ack = self.provider.send(op, pre)
+            self.assertEqual('unknown', ack['state'])
+            self.assertFalse(ack['write_terminal'])
+            self.assertEqual(64, len(ack['initial_ack_digest']))
+            self.assertIn(ack['ack_rejection'], ('resource_id_mismatch', 'identity_response_mismatch'))
+
+    def test_identity_readback_and_cleanup_bind_all_ack_uuids(self):
+        op = operation('userAssignedIdentities')
+        op['expected']['receipt_properties'] = []
+        for key in ('principalId', 'tenantId', 'clientId'):
+            with self.subTest(key=key):
+                pre = self.absent(op)
+                self.http.add(201, resource(op), {'Location': op['url']})
+                ack = self.provider.send(op, pre)
+                changed = resource(op)
+                changed['properties'][key] = 'abcdef01-2345-6789-abcd-ef0123456789'
+                self.http.add(200, changed)
+                result = self.provider.readback(op, ack)
+                self.assertEqual('pending', result['state'])
+                self.assertEqual('identity_mismatch', result['readback_state'])
+                self.assertFalse(result['readback_verified'])
+                self.http.add(200, resource(op))
+                created = self.provider.readback(op, ack)
+                self.assertEqual('succeeded', created['state'])
+                self.http.add(200, changed)
+                current = self.provider.inspect_cleanup(op, created)
+                before = len(self.http.calls)
+                with self.assertRaisesRegex(Denied, 'changed_resource'):
+                    self.provider.cleanup(deletion(op), op, created, current)
+                self.assertEqual(before, len(self.http.calls))
+
+    def test_identity_uuid_case_does_not_change_binding_and_missing_binding_is_not_inferred(self):
+        op = operation('userAssignedIdentities')
+        value = resource(op)
+        value['properties']['clientId'] = 'abcdef01-2345-6789-abcd-ef0123456789'
+        pre = self.absent(op)
+        self.http.add(201, value)
+        ack = self.provider.send(op, pre)
+        value['properties']['clientId'] = value['properties']['clientId'].upper()
+        self.http.add(200, value)
+        self.assertEqual('succeeded', self.provider.readback(op, ack)['state'])
+        legacy = deepcopy(ack); del legacy['identity_properties_digest']
+        self.http.add(200, value)
+        result = self.provider.readback(op, legacy)
+        self.assertEqual('pending', result['state'])
+        self.assertFalse(result['readback_verified'])
+        self.assertNotIn('identity_properties_digest', legacy)
 
     def test_identity_unknown_201_is_not_promoted_by_case_insensitive_get(self):
         op = operation('userAssignedIdentities')

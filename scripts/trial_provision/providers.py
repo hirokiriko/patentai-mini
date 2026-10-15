@@ -69,6 +69,12 @@ def _resource_id_matches(op, actual):
     return actual == expected
 
 
+def _identity_properties_digest(value):
+    # Called only after _match validates all three canonical-form UUIDs.
+    return digest({key: value['properties'][key].lower()
+                   for key in ('principalId', 'tenantId', 'clientId')})
+
+
 def _secret_sources(op):
     """Return only declared metadata placeholders; raw secret values forbidden."""
     declarations = op['expected'].get('secret_bindings', [])
@@ -400,6 +406,20 @@ class BoundedArmProvider:
     def _match(self, op, value):
         if not _resource_id_matches(op, value.get('id')):
             raise Denied('resource_binding')
+        if op['provider'] == 'Microsoft.ManagedIdentity':
+            properties = value.get('properties')
+            if not isinstance(properties, dict):
+                raise Denied('identity_response_binding')
+            # A synchronous Identity response must be complete and terminal,
+            # even when none of these IDs are selected for receipt projection.
+            for container in (value, properties):
+                if 'error' in container or any(container[key] != 'Succeeded'
+                        for key in ('status', 'provisioningState') if key in container):
+                    raise Denied('identity_response_binding')
+            for key in ('principalId', 'tenantId', 'clientId'):
+                item = properties.get(key)
+                if not isinstance(item, str) or not re.fullmatch(GUID, item):
+                    raise Denied('identity_response_binding')
         for path, expected in op['expected']['properties'].items():
             if not _input_matches(expected, _get(value, path), path):
                 raise Denied('resource_binding')
@@ -435,6 +455,40 @@ class BoundedArmProvider:
             raise Denied('lro_binding')
         return url
 
+    def _identity_created_ack(self, op, response, headers, result):
+        # MSI 2023-01-31 defines a synchronous 201 Identity, not an LRO.
+        # RFC 9110 permits Location to identify that newly created resource.
+        # Compare raw strings to a finite set; never parse, resolve or follow it.
+        controls = ('location', 'azure-asyncoperation', 'operation-location')
+        names = [key.lower() for key in response['headers']]
+        duplicate = any(names.count(key) > 1 for key in controls)
+        location = headers.get('location')
+        location_kind = ('absent' if 'location' not in headers else
+            'fixed_resource' if isinstance(location, str) and location in
+            (op['url'], ARM + op['expected']['resource_id']) else 'unsupported')
+        result['ack_header_evidence'] = {
+            'location': location_kind,
+            'azure_asyncoperation_present': 'azure-asyncoperation' in headers,
+            'operation_location_present': 'operation-location' in headers,
+            'duplicate_control_headers': duplicate,
+        }
+        if (duplicate or 'azure-asyncoperation' in headers or 'operation-location' in headers
+                or location_kind == 'unsupported'):
+            result['ack_rejection'] = 'unsupported_lro_headers'
+            return result
+        try:
+            value = self._value(response)
+            if not _resource_id_matches(op, value.get('id')):
+                result['ack_rejection'] = 'resource_id_mismatch'
+                return result
+            self._match(op, value)
+        except Exception:
+            result['ack_rejection'] = 'identity_response_mismatch'
+            return result
+        result.update(state='pending', write_terminal=True,
+                      identity_properties_digest=_identity_properties_digest(value))
+        return result
+
     def _ack(self, op, response):
         code = response['status']
         result = self._base(op, 'unknown', code)
@@ -446,6 +500,12 @@ class BoundedArmProvider:
                                               'async_url': async_url, 'location': location})
         if op['method'] == 'PUT' and code == 200:
             return result
+        if op['provider'] == 'Microsoft.ManagedIdentity':
+            if op['method'] == 'PUT' and code == 201:
+                return self._identity_created_ack(op, response, headers, result)
+            if any(key in headers for key in ('location', 'azure-asyncoperation', 'operation-location')):
+                result['ack_rejection'] = 'unsupported_lro_headers'
+                return result
         if op['provider'] != 'Microsoft.App' and (async_url or location):
             if op['provider'] == 'Microsoft.ManagedIdentity':
                 result['ack_rejection'] = 'unsupported_lro_headers'
@@ -627,6 +687,8 @@ class BoundedArmProvider:
             elif response['status'] == 200:
                 value = self._value(response)
                 result['properties'] = self._match(op, value)
+                if op['provider'] == 'Microsoft.ManagedIdentity':
+                    result['identity_properties_digest'] = _identity_properties_digest(value)
                 if cleanup_operation is not None:
                     self._match(cleanup_operation, value)
                     result['cleanup_binding_digest'] = digest(cleanup_operation)
@@ -642,6 +704,12 @@ class BoundedArmProvider:
             return observation
         known = receipt.get('state') == 'pending' and receipt.get('write_terminal') is True
         agrees = observation['state'] == ('matching' if op['method'] in ('PUT', 'PATCH') else 'absent')
+        if (known and agrees and op['provider'] == 'Microsoft.ManagedIdentity'
+                and op['method'] == 'PUT'
+                and (not re.fullmatch(r'[0-9a-f]{64}', receipt.get('identity_properties_digest', ''))
+                     or receipt['identity_properties_digest'] != observation.get('identity_properties_digest'))):
+            agrees = False
+            observation['state'] = 'identity_mismatch'
         if known and agrees:
             observation.update(state='succeeded', terminal=True, write_terminal=True, readback_verified=True)
             return observation
@@ -706,6 +774,9 @@ class BoundedArmProvider:
             raise Denied('changed_resource')
         projection = {key: properties.get(key) for key in prior['expected'].get('receipt_properties', [])}
         if evidence.get('state') != 'matching' or evidence.get('http') != 200 or evidence.get('binding_digest') != digest(prior['expected']['properties']) or evidence.get('properties') != projection:
+            raise Denied('changed_resource')
+        if ('identity_properties_digest' in receipt
+                and receipt['identity_properties_digest'] != evidence.get('identity_properties_digest')):
             raise Denied('changed_resource')
 
     def _zero_refs(self, created, receipt, evidence):

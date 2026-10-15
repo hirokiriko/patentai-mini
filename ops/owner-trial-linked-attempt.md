@@ -291,9 +291,30 @@ different subscriptions, groups, names, encoded paths and non-ASCII IDs remain
 unacceptable. A successful write acknowledgement and matching properties on
 readback are both still required.
 
-Identity ID-mismatch and unsupported-LRO rejections record a fixed reason:
-`resource_id_mismatch` or `unsupported_lro_headers`. They do not persist the
-response body, header URI or exception text. See the official
+For future PUT 201 responses only, `Location` may be absent or exactly equal to
+the sealed request URL or its absolute resource URL without the query. The raw
+header is compared directly; no URL parsing, relative resolution, redirect or
+polling occurs. `Azure-AsyncOperation` and `Operation-Location` are rejected by
+presence, including empty values. Duplicate control headers are also rejected.
+Other locations, 200 updates and 202 responses do not prove creation.
+
+Both the initial response and the fixed-URL readback must match every requested
+and expected property, contain all three Identity UUIDs (principal, tenant and
+client) regardless of receipt projection, and contain no error or nonterminal
+status. A digest of all three normalized UUIDs binds the initial acknowledgement
+to readback and subsequent cleanup inspection, even when projection is empty.
+A changed UUID cannot become verified ownership; missing historical binding is
+not inferred. The initial acknowledgement alone remains pending until readback agrees.
+This is a deliberately narrow compatibility rule, not a claim about which
+header was returned in an earlier stopped attempt. See
+[MSI 2023-01-31](https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/msi/resource-manager/Microsoft.ManagedIdentity/ManagedIdentity/stable/2023-01-31/ManagedIdentity.json)
+and [RFC 9110 Location semantics](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.2).
+
+Identity rejections record a fixed reason: `resource_id_mismatch`,
+`unsupported_lro_headers` or `identity_response_mismatch`. The acknowledgement
+also records only the Location classification and async/duplicate header
+presence, alongside the existing digest. It does not persist the response body,
+header URI or exception text. See the official
 [Identity create example](https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/msi/resource-manager/Microsoft.ManagedIdentity/ManagedIdentity/stable/2023-01-31/examples/IdentityCreate.json)
 and [ARM naming rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules).
 
