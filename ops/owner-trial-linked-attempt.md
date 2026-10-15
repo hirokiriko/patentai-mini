@@ -382,3 +382,16 @@ precede any live V6 transition. Unchanged evidence can be reused; authentication
 Docker, IP, environment state and image readback need fresh checks. OWNER sign-in,
 real AI, PDF/CSV, persisted redisplay, expiry and scoped cleanup remain unfinished
 until observed in the trial environment.
+
+An expired V6 with the single unacknowledged Identity write may be inspected
+through the separate `unknown_observation` consumer after a new, hash-bound
+OWNER read-only grant. It accepts only that historical target, one token read
+and one GET within ten minutes, charging both to the unchanged lifetime
+counter before sending, under one shared 60-second token/HTTP deadline. A fixed
+exclusive marker prevents re-entry even after
+a crash or a newly issued grant. The old child and UNKNOWN receipt stay intact.
+The transport has no retry or redirect, and source changes, clock rollback,
+late results and malformed responses remain unconfirmed. A valid Identity
+200 means only current existence; a fixed-target ARM `ResourceNotFound` 404
+means only current absence. Neither outcome supplies the old write ACK,
+ownership, deletion evidence, released money or a new trial authorization.

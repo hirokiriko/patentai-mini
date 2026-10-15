@@ -392,6 +392,36 @@ class ControlBudget:
                 and type(limit) is int and limit==self.LIMITS.get(kind),'budget_scope')
             phase=scope.phase;self._admit(kind,phase,purpose,verified=self._verified)
             row={'kind':kind,'attempt':self._plan['attempt'],'phase':phase,'purpose':purpose};self._append('request',row);self._add_request(row)
+    def begin_unknown_observation(self,grant,*,guard):
+        """Separate read-only grant; expired trial windows grant no capability."""
+        from .unknown_observation import ObservationGrant,validate_counter,MARKER
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            _budget_need(type(grant) is ObservationGrant and not hasattr(self,'_observation'),'unknown_observation_scope')
+            proof=grant.proof
+            _budget_need(self.binding==proof['counter_binding'] and self.seed==proof['seed']
+                and str(self.journal.path.parent)==proof['directory'] and self._plan['attempt']==proof['attempt']
+                and self._counts==proof['counts'],'unknown_observation_scope')
+            marker=self.journal.path.parent/MARKER;verify_owner_file(marker)
+            value=json.loads(marker.read_bytes())
+            _budget_need(value['grant_sha256']==grant.checksum and value['old_attempt']==proof['attempt']
+                and value['target_digest']==digest(proof['target']),'unknown_observation_scope')
+            validate_counter(grant,self.journal.path.read_bytes(),consumed=[]);guard()
+            self._observation=(grant,guard,[])
+            return _ObservationScope(self,grant)
+    def _consume_observation(self,grant,purpose):
+        from .unknown_observation import validate_counter
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            active,guard,consumed=self._observation
+            _budget_need(grant is active and consumed in ([],['owner_token'])
+                and purpose==('owner_token' if not consumed else 'http'),'unknown_observation_exhausted')
+            guard();validate_counter(grant,self.journal.path.read_bytes(),consumed=consumed)
+            _budget_need(self._counts['owner_arm']==316+len(consumed),'unknown_observation_counter_changed')
+            self._admit('owner_arm','provision',purpose)
+            row={'kind':'owner_arm','attempt':self._plan['attempt'],'phase':'provision','purpose':purpose}
+            self._append('request',row);self._add_request(row);consumed.append(purpose)
+            guard()
     def close(self):
         with self.mutex:self._closed=True;self._verified=None;self.journal.close()
     def __enter__(self):return self
@@ -431,6 +461,14 @@ class _BudgetScope:
     def consume_owner_token(self):self.__budget._consume_scoped(self,'owner_arm',600,'owner_token')
     def count(self,kind):return self.__budget.count(kind)
     def counts(self):return self.__budget.counts()
+
+class _ObservationScope:
+    __slots__=('__budget','__grant')
+    def __init__(self,budget,grant):self.__budget,self.__grant=budget,grant
+    def consume_owner_token(self):self.__budget._consume_observation(self.__grant,'owner_token')
+    def consume(self,kind,limit):
+        _budget_need(kind=='owner_arm' and type(limit) is int and limit==600,'unknown_observation_scope')
+        self.__budget._consume_observation(self.__grant,'http')
 
 _PROVISION_IDS=frozenset(('webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app','O1','O2','E1','E2','E3','E4',
     'guardMainConfiguration','jobRuntime','appRuntime','auth-platform-secret','auth-config','auth-ingress')+tuple('C'+str(i) for i in range(1,8))+
