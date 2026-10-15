@@ -102,8 +102,12 @@ def _validate(config, journal, resolver, verify_policy, *, verified_attempt=None
     _need(config['owner_id'] == manifest['owner']['principal_id'] and config['tenant_id'] == manifest['owner']['tenant_id'])
     budget = config['control_budget']
     local_binding = journal.values('binding')[0]
-    _need({k: budget['binding'][k] for k in ('manifest_sha256', 'owner_id', 'task_id')} ==
-        {k:local_binding[k] for k in ('manifest_sha256','owner_id','task_id')})
+    expected_budget = {k:local_binding[k] for k in ('manifest_sha256','owner_id','task_id')}
+    if verified_attempt is not None and verified_attempt.authority['schema'] == 7:
+        from .attempt import origin_manifest_hash
+        _need(local_binding['manifest_sha256'] == verified_attempt.authority['manifest_sha256'])
+        expected_budget['manifest_sha256'] = origin_manifest_hash(verified_attempt.authority)
+    _need({k: budget['binding'][k] for k in expected_budget} == expected_budget)
     if 'attempt' in local_binding:_need(config.get('attempt_binding_digest')==local_binding['attempt']['binding_digest'])
     if verified_attempt is not None:
         _need(local_binding.get('attempt',{}).get('binding_digest') == verified_attempt.binding_digest ==

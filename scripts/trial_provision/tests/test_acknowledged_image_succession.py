@@ -228,7 +228,7 @@ class AcknowledgedImageSuccessionTests(unittest.TestCase):
         self.assertEqual(a.window_offsets({'schema': 6}), {'publication': (0, 600), 'guardian': (600, 29400),
             'owner_input': (3300, 6900), 'initial': (4200, 6000)})
         for schema in (1, 2, 3, 4, 5): self.assertEqual(a.window_offsets({'schema': schema}), a.WINDOW_OFFSETS)
-        for bad in ({}, {'schema': True}, {'schema': 7}, {'schema': '6'}):
+        for bad in ({}, {'schema': True}, {'schema': 8}, {'schema': '6'}):
             with self.subTest(bad=bad), self.assertRaises(Denied): a.window_offsets(bad)
         copy = a.window_offsets({'schema': 6}); copy['publication'] = (0, 1800)
         self.assertEqual(a.window_offsets({'schema': 6})['publication'], (0, 600))

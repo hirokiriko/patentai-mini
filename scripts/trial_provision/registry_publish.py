@@ -608,7 +608,7 @@ def reuses_acknowledged_images(verified):
     """Only a sealed V6 capability can select the historical-image contract."""
     if verified is None:return False
     from .attempt import _proof
-    return _proof(verified)['authority']['schema']==6
+    return _proof(verified)['authority']['schema'] in (6,7)
 
 
 def _reuse_source(journal,verified):
@@ -616,8 +616,14 @@ def _reuse_source(journal,verified):
     from .acknowledged_image_succession import previous_verified_attempt
     from .registry_retention import check_attempt
     need(reuses_acknowledged_images(verified));check_attempt(journal,verified)
-    proof=_proof(verified);source=proof['succession']
-    previous=previous_verified_attempt(verified)
+    proof=_proof(verified);origin_verified=verified
+    if proof['authority']['schema']==7:
+        from .attempt import VerifiedAttempt,_SEAL
+        parent_proof=proof['succession']['previous_verified_proof']
+        need(parent_proof['authority']['schema']==6)
+        origin_verified=VerifiedAttempt(parent_proof,_SEAL)
+    source=_proof(origin_verified)['succession']
+    previous=previous_verified_attempt(origin_verified)
     origin=_ParentView(source['previous_child_records'])
     images=verified_publication_images(origin,verified_attempt=previous)
     preparations=origin.values('publication_preparation')
@@ -643,7 +649,7 @@ def _reuse_event(journal,verified,configuration_sha256):
     prep=source['publication_preparation'];old=source['previous_publication']
     need(isinstance(configuration_sha256,str) and re.fullmatch(HEX,configuration_sha256))
     need(prep['source_sha256']=={k:v['sha256'] for k,v in old['sources'].items()})
-    return {'schema':1,'kind':'acknowledged-image-reuse','configuration_sha256':configuration_sha256,
+    event = {'schema':1,'kind':'acknowledged-image-reuse','configuration_sha256':configuration_sha256,
         'source_sha256':deepcopy(prep['source_sha256']),'manifest_sha256':prep['manifest_sha256'],
         'local_code_sha':proof['authority']['head'],'image_build_head':source['image_build_head'],
         'run_binding_digest':digest(journal.values('binding')[0]),'attempt_binding_digest':verified.binding_digest,
@@ -654,6 +660,12 @@ def _reuse_event(journal,verified,configuration_sha256):
         **{k:deepcopy(prep[k]) for k in ('registry_id','login_server','tenant_id','owner_id','slots')},
         'publish_from':proof['activation']['windows']['publication']['start'],
         'publish_until':proof['activation']['windows']['publication']['end']}
+    if proof['authority']['schema']==7:
+        new_sources=proof['succession']['new_sources'];origin_sources=proof['succession']['origin_sources']
+        need(origin_sources==event['source_sha256'])
+        event.update(schema=2,origin_source_sha256=deepcopy(origin_sources),
+            source_sha256=deepcopy(new_sources),manifest_sha256=proof['authority']['manifest_sha256'])
+    return event
 
 
 def _prepare_reused_images(config,manifest,configuration_sha256,journal):

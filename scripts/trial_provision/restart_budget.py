@@ -59,11 +59,11 @@ def required_run_requests(schema, stage, *, http_used, owner_token_used):
     The live caller must compare this floor with both phase and global limits
     and authenticate the stage against its existing canonical ACK evidence.
     """
-    _integer(schema, 1, 6)
+    _integer(schema, 1, 7)
     if not isinstance(stage, str) or stage not in _LEGACY_FLOORS:
         raise ValueError('restart_admission_stage')
     _integer(http_used, 0, 42); _integer(owner_token_used, 0, 42)
-    if schema != 6:
+    if schema not in (6, 7):
         return _LEGACY_FLOORS[stage]
     _integer(owner_token_used, 0, RUN_TOKEN_ALLOWANCE)
     before = _HTTP_BEFORE[stage]

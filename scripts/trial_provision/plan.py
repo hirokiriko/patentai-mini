@@ -173,21 +173,24 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
         sources[name], hashes[name] = _load(authority_bundle[name])
     _need(sources["manifest"] == manifest, "manifest_bytes_mismatch")
     fixed_ai_scope = False
+    origin_manifest = hashes['manifest']
     if verified_attempt is not None:
         from .attempt import _proof
         proof = _proof(verified_attempt)
         _need(proof['manifest_digest'] == digest(manifest)
               and proof['authority']['manifest_sha256'] == hashes['manifest'],
               'attempt_manifest_binding')
-        fixed_ai_scope = proof['authority']['schema'] == 6
+        fixed_ai_scope = proof['authority']['schema'] in (6, 7)
+        from .attempt import origin_manifest_hash
+        origin_manifest = origin_manifest_hash(proof['authority'])
     m, a, approved, latest = manifest, sources["annex"], sources["approval"], sources["latest"]
     for actual, expected in (
-        (_at(a, "fixedManifestSha256"), hashes["manifest"]),
+        (_at(a, "fixedManifestSha256"), origin_manifest),
         (_at(approved, "boundProposalSha256"), hashes["annex"]),
-        (_at(approved, "fixedManifestSha256"), hashes["manifest"]),
+        (_at(approved, "fixedManifestSha256"), origin_manifest),
         (_at(latest, "priorApprovalSha256"), hashes["approval"]),
         (_at(latest, "originalProposalSha256"), hashes["annex"]),
-        (_at(latest, "fixedManifestSha256"), hashes["manifest"]),
+        (_at(latest, "fixedManifestSha256"), origin_manifest),
         (_at(sources["network_approval"], "networkOriginalBindingSha256"), hashes["network_binding"]),
     ):
         _need(_sha(actual) == expected, "authority_chain")
@@ -250,7 +253,11 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
     _need(_at(latest, "acr.registryResourceId") == registry == _at(a, "acr.fixedRegistryResourceId"), "registry_binding")
     for latest_key, alias in (("web.identityResourceId", "webIdentity"), ("worker.identityResourceId", "workerIdentity"),
                               ("guardian.systemIdentityResourceId", "guard")):
-        _need(_at(latest, "acr." + latest_key) == ids[alias], "pull_principal_binding")
+        original_id = ids[alias]
+        if verified_attempt is not None and verified_attempt.authority['schema'] == 7 and alias == 'webIdentity':
+            from .attempt import _proof
+            original_id = _proof(verified_attempt)['succession']['origin_manifest']['ids'][alias]
+        _need(_at(latest, "acr." + latest_key) == original_id, "pull_principal_binding")
     _need(_at(a, "auth.targetTrialAppResourceId") == ids["app"]
           and _at(a, "lro.fixedGuardianResourceId") == ids["guard"], "target_binding")
     network, network_approval = sources["network_binding"], sources["network_approval"]

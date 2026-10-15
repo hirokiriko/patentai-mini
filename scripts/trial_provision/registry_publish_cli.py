@@ -33,6 +33,10 @@ def validate_build_receipts(config, manifest):
         'attempt','exit_code','docker_sha256','docker_host','image_ref','image_id',
         'readback_verified','managed_build_sha'}
     image_head=effective_image_head(config.get('verified_attempt'),config['frozen_head'])
+    manifest_hash=config['sources']['manifest']['sha256']
+    if config.get('verified_attempt') is not None:
+        from .attempt import origin_manifest_hash
+        manifest_hash=origin_manifest_hash(config['verified_attempt'].authority)
     for slot,repository,tag in (('guardian','cleanupImageRepository','cleanupImageTag'),
                                ('runtime','imageRepository','imageTag')):
         proof=config['build_receipts'][slot]; fixed=config['publication']['slots'][slot]
@@ -43,7 +47,7 @@ def validate_build_receipts(config, manifest):
             and type(proof['exit_code']) is int and proof['exit_code']==0
             and proof['slot']==slot and proof['method']=='docker-build'
             and proof['readback_verified'] is True
-            and proof['manifest_sha256']==config['sources']['manifest']['sha256']
+            and proof['manifest_sha256']==manifest_hash
             and proof['source_head']==image_head==proof['managed_build_sha']
             and proof['docker_sha256']==fixed['docker_sha256']
             and proof['docker_host']==fixed['docker_host']

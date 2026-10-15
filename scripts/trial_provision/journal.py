@@ -37,7 +37,7 @@ class Journal:
     """Hash chain and OS writer lock; a partial/changed chain cannot be reset."""
     def __init__(self, directory, directory_digest, binding, *, name='trial-provision', require_existing=False):
         self.mutex = threading.RLock()
-        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor','trial-provision-successor-v3','trial-provision-successor-v4','trial-provision-successor-v5','trial-provision-successor-v6'):
+        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor','trial-provision-successor-v3','trial-provision-successor-v4','trial-provision-successor-v5','trial-provision-successor-v6','trial-provision-successor-v7'):
             raise Denied('journal_name')
         directory = Path(directory)
         if (not directory.is_absolute() or not directory.is_dir() or directory.is_symlink()
@@ -276,17 +276,20 @@ class ControlBudget:
                 _budget_need(self._plan is None,'budget_plan_repeated');self._validate_plan(value);_budget_need(value['counts_before']==self._counts,'budget_plan_snapshot');self._plan=deepcopy(value);continue
             if event=='attempt_transition':
                 from .attempt import _proof
-                _budget_need(len(self._transitions)<5,'budget_transition_repeated')
+                _budget_need(len(self._transitions)<6,'budget_transition_repeated')
                 active=verified if verified is not None and value.get('plan',{}).get('attempt')==verified.binding_digest else None
                 ordinal=len(self._transitions)
-                amended=ordinal in (2,3,4)
-                published=ordinal in (1,2,3,4)
-                if verified is not None and _proof(verified)['authority']['schema'] in (4,5,6):
+                amended=ordinal in (2,3,4,5)
+                published=ordinal in (1,2,3,4,5)
+                if verified is not None and _proof(verified)['authority']['schema'] in (4,5,6,7):
                     schema=_proof(verified)['authority']['schema']
                     _budget_need(ordinal<schema-1,'budget_transition_repeated')
                     if ordinal<schema-2:
                         _budget_need(value==_proof(verified)['succession']['previous_transitions'][ordinal],'budget_previous_transition_changed')
-                if ordinal==4:
+                if ordinal==5:
+                    from .observed_identity_succession import validate_transition, PREFIX_ROWS, KIND
+                    _budget_need(index==PREFIX_ROWS and value.get('kind')==KIND,'budget_transition_repeated')
+                elif ordinal==4:
                     from .acknowledged_image_succession import validate_transition, PREFIX_ROWS, KIND
                     _budget_need(index==PREFIX_ROWS and value.get('kind')==KIND,'budget_transition_repeated')
                 elif ordinal==3:
@@ -303,10 +306,10 @@ class ControlBudget:
                     _budget_need(not self._transitions and index==PREFIX_ROWS,'budget_transition_repeated')
                     if verified is not None and _proof(verified)['authority']['schema']==3:
                         _budget_need(value==_proof(verified)['succession']['previous_transition'],'budget_previous_transition_changed')
-                _budget_need(len(self._transitions)<5,'budget_transition_repeated')
+                _budget_need(len(self._transitions)<6,'budget_transition_repeated')
                 plan=validate_transition(value,prefix_raw=b''.join(raw.splitlines(keepends=True)[:index]),
                     previous_plan=self._plan,counts=self._counts,used=self._used,verified=active)
-                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal==4);self._plan=plan;self._transition=deepcopy(value)
+                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal in (4,5));self._plan=plan;self._transition=deepcopy(value)
                 self._transitions.append(deepcopy(value));self._published_plan=published
                 self._used=self._blank_usage();self._purpose_used=self._blank_purposes();continue
             _budget_need(event=='request' and isinstance(value,dict),'budget_event');kind=value.get('kind');_budget_need(kind in self.LIMITS,'budget_kind')
@@ -336,21 +339,23 @@ class ControlBudget:
         expected=phase_plan(verified)
         with self.mutex:
             schema=_proof(verified)['authority']['schema']
-            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6),amended=schema in (4,5,6),reused_images=schema==6)
+            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6,7),amended=schema in (4,5,6,7),reused_images=schema in (6,7))
             if self._plan is None:
                 _budget_need('succession' not in _proof(verified),'budget_succession_prefix_required')
                 _budget_need(initialize is True,'budget_plan_not_prepared')
                 _budget_need(expected['counts_before']==self._counts,'budget_plan_snapshot');check_budget_snapshot(verified,deepcopy(self._counts),initializing=True)
                 self._append('phase_plan',expected);self._plan=deepcopy(expected)
             elif self._plan!=expected:
-                expected_transitions={2:0,3:1,4:2,5:3,6:4}.get(schema,-1)
+                expected_transitions={2:0,3:1,4:2,5:3,6:4,7:5}.get(schema,-1)
                 _budget_need(initialize is True and len(self._transitions)==expected_transitions and 'succession' in _proof(verified),'budget_phase_plan_changed')
                 self._begin_successor(verified)
             self._replay(verified);check_budget_snapshot(verified,deepcopy(self._counts),initializing=False);self._verified=verified
     def _begin_successor(self,verified):
         """One append while both counter and previous-child OS locks are held."""
         from .attempt import _proof,_sha,CHILD_JOURNAL
-        if _proof(verified)['authority']['schema']==6:
+        if _proof(verified)['authority']['schema']==7:
+            from .observed_identity_succession import transition_value,validate_transition
+        elif _proof(verified)['authority']['schema']==6:
             from .acknowledged_image_succession import transition_value,validate_transition
         elif _proof(verified)['authority']['schema']==5:
             from .unknown_publication_succession import transition_value,validate_transition
@@ -483,7 +488,7 @@ def scope_for_dispatch(budget,verified,*,entry_point,action,operation=None):
     elif entry_point=='publication':
         from .attempt import _proof
         schema=_proof(verified)['authority']['schema']
-        _budget_need(action==('verify-reused-images' if schema==6 else 'publish'),'budget_dispatch_action');phase='publication'
+        _budget_need(action==('verify-reused-images' if schema in (6,7) else 'publish'),'budget_dispatch_action');phase='publication'
     elif entry_point=='registry-cleanup':_budget_need(action=='cleanup','budget_dispatch_action');phase='cleanup'
     elif entry_point=='rehearsal':_budget_need(action in ('start','poll','seed','verify'),'budget_dispatch_action');phase='run'
     elif entry_point=='owner-run':_budget_need(action=='execute','budget_dispatch_action');phase='run'

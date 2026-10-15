@@ -61,9 +61,12 @@ def compose_configuration(publication, journal, inputs, *, verify_local_node=Tru
     image_head=effective_image_head(verified,publication['frozen_head'])
     origin=publication_origin(journal,verified_attempt=verified)
     preparation = origin.values('publication_preparation')[0]
+    origin_sources = {key: value['sha256'] for key, value in publication['sources'].items()}
+    if verified is not None and verified.authority['schema'] == 7:
+        from .attempt import _proof
+        origin_sources = _proof(verified)['succession']['origin_sources']
     need(preparation['code_sha'] == image_head
-         and preparation['source_sha256'] ==
-         {key: value['sha256'] for key, value in publication['sources'].items()})
+         and preparation['source_sha256'] == origin_sources)
     if reuses_acknowledged_images(verified):
         preparation=reused_image_preparation(journal,verified)
         need(preparation['configuration_sha256']==publication['config_sha256'])

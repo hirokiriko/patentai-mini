@@ -227,7 +227,9 @@ class ReusedBootstrapTests(unittest.TestCase):
         original = self.f.journal.values
         def values(event):
             if event=='binding':
-                return [{**original(event)[0], 'attempt':{'binding_digest':self.verified.binding_digest}}]
+                value = {**original(event)[0], 'attempt':{'binding_digest':self.verified.binding_digest}}
+                if hasattr(self,'new_manifest_hash'):value['manifest_sha256'] = self.new_manifest_hash
+                return [value]
             return original(event)
         with patch.object(self.f.journal, 'values', side_effect=values):
             return bootstrap.bind_bootstrap(self.f.bundle,self.f.journal,self.f.resolver,self.f.clock,
@@ -244,6 +246,24 @@ class ReusedBootstrapTests(unittest.TestCase):
         self.f.finish()
         with self.assertRaises(Denied): self.bind(verified=False)
         self.assertFalse(self.f.journal.values('intent')[-1]['operation_id']=='trialDatabaseBootstrap')
+
+    def v7(self):
+        proof = attempt._proof(self.verified)
+        self.new_manifest_hash = 'd'*64
+        proof['authority'].update(schema=7,manifest_sha256=self.new_manifest_hash,
+            origin_manifest_sha256=self.f.config['control_budget']['binding']['manifest_sha256'])
+        self.verified = attempt.VerifiedAttempt(proof,attempt._SEAL)
+        self.f.config['attempt_binding_digest'] = self.verified.binding_digest
+
+    def test_v7_bootstrap_keeps_original_budget_and_new_child_manifest(self):
+        self.v7(); self.f.finish()
+        self.assertTrue(self.bind()['bootstrapBound'])
+
+    def test_v7_bootstrap_rejects_rebased_lifetime_counter(self):
+        self.v7(); self.f.config['control_budget']['binding']['manifest_sha256'] = self.new_manifest_hash
+        self.f.finish()
+        with self.assertRaises(Denied):self.bind()
+        self.f.resolver.make_runtime_binding.assert_not_called()
 
     def test_unapproved_local_head_or_mismatched_child_is_rejected(self):
         self.f.config['attempt_binding_digest']='c'*64; self.f.finish()

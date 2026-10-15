@@ -64,7 +64,7 @@ class ProposalTests(unittest.TestCase):
             for stage, floor in {'rehearsal_start': 30, 'rehearsal_poll': 27, 'rehearsal_seed': 31,
                                  'rehearsal_verify': 32, 'main_preflight': 25, 'main': 18}.items():
                 self.assertEqual(target.required_run_requests(schema, stage, http_used=0, owner_token_used=0), floor)
-        for args in ((True, 'main', 12, 0), (7, 'main', 12, 0), (6, 'main', 11, 0),
+        for args in ((True, 'main', 12, 0), (8, 'main', 12, 0), (6, 'main', 11, 0),
                      (6, 'main', 17, 0), (6, 'main', 12, 9), (6, 'main', 12, True),
                      (6, 'rehearsal_start', 1, 0), (6, 'rehearsal_poll', 6, 0), (6, 'unlisted', 0, 0)):
             with self.subTest(args=args), self.assertRaises(ValueError):

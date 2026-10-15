@@ -200,12 +200,21 @@ def _load_common_configuration(path, *, now, local_head, owner_context,
         parsed[slot] = _json(sources[slot])
     _need(len(parents) == 1, 'config_source_directory')
     hashes = {slot: hashlib.sha256(raw).hexdigest() for slot, raw in sources.items()}
+    origin_manifest = hashes['manifest']
+    if trusted_attempt_authority is not None and 'attempt_evidence' in config:
+        preview_raw = _read_ref(config['attempt_evidence']['authority'], acl_check)
+        _need(hashlib.sha256(preview_raw).hexdigest() == trusted_attempt_authority, 'attempt_trusted_authority')
+        preview_authority = _json(preview_raw)
+        if type(preview_authority.get('schema')) is int and preview_authority['schema'] == 7:
+            origin_manifest = _sha(preview_authority['origin_manifest_sha256'])
+    # The V7 exception is usable only if full trusted succession verification
+    # below succeeds. All unchanged source documents retain their old hashes.
     links = (('annex', 'fixedManifestSha256', 'manifest'), ('approval', 'boundProposalSha256', 'annex'),
              ('approval', 'fixedManifestSha256', 'manifest'), ('latest', 'priorApprovalSha256', 'approval'),
              ('latest', 'originalProposalSha256', 'annex'), ('latest', 'fixedManifestSha256', 'manifest'),
              ('network_approval', 'networkOriginalBindingSha256', 'network_binding'))
     for parent, field, child in links:
-        _need(parsed[parent].get(field) == hashes[child], 'config_authority_chain')
+        _need(parsed[parent].get(field) == (origin_manifest if child == 'manifest' else hashes[child]), 'config_authority_chain')
     manifest = parsed['manifest']
     _keys(owner_context, {'mode', 'tenant_id', 'principal_id'})
     try:
@@ -222,7 +231,7 @@ def _load_common_configuration(path, *, now, local_head, owner_context,
     _directory({k: control[k] for k in ('directory', 'directory_digest')})
     _need(control['directory'] == config['recovery']['directory'], 'config_control_directory')
     _keys(control['binding'], {'manifest_sha256', 'owner_id', 'task_id', 'source_sha256'})
-    _need(control['binding']['manifest_sha256'] == hashes['manifest']
+    _need(control['binding']['manifest_sha256'] == origin_manifest
           and _guid(control['binding']['owner_id']) == _guid(manifest['owner']['principal_id']), 'config_control_binding')
     _need(isinstance(control['binding']['task_id'], str) and re.fullmatch('[A-Za-z0-9_-]{1,128}', control['binding']['task_id']),
           'config_control_binding')

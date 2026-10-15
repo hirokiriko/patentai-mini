@@ -395,3 +395,28 @@ late results and malformed responses remain unconfirmed. A valid Identity
 200 means only current existence; a fixed-target ARM `ResourceNotFound` 404
 means only current absence. Neither outcome supplies the old write ACK,
 ownership, deletion evidence, released money or a new trial authorization.
+
+A separately approved V7 can retain the observed V6 identity as UNKNOWN and
+replace only `names.webIdentity` and `ids.webIdentity` in a new manifest. The
+single successful observation, its grant/marker, exact old 34-row child and
+199-row lifetime prefix must all agree. Neither deletion nor adoption of the
+old target is authorized; its history and every monetary reservation remain.
+The new target requires the ordinary authenticated absence check and its own
+write/readback evidence before any principal-dependent grant. All other fixed
+targets and the seven roles/eighteen assignments remain unchanged.
+
+The lifetime binding, original approval documents and two image build receipts
+continue to reference the original manifest. The V7 authority explicitly binds
+that origin hash and the new manifest hash. Resource compilation and the new
+child use the new hash; image provenance remains attached to the original ACKs.
+No build or push is repeated. Source closure compatibility is required for both
+retained images, and fresh digest readback is required in the new window.
+
+After the observation, 318 of 631 OWNER requests are spent. V7 allocates the
+remaining 313 as fresh reads 8, image verification 8, provisioning 145, run 32
+and cleanup 120. Its fixed transfer is fresh reads -10, publication +6 and
+provisioning +4 relative to the remaining V6 phases. Failed/unknown requests
+are never refunded. The V7 transition is single-use and retains every prefix
+byte. V7 uses the same relative windows and fixed formal/retention deadlines
+as V6; an expired window is never carried forward automatically. This code and
+its fictional tests do not approve a trial or establish live acceptance.
