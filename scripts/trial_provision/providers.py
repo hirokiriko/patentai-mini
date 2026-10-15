@@ -75,6 +75,31 @@ def _identity_properties_digest(value):
                    for key in ('principalId', 'tenantId', 'clientId')})
 
 
+def _identity_location_evidence(headers):
+    """Safe shape only. A synchronous 201 Location never becomes a target.
+
+    MSI 2023-01-31 returns an Identity for 201, with no LRO contract. RFC 9110
+    allows a URI-reference here; it does not require a client to follow it.
+    Reject malformed protocol text, but do not confuse a reference's spelling
+    with the sealed write's identity. Body validation and a fixed GET prove it.
+    """
+    if 'location' not in headers:
+        return 'absent', 'absent'
+    value = headers['location']
+    if type(value) is not str:
+        return 'unsupported', 'invalid_type'
+    if not 0 < len(value) <= 8192:
+        return 'unsupported', 'invalid_length'
+    if not value.isascii() or any(ord(c) <= 32 or ord(c) == 127 or c in '\\<>"{}|^`' for c in value):
+        return 'unsupported', 'invalid_characters'
+    if re.search(r'%(?![0-9a-fA-F]{2})', value):
+        return 'unsupported', 'invalid_percent_encoding'
+    shape = ('absolute' if re.match(r'[A-Za-z][A-Za-z0-9+.-]*:', value) else
+             'network_relative' if value.startswith('//') else
+             'root_relative' if value.startswith('/') else 'relative')
+    return 'ignored_sync_201', shape
+
+
 def _secret_sources(op):
     """Return only declared metadata placeholders; raw secret values forbidden."""
     declarations = op['expected'].get('secret_bindings', [])
@@ -457,17 +482,16 @@ class BoundedArmProvider:
 
     def _identity_created_ack(self, op, response, headers, result):
         # MSI 2023-01-31 defines a synchronous 201 Identity, not an LRO.
-        # RFC 9110 permits Location to identify that newly created resource.
-        # Compare raw strings to a finite set; never parse, resolve or follow it.
+        # Location is neither a write receipt nor authority for another request.
+        # Never resolve/follow it. Require the full body and fixed-URL readback.
         controls = ('location', 'azure-asyncoperation', 'operation-location')
         names = [key.lower() for key in response['headers']]
         duplicate = any(names.count(key) > 1 for key in controls)
-        location = headers.get('location')
-        location_kind = ('absent' if 'location' not in headers else
-            'fixed_resource' if isinstance(location, str) and location in
-            (op['url'], ARM + op['expected']['resource_id']) else 'unsupported')
+        location_kind, location_shape = _identity_location_evidence(headers)
         result['ack_header_evidence'] = {
             'location': location_kind,
+            'location_shape': location_shape,
+            'location_used_for_authority_or_polling': False,
             'azure_asyncoperation_present': 'azure-asyncoperation' in headers,
             'operation_location_present': 'operation-location' in headers,
             'duplicate_control_headers': duplicate,

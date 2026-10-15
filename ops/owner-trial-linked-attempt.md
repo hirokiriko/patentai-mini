@@ -291,12 +291,16 @@ different subscriptions, groups, names, encoded paths and non-ASCII IDs remain
 unacceptable. A successful write acknowledgement and matching properties on
 readback are both still required.
 
-For future PUT 201 responses only, `Location` may be absent or exactly equal to
-the sealed request URL or its absolute resource URL without the query. The raw
-header is compared directly; no URL parsing, relative resolution, redirect or
-polling occurs. `Azure-AsyncOperation` and `Operation-Location` are rejected by
-presence, including empty values. Duplicate control headers are also rejected.
-Other locations, 200 updates and 202 responses do not prove creation.
+For future PUT 201 responses only, `Location` is supplementary metadata and
+never supplies creation authority, a request target or a polling target. The
+MSI contract returns an Identity synchronously; RFC 9110 permits relative
+URI references. A bounded ASCII header is classified without resolving,
+parsing or following it, including when it names a different host or resembles
+an operation URL. Empty, oversized or malformed protocol text is rejected.
+The sealed request, complete response body and independent fixed-URL GET
+remain the evidence. `Azure-AsyncOperation` and `Operation-Location` are
+rejected by presence, including empty values. Duplicate control headers are
+also rejected. 200 updates and 202 responses do not prove creation.
 The duplicate check runs before header normalization in the Local Identity
 transport, which is included in the executor's required source hashes. Other
 provider transports and all guardian image files remain unchanged, preserving
@@ -316,8 +320,9 @@ and [RFC 9110 Location semantics](https://www.rfc-editor.org/rfc/rfc9110.html#se
 
 Identity rejections record a fixed reason: `resource_id_mismatch`,
 `unsupported_lro_headers` or `identity_response_mismatch`. The acknowledgement
-also records only the Location classification and async/duplicate header
-presence, alongside the existing digest. It does not persist the response body,
+also records only the Location classification, reference shape, the fact that
+it was not used for authority or polling, and async/duplicate header presence,
+alongside the existing digest. It does not persist the response body,
 header URI or exception text. See the official
 [Identity create example](https://raw.githubusercontent.com/Azure/azure-rest-api-specs/main/specification/msi/resource-manager/Microsoft.ManagedIdentity/ManagedIdentity/stable/2023-01-31/examples/IdentityCreate.json)
 and [ARM naming rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules).

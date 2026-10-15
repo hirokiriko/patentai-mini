@@ -189,9 +189,9 @@ class ProvidersTests(unittest.TestCase):
         self.http.add(200, value)
         self.assertNotEqual('matching', self.provider.inspect_cleanup(op, known)['state'])
 
-    def test_identity_lro_diagnostic_does_not_accept_or_expose_header(self):
+    def test_identity_explicit_lro_diagnostic_does_not_accept_or_expose_header(self):
         op = operation('userAssignedIdentities')
-        for header in ('Location', 'Azure-AsyncOperation'):
+        for header in ('Operation-Location', 'Azure-AsyncOperation'):
             pre = self.absent(op)
             self.http.add(201, resource(op), {header: 'https://evil.invalid/canary-secret'})
             ack = self.provider.send(op, pre)
@@ -216,29 +216,57 @@ class ProvidersTests(unittest.TestCase):
                 self.assertFalse(ack['terminal'])
                 self.assertFalse(ack['readback_verified'])
                 self.assertNotIn('operation_url', ack)
-                self.assertEqual('fixed_resource' if headers else 'absent',
+                self.assertEqual('ignored_sync_201' if headers else 'absent',
                                  ack['ack_header_evidence']['location'])
                 self.http.add(200, value)
                 self.assertEqual('succeeded', self.provider.readback(op, ack)['state'])
                 self.assertEqual(['GET', 'PUT', 'GET'], [call[0] for call in self.http.calls])
                 self.assertTrue(all(call[1] == op['url'] for call in self.http.calls))
 
-    def test_identity_location_is_an_exact_finite_set_not_a_redirect(self):
+    def test_identity_201_location_is_not_authority_or_a_redirect(self):
         op = operation('userAssignedIdentities')
         url = op['url']
-        invalid = [None, '', 1, [], url.replace('management.azure.com', 'evil.invalid'),
+        references = [url, url.split('?')[0],
+                   url.replace('management.azure.com', 'evil.invalid'),
                    url.replace('management.azure.com', 'management.azure.com:443'),
                    url.replace('management.azure.com', 'canary-secret@management.azure.com'),
                    url.replace('11111111', '33333333'), url.replace('/fictional/', '/other/'),
                    url.replace('trial-worker', 'another'), url + '&canary-secret=1',
                    url.replace('2023-01-31', '2024-01-31'), url + '#canary-secret',
                    op['expected']['resource_id'], url.replace('trial-worker', 'trial%2dworker'),
-                   url.replace('trial-worker', 'trial-wor\u212aer'), '\n' + url, url + '\t',
                    url.replace('/resourceGroups/', '/resourcegroups/'),
                    url.replace('/trial-worker', '/../trial-worker'),
-                   url.split('?')[0] + '/', url.split('?')[0] + '?']
+                   url.split('?')[0] + '/', url.split('?')[0] + '?',
+                   '/operationStatuses/canary-secret', '//evil.invalid/canary-secret',
+                   '../canary-secret', '?api-version=2023-01-31', 'urn:fixture:canary-secret']
+        for location in references:
+            with self.subTest(shape='synthetic_reference'):
+                self.http.calls.clear()
+                pre = self.absent(op)
+                self.http.add(201, resource(op), {'Location': location})
+                ack = self.provider.send(op, pre)
+                self.assertEqual('pending', ack['state'])
+                self.assertTrue(ack['write_terminal'])
+                self.assertFalse(ack['terminal'])
+                self.assertFalse(ack['readback_verified'])
+                self.assertEqual('ignored_sync_201', ack['ack_header_evidence']['location'])
+                self.assertFalse(ack['ack_header_evidence']['location_used_for_authority_or_polling'])
+                self.assertNotIn('operation_url', ack)
+                self.assertNotIn('canary-secret', json.dumps(ack))
+                self.http.add(200, resource(op))
+                self.assertEqual('succeeded', self.provider.readback(op, ack)['state'])
+                self.assertEqual(['GET', 'PUT', 'GET'], [call[0] for call in self.http.calls])
+                self.assertTrue(all(call[1] == op['url'] for call in self.http.calls))
+
+    def test_identity_201_malformed_location_preserves_safe_diagnostics(self):
+        op = operation('userAssignedIdentities')
+        url = op['url']
+        invalid = [None, '', 1, [], 'x'*8193, '\n' + url, url + '\t',
+                   url + '\x7f', url + ' canary-secret', url + '%xx',
+                   url.replace('trial-worker', 'trial-wor\u212aer'),
+                   'https:\\evil.invalid\\canary-secret', '<canary-secret>']
         for location in invalid:
-            with self.subTest(location=location):
+            with self.subTest(shape='malformed_reference'):
                 self.http.calls.clear()
                 pre = self.absent(op)
                 self.http.add(201, resource(op), {'Location': location})
@@ -250,6 +278,43 @@ class ProvidersTests(unittest.TestCase):
                 self.assertNotIn('canary-secret', json.dumps(ack))
                 self.assertNotIn('operation_url', ack)
                 self.assertEqual(['GET', 'PUT'], [call[0] for call in self.http.calls])
+
+    def test_ignored_location_never_overrides_body_or_old_unknown_evidence(self):
+        op = operation('userAssignedIdentities')
+        op['body']['tags'] = {'trial': 'fixture'}
+        op['expected']['body_sha256'] = digest(op['body'])
+        for field in ('id', 'location', 'tags', 'principalId', 'tenantId', 'clientId', 'state', 'error'):
+            with self.subTest(field=field):
+                pre = self.absent(op)
+                body = resource(op)
+                if field == 'id': body['id'] += '-other'
+                elif field == 'location': body['location'] = 'westus'
+                elif field == 'tags': body['tags'] = {'unexpected': 'canary-secret'}
+                elif field in ('principalId', 'tenantId', 'clientId'): del body['properties'][field]
+                elif field == 'state': body['properties']['provisioningState'] = 'Creating'
+                else: body['error'] = 'canary-secret'
+                self.http.add(201, body, {'Location': 'https://evil.invalid/canary-secret'})
+                unknown = self.provider.send(op, pre)
+                self.assertEqual('unknown', unknown['state'])
+                self.assertFalse(unknown['write_terminal'])
+                self.assertNotIn('canary-secret', json.dumps(unknown))
+                self.http.add(200, resource(op))
+                self.assertEqual('unknown', self.provider.readback(op, unknown)['state'])
+
+    def test_ignored_location_ack_requires_same_uuid_readback(self):
+        op = operation('userAssignedIdentities')
+        for field in ('principalId', 'tenantId', 'clientId'):
+            with self.subTest(field=field):
+                pre = self.absent(op)
+                self.http.add(201, resource(op), {'Location': '/operationStatuses/canary-secret'})
+                ack = self.provider.send(op, pre)
+                changed = resource(op)
+                changed['properties'][field] = 'abcdef01-2345-6789-abcd-ef0123456789'
+                self.http.add(200, changed)
+                current = self.provider.readback(op, ack)
+                self.assertFalse(current['terminal'])
+                self.assertFalse(current['readback_verified'])
+                self.assertEqual('identity_mismatch', current['readback_state'])
 
     def test_identity_async_header_presence_or_duplicate_control_headers_is_unknown(self):
         op = operation('userAssignedIdentities')
@@ -385,10 +450,9 @@ class ProvidersTests(unittest.TestCase):
 
     def test_identity_unknown_201_is_not_promoted_by_case_insensitive_get(self):
         op = operation('userAssignedIdentities')
-        pre = self.absent(op)
-        self.http.add(201, resource(op), {'location': 'https://example.invalid/unsupported'})
-        unknown = self.provider.send(op, pre)
-        unknown.pop('ack_rejection')  # A legacy persisted UNKNOWN has no diagnosis.
+        # Historical receipt bytes, not an old response reinterpreted by new code.
+        unknown = self.provider._base(op, 'unknown', 201)
+        unknown['initial_ack_digest'] = 'a' * 64
         before = deepcopy(unknown)
         value = resource(op); value['id'] = value['id'].lower()
         self.http.add(200, value)
