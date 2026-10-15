@@ -53,6 +53,18 @@ def full_trace(tokens=0, polls=0):
 
 
 class ProposalTests(unittest.TestCase):
+    def test_schema_seven_reserves_three_tokens_and_one_known_poll(self):
+        expected = {'rehearsal_start':(0,23),'rehearsal_poll':(2,22),
+            'rehearsal_seed':(2,21),'rehearsal_verify':(4,19),'main_preflight':(5,18),'main':(12,11)}
+        for stage,(before,floor) in expected.items():
+            for tokens in range(4):
+                self.assertEqual(target.required_run_requests(7,stage,http_used=before,owner_token_used=tokens),floor-tokens)
+            if stage!='rehearsal_start' and stage!='rehearsal_poll':
+                self.assertEqual(target.required_run_requests(7,stage,http_used=before+1,owner_token_used=3),floor-3)
+            with self.assertRaises(ValueError):target.required_run_requests(7,stage,http_used=before,owner_token_used=4)
+            with self.assertRaises(ValueError):target.required_run_requests(7,stage,http_used=before+2,owner_token_used=0)
+        with self.assertRaises(ValueError):target.required_run_requests(7,'rehearsal_poll',http_used=3,owner_token_used=0)
+
     def test_schema_six_floor_uses_actual_prior_debits_and_legacy_is_unchanged(self):
         expected = {'rehearsal_start': (0, 28), 'rehearsal_poll': (2, 27),
                     'rehearsal_seed': (2, 26), 'rehearsal_verify': (4, 24),

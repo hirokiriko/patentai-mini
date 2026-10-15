@@ -225,9 +225,9 @@ class ControlBudget:
         try:self._replay()
         except BaseException:self.close();raise
     def _assert_open(self):_budget_need(not self._closed and not self._poisoned,'budget_unavailable')
-    def _validate_plan(self,plan,*,published_successor=False,amended=False,reused_images=False):
-        from .attempt import REUSED_IMAGE_PURPOSE_CAPS
-        purpose_caps=REUSED_IMAGE_PURPOSE_CAPS if reused_images else _PURPOSE_CAPS
+    def _validate_plan(self,plan,*,published_successor=False,amended=False,reused_images=False,observed_identity=False):
+        from .attempt import REUSED_IMAGE_PURPOSE_CAPS, OBSERVED_IDENTITY_PURPOSE_CAPS
+        purpose_caps=OBSERVED_IDENTITY_PURPOSE_CAPS if observed_identity else (REUSED_IMAGE_PURPOSE_CAPS if reused_images else _PURPOSE_CAPS)
         limits={**self.LIMITS,'owner_arm':631} if amended else self.LIMITS
         _budget_need(isinstance(plan,dict) and set(plan)=={'schema','attempt','limits','counts_before','phase_caps','unallocated','purpose_caps','budget_binding_sha256'}
             and type(plan['schema']) is int and plan['schema']==1 and isinstance(plan['attempt'],str) and re.fullmatch('[a-f0-9]{64}',plan['attempt']) is not None
@@ -309,7 +309,7 @@ class ControlBudget:
                 _budget_need(len(self._transitions)<6,'budget_transition_repeated')
                 plan=validate_transition(value,prefix_raw=b''.join(raw.splitlines(keepends=True)[:index]),
                     previous_plan=self._plan,counts=self._counts,used=self._used,verified=active)
-                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal in (4,5));self._plan=plan;self._transition=deepcopy(value)
+                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal in (4,5),observed_identity=ordinal==5);self._plan=plan;self._transition=deepcopy(value)
                 self._transitions.append(deepcopy(value));self._published_plan=published
                 self._used=self._blank_usage();self._purpose_used=self._blank_purposes();continue
             _budget_need(event=='request' and isinstance(value,dict),'budget_event');kind=value.get('kind');_budget_need(kind in self.LIMITS,'budget_kind')
@@ -339,7 +339,7 @@ class ControlBudget:
         expected=phase_plan(verified)
         with self.mutex:
             schema=_proof(verified)['authority']['schema']
-            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6,7),amended=schema in (4,5,6,7),reused_images=schema in (6,7))
+            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6,7),amended=schema in (4,5,6,7),reused_images=schema in (6,7),observed_identity=schema==7)
             if self._plan is None:
                 _budget_need('succession' not in _proof(verified),'budget_succession_prefix_required')
                 _budget_need(initialize is True,'budget_plan_not_prepared')

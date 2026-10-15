@@ -5,16 +5,19 @@ No live file, token, wire, adoption, deletion or approval is performed.
 """
 from copy import deepcopy
 import json
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from scripts.trial_guard.adapters import digest, encoded
-from scripts.trial_guard.lifecycle import Denied
+from scripts.trial_guard.adapters import Deadline, digest, encoded
+from scripts.trial_guard.lifecycle import Denied, parse
 from scripts.trial_provision import attempt as a, registry_publish as publication
 from scripts.trial_provision import acknowledged_image_succession as prior
 from scripts.trial_provision import observed_identity_succession as target
 from scripts.trial_provision import unknown_observation as observation
-from scripts.trial_provision.journal import replay_control_budget
+from scripts.trial_provision.journal import ControlBudget, CountedControlHttp, replay_control_budget
+from scripts.trial_provision.owner_tokens import OwnerTokenPool
+from scripts.trial_provision.tests.test_owner_tokens import Clock, jwt
 from scripts.trial_provision.tests import test_acknowledged_image_succession as previous_fixture
 from scripts.trial_provision.tests.test_attempt import chain, stamp
 from scripts.trial_provision.tests.test_attempt_succession import seal
@@ -134,7 +137,7 @@ def fixture():
     new['artifacts']['local_ready'] = encoded({'head':head,'design_sha256':a.DESIGN_SHA256,
         'code_sources_sha256':authority['code_sources_sha256'],'succession_proof':proof})
     new['artifacts']['limits'] = encoded({'schema':1,'head':head,'counts_before':target.COUNTS,'phase_caps':caps,
-        'unallocated':reserve,'purpose_caps':a.REUSED_IMAGE_PURPOSE_CAPS,'limits':a._authority_limits(authority),
+        'unallocated':reserve,'purpose_caps':a.purpose_caps(authority),'limits':a._authority_limits(authority),
         'limit_amendment':authority['limit_amendment']})
     new['activation'].update(attempt_id=authority['attempt_id'],issued_at=stamp(39000),
         windows={k:{'start':stamp(40000+s),'end':stamp(40000+e)} for k,(s,e) in a.window_offsets(authority).items()})
@@ -171,6 +174,82 @@ class ObservedIdentitySuccessionTests(unittest.TestCase):
         return replay_control_budget(chain(rows)[0],binding=c['control_budget']['binding'],seed=a.SEED,
             directory=c['control_budget']['directory'],verified=verified)
 
+    def memory_tokens(self):
+        """Real admission/pool/counted HTTP; only durable append is in memory."""
+        verified = verify(self.data)
+        rows = deepcopy(self.data['counter_rows'])+[('attempt_transition',target.transition_value(verified))]
+        state = self.replay(rows,verified); budget = object.__new__(ControlBudget)
+        for attr,key in (('_plan','plan'),('_counts','counts'),('_used','used'),('_purpose_used','purpose_used')):
+            setattr(budget,attr,deepcopy(state[key]))
+        budget._published_plan = True
+        def debit(phase,purpose,kind='owner_arm',limit=600):
+            self.assertEqual((kind,limit),('owner_arm',600))
+            budget._admit(kind,phase,purpose,verified=verified)
+            row = {'kind':kind,'attempt':verified.binding_digest,'phase':phase,'purpose':purpose}
+            rows.append(('request',row)); budget._add_request(row)
+        scopes = {p:SimpleNamespace(consume_owner_token=lambda p=p:debit(p,'owner_token'),
+            consume=lambda kind,limit,p=p:debit(p,'http',kind,limit)) for p in a.PHASES}
+        clock = Clock(); clock.wall = parse(verified.activation['windows']['publication']['start'])
+        owner = self.data['new']['manifest']['owner']
+        raw = Mock(mode='owner',principal=owner['principal_id'],tenant=owner['tenant_id']); box = {'ttl':3600}
+        def acquire(audience,deadline):
+            self.assertEqual(rows[-1][1]['purpose'],'owner_token')
+            return jwt({'oid':raw.principal,'tid':raw.tenant,'aud':audience,'exp':clock.utc().timestamp()+box['ttl']})
+        raw.token.side_effect = acquire; pool = OwnerTokenPool(verified,clock); self.addCleanup(pool.close)
+        credentials = {p:pool.bind(raw,s,verified) for p,s in scopes.items()}
+        wire = Mock(return_value={'status':200,'headers':{},'body':b'{}'})
+        def token(phase,audience='https://management.azure.com/'):
+            return credentials[phase].token(audience,Deadline(10,clock.monotonic))
+        def http(phase,count):
+            transport = CountedControlHttp(wire,scopes[phase])
+            for _ in range(count):transport('GET','https://management.azure.com/fictional',{},None,Deadline(10,clock.monotonic))
+        def at(seconds):
+            self.assertGreaterEqual(seconds,clock.mono);clock.advance(seconds-clock.mono)
+        return SimpleNamespace(budget=budget,rows=rows,raw=raw,box=box,token=token,http=http,at=at,wire=wire,
+            replay=lambda:self.replay(rows,verified))
+
+    def test_sixty_minute_tokens_cross_phase_without_permanent_cache_assumption(self):
+        m = self.memory_tokens(); storage = 'https://storage.azure.com/'; graph = 'https://graph.microsoft.com/'
+        m.token('fresh_read');m.http('fresh_read',5)
+        m.at(120);m.token('publication');m.http('publication',6)
+        m.at(600);m.http('provision',96)
+        m.at(900);m.token('fresh_read');m.http('fresh_read',6)
+        m.token('run');m.token('run',storage);m.http('run',5);m.http('provision',3)
+        m.at(3300);m.token('provision',graph);m.http('provision',8)
+        m.at(3900);m.token('fresh_read');m.http('fresh_read',10);m.http('run',7)
+        m.at(4260);m.token('run');m.token('run',storage)
+        m.at(4560);m.token('run',storage);m.http('run',8)
+        m.at(5700);m.token('provision',graph);m.http('provision',28)
+        self.assertEqual(m.raw.token.call_count,5);self.assertEqual(m.wire.call_count,182)
+        self.assertEqual(m.budget._counts['owner_arm'],505)
+        self.assertEqual(m.budget._used['owner_arm'],dict(zip(a.PHASES,(23,6,136,22,0))))
+        replayed = m.replay()
+        for key,attr in (('counts','_counts'),('used','_used'),('purpose_used','_purpose_used')):
+            self.assertEqual(replayed[key],getattr(m.budget,attr))
+
+    def test_publication_empty_or_expired_cache_stops_before_credential_or_http(self):
+        for expired in (False,True):
+            with self.subTest(expired=expired):
+                m = self.memory_tokens()
+                if expired:m.box['ttl']=40;m.token('fresh_read');m.at(41)
+                calls = m.raw.token.call_count; before = deepcopy(m.budget._counts); rows_before = len(m.rows)
+                with self.assertRaises(Denied):m.token('publication')
+                self.assertEqual(m.raw.token.call_count,calls);self.assertEqual(m.budget._counts,before)
+                self.assertEqual(len(m.rows),rows_before);m.wire.assert_not_called()
+                self.assertEqual(m.replay()['counts'],before)
+
+    def test_fourth_run_token_denied_and_cleanup_still_available(self):
+        m = self.memory_tokens(); storage = 'https://storage.azure.com/';m.box['ttl']=20
+        for _ in range(3):m.token('run',storage)
+        before = deepcopy(m.budget._counts);rows_before = len(m.rows)
+        with self.assertRaises(Denied):m.token('run',storage)
+        self.assertEqual(m.raw.token.call_count,3);self.assertEqual(m.budget._counts,before)
+        self.assertEqual(len(m.rows),rows_before);m.wire.assert_not_called()
+        m.token('cleanup',storage);m.http('cleanup',119)
+        self.assertEqual(m.raw.token.call_count,4);self.assertEqual(m.budget._used['owner_arm']['run'],3)
+        self.assertEqual(m.budget._used['owner_arm']['cleanup'],120)
+        self.assertEqual(m.replay()['used'],m.budget._used)
+
     def test_verified_v7_keeps_old_unknown_images_and_origin_manifest(self):
         before = self.data['counter_raw'],self.data['child_raw']
         with patch('builtins.open',side_effect=AssertionError('file')),patch('socket.create_connection',side_effect=AssertionError('wire')):
@@ -184,7 +263,7 @@ class ObservedIdentitySuccessionTests(unittest.TestCase):
     def test_exact_313_remaining_and_120_cleanup_no_reset_or_retry(self):
         verified = verify(self.data); prefix = self.data['counter_rows']+[('attempt_transition',target.transition_value(verified))]
         rows = deepcopy(prefix)
-        for phase,http,tokens in (('fresh_read',7,1),('publication',6,2),('provision',135,10),('run',24,8),('cleanup',120,0)):
+        for phase,http,tokens in (('fresh_read',21,3),('publication',6,0),('provision',135,4),('run',21,3),('cleanup',120,0)):
             rows += [('request',{'kind':'owner_arm','attempt':verified.binding_digest,'phase':phase,'purpose':purpose})
                 for purpose,count in (('http',http),('owner_token',tokens)) for _ in range(count)]
         state = self.replay(rows,verified)
@@ -193,6 +272,25 @@ class ObservedIdentitySuccessionTests(unittest.TestCase):
         for changed in (prefix+[prefix[-1]],rows+[rows[-1]],prefix+[('request',{'kind':'owner_arm',
                 'attempt':self.data['old'].binding_digest,'phase':'provision','purpose':'http'})]):
             with self.assertRaises(Denied):self.replay(changed,verified)
+
+    def test_narrow_forward_allowances_reject_excess_but_keep_cleanup_tokens(self):
+        verified = verify(self.data)
+        prefix = self.data['counter_rows']+[('attempt_transition',target.transition_value(verified))]
+        for phase,purpose,count in (('publication','owner_token',1),('fresh_read','http',22),
+                ('fresh_read','owner_token',4),('provision','owner_token',5),
+                ('run','http',22),('run','owner_token',4)):
+            rows = prefix+[('request',{'kind':'owner_arm','attempt':verified.binding_digest,
+                'phase':phase,'purpose':purpose})]*count
+            with self.subTest(phase=phase,purpose=purpose),self.assertRaises(Denied):self.replay(rows,verified)
+        cleanup = prefix+[('request',{'kind':'owner_arm','attempt':verified.binding_digest,
+            'phase':'cleanup','purpose':'owner_token'})]*5
+        self.assertEqual(self.replay(cleanup,verified)['used']['owner_arm']['cleanup'],5)
+
+    def test_withdrawn_eight_fresh_read_proposal_is_rejected(self):
+        n = self.data['new']; n['authority']['phase_caps']['owner_arm'] = dict(zip(a.PHASES,(8,8,145,32,120)))
+        limits = a._json(n['artifacts']['limits']); limits['phase_caps'] = deepcopy(n['authority']['phase_caps'])
+        n['artifacts']['limits'] = encoded(limits); reseal(self.data)
+        with self.assertRaises(Denied):verify(self.data)
 
     def test_single_target_change_and_no_old_resource_adoption(self):
         for mutation in ('same','worker','cap','retain','delete','reserve','digest'):

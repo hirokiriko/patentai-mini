@@ -12,6 +12,7 @@ from pathlib import PurePosixPath,PureWindowsPath
 import re
 from scripts.trial_guard.adapters import digest,encoded
 from scripts.trial_guard.lifecycle import Denied
+from .restart_budget import V7_RUN_HTTP_CAP, V7_RUN_TOKEN_ALLOWANCE
 
 DESIGN_SHA256='731c6b63ced5ea8e66c6f87f91fde106972537ac5761359b7f716c3f251b290d'
 CHILD_JOURNAL='trial-provision-next'
@@ -22,6 +23,9 @@ PHASES=('fresh_read','publication','provision','run','cleanup')
 OWNER_CAPS=dict(zip(PHASES,(24,24,180,42,120)))
 PURPOSE_CAPS={'provision':{'http':170,'owner_token':10}}
 REUSED_IMAGE_PURPOSE_CAPS={**PURPOSE_CAPS,'publication':{'http':6,'owner_token':2},'run':{'http':24,'owner_token':8}}
+OBSERVED_IDENTITY_PURPOSE_CAPS={'fresh_read':{'http':21,'owner_token':3},
+    'publication':{'http':6,'owner_token':0},'provision':{'http':139,'owner_token':4},
+    'run':{'http':V7_RUN_HTTP_CAP,'owner_token':V7_RUN_TOKEN_ALLOWANCE}}
 WINDOW_OFFSETS={'publication':(0,1800),'guardian':(2100,30900),'owner_input':(4800,8400),'initial':(5700,7500)}
 REUSED_IMAGE_WINDOW_OFFSETS={'publication':(0,600),'guardian':(600,29400),'owner_input':(3300,6900),'initial':(4200,6000)}
 FORMAL_END='2026-10-31T00:00:00Z'
@@ -83,7 +87,8 @@ def origin_manifest_hash(authority):
 def effective_limits(verified):return _authority_limits(_proof(verified)['authority'])
 
 def purpose_caps(authority):
-    return deepcopy(REUSED_IMAGE_PURPOSE_CAPS if authority['schema'] in (6,7) else PURPOSE_CAPS)
+    if authority['schema']==7:return deepcopy(OBSERVED_IDENTITY_PURPOSE_CAPS)
+    return deepcopy(REUSED_IMAGE_PURPOSE_CAPS if authority['schema']==6 else PURPOSE_CAPS)
 
 def _counts(value,limits=LIMITS):
     _keys(value,limits);_need(all(type(value[k]) is int and 0<=value[k]<=limits[k] for k in limits),'attempt_counts')

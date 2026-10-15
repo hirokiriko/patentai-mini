@@ -28,9 +28,9 @@ def allocation(previous_plan, used, counts):
         and all(type(v) is int for phases in used.values() for v in phases.values())
         and all(used[k][p] == 0 for k in ('owner_control_blob','heartbeat_blob') for p in a.PHASES))
     caps = {k:{p:previous_plan['phase_caps'][k][p]-used[k][p] for p in a.PHASES} for k in a.LIMITS}
-    before = deepcopy(caps['owner_arm']); caps['owner_arm'] = dict(zip(a.PHASES,(8,8,145,32,120)))
+    before = deepcopy(caps['owner_arm']); caps['owner_arm'] = dict(zip(a.PHASES,(24,6,139,24,120)))
     delta = {'schema':1,'kind':'owner_arm','phase_delta':{p:caps['owner_arm'][p]-before[p] for p in a.PHASES},'unallocated_delta':0}
-    need(delta['phase_delta'] == dict(zip(a.PHASES,(-10,6,4,0,0))) and sum(caps['owner_arm'].values()) == 313)
+    need(delta['phase_delta'] == dict(zip(a.PHASES,(6,4,-2,-8,0))) and sum(caps['owner_arm'].values()) == 313)
     return caps,deepcopy(previous_plan['unallocated']),delta
 
 
@@ -72,7 +72,7 @@ def validate_transition(value, *, prefix_raw, previous_plan, counts, used, verif
     plan = value['plan']
     need(type(plan) is dict and plan.get('counts_before') == counts and plan.get('attempt') != previous_plan['attempt']
         and plan.get('phase_caps') == caps and plan.get('unallocated') == reserve and plan.get('limits') == limits
-        and plan.get('purpose_caps') == a.REUSED_IMAGE_PURPOSE_CAPS)
+        and plan.get('purpose_caps') == a.OBSERVED_IDENTITY_PURPOSE_CAPS)
     if verified is not None:need(value == transition_value(verified))
     return deepcopy(plan)
 

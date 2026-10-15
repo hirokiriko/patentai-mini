@@ -413,9 +413,18 @@ No build or push is repeated. Source closure compatibility is required for both
 retained images, and fresh digest readback is required in the new window.
 
 After the observation, 318 of 631 OWNER requests are spent. V7 allocates the
-remaining 313 as fresh reads 8, image verification 8, provisioning 145, run 32
-and cleanup 120. Its fixed transfer is fresh reads -10, publication +6 and
-provisioning +4 relative to the remaining V6 phases. Failed/unknown requests
+remaining 313 as fresh reads 24, image verification 6, provisioning 139, run 24
+and cleanup 120. The withdrawn 8/8/145/32/120 proposal is invalid: the initial,
+rehearsal and main fresh checks alone require 21 HTTP calls. The fixed transfer
+from the remaining V6 phases is +6/+4/-2/-8/0, with no refund. Fresh reads allow
+21 HTTP and three token misses. Publication allows six HTTP and zero token
+misses: it must use the same session's cached ARM token or stop before obtaining
+a new credential. Provisioning keeps all 135 normal HTTP calls, with at most
+four token misses and 139 combined calls. Run keeps 20 normal HTTP calls, three
+token misses and one known poll. Real expiry or additional provider polling can
+therefore stop this narrower attempt; no completion or future cache hit is
+guaranteed. These smaller allowances require a new explicit approval. Cleanup
+retains its independent 120 requests and existing authentication. Failed/unknown requests
 are never refunded. The V7 transition is single-use and retains every prefix
 byte. V7 uses the same relative windows and fixed formal/retention deadlines
 as V6; an expired window is never carried forward automatically. This code and

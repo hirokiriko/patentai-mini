@@ -23,6 +23,9 @@ NORMAL_RUN_HTTP = {
 }
 RUN_TOKEN_ALLOWANCE = 8
 RUN_POLL_ALLOWANCE = 4
+V7_RUN_TOKEN_ALLOWANCE = 3
+V7_RUN_POLL_ALLOWANCE = 1
+V7_RUN_HTTP_CAP = sum(NORMAL_RUN_HTTP.values()) + V7_RUN_POLL_ALLOWANCE
 LEGACY_REHEARSAL_FLOORS = {
     'rehearsal_start': 5 + 18 + 7,
     'rehearsal_seed': 6 + 18 + 7,
@@ -55,7 +58,9 @@ def required_run_requests(schema, stage, *, http_used, owner_token_used):
     Schema 1..5 keep their old conservative floors. Schema 6 reserves the
     remaining normal HTTP sequence and all unspent token allowance. Its four
     extra HTTP slots remain shared, strictly counted observations; no new
-    observation/retry route is authorized. A poll also reserves its own GET.
+    observation/retry route is authorized. V7 narrows these allowances to
+    three token misses and one known poll; it never assumes future cache hits
+    or guarantees completion. A poll also reserves its own GET.
     The live caller must compare this floor with both phase and global limits
     and authenticate the stage against its existing canonical ACK evidence.
     """
@@ -65,9 +70,11 @@ def required_run_requests(schema, stage, *, http_used, owner_token_used):
     _integer(http_used, 0, 42); _integer(owner_token_used, 0, 42)
     if schema not in (6, 7):
         return _LEGACY_FLOORS[stage]
-    _integer(owner_token_used, 0, RUN_TOKEN_ALLOWANCE)
+    token_allowance = V7_RUN_TOKEN_ALLOWANCE if schema == 7 else RUN_TOKEN_ALLOWANCE
+    poll_allowance = V7_RUN_POLL_ALLOWANCE if schema == 7 else RUN_POLL_ALLOWANCE
+    _integer(owner_token_used, 0, token_allowance)
     before = _HTTP_BEFORE[stage]
-    _integer(http_used, before, before + RUN_POLL_ALLOWANCE)
+    _integer(http_used, before, before + poll_allowance)
     # A new start must be the first run dispatch; prior requests cannot be
     # reinterpreted as another start's observation allowance.
     if stage == 'rehearsal_start' and http_used != 0:
@@ -75,9 +82,9 @@ def required_run_requests(schema, stage, *, http_used, owner_token_used):
     remaining_http = sum(NORMAL_RUN_HTTP.values()) - before
     if stage == 'rehearsal_poll':
         remaining_http += 1
-    if http_used + remaining_http > 24:
+    if http_used + remaining_http > sum(NORMAL_RUN_HTTP.values()) + poll_allowance:
         raise ValueError('restart_http_reserve_exhausted')
-    return remaining_http + RUN_TOKEN_ALLOWANCE - owner_token_used
+    return remaining_http + token_allowance - owner_token_used
 
 
 def proposed_budget(*, additional_readbacks=0):
