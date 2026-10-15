@@ -63,13 +63,29 @@ class ApprovedOperations:
     checks its six authority hashes and the nine exact prerequisite operations.
     Optional late binding is deliberately separate from the initial plan hash.
     """
-    def __init__(self, core_plan, manifest, authority_bundle, resource_bindings):
+    def __init__(self, core_plan, manifest, authority_bundle, resource_bindings, *, verified_attempt=None):
         try:
             core._validate_plan(core_plan)
             _require(set(authority_bundle) == set(core_plan['source_sha256']))
             for key, raw in authority_bundle.items():
                 _require(isinstance(raw, bytes) and hashlib.sha256(raw).hexdigest() == core_plan['source_sha256'][key])
             _require(json.loads(authority_bundle['manifest']) == manifest)
+            from .runtime_auth import PROFILE
+            self.combined_runtime_auth = False
+            if verified_attempt is not None:
+                from .attempt import _proof
+                proof = _proof(verified_attempt)
+                _require(proof['manifest_digest'] == digest(manifest)
+                    and proof['authority']['manifest_sha256'] == core_plan['source_sha256']['manifest'])
+                self.combined_runtime_auth = proof['authority']['schema'] == 9
+                if self.combined_runtime_auth:
+                    _require(core_plan.get('local_execution_profile') == {
+                        'schema': 1, 'kind': PROFILE, 'attempt_binding_digest': verified_attempt.binding_digest})
+                    _require(core_plan['windows'] == {k: proof['activation']['windows'][k] for k in ('guardian', 'owner_input')}
+                        and core_plan['auth_binding']['owner_id'] == proof['authority']['owner_id']
+                        and resource_bindings['code_sha'] == proof['authority']['image_build_head'])
+            if not self.combined_runtime_auth:
+                _require('local_execution_profile' not in core_plan)
             resources = build_resource_operations(manifest, authority_bundle, resource_bindings)
             resource_map = {op['id']: op for op in resources}
             _require(len(resources) == len(resource_map) == 9 and len(core_plan['operations']) == 29)
@@ -98,10 +114,13 @@ class ApprovedOperations:
                 'auth_deadline': self._auth_deadline,
                 'operations': {**deepcopy(resource_map), **deepcopy(core_plan['operations'])}}
             self._initial = initial
+            if self.combined_runtime_auth:
+                initial['local_execution_profile'] = deepcopy(core_plan['local_execution_profile'])
             self.plan_digest = digest(initial)
             cleanup_sources = tuple(k for k in resource_map if k not in RETAINED_CONTAINERS) + tuple(core_plan['operations']) + AUTH_IDS
             self._cleanup_sources = {'cleanup_' + key.replace('-', '_'): key for key in cleanup_sources}
-            self.allowed_ids = tuple(initial['operations']) + RUNTIME_IDS + AUTH_IDS + ('guardRehearsal', 'guardMainConfiguration') + tuple(self._cleanup_sources)
+            runtime_ids = ('jobRuntime',) if self.combined_runtime_auth else RUNTIME_IDS
+            self.allowed_ids = tuple(initial['operations']) + runtime_ids + AUTH_IDS + ('guardRehearsal', 'guardMainConfiguration') + tuple(self._cleanup_sources)
             _require(len(self.allowed_ids) <= 128 and len(set(self.allowed_ids)) == len(self.allowed_ids))
             _require(all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', key) for key in self.allowed_ids))
         except (KeyError, TypeError, ValueError, RecursionError):
@@ -206,6 +225,8 @@ class ApprovedOperations:
         self._database_observation_digest = fingerprint
 
     def _auth(self, key, receipts):
+        if self.combined_runtime_auth:
+            return self.combined_auth_context(receipts)[2 + AUTH_IDS.index(key)]
         for runtime_id in RUNTIME_IDS:
             _final(self._runtime(runtime_id, receipts), receipts.get(runtime_id))
         e4 = core.materialize_operation(self._core, 'E4', receipts)
@@ -213,6 +234,20 @@ class ApprovedOperations:
         generated = build_auth_operations(self._auth_binding, receipts, self._auth_deadline, 'appRuntime')
         _require(tuple(op['id'] for op in generated) == AUTH_IDS)
         return next(op for op in generated if op['id'] == key)
+
+    def _combined_dependencies(self, receipts):
+        _require(self.combined_runtime_auth and 'appRuntime' not in receipts)
+        _final(self._runtime('jobRuntime', receipts), receipts.get('jobRuntime'))
+        source = self.resolve('app', receipts)
+        _final(source, receipts.get('app'))
+        target = self._runtime('appRuntime', receipts)
+        return source, target
+
+    def combined_auth_context(self, receipts):
+        from .runtime_auth import combined_operations
+        source, target = self._combined_dependencies(receipts)
+        _final(self.resolve('E4', receipts), receipts.get('E4'))
+        return (source, target, *combined_operations(self._auth_binding, receipts, self._auth_deadline, source, target))
 
     def bind_rehearsal(self, event, receipts):
         """Bind only an authenticated normalized result from the fixed adapter.
@@ -285,9 +320,14 @@ class ApprovedOperations:
                 op = deepcopy(self._resources[operation_id])
             elif operation_id in self._core['operations']:
                 if operation_id == 'E4':
-                    for key in RUNTIME_IDS:
-                        _final(self._runtime(key, receipts), receipts.get(key))
+                    if self.combined_runtime_auth:
+                        self._combined_dependencies(receipts)
+                    else:
+                        for key in RUNTIME_IDS:
+                            _final(self._runtime(key, receipts), receipts.get(key))
                 op = core.materialize_operation(self._core, operation_id, receipts)
+                if operation_id == 'E4' and self.combined_runtime_auth:
+                    op['deadline'] = min(parse(op['deadline']), parse(self._runtime_binding['deadline'])).isoformat().replace('+00:00', 'Z')
             elif operation_id in RUNTIME_IDS:
                 op = self._runtime(operation_id, receipts)
             elif operation_id in AUTH_IDS:
@@ -382,10 +422,14 @@ class ApprovedOperations:
             op = build_arm_cleanup(creation, receipt, event['deadline'])
         else:
             op = build_auth_cleanup(creation, receipt, self._auth_binding, event['deadline'], event['reference_evidence'])
+            if self.combined_runtime_auth and source == 'auth-platform-secret':
+                op['body'] = {'location': self._auth_binding['location'], 'properties': {'configuration': {
+                    'secrets': [{'name': name} for name in self._auth_binding['runtime_secret_names']]}}}
+                op['expected']['body_sha256'] = digest(op['body'])
         # All approved builders converge on one public-safe slot name.
         op['id'] = operation_id
         return op
 
 
-def create_resolver(core_plan, manifest, authority_bundle, resource_bindings):
-    return ApprovedOperations(core_plan, manifest, authority_bundle, resource_bindings)
+def create_resolver(core_plan, manifest, authority_bundle, resource_bindings, *, verified_attempt=None):
+    return ApprovedOperations(core_plan, manifest, authority_bundle, resource_bindings, verified_attempt=verified_attempt)

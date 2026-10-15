@@ -62,7 +62,7 @@ def compose_configuration(publication, journal, inputs, *, verify_local_node=Tru
     origin=publication_origin(journal,verified_attempt=verified)
     preparation = origin.values('publication_preparation')[0]
     origin_sources = {key: value['sha256'] for key, value in publication['sources'].items()}
-    if verified is not None and verified.authority['schema'] in (7, 8):
+    if verified is not None and verified.authority['schema'] in (7, 8, 9):
         from .attempt import _proof
         origin_sources = _proof(verified)['succession']['origin_sources']
     need(preparation['code_sha'] == image_head
@@ -153,7 +153,8 @@ def prepare_bridge(publication, journal, reference, *, now):
         'trial-provision-successor-v5':'provision-successor-v5-config.json',
         'trial-provision-successor-v6':'provision-successor-v6-config.json',
         'trial-provision-successor-v7':'provision-successor-v7-config.json',
-        'trial-provision-continuation-v7r1':'provision-continuation-v7r1-config.json'}[child_name]
+        'trial-provision-continuation-v7r1':'provision-continuation-v7r1-config.json',
+        'trial-provision-successor-v8':'provision-successor-v8-config.json'}[child_name]
     raw = encoded(config)
     need(0 < len(raw) <= 2 * 1024 * 1024)
     previous = journal.values('provision_bridge_intent')
@@ -164,7 +165,7 @@ def prepare_bridge(publication, journal, reference, *, now):
     preview_core = _core_plan(publication, config, checked_at,
         lambda key: str(uuid.uuid5(uuid.NAMESPACE_URL, 'publication-bridge-preview:' + key)))
     create_resolver(preview_core, publication['manifest'], publication['authority_bundle'],
-                    config['resource_bindings'])
+                    config['resource_bindings'],verified_attempt=publication.get('verified_attempt'))
     origin=publication_origin(journal,verified_attempt=publication.get('verified_attempt'))
     binding = {'schema': 1, 'publication_config_sha256': publication['config_sha256'],
                'checked_at': checked_at,

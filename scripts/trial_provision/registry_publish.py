@@ -608,7 +608,7 @@ def reuses_acknowledged_images(verified):
     """Only a sealed V6 capability can select the historical-image contract."""
     if verified is None:return False
     from .attempt import _proof
-    return _proof(verified)['authority']['schema'] in (6,7,8)
+    return _proof(verified)['authority']['schema'] in (6,7,8,9)
 
 
 def _reuse_source(journal,verified):
@@ -617,7 +617,7 @@ def _reuse_source(journal,verified):
     from .registry_retention import check_attempt
     need(reuses_acknowledged_images(verified));check_attempt(journal,verified)
     proof=_proof(verified);origin_verified=verified
-    for expected in ((7,6) if proof['authority']['schema']==8 else (6,) if proof['authority']['schema']==7 else ()):
+    for expected in ((8,7,6) if proof['authority']['schema']==9 else (7,6) if proof['authority']['schema']==8 else (6,) if proof['authority']['schema']==7 else ()):
         from .attempt import VerifiedAttempt,_SEAL
         parent_proof=_proof(origin_verified)['succession']['previous_verified_proof']
         need(parent_proof['authority']['schema']==expected)
@@ -660,12 +660,12 @@ def _reuse_event(journal,verified,configuration_sha256):
         **{k:deepcopy(prep[k]) for k in ('registry_id','login_server','tenant_id','owner_id','slots')},
         'publish_from':proof['activation']['windows']['publication']['start'],
         'publish_until':proof['activation']['windows']['publication']['end']}
-    if proof['authority']['schema'] in (7,8):
+    if proof['authority']['schema'] in (7,8,9):
         new_sources=proof['succession']['new_sources'];origin_sources=proof['succession']['origin_sources']
         need(origin_sources==event['source_sha256'])
         event.update(schema=2,origin_source_sha256=deepcopy(origin_sources),
             source_sha256=deepcopy(new_sources),manifest_sha256=proof['authority']['manifest_sha256'])
-    if proof['authority']['schema']==8:
+    if proof['authority']['schema'] in (8,9):
         continuation=proof['succession']
         event.update(schema=3,kind='verified-readback-continuation',
             inherited_child_sha256=continuation['child_sha256'],
@@ -706,7 +706,7 @@ def _reuse_intent(prep):
 def _verified_reused_images(journal,verified):
     prep=reused_image_preparation(journal,verified)
     source,_,images=_reuse_source(journal,verified)
-    if verified.authority['schema']==8:
+    if verified.authority['schema'] in (8,9):
         from .attempt import _proof
         continuation=_proof(verified)['succession']
         need(prep['schema']==3 and prep['inherited_child_sha256']==continuation['child_sha256']
@@ -741,7 +741,7 @@ def _reused_import(journal,resolver,resources,verified):
         and resolver.initial_plan['source_sha256']==prep['source_sha256']
         and resources['code_sha']==prep['image_build_head']
         and resolver.initial_plan['resource_bindings']==resources)
-    inherited=verified.authority['schema']==8
+    inherited=verified.authority['schema'] in (8,9)
     return {'schema':3 if inherited else 2,'kind':'verified-readback-continuation' if inherited else 'acknowledged-image-reuse','initial_plan_digest':resolver.plan_digest,
         'image_reuse_preparation_digest':digest(prep),'image_reuse_readback_digest':prep['inherited_readback_sha256'] if inherited else digest(journal.values('image_reuse_readback')[0]),
         'run_binding_digest':prep['run_binding_digest'],'push_receipt_digests':deepcopy(prep['push_receipt_digests'])}
@@ -755,7 +755,7 @@ def verify_reused_import(journal,resolver,resources,verified):
 class _ReuseReadback:
     """One pull-only, digest-only observation; no Docker or write capability."""
     def __init__(self,journal,credential,wire,budget,clock,verified,source_guard):
-        need(verified.authority['schema']!=8)
+        need(verified.authority['schema'] not in (8,9))
         self.journal,self.credential,self.budget=journal,credential,budget
         self.verified_attempt,self.source_guard=verified,source_guard
         self.prep=reused_image_preparation(journal,verified)

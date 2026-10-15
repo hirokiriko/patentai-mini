@@ -138,7 +138,8 @@ class ArmWire:
             if u.path == self.manifest['ids']['app']:
                 ingress = value['properties']['configuration']['ingress']
                 label = '' if ingress['external'] else '.internal'
-                ingress['fqdn'] = self.manifest['names']['app'] + label + '.fictional.japaneast.azurecontainerapps.io'
+                from scripts.trial_provision.resources import canonical_region
+                ingress['fqdn'] = self.manifest['names']['app'] + label + '.fictional.' + canonical_region(self.manifest['region']) + '.azurecontainerapps.io'
             for secret in value['properties'].get('configuration', {}).get('secrets', []): secret.pop('value', None)
         self.objects[u.path] = value
         if u.path == self.unknown_path: raise TimeoutError('fictional lost ACK')
@@ -259,7 +260,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def snapshot(self):
         with self.journal() as journal:
-            resolver=create_resolver(journal.values('core_plan')[0],self.manifest,self.authority,self.config['resource_bindings'])
+            resolver=create_resolver(journal.values('core_plan')[0],self.manifest,self.authority,self.config['resource_bindings'],verified_attempt=self.verified)
             receipts=journal.receipts()
             for event in journal.values('rehearsal_binding'): resolver.bind_rehearsal(event,receipts)
             for event in journal.values('runtime_binding'): resolver.bind_runtime(event,receipts,verify_policy=lambda e:json.loads(e['TRIAL_POLICY_JSON']))
@@ -442,12 +443,16 @@ class WorkflowContractTests(unittest.TestCase):
         ref=self.f.write('rehearsal.local.json',{'owner':f.owner,'guardian':f.guardian})
         with patch.multiple(rehearsal_fixture,JOB=job,EXECUTION=execution_id,BLOB=blob,PRINCIPAL=principal,TENANT=owner['tenant_id']):
             wire=rehearsal_fixture.Wire(self.clock,create);wire.replica_rows=[{'name':execution_id.rsplit('/',1)[1]+'-replica'}]
+            if hasattr(self,'rehearsal_wire_setup'):self.rehearsal_wire_setup(wire,execution_id)
             start=self.clock.utc();saved_iso=self.clock.iso
             self.clock.iso=lambda seconds=0:(start+timedelta(seconds=seconds)).isoformat().replace('+00:00','Z')
             old=self.f.wire;self.f.wire=wire
             try:
                 for action in ('start','seed'):
                     self.assertIn(self.f.run_action('rehearsal-'+action,rehearsal_config=ref)['status'],('pending','succeeded'))
+                    if action=='start' and hasattr(self,'rehearsal_wire_setup'):
+                        self.clock.advance(2)
+                        self.assertIn(self.f.run_action('rehearsal-poll',rehearsal_config=ref)['status'],('pending','succeeded'))
                 self.clock.advance(10);wire.job_status='Succeeded';wire.state['version']=1
                 wire.state['rehearsal']={'at':self.clock.iso(5),'reads_and_cas':True,'delete_measured':False}
                 self.assertTrue(self.f.run_action('rehearsal-verify',rehearsal_config=ref)['rehearsal_verified'])
@@ -470,13 +475,14 @@ class WorkflowContractTests(unittest.TestCase):
         return env
 
     def guardian_execute(self):
-        self.clock.seconds=4800
+        self.clock.seconds=(parse(self.windows['owner_input']['start'])-self.clock.start).total_seconds()
         # Resource preparation and rehearsal precede the OWNER input window.
         # E1 is needed for bootstrap's fixed callback, and starts inside it.
         self.assertEqual('succeeded',self.f.run_action('create',operation_id='E1')['status'])
         for slot in ('O1','O2'):
             self.assertEqual('succeeded',self.f.run_action('create',operation_id=slot)['status'])
-        self.clock.seconds=5700
+        if hasattr(self, 'before_main'): self.before_main()
+        self.clock.seconds=(parse(self.windows['initial']['start'])-self.clock.start).total_seconds()
         resolver,receipts=self.snapshot();main=resolver.resolve('guardMainConfiguration',receipts)
         self.assertEqual(7,sum(slot.startswith('C') and slot[1:].isdigit() for slot in receipts))
         self.assertEqual(18,sum(slot[0] in 'RGO' and slot[1:].isdigit() for slot in receipts))
@@ -536,7 +542,7 @@ class WorkflowContractTests(unittest.TestCase):
         compiled=self.root/'.koho-ops'/'managed';(compiled/'scripts').mkdir(parents=True)
         script=compiled/'scripts'/'trial-session.js';script.write_bytes(b'// fictional Node boundary\n')
         node=Path(self.config['policy_verifier_node'])
-        pin={'schema':1,'head':self.f.head,'node_sha256':hashlib.sha256(node.read_bytes()).hexdigest(),
+        pin={'schema':1,'head':self.config['resource_bindings']['code_sha'],'node_sha256':hashlib.sha256(node.read_bytes()).hexdigest(),
             'compiled_root':str(compiled),'entry':'scripts/trial-session.js','source_digest':'b'*64,
             'files':{'scripts/trial-session.js':hashlib.sha256(script.read_bytes()).hexdigest()}}
         config['worker']={'node':str(node),'script':str(script),'payload':payload,'artifact_pin':pin,'mode':catalog.MODE}
@@ -570,7 +576,7 @@ class WorkflowContractTests(unittest.TestCase):
         test=self
         child=CatalogChild();actual_window=None;pass_hashes=[];requested=False
         def emit_pass(number):
-            value={'schema':1,'pass':number,'codeSha':self.f.head,'auditPlanDigest':catalog.catalog_digest(plan),
+            value={'schema':1,'pass':number,'codeSha':self.config['resource_bindings']['code_sha'],'auditPlanDigest':catalog.catalog_digest(plan),
                 'querySetDigest':plan['querySetSha256'],'builtinManifestSha256':plan['builtinManifestSha256'],
                 'databaseWindowDigest':catalog.catalog_digest(actual_window),'lifecycleId':actual_window['lifecycleId'],
                 'guardianNonce':actual_window['guardianNonce'],'targetInventoryDigest':'d'*64,'catalogDigest':'e'*64,
@@ -607,7 +613,7 @@ class WorkflowContractTests(unittest.TestCase):
                 bootstrap={'status':'bootstrapped','databaseBaselineBytes':1024,'cases':4,'automaticResend':False}
                 proof={'schema':1,'bootstrap':bootstrap,'databaseWindow':actual_window,
                     'database':{k:final['database'][k] for k in ('host','database','ownerRole','migratorUser','webUser','workerUser')},
-                    'codeSha':test.f.head,'bootstrapManifest':payload['bootstrap']['manifest'],
+                    'codeSha':test.config['resource_bindings']['code_sha'],'bootstrapManifest':payload['bootstrap']['manifest'],
                     'receipts':entries,'receiptScope':'verified_steps_this_invocation'}
                 proof_ref=test.f.write('trial-bootstrap-proof.json',proof);emit_pass(3)
                 child.stdout.feed({'status':'completed','completedRequests':10,
@@ -667,10 +673,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(digest(self.final_environment),receipts['trialDatabaseBootstrap']['properties']['final_policy_environment_sha256'])
         self.assertEqual(1024,receipts['trialDatabaseBootstrap']['properties']['database_baseline_bytes'])
         self.trace.append('bootstrap_and_runtime_bound')
-        for slot,parent in (('jobRuntime','job'),('appRuntime','app')):
+        targets=(('jobRuntime','job'),) if resolver.combined_runtime_auth else (('jobRuntime','job'),('appRuntime','app'))
+        for slot,parent in targets:
             self.assertEqual('succeeded',self.f.run_action('update',operation_id=slot,creation_id=parent)['status'])
         resolver,receipts=self.snapshot()
-        for slot in ('jobRuntime','appRuntime'):
+        for slot,_ in targets:
             self.assertEqual(digest(resolver.resolve(slot,receipts)),receipts[slot]['request_digest'])
         self.trace.append('runtime_deployed')
 
@@ -692,6 +699,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def enable_owner_auth(self):
         for slot in ('E2', 'E3', 'E4'):
+            if slot in self.snapshot()[1]: continue
             self.assertEqual('succeeded', self.f.run_action('create', operation_id=slot)['status'], slot)
         resolver, receipts = self.snapshot()
         # The addPassword callback must actually dispatch the platform secret
@@ -714,22 +722,24 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual('Return401', cfg['globalValidation']['unauthenticatedClientAction'])
         self.assertEqual([self.manifest['owner']['principal_id']], cfg['identityProviders']['azureActiveDirectory']['validation']['defaultAuthorizationPolicy']['allowedPrincipals']['identities'])
         self.assertTrue(self.arm.objects['/v1.0/servicePrincipals/' + op_fixture.guid(3002)]['appRoleAssignmentRequired'])
-        self.assertNotIn(b'fictional-memory-only-auth-secret', (self.root / 'trial-provision-next.jsonl').read_bytes())
+        self.assertNotIn(b'fictional-memory-only-auth-secret', (self.root / (journal_descriptor(self.config,self.verified)[0]+'.jsonl')).read_bytes())
         self.assertEqual(1, sum(m == 'POST' and p.endswith('/addPassword') for m, p in self.arm.calls))
         rows=[json.loads(row) for row in (self.root/'trial-control-budget.jsonl').read_bytes().splitlines()]
-        provision=Counter(row['value']['purpose'] for row in rows if row['event']=='request' and row['value'].get('phase')=='provision')
+        provision=Counter(row['value']['purpose'] for row in rows if row['event']=='request' and row['value'].get('phase')=='provision' and row['value'].get('attempt')==self.verified.binding_digest)
         # Measured adapter sends: foundation 96 + main PATCH 3 + OWNER 8 +
         # runtime PATCHes 6 + remaining Graph/secret/auth 22 = 135. The 170
         # HTTP allocation therefore preserves 35 poll/error observations.
-        self.assertEqual(provision['http'],135)
-        self.assertEqual(provision['owner_token'],1)  # Graph miss; shared ARM token is cached.
+        self.assertEqual(provision['http'],(132 if self.verified.authority['schema']==9 else 135)+getattr(self,'expected_provision_polls',0))
+        self.assertEqual(provision['owner_token'],2 if self.verified.authority['schema']==9 else 1)
         self.assertLessEqual(provision['owner_token'],10)
         foundation={'webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app'}
         foundation.update('C'+str(i) for i in range(1,8));foundation.update('R'+str(i) for i in range(1,11))
         foundation.update('G'+str(i) for i in range(1,7))
         actions=[row for row in self.action_trace if row['action']=='create' and row['operation'] in foundation]
         self.assertEqual(len(actions),32)
-        self.assertTrue(all(Counter(method for method,_ in row['requests'])=={'GET':2,'PUT':1} for row in actions))
+        if getattr(self,'expected_provision_polls',0):
+            self.assertTrue(all(Counter(m for m,_ in row['requests'])['PUT']==1 for row in actions))
+        else:self.assertTrue(all(Counter(method for method,_ in row['requests'])=={'GET':2,'PUT':1} for row in actions))
         self.assertEqual(self.parent_bytes,(self.root/'trial-provision.jsonl').read_bytes())
         self.trace.append('owner_auth_enabled')
 

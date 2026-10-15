@@ -462,3 +462,43 @@ Both images, build receipts, original manifest lineage, UNKNOWN resources,
 cost reservations, permission limits and formal/retention deadlines stay fixed.
 This continuation adds no new trial or formal-start authorization. Its source,
 tests and a pending proposal alone cannot open a window or send a request.
+
+### V8 replacement after an UNKNOWN V7r1 identity (authority schema 9)
+
+V8 preserves the exact stopped V7r1 child and the 216-row lifetime prefix with
+333 charged requests. It does not adopt, retry or delete the old identity. A
+new explicitly approved manifest changes only the Web identity name and ID;
+every old UNKNOWN resource and monetary hold remains. The two acknowledged
+images and original build HEAD are reused, with both source closures checked.
+Historical local-ready evidence alone may use a bounded, hash-bound compressed
+encoding; truncated, trailing or oversized streams are rejected before reuse.
+
+The remaining 298 requests are 17 fresh / 0 publication / 141 provisioning /
+20 run / 120 cleanup. The transfer from the actual remaining phases is
+-1 / 0 / +5 / -4 / 0. Purpose caps are fresh 16 HTTP plus one token acquisition,
+provisioning 139 HTTP plus two tokens, and run 18 HTTP plus two tokens. There
+is no phase borrowing, refund, image verification repetition or new build.
+
+A schema-9-only profile combines the Web runtime template update and the
+memory-only EasyAuth secret delivery into one PATCH. Two stable source reads,
+the exact frozen target template, configuration digest and final fixed readback
+remain mandatory. Direct appRuntime dispatch is forbidden. An unknown ACK
+cannot be resent, adopted or followed as a known operation. Cleanup removes
+the secret without restoring or resending a runtime template.
+
+The main preflight uses one fixed Guardian-principal role-assignment List for
+G1 through G5. All five exact owned assignments must appear once, with the
+approved scopes, roles and principal. Extra/missing rows, duplicates, paging,
+conditions and identity changes are rejected. The raw response, request and
+historical receipts are bound and revalidated on saved-materialization reload.
+
+Measured fictional real-entrypoint paths require 132 provisioning and 17 run
+HTTP calls; the separate actual preflight consumer performs 16 fresh calls.
+Seven known provisioning polls and one rehearsal poll consume the remaining
+HTTP allowances. With rehearsal at T+35 and 60-minute synthetic token expiry,
+four cache misses yield 177 normal requests and preserve 120 cleanup requests
+within 631. This does not guarantee real token lifetime, latency or completion.
+Shorter expiry, additional polling, unknown writes or a missed window stop the
+attempt before borrowing cleanup capacity. The tests exercise production
+dispatch/adapters with fictional provider, credential and process boundaries;
+they do not establish live Azure, SQL, browser or AI acceptance.

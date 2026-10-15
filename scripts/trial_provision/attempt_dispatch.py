@@ -60,7 +60,7 @@ class ApprovedAttemptSession:
         name,binding=journal_descriptor(config,self.verified)
         with Journal(config['recovery']['directory'],config['recovery']['directory_digest'],binding,name=name,require_existing=True) as journal:
             cores=journal.values('core_plan');need(len(cores)==1)
-            resolver=create_resolver(cores[0],manifest,config['authority_bundle'],config['resource_bindings']);receipts=journal.receipts()
+            resolver=create_resolver(cores[0],manifest,config['authority_bundle'],config['resource_bindings'],verified_attempt=self.verified);receipts=journal.receipts()
             for event in journal.values('rehearsal_binding'):resolver.bind_rehearsal(event,receipts)
             for event in journal.values('runtime_binding'):resolver.bind_runtime(event,receipts,verify_policy=cli.policy_verifier(config['policy_verifier_node']))
             op=resolver.resolve(slot,receipts);receipt=receipts.get(slot)
@@ -77,7 +77,8 @@ class ApprovedAttemptSession:
             return 'create',op,receipt
     def run_group(self,config_path,group,*,sleep=time.sleep):
         self._open();need(group in GROUPS);completed=[];started=self.clock.utc()
-        for slot in GROUPS[group]:
+        slots=('jobRuntime',) if group=='runtime' and self.verified.authority['schema']==9 else GROUPS[group]
+        for slot in slots:
             attempted=False
             while True:
                 now=self.clock.utc();need(now>=started)

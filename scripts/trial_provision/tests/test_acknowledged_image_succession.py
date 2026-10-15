@@ -224,11 +224,12 @@ class AcknowledgedImageSuccessionTests(unittest.TestCase):
         self.assertEqual(state['counts'], target.COUNTS); self.assertEqual(len(state['transitions']), 5)
         self.assertTrue(raw.startswith(before[0])); self.assertEqual(before, (data['counter_raw'], data['child_raw']))
 
-    def test_shorter_reused_image_windows_are_schema_six_only_with_fixed_lead(self):
+    def test_shorter_reused_image_windows_require_reuse_schema_with_fixed_lead(self):
         self.assertEqual(a.window_offsets({'schema': 6}), {'publication': (0, 600), 'guardian': (600, 29400),
             'owner_input': (3300, 6900), 'initial': (4200, 6000)})
         for schema in (1, 2, 3, 4, 5): self.assertEqual(a.window_offsets({'schema': schema}), a.WINDOW_OFFSETS)
-        for bad in ({}, {'schema': True}, {'schema': 9}, {'schema': '6'}):
+        for schema in (7,8,9):self.assertEqual(a.window_offsets({'schema':schema}),a.REUSED_IMAGE_WINDOW_OFFSETS)
+        for bad in ({}, {'schema': True}, {'schema': 10}, {'schema': '6'}):
             with self.subTest(bad=bad), self.assertRaises(Denied): a.window_offsets(bad)
         copy = a.window_offsets({'schema': 6}); copy['publication'] = (0, 1800)
         self.assertEqual(a.window_offsets({'schema': 6})['publication'], (0, 600))

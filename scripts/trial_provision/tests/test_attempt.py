@@ -174,6 +174,22 @@ class AttemptTests(unittest.TestCase):
         v=verify(self.d);before=v.binding_digest;a=v.authority;a['tags']['runtime']='changed';plan=phase_plan(v);plan['purpose_caps']['provision']['http']=1000
         self.assertEqual(v.binding_digest,before);self.assertEqual(phase_plan(v)['purpose_caps'],PURPOSE_CAPS)
         with self.assertRaises(Denied):v._raw=b'{}'
+    def test_cached_projections_preserve_seal_and_canonical_proof(self):
+        from scripts.trial_provision.attempt import _proof
+        v=verify(self.d);proof=_proof(v)
+        self.assertEqual(v.binding_digest,digest(proof));self.assertEqual(v.binding_digest,sha(v._raw))
+        self.assertEqual(v.authority,proof['authority']);self.assertEqual(v.activation,proof['activation'])
+        changed=v.activation;changed['windows']['initial']['end']='changed'
+        self.assertEqual(v.activation,proof['activation'])
+        for slot in VerifiedAttempt.__slots__:
+            with self.assertRaises(Denied):setattr(v,slot,None)
+        class Subclass(VerifiedAttempt):pass
+        for cls in (VerifiedAttempt,Subclass):
+            fake=object.__new__(cls)
+            for slot in VerifiedAttempt.__slots__:
+                if slot!='_seal':object.__setattr__(fake,slot,getattr(v,slot))
+            for field in ('authority','activation','binding_digest'):
+                with self.assertRaises(Denied):getattr(fake,field)
     def test_window_send_includes_wait_and_exact_end(self):
         v=verify(self.d);check_window(v,'publication',stamp(),1799)
         for at,duration in ((stamp(-1),0),(stamp(),1800),(stamp(1800),0),(stamp(),float('nan'))):

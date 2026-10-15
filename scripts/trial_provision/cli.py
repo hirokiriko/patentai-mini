@@ -34,7 +34,7 @@ MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
     'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','identity_http','unknown_observation','observed_identity_succession','readback_continuation','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
+        'providers','identity_http','unknown_observation','observed_identity_succession','readback_continuation','unknown_identity_succession','runtime_auth','guard_assignments','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
@@ -205,7 +205,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
                 verified_attempt=verified)
             journal.append('core_plan',core)
         verifier=policy_verifier(config['policy_verifier_node'])
-        resolver=create_resolver(core,manifest,loaded['authority_bundle'],config['resource_bindings'])
+        resolver=create_resolver(core,manifest,loaded['authority_bundle'],config['resource_bindings'],verified_attempt=verified)
         journal.fix_plan(resolver.initial_plan)
         if journal.values('publication_preparation') or journal.values('image_reuse_preparation'):
             from .registry_publish import bind_publication
@@ -288,8 +288,13 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
             application_op=resolver.resolve('E1',journal.receipts())
             auth_binding['redirect_uri']=application_op['body']['web']['redirectUris'][0]
             graph=GraphAdapter(auth_binding,credential,counted,clock)
-            auth=EasyAuthAdapter(auth_binding,credential,counted,
-                lambda:{'trial-web-database':secret('trial-web-database')},clock,arm_provider=provider)
+            adapter,extra=EasyAuthAdapter,{}
+            if resolver.combined_runtime_auth and (requested_operation['id']=='E4' or requested_operation['id']=='auth-platform-secret'):
+                from .runtime_auth import CombinedRuntimeAuthAdapter
+                adapter=CombinedRuntimeAuthAdapter
+                extra={'context':lambda:resolver.combined_auth_context(journal.receipts())[:3]}
+            auth=adapter(auth_binding,credential,counted,
+                lambda:{'trial-web-database':secret('trial-web-database')},clock,arm_provider=provider,**extra)
         adapters={name:provider for name in ('Microsoft.App','Microsoft.ManagedIdentity','Microsoft.Storage','Microsoft.Authorization')}
         adapters['Microsoft.Graph']=graph
         control=Controller(journal,clock,resolver.resolve,resolver.allowed_ids,adapters,
