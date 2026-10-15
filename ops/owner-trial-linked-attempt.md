@@ -297,6 +297,10 @@ header is compared directly; no URL parsing, relative resolution, redirect or
 polling occurs. `Azure-AsyncOperation` and `Operation-Location` are rejected by
 presence, including empty values. Duplicate control headers are also rejected.
 Other locations, 200 updates and 202 responses do not prove creation.
+The duplicate check runs before header normalization in the Local Identity
+transport, which is included in the executor's required source hashes. Other
+provider transports and all guardian image files remain unchanged, preserving
+the existing images' execution closure for a separately authorized attempt.
 
 Both the initial response and the fixed-URL readback must match every requested
 and expected property, contain all three Identity UUIDs (principal, tenant and

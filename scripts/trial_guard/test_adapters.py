@@ -1,8 +1,7 @@
 import unittest
-from unittest.mock import MagicMock, patch
 from copy import deepcopy
 from datetime import timedelta
-from .adapters import ArmTransport, BlobJournal, Deadline, Handoff, _http_child, encoded, digest
+from .adapters import ArmTransport, BlobJournal, Deadline, Handoff, encoded, digest
 from .runner import GuardianRunner, validate_creation_cleanup
 from .lifecycle import Conflict, Denied, Controller, initial, parse
 from .test_lifecycle import Clock, Journal, Transport
@@ -32,35 +31,6 @@ class Wire:
         if isinstance(result, Exception):
             raise result
         return result
-
-
-class HttpHeaderTest(unittest.TestCase):
-    def exchange(self, headers):
-        pipe, connection, reply = MagicMock(), MagicMock(), MagicMock()
-        reply.status = 201
-        reply.read.return_value = b'{}'
-        reply.getheaders.return_value = headers
-        connection.getresponse.return_value = reply
-        with patch('scripts.trial_guard.adapters.http.client.HTTPSConnection', return_value=connection):
-            _http_child(pipe, ('PUT', 'https://management.azure.com/fictional', {}, b'{}', 20, 1024))
-        connection.request.assert_called_once()
-        connection.close.assert_called_once()
-        pipe.close.assert_called_once()
-        pipe.send.assert_called_once()
-        return pipe.send.call_args.args[0]
-
-    def test_duplicate_control_headers_cannot_be_lost_before_ack_validation(self):
-        for key in ('Location', 'Azure-AsyncOperation', 'Operation-Location'):
-            for second in (key, key.lower()):
-                with self.subTest(key=key, second=second):
-                    self.assertIsNone(self.exchange([(key, 'canary-secret'), (second, 'fixed-resource')]))
-
-    def test_single_control_header_reaches_provider_without_url_normalization(self):
-        status, headers, body = self.exchange([('Location', 'https://management.azure.com/fictional'),
-                                             ('X-Fixture', 'one'), ('X-Fixture', 'two')])
-        self.assertEqual(201, status)
-        self.assertEqual(b'{}', body)
-        self.assertEqual({'location': 'https://management.azure.com/fictional', 'x-fixture': 'two'}, headers)
 
 
 class AdapterTest(unittest.TestCase):

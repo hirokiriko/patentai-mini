@@ -56,15 +56,7 @@ def _http_child(pipe, request):
         content = response.read(limit+1)
         if len(content) > limit:
             raise ValueError('response_limit')
-        response_headers = {}
-        for key, value in response.getheaders():
-            key = key.lower()
-            # Do not silently choose one of conflicting ACK/redirect controls
-            # before a provider can reject the response as inconclusive.
-            if key in response_headers and key in ('location', 'azure-asyncoperation', 'operation-location'):
-                raise ValueError('duplicate_control_header')
-            response_headers[key] = value
-        pipe.send((response.status, response_headers, content))
+        pipe.send((response.status, {k.lower(): v for k, v in response.getheaders()}, content))
     except Exception:
         pipe.send(None)
     finally:

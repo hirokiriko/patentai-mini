@@ -16,6 +16,7 @@ import sys
 
 from scripts.trial_guard.__main__ import Clock
 from scripts.trial_guard.adapters import AzureCredential, BoundedHttp, digest, encoded
+from .identity_http import IdentityHttp
 from scripts.trial_guard.lifecycle import Denied, parse
 from .configuration import load_configuration
 from .controller import Controller, cleanup_only
@@ -33,7 +34,7 @@ MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
     'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
+        'providers','identity_http','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
@@ -42,6 +43,12 @@ REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs'
     'src/lib/trial/catalog-access.ts','src/lib/trial/catalog-builtins.ts','src/lib/trial/catalog-evaluate.ts',
     'src/lib/trial/catalog-queries.ts','src/lib/trial/catalog-runtime.ts','src/lib/trial/catalog-schema.ts',
     'src/lib/trial/catalog-pg16-builtins.json','src/lib/trial/strict-json.ts','src/lib/trial/database-permit.ts','src/lib/trial/database-client.ts'))
+
+
+def _arm_http(operation):
+    if operation is not None and (operation['provider'], operation['kind']) == ('Microsoft.ManagedIdentity', 'userAssignedIdentities'):
+        return IdentityHttp()
+    return BoundedHttp()
 
 
 def git(arguments, *, input=None):
@@ -247,7 +254,9 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
             else:
                 requested_operation=resolver.resolve(request.get('operation_id'),journal.receipts())
                 scoped=scope_for_dispatch(budget,verified,entry_point='provision',action=action,operation=requested_operation)
-        counted=CountedControlHttp(wire or BoundedHttp(),scoped)
+        if action != 'registry-cleanup' and action not in rehearsal_actions:
+            requested_operation=requested_operation or resolver.resolve(request.get('operation_id'),journal.receipts())
+        counted=CountedControlHttp(wire or _arm_http(requested_operation),scoped)
         credential=AzureCredential('owner',owner['principal_id'],owner['tenant_id'],counted)
         if verified is not None:credential=owner_token_pool.bind(credential,scoped,verified)
         if action=='registry-cleanup':
