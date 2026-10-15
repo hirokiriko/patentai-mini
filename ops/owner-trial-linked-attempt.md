@@ -429,3 +429,31 @@ are never refunded. The V7 transition is single-use and retains every prefix
 byte. V7 uses the same relative windows and fixed formal/retention deadlines
 as V6; an expired window is never carried forward automatically. This code and
 its fictional tests do not approve a trial or establish live acceptance.
+
+A finite V7 continuation (authority schema 8) handles a local configuration
+bridge failure after both image observations succeeded and before any resource
+intent. It requires a separately approved corrected HEAD and remaining-work
+windows. The V7 child must contain exactly its binding, reuse preparation,
+readback intent, six request clock observations and successful readback. The
+212-row lifetime prefix must contain exactly V7's first token acquisition,
+five metadata GETs and six image verification requests. Additional resource
+intent, partial readback, changed history or another continuation is rejected.
+
+The consumed 330 requests remain charged. The remaining phase limits are
+18/0/139/24/120, totaling 301; there is no transfer or refund. Fresh-read purpose
+limits are also reduced to 16 HTTP calls and two token misses. Initial metadata
+retrieval and image verification are prohibited in the continuation. Rehearsal
+and main preflights still perform their separate six and ten live reads with
+the existing freshness requirements. A new process starts with an empty token
+pool; acquisitions are charged to the phase that needs them. Cleanup keeps 120
+requests, and normal work remains capped at 511 lifetime requests.
+
+The old VerifiedAttempt validates the original readback at its original time.
+The new child records a hash-bound reference to that completed evidence; it
+does not manufacture a fresh ACK or change an observed timestamp. The normal
+configuration bridge, resource compiler, absence checks and provisioning gates
+then operate on the corrected source and the same V7 Web identity target.
+Both images, build receipts, original manifest lineage, UNKNOWN resources,
+cost reservations, permission limits and formal/retention deadlines stay fixed.
+This continuation adds no new trial or formal-start authorization. Its source,
+tests and a pending proposal alone cannot open a window or send a request.

@@ -106,6 +106,8 @@ def run_command(request, *, clock=None, wire=None, runner=None,trusted_attempt_a
         need(loaded.get('live') is True and loaded.get('code_sources')==sources)
     verified=loaded.get('verified_attempt');name,binding=journal_descriptor(loaded,verified)
     reuse=reuses_acknowledged_images(verified)
+    if verified is not None and verified.authority['schema']==8:
+        need(action not in ('verify-reused-images','publish','cleanup-publication'))
     need(not (reuse and action in ('publish','cleanup-publication'))
         and (action!='verify-reused-images' or reuse))
     with ExitStack() as stack:
@@ -140,7 +142,7 @@ def run_command(request, *, clock=None, wire=None, runner=None,trusted_attempt_a
             return complete_bridge(loaded,binding,clock=clock,trusted_attempt_authority=trusted_attempt_authority)
         if action=='status':
             if reuse:
-                complete=bool(journal.values('image_reuse_readback'))
+                complete=verified.authority['schema']==8 or bool(journal.values('image_reuse_readback'))
                 if complete:verified_publication_images(journal,verified_attempt=verified)
                 return {'status':'publication_status','verified_images':2 if complete else 0,
                     'attempts':len(journal.values('image_reuse_readback_intent')),

@@ -180,7 +180,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
         _need(proof['manifest_digest'] == digest(manifest)
               and proof['authority']['manifest_sha256'] == hashes['manifest'],
               'attempt_manifest_binding')
-        fixed_ai_scope = proof['authority']['schema'] in (6, 7)
+        fixed_ai_scope = proof['authority']['schema'] in (6, 7, 8)
         from .attempt import origin_manifest_hash
         origin_manifest = origin_manifest_hash(proof['authority'])
     m, a, approved, latest = manifest, sources["annex"], sources["approval"], sources["latest"]
@@ -254,7 +254,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
     for latest_key, alias in (("web.identityResourceId", "webIdentity"), ("worker.identityResourceId", "workerIdentity"),
                               ("guardian.systemIdentityResourceId", "guard")):
         original_id = ids[alias]
-        if verified_attempt is not None and verified_attempt.authority['schema'] == 7 and alias == 'webIdentity':
+        if verified_attempt is not None and verified_attempt.authority['schema'] in (7, 8) and alias == 'webIdentity':
             from .attempt import _proof
             original_id = _proof(verified_attempt)['succession']['origin_manifest']['ids'][alias]
         _need(_at(latest, "acr." + latest_key) == original_id, "pull_principal_binding")

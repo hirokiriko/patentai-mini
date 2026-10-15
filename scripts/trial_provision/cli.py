@@ -34,7 +34,7 @@ MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
     'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','identity_http','unknown_observation','observed_identity_succession','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
+        'providers','identity_http','unknown_observation','observed_identity_succession','readback_continuation','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
