@@ -229,7 +229,9 @@ class AcknowledgedImageSuccessionTests(unittest.TestCase):
             'owner_input': (3300, 6900), 'initial': (4200, 6000)})
         for schema in (1, 2, 3, 4, 5): self.assertEqual(a.window_offsets({'schema': schema}), a.WINDOW_OFFSETS)
         for schema in (7,8,9):self.assertEqual(a.window_offsets({'schema':schema}),a.REUSED_IMAGE_WINDOW_OFFSETS)
-        for bad in ({}, {'schema': True}, {'schema': 10}, {'schema': '6'}):
+        for bad in ({}, {'schema': True}, {'schema': 10}, {'schema': '6'},
+                    {'schema': 10, 'inherited_guardian_end': '2026-10-16T06:40:00Z'},
+                    {'schema': 10, 'publish_from': '2026-10-16T03:00:00Z'}):
             with self.subTest(bad=bad), self.assertRaises(Denied): a.window_offsets(bad)
         copy = a.window_offsets({'schema': 6}); copy['publication'] = (0, 1800)
         self.assertEqual(a.window_offsets({'schema': 6})['publication'], (0, 600))

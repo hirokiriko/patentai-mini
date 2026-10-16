@@ -45,7 +45,7 @@ def window_offsets(authority):
           and authority['schema'] in (1,2,3,4,5,6,7,8,9,10),'attempt_window_schema')
     offsets=deepcopy(REUSED_IMAGE_WINDOW_OFFSETS if authority['schema'] in (6,7,8,9,10) else WINDOW_OFFSETS)
     if authority['schema']==10:
-        end=_time(authority['inherited_guardian_end']);start=_time(authority['publish_from'])
+        end=_time(authority.get('inherited_guardian_end'));start=_time(authority.get('publish_from'))
         seconds=(end-start).total_seconds()
         _need(end.microsecond==0 and type(seconds) is float and seconds.is_integer()
             and 6900<=seconds<=29400,'attempt_inherited_guardian_window')
