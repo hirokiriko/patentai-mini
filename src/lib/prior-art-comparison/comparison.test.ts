@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseComparisonSource } from "./source";
-import { answerSchema, comparisonPrompt, LIMITS, makePlan, validateAnswer, validateSaved } from "./comparison";
+import { answerSchema, comparisonPrompt, LIMITS, makePlan, savedDigest, validateAnswer, validateSaved } from "./comparison";
 import { fictionalAnswer, fictionalInputs, fictionalSaved } from "./fixtures.test-support";
+import { comparisonBlocks, comparisonCsv } from "./report";
 
 describe("original-text comparison", () => {
   it("keeps source and prompt tails beyond 2,000 and 15,000, including positive/negative conditions", () => {
@@ -77,6 +78,22 @@ describe("original-text comparison", () => {
   it("does not promote legacy or unknown versions", () => {
     expect(() => validateSaved({ matched: [], explanation: "keyword fallback" })).toThrow("result_invalid");
     expect(() => validateSaved({ ...fictionalSaved(), version: 2 })).toThrow("result_invalid");
+  });
+  it("can read and export stored originals even when a later request prompt exceeds its input budget", () => {
+    const saved = fictionalSaved();
+    const [first, second] = saved.inputs.draft.source.claims;
+    // A larger, previously saved original; existing quotes retain their offsets.
+    saved.inputs.draft = parseComparisonSource(`【請求項1】\n${first.text}${"補".repeat(7800)}。\n【請求項2】\n${second.text}`, 11, "draft-11");
+    saved.snapshotDigest = savedDigest(saved);
+    expect(() => makePlan(saved.inputs, saved.selection)).toThrow("plan_limit");
+    expect(validateSaved(saved)).toEqual(saved);
+    expect(comparisonBlocks(saved, true).some(b => b.text === saved.inputs.draft.source.claims[0].text)).toBe(true);
+    expect(comparisonCsv(saved, true)).toContain(saved.inputs.draft.source.claims[0].text);
+    // A matching digest cannot excuse altered quotes or missing coverage.
+    for (const change of [(s: typeof saved) => s.pairs[0].baseEvidence.start++, (s: typeof saved) => s.pairs.pop()]) {
+      const invalid = structuredClone(saved); change(invalid); invalid.snapshotDigest = savedDigest(invalid);
+      expect(() => validateSaved(invalid)).toThrow("result_invalid");
+    }
   });
   it("bounds the largest permitted output below the token envelope without clipping sources", () => {
     const pair = { baseClaimNo: 1000, candidateClaimNo: 1000, common: "漢".repeat(200), differences: "漢".repeat(200),
