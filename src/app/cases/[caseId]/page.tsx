@@ -1125,7 +1125,7 @@ export default async function CaseDetailPage({
       )}
 
       {/* ── Step 5: 重なり比較レポート ── */}
-      {priorArts.length > 0 && (
+      {(priorArts.length > 0 || analysisResults.some(r => hasSavedComparisonMarker(r.matchedElementsJson))) && (
         <section
           id="step-5"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(5)}`}

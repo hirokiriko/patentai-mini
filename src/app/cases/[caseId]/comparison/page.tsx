@@ -25,7 +25,7 @@ export default async function ComparisonPage({ params }: { params: Promise<{ cas
       {saved.results.map(result => <article key={result.operationId} className="space-y-4 rounded-xl border border-slate-300 p-5">
         <h3 className="text-lg font-bold">{result.generatedAt} の比較</h3>
         <p className="break-all text-sm">操作ID: {result.operationId}</p>
-        <div className="flex gap-5">{(["pdf", "csv"] as const).map(format => <DownloadLink key={format} href={`/api/cases/${caseId}/analyze/${result.operationId}/${format}`} format={format} />)}</div>
+        <div className="flex gap-5">{(["pdf", "csv"] as const).map(format => <DownloadLink key={format} operationId={result.operationId} href={`/api/cases/${caseId}/analyze/${result.operationId}/${format}`} format={format} />)}</div>
         <p className="text-sm">保存結果から生成します。再取得でAIは実行されません。</p>
         <details open><summary className="cursor-pointer font-semibold">比較範囲・根拠・保存原文</summary>
           <div className="mt-4 space-y-3">{comparisonBlocks(result, result.inputs.inputDigest !== saved.currentInputDigest).map((block, i) => block.heading

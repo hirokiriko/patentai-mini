@@ -9,7 +9,12 @@ const originalQuery = pg.Client.prototype.query;
 pg.Client.prototype.query = function (...args) {
   const command = String(typeof args[0] === "string" ? args[0] : args[0]?.text || "");
   if (/^delete from "comparison_results"/i.test(command)) this.fixtureFinalizing = true;
-  if (mode() === "commit-readback" && this.fixtureAckLost && /^select/i.test(command)) return Promise.reject(Error("FICTIONAL_PRIVATE_ERROR_SENTINEL"));
+  if (mode() === "commit-readback" && this.fixtureAckLost && /^select/i.test(command)) {
+    const failure = Error("FICTIONAL_PRIVATE_ERROR_SENTINEL");
+    const callback = args.at(-1);
+    if (typeof callback === "function") { queueMicrotask(() => callback(failure)); return; }
+    return Promise.reject(failure);
+  }
   const result = originalQuery.apply(this, args);
   if (/^commit$/i.test(command) && result?.then && ((mode() === "reserve-ack" && !this.fixtureFinalizing) || (mode().startsWith("commit-") && this.fixtureFinalizing))) {
     return result.then(value => {

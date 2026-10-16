@@ -113,7 +113,7 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       await page.reload();await page.getByRole("link",{name:"PDFを取得"}).waitFor();
       await stopApp();await startApp();await page.reload();await page.getByRole("link",{name:"PDFを取得"}).waitFor();
       for(const format of ["PDF","CSV"]) {
-        const waiting=page.waitForEvent("download");await page.getByRole("link",{name:`${format}を取得`}).click();const download=await waiting;await download.saveAs(join(output,`comparison.${format.toLowerCase()}`));
+        const waiting=page.waitForEvent("download");await page.getByRole("link",{name:`${format}を取得`}).click();const download=await waiting;expect(download.suggestedFilename()).toBe(`comparison-${saved.operationId}.${format.toLowerCase()}`);await download.saveAs(join(output,`comparison.${format.toLowerCase()}`));
       }
       const pdf=await readFile(join(output,"comparison.pdf"));expect(pdf.subarray(0,5).toString()).toBe("%PDF-");
       const csv=await readFile(join(output,"comparison.csv"),"utf8");expect(csv).toContain("超えると青色弁を閉じる");expect(csv).toContain("下回ると青色弁を開く");
@@ -213,11 +213,15 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
 
   check("preserves old snapshots after source removal and fails closed on corrupt groups",async()=>{
     const old=JSON.parse(await readFile(join(output,"saved-fictional-result.json"),"utf8"));const before=await counts();
-    expect((await fetch(appOrigin+"/api/cases/7/prior-art",{method:"DELETE",headers,body:JSON.stringify({docIds:[21]})})).status).toBe(200);
+    expect((await fetch(appOrigin+"/api/cases/7/prior-art",{method:"DELETE",headers,body:JSON.stringify({docIds:[21,22]})})).status).toBe(200);
     const exported=await fetch(`${appOrigin}/api/cases/7/analyze/${old.operationId}/csv`,{headers});expect(exported.status).toBe(200);expect(exported.headers.get("cache-control")).toContain("no-store");
     const text=await exported.text();expect(text).toContain("現在の入力と異なる保存結果");expect(text).toContain(old.inputs.documents[0].source.claims[0].text);
     const rows=await pg.sql("select prior_doc_id,matched_elements_json from comparison_results where case_id=7");expect(rows.some(r=>r.prior_doc_id===null&&JSON.parse(r.matched_elements_json).detachedPriorDocId===21)).toBe(true);
-    await pg.sql("update comparison_results set matched_elements_json='{"+'"priorArtComparison":null'+"}' where case_id=7 and prior_doc_id=22");
+    const playwright=createRequire(import.meta.url)(process.env.PRIOR_ART_PLAYWRIGHT_MODULE!);
+    const browser=await playwright.chromium.launch({headless:true,channel:"chrome"});
+    try {const page=await browser.newPage();await page.goto(browserOrigin+"/cases/7");await page.getByRole("link",{name:"文献・請求項を選んで根拠付き比較"}).click();await page.getByRole("link",{name:"CSVを取得"}).waitFor();}
+    finally{await browser.close();}
+    await pg.sql("update comparison_results set matched_elements_json=$1 where case_id=7 and matched_elements_json::json->>'detachedPriorDocId'='22'",[JSON.stringify({priorArtComparison:null})]);
     expect((await fetch(`${appOrigin}/api/cases/7/analyze/${old.operationId}/pdf`,{headers})).status).toBe(404);expect(await counts()).toBe(before);
   });
 
