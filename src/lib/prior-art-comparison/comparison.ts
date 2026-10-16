@@ -3,6 +3,7 @@ import { managedClaimContext, validateManagedClaims, ManagedClaimsError, planMan
   type ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { ComparisonError, digest, type SourceSnapshot } from "./source";
 import { managedClaimReferences } from "../koho-import/managed-claim-source";
+import { assertGenerationEvidence, generationInput, generationSchemaFor } from "./generation";
 
 const number = z.number().int().positive();
 const numbers = z.array(number).min(1).max(6).refine(v => new Set(v).size === v.length);
@@ -42,18 +43,21 @@ export const SYSTEM = `指定された請求項の全文と従属参照を比較
 「及び」と「又は」、「いずれか」と「全部」、組合せ、否定、数値、条件付きの限定をその対象と結び付けたまま説明します。必須条件を選択肢へ移したり、選択肢を同時に必須としたりしません。従属先が択一なら全参照先を同時必須としません。
 例えば「主装置はAを備え、補助装置はB又はCを備える」を「A・B・Cのいずれかを備える」と要約してはいけません。両側の条件を別々に述べてから対比してください。
 片側の選択肢の一つだけが他方と対応する場合、commonでも「基準側の選択肢として」等と明記し、両側で必須又は全体が同一とは述べません。
-各説明を両側の原文引用に対応させ、引用は指定請求項またはその従属参照に含まれる、一意の連続文字列をそのまま返します。
-引用は主な共通点・差分の限定とその対象が分かる箇所を優先し、選択条件の途中だけを切り出して意味を変えません。引用外の参照条件も全文で照合し、対応を確認できなければunconfirmedへ記します。
+各請求項のsegmentsを順番に連結したものが無省略の全文です。segmentsは表示上の区切りであり、独立した条件や論理節ではありません。
+最初に各側の指定請求項またはその従属参照からquotable=trueの根拠IDを一つずつ選び、baseEvidenceIdとcandidateEvidenceIdへ返します。引用文字列を作成・加工・連結しません。IDの側を交換しません。
+次にbaseObservationへ基準側だけ、candidateObservationへ候補側だけの主な条件と対象を記します。その後に共通点と差分を記し、両欄の主語・条件が各側の観察と矛盾しないことを照合します。
+根拠は主な共通点・差分の限定とその対象が分かる箇所を優先します。区切りをまたぐ条件は前後を含めた全文で照合し、短い根拠だけで全条件を証明済みと扱いません。対応を確認できなければunconfirmedへ記します。
 末尾の制約も必ず考慮します。引用にない記載不存在、明細書全体の不存在、法的判断、リスク段階は述べません。
 共通点が確認できない場合はそう明記し、対比した箇所を引用します。差分は引用した箇所の差であり文献全体の不存在ではありません。
-引用各120文字以内、共通点と差分各200文字以内、未確認120文字以内。短文化のために条件の対象や必須・択一の区別を省かず、正確に収まらない論点は未確認と明記します。`;
-export function comparisonPrompt(chunk: ManagedComparisonChunk): string { return JSON.stringify(chunk); }
+各側の観察は120文字以内、共通点と差分各200文字以内、未確認120文字以内。短文化のために条件の対象や必須・択一の区別を省かず、正確に収まらない論点は未確認と明記します。`;
+export function comparisonPrompt(chunk: ManagedComparisonChunk): string { return JSON.stringify(generationInput(chunk)); }
 
 export function makePlan(inputs: ComparisonInputs, selection: Selection): ManagedComparisonChunk[] {
   const chunks = planSelection(inputs, selection);
   for (const chunk of chunks) {
+    assertGenerationEvidence(chunk);
     // New sends include all messages + JSON schema, with room for SDK framing.
-    const bytes = Buffer.byteLength(JSON.stringify({ system: SYSTEM, prompt: comparisonPrompt(chunk), schema: z.toJSONSchema(answerSchema) }), "utf8");
+    const bytes = Buffer.byteLength(JSON.stringify({ system: SYSTEM, prompt: comparisonPrompt(chunk), schema: z.toJSONSchema(generationSchemaFor(chunk)) }), "utf8");
     if (bytes + 8192 > LIMITS.inputBytes) throw new ComparisonError("plan_limit");
   }
   return chunks;

@@ -1,9 +1,10 @@
 import { generateObject } from "ai";
 import { getModel, getGoogleThinkingProviderOptions } from "../ai-model";
 import { aiOperationDeadline, withAiOperationBudget } from "../ai-operation-budget";
-import { answerSchema, comparisonPrompt, LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
+import { comparisonPrompt, LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
+import { decodeGeneration, generationSchemaFor } from "./generation";
 
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
@@ -16,7 +17,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         if (absolute.aborted) throw new ComparisonError("ai_incomplete");
         const options = getGoogleThinkingProviderOptions();
         const signal = AbortSignal.any([absolute, aiOperationDeadline(35_000)]);
-        const answer = await generateObject({ model: getModel(), schema: answerSchema,
+        const answer = await generateObject({ model: getModel(), schema: generationSchemaFor(chunk),
           system: SYSTEM, prompt: comparisonPrompt(chunk), maxRetries: 0,
           maxOutputTokens: LIMITS.outputTokens, abortSignal: signal,
           ...(options ? { providerOptions: options } : {}),
@@ -26,7 +27,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         if (signal.aborted || !Number.isSafeInteger(answer.usage.inputTokens) || answer.usage.inputTokens! < 0 ||
             !Number.isSafeInteger(answer.usage.outputTokens) || answer.usage.outputTokens! < 0 ||
             answer.usage.inputTokens! > 150_000 || answer.usage.outputTokens! > LIMITS.outputTokens) throw new ComparisonError("ai_incomplete");
-        pairs.push(...validateAnswer(chunk, answer.object));
+        pairs.push(...validateAnswer(chunk, decodeGeneration(chunk, answer.object)));
       }
       if (absolute.aborted) throw new ComparisonError("ai_incomplete");
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),

@@ -1,5 +1,6 @@
 import { parseComparisonSource } from "./source";
 import { makePlan, savedDigest, validateAnswer, type ComparisonInputs, type Selection, type SavedComparison } from "./comparison";
+import type { generationInput } from "./generation";
 export function fictionalInputs() {
   const body = "架空の温度制御装置は、各区域の測定値を保持する。".repeat(650);
   const draftText = `【請求項1】\n${body}末尾条件は温度が七度を超えると青色弁を閉じることである。\n【請求項2】\n請求項1に記載の装置であって、確認値を翌朝に消去する装置。`;
@@ -20,6 +21,17 @@ export function fictionalAnswer(chunk: ReturnType<typeof makePlan>[number]) {
     unconfirmed: "装置全体の作用と図面は未確認。",
     baseEvidence: { claimNo: p.baseClaimNo, quote: chunk.base.claims.find(c => c.claimNo === p.baseClaimNo)!.text.split("。").filter(Boolean).at(-1)! + "。" },
     candidateEvidence: { claimNo: p.candidateClaimNo, quote: chunk.candidate.claims.find(c => c.claimNo === p.candidateClaimNo)!.text.split("。").filter(Boolean).at(-1)! + "。" },
+  })) };
+}
+export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
+  const evidence = (source: typeof chunk.base, claimNo: number) => source.claims.find(c => c.claimNo === claimNo)!.segments.filter(s => s.quotable).at(-1)!.id;
+  return { results: chunk.pairs.map(p => ({ ...p,
+    baseEvidenceId: evidence(chunk.base, p.baseClaimNo), candidateEvidenceId: evidence(chunk.candidate, p.candidateClaimNo),
+    baseObservation: "基準の末尾条件は七度を超えると青色弁を閉じる。",
+    candidateObservation: chunk.candidateId === 22 ? "候補の末尾条件は七度を下回ると青色弁を開く。" : "候補の末尾条件は七度を超えると青色弁を閉じる。",
+    common: "引用した箇所はどちらも温度の条件に応じて青色弁を動作させる。",
+    differences: chunk.candidateId === 22 ? "引用箇所は基準の超過・閉動作に対し、文献では低下・開動作である。" : "引用した末尾条件に差は確認できない。",
+    unconfirmed: "装置全体の作用と図面は未確認。",
   })) };
 }
 export function fictionalSaved(): SavedComparison {

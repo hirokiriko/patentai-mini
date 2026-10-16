@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalAnswer, fictionalInputs } from "./fixtures.test-support";
+import { fictionalGeneration, fictionalInputs } from "./fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
+import { generationInput } from "./generation";
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
 function response(value: unknown, usage: unknown = { input_tokens: 100, output_tokens: 30 }) {
@@ -23,12 +24,12 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(String(url)).toMatch(/^https:\/\/example\.invalid\/openai\//);
       payloads.push(String(init?.body));
       const body = JSON.parse(String(init?.body));
-      const chunk = JSON.parse(body.input[1].content[0].text);
+      const chunk: ReturnType<typeof generationInput> = JSON.parse(body.input[1].content[0].text);
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
-      expect(chunk.base.claims[0].text.length).toBeGreaterThan(15000);
-      expect(chunk.candidate.claims[0].text.length).toBeGreaterThan(2000);
-      return response(fictionalAnswer(chunk));
+      expect(chunk.base.claims[0].segments.map(s => s.text).join("")).toBe(inputs.draft.source.claims[0].text);
+      expect(chunk.candidate.claims[0].segments.map(s => s.text).join("")).toBe(inputs.documents[payloads.length - 1].source.claims[0].text);
+      return response(fictionalGeneration(chunk));
     }));
     const saved = await executeComparison(inputs, selection);
     expect(payloads).toHaveLength(2);
@@ -36,8 +37,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
   it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "secret_error"])("fails closed without another send on %s", async mode => {
-    const { inputs, selection } = fictionalInputs(); const answer = fictionalAnswer(makePlan(inputs, selection)[0]);
-    if (mode === "quote") answer.results[0].baseEvidence.quote = "存在しない引用";
+    const { inputs, selection } = fictionalInputs(); const answer = fictionalGeneration(generationInput(makePlan(inputs, selection)[0]));
+    if (mode === "quote") answer.results[0].baseEvidenceId = "unknown";
     if (mode === "missing_pair") answer.results = [];
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
       if (mode === "secret_error") throw Error(SECRET);

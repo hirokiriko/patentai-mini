@@ -36,8 +36,9 @@ globalThis.fetch = async (url, init) => {
   const chunk = JSON.parse(body.input[1].content[0].text);
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
-  const event = { bytes: Buffer.byteLength(init.body), baseTailPresent: chunk.base.claims.some(c => c.text.includes("超えると青色弁を閉じる")),
-    candidateTailPresent: chunk.candidate.claims.some(c => /青色弁を(?:開く|閉じる)/.test(c.text)), pairs: chunk.pairs.length };
+  const fullText = claim => claim.segments.map(s => s.text).join("");
+  const event = { bytes: Buffer.byteLength(init.body), baseTailPresent: chunk.base.claims.some(c => fullText(c).includes("超えると青色弁を閉じる")),
+    candidateTailPresent: chunk.candidate.claims.some(c => /青色弁を(?:開く|閉じる)/.test(fullText(c))), pairs: chunk.pairs.length };
   fs.appendFileSync(path.join(directory, "fixture-sends.jsonl"), JSON.stringify(event) + "\n");
   let mode = "ok";
   try { mode = fs.readFileSync(path.join(directory, "fixture-mode.txt"), "utf8").trim(); } catch { /* default */ }
@@ -45,13 +46,16 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = { results: chunk.pairs.map(pair => {
-    const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo).text;
-    const candidate = chunk.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo).text;
-    const last = text => text.split("。").filter(Boolean).at(-1) + "。";
-    return { ...pair, common: "引用箇所は温度条件に応じて青色弁を動作させる。",
-      differences: candidate.includes("下回ると") ? "基準の超過・閉動作に対し、文献の引用箇所は低下・開動作である。" : "引用した末尾条件に差は確認できない。",
+    const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
+    const candidate = chunk.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
+    const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;
+    return { ...pair, baseEvidenceId: lastId(base), candidateEvidenceId: lastId(candidate),
+      baseObservation: "基準の末尾条件は七度を超えると青色弁を閉じる。",
+      candidateObservation: fullText(candidate).includes("下回ると") ? "候補の末尾条件は七度を下回ると青色弁を開く。" : "候補の末尾条件は七度を超えると青色弁を閉じる。",
+      common: "引用箇所は温度条件に応じて青色弁を動作させる。",
+      differences: fullText(candidate).includes("下回ると") ? "基準の超過・閉動作に対し、文献の引用箇所は低下・開動作である。" : "引用した末尾条件に差は確認できない。",
       unconfirmed: "図面、明細書の全体、作用の意味は人による確認が必要。",
-      baseEvidence: { claimNo: pair.baseClaimNo, quote: last(base) }, candidateEvidence: { claimNo: pair.candidateClaimNo, quote: last(candidate) } };
+    };
   }) };
   return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
     output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed", content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }],
