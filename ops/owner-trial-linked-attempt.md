@@ -535,3 +535,17 @@ recreation, account for cleanup already consumed without refunding it, and
 validate all remaining calls against the lifetime cap. A diagnostic result or
 this document does not make that continuation executable or establish live
 acceptance. Both previously published image closures must remain compatible.
+
+The later explicit PIM-cause request uses a separate one-shot diagnostic grant,
+bound to the completed five-request diagnostic and its 266-row/382-request
+counter. It may consume one fresh-read token and at most two fixed PIM GETs;
+the second GET requires a valid first 200 response. An error stops immediately.
+The old provisioning token allowance is already exhausted and is not enlarged.
+The cleanup reserve remains 117 after three previously charged cleanup calls.
+Known error codes or exact fixed messages may classify a failure; classification
+never proves an empty collection or grants a permission/license change. To avoid
+spending another cloud request only to improve local classification, a bounded
+failure body may be kept in a CurrentUser Windows DPAPI envelope in the existing
+OWNER-only directory. Neither plaintext bodies nor arbitrary provider text leave
+the protected process. Reclassification must verify the saved result's body hash
+and length, and does not issue another diagnostic or restart authority.

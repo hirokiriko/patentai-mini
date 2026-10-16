@@ -464,6 +464,33 @@ class ControlBudget:
             self._admit('owner_arm','provision',purpose)
             row={'kind':'owner_arm','attempt':self._plan['attempt'],'phase':'provision','purpose':purpose}
             self._append('request',row);self._add_request(row);consumed.append(purpose);guard()
+    def begin_pim_diagnosis(self,grant,*,guard):
+        from .pim_diagnosis import PimGrant,validate_counter,MARKER
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            _budget_need(type(grant) is PimGrant and not hasattr(self,'_pim_diagnosis'),'pim_diagnosis_scope')
+            g=grant.proof
+            _budget_need(self.binding==g['counter_binding'] and self.seed==g['seed']
+                and str(self.journal.path.parent)==g['directory'] and self._plan['attempt']==g['attempt']
+                and self._counts==g['counts'],'pim_diagnosis_scope')
+            marker=self.journal.path.parent/MARKER;verify_owner_file(marker)
+            v=json.loads(marker.read_bytes())
+            _budget_need(v['grant_sha256']==grant.checksum and v['attempt']==g['attempt']
+                and v['targets_sha256']==digest(g['targets']),'pim_diagnosis_scope')
+            validate_counter(grant,self.journal.path.read_bytes(),[]);guard()
+            self._pim_diagnosis=(grant,guard,[])
+            return _PimDiagnosisScope(self,grant)
+    def _consume_pim_diagnosis(self,grant,purpose):
+        from .pim_diagnosis import validate_counter,PHASE,SEQUENCE
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            active,guard,consumed=self._pim_diagnosis
+            _budget_need(grant is active and len(consumed)<3 and purpose==SEQUENCE[len(consumed)],'pim_diagnosis_exhausted')
+            guard();validate_counter(grant,self.journal.path.read_bytes(),consumed)
+            _budget_need(self._counts['owner_arm']==grant.proof['counts']['owner_arm']+len(consumed),'pim_diagnosis_counter')
+            self._admit('owner_arm',PHASE,purpose)
+            row={'kind':'owner_arm','attempt':self._plan['attempt'],'phase':PHASE,'purpose':purpose}
+            self._append('request',row);self._add_request(row);consumed.append(purpose);guard()
     def close(self):
         with self.mutex:self._closed=True;self._verified=None;self.journal.close()
     def __enter__(self):return self
@@ -511,6 +538,14 @@ class _StoppedReadScope:
     def consume(self,kind,limit):
         _budget_need(kind=='owner_arm' and type(limit) is int and limit==600,'stopped_read_scope')
         self.__budget._consume_stopped_read(self.__grant,'http')
+
+class _PimDiagnosisScope:
+    __slots__=('__budget','__grant')
+    def __init__(self,budget,grant):self.__budget,self.__grant=budget,grant
+    def consume_owner_token(self):self.__budget._consume_pim_diagnosis(self.__grant,'owner_token')
+    def consume(self,kind,limit):
+        _budget_need(kind=='owner_arm' and type(limit) is int and limit==600,'pim_diagnosis_scope')
+        self.__budget._consume_pim_diagnosis(self.__grant,'http')
 
 class _ObservationScope:
     __slots__=('__budget','__grant')
