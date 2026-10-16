@@ -49,7 +49,7 @@ globalThis.fetch = async (url, init) => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = chunk.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
     const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;
-    return { ...pair, baseEvidenceId: lastId(base), candidateEvidenceId: lastId(candidate),
+    return { baseClaimNo: pair.baseClaimNo, candidateClaimNo: pair.candidateClaimNo, baseEvidenceId: lastId(base), candidateEvidenceId: lastId(candidate),
       baseObservation: "基準の末尾条件は七度を超えると青色弁を閉じる。",
       candidateObservation: fullText(candidate).includes("下回ると") ? "候補の末尾条件は七度を下回ると青色弁を開く。" : "候補の末尾条件は七度を超えると青色弁を閉じる。",
       common: "引用箇所は温度条件に応じて青色弁を動作させる。",

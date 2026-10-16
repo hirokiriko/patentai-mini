@@ -36,10 +36,11 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(payloads[1]).toContain("下回ると青色弁を開く");
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
-  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "secret_error"])("fails closed without another send on %s", async mode => {
+  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
     const { inputs, selection } = fictionalInputs(); const answer = fictionalGeneration(generationInput(makePlan(inputs, selection)[0]));
     if (mode === "quote") answer.results[0].baseEvidenceId = "unknown";
     if (mode === "missing_pair") answer.results = [];
+    if (mode === "protocol_metadata") answer.results[0].unconfirmed = "quotable=falseのため比較できません。";
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
       if (mode === "secret_error") throw Error(SECRET);
       if (mode === "http") return new Response(SECRET, { status: 429 });

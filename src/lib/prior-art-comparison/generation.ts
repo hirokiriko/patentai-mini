@@ -9,9 +9,9 @@ const evidenceId = z.string().min(1).max(100).regex(/^[bc][a-f0-9]{64}:\d+:\d+:\
 // not a second semantic validator or a change to the immutable saved format.
 export const generationSchema = z.object({ results: z.array(z.object({
   baseClaimNo: claimNo, candidateClaimNo: claimNo,
-  baseEvidenceId: evidenceId, candidateEvidenceId: evidenceId,
   baseObservation: text.max(120), candidateObservation: text.max(120),
   common: text, differences: text, unconfirmed: text.max(120),
+  baseEvidenceId: evidenceId, candidateEvidenceId: evidenceId,
 }).strict()).min(1).max(2) }).strict();
 export type GenerationAnswer = z.infer<typeof generationSchema>;
 type Segment = { id: string; text: string; quotable: boolean };
@@ -40,6 +40,10 @@ function sourceSegments(source: ManagedClaimSet, prefix: string) {
 /** Full source, losslessly partitioned; no second copy or generated quote text. */
 export function generationInput(chunk: ManagedComparisonChunk) {
   return { ...chunk,
+    pairs: chunk.pairs.map(pair => ({ ...pair,
+      baseContextClaimNos: managedClaimContext(chunk.base, [pair.baseClaimNo]).claims.map(c => c.claimNo),
+      candidateContextClaimNos: managedClaimContext(chunk.candidate, [pair.candidateClaimNo]).claims.map(c => c.claimNo),
+    })),
     base: sourceSegments(chunk.base, `b${chunk.baseDigest}:0`),
     candidate: sourceSegments(chunk.candidate, `c${chunk.candidateDigest}:${chunk.candidateId}`),
   };
@@ -76,6 +80,11 @@ export function generationSchemaFor(chunk: ManagedComparisonChunk) {
 export function decodeGeneration(chunk: ManagedComparisonChunk, answer: unknown) {
   try {
     const parsed = generationSchema.parse(answer);
+    // Protocol metadata is not a patent condition or a reason that source text
+    // cannot be compared. Apply this only to new generations, not saved readers.
+    if (parsed.results.some(r => /quotable|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
+      [r.baseObservation, r.candidateObservation, r.common, r.differences, r.unconfirmed].join("\n"),
+    ))) throw Error();
     const input = generationInput(chunk);
     const resolve = (source: typeof input.base, id: string) => {
       for (const claim of source.claims) {

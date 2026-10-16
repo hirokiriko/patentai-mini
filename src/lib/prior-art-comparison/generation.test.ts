@@ -69,6 +69,7 @@ describe("literal evidence selection", () => {
     selection.draftClaimNos = [2, 3];
     const chunk = makePlan(inputs, selection)[0];
     const answer = fictionalGeneration(generationInput(chunk));
+    expect(generationInput(chunk).pairs.map(p => [p.baseClaimNo, p.baseContextClaimNos])).toEqual([[2, [2]], [3, [1, 3]]]);
     const ancestorId = generationInput(chunk).base.claims.find(c => c.claimNo === 1)!.segments[0].id;
     answer.results.find(r => r.baseClaimNo === 3)!.baseEvidenceId = ancestorId;
     expect(validateAnswer(chunk, decodeGeneration(chunk, answer))).toHaveLength(2);
@@ -91,6 +92,20 @@ describe("literal evidence selection", () => {
     expect(validateAnswer(chunk, decodeGeneration(chunk, answer))).toHaveLength(1);
     // Meaning still requires independent original-text review; no automatic GO.
     expect(fictionalSaved().review).toBe("human_review_required");
+  });
+  it("allows an ordinary technical noun that also names an input collection", () => {
+    const { chunk, answer } = example();
+    answer.results[0].unconfirmed = "装置のsegments間の対応は未確認。";
+    expect(validateAnswer(chunk, decodeGeneration(chunk, answer))).toHaveLength(1);
+  });
+  it.each(["baseObservation", "candidateObservation", "common", "differences", "unconfirmed"] as const)("rejects protocol metadata in new %s without invalidating old results", field => {
+    const { chunk, answer } = example();
+    answer.results[0][field] = "quotable=falseのため比較できません。";
+    expect(() => decodeGeneration(chunk, answer)).toThrow("ai_incomplete");
+    const saved = fictionalSaved();
+    saved.pairs[0].unconfirmed = "非quotable区間のため未確認。";
+    saved.snapshotDigest = savedDigest(saved);
+    expect(validateSaved(saved)).toEqual(saved);
   });
   it("keeps the complete bounded wire output within the existing envelope", () => {
     const { answer } = example();

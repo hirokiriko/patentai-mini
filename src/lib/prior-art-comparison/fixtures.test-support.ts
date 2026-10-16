@@ -25,7 +25,7 @@ export function fictionalAnswer(chunk: ReturnType<typeof makePlan>[number]) {
 }
 export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
   const evidence = (source: typeof chunk.base, claimNo: number) => source.claims.find(c => c.claimNo === claimNo)!.segments.filter(s => s.quotable).at(-1)!.id;
-  return { results: chunk.pairs.map(p => ({ ...p,
+  return { results: chunk.pairs.map(p => ({ baseClaimNo: p.baseClaimNo, candidateClaimNo: p.candidateClaimNo,
     baseEvidenceId: evidence(chunk.base, p.baseClaimNo), candidateEvidenceId: evidence(chunk.candidate, p.candidateClaimNo),
     baseObservation: "基準の末尾条件は七度を超えると青色弁を閉じる。",
     candidateObservation: chunk.candidateId === 22 ? "候補の末尾条件は七度を下回ると青色弁を開く。" : "候補の末尾条件は七度を超えると青色弁を閉じる。",
