@@ -35,7 +35,7 @@ MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
     'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','identity_http','read_http','read_observation','stopped_reads','pim_diagnosis','unknown_observation','observed_identity_succession','readback_continuation','unknown_identity_succession','runtime_auth','guard_assignments','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
+        'providers','identity_http','read_http','read_observation','stopped_reads','pim_diagnosis','unknown_observation','observed_identity_succession','readback_continuation','partial_foundation_continuation','unknown_identity_succession','runtime_auth','guard_assignments','reduction_lists','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
@@ -170,7 +170,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         raise Denied('command_shape')
     action=request['action']
     rehearsal_actions=('rehearsal-start','rehearsal-poll','rehearsal-seed','rehearsal-verify')
-    if action not in ('prepare','status','create','update','reconcile','cleanup','bind-runtime','bind-cleanup','bind-bootstrap','registry-cleanup')+rehearsal_actions:
+    if action not in ('prepare','status','create','update','reconcile','cleanup','bind-runtime','bind-cleanup','bind-bootstrap','registry-cleanup','revalidate-foundation')+rehearsal_actions:
         raise Denied('command_action')
     clock=clock or Clock()
     path=Path(request['config'])
@@ -182,7 +182,7 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
     manifest=json.loads(private_bytes(preview['sources']['manifest']))
     owner=manifest['owner']
     head=git(['rev-parse','HEAD']).decode('ascii').strip()
-    mutating=action in ('create','update','cleanup','reconcile','registry-cleanup')+rehearsal_actions
+    mutating=action in ('create','update','cleanup','reconcile','registry-cleanup','revalidate-foundation')+rehearsal_actions
     sources=local_sources(head,live=mutating)
     loaded=load_configuration(path,now=clock.utc(),local_head=head,
         owner_context={'mode':'AzureCliCredential','tenant_id':owner['tenant_id'],
@@ -210,6 +210,8 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
         verifier=policy_verifier(config['policy_verifier_node'])
         resolver=create_resolver(core,manifest,loaded['authority_bundle'],config['resource_bindings'],verified_attempt=verified)
         journal.fix_plan(resolver.initial_plan)
+        from .partial_foundation_continuation import continuation_journal
+        journal=continuation_journal(journal,verified,initialize=action=='prepare')
         if journal.values('publication_preparation') or journal.values('image_reuse_preparation'):
             from .registry_publish import bind_publication
             bind_publication(journal,resolver,config['resource_bindings'],verified_attempt=verified)
@@ -219,6 +221,34 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
             resolver.bind_cleanup(record['operation_id'],record['evidence'])
         for record in journal.values('rehearsal_binding'):
             resolver.bind_rehearsal(record,journal.receipts())
+        if action=='revalidate-foundation':
+            from . import reduction_lists as lists
+            if verified is None or verified.authority['schema']!=10 or owner_token_pool is None:
+                raise Denied('foundation_read_authority')
+            facts={slot:(resolver.resolve(slot,journal.receipts()),journal.receipts()[slot]) for slot in lists.CARRIED}
+            previous=journal.values('foundation_readback')
+            if previous:
+                if len(previous)!=1 or previous[0]['attempt']!=verified.binding_digest:
+                    raise Denied('foundation_read_changed')
+                lists.validate_carry(previous[0]['record'],manifest,facts,clock.utc())
+                return {'status':'foundation_current_verified','cloud_calls':0,'control_requests_used':budget.count('owner_arm')}
+            if journal.values('foundation_read_intent'):
+                raise Denied('foundation_read_already_attempted')
+            target=resolver.resolve('guard',journal.receipts())
+            scoped=scope_for_dispatch(budget,verified,entry_point='provision',action='create',operation=target)
+            def observation_guard():
+                check_window(verified,'guardian',clock.utc())
+                if clock.utc()>=parse(verified.activation['windows']['owner_input']['start']):
+                    raise Denied('foundation_window_closed')
+            observation_guard()
+            journal.append('foundation_read_intent',{'attempt':verified.binding_digest,'at':clock.utc().isoformat(),
+                'specifications_sha256':digest(lists.carry_specifications(manifest,facts))})
+            from .read_http import ReadHttp
+            counted=CountedControlHttp(wire or ReadHttp(),scoped)
+            credential=owner_token_pool.bind(AzureCredential('owner',owner['principal_id'],owner['tenant_id'],counted),scoped,verified)
+            record=lists.collect_carry(manifest,facts,counted,credential,clock,observation_guard)
+            journal.append('foundation_readback',{'attempt':verified.binding_digest,'record':record})
+            return {'status':'foundation_current_verified','cloud_calls':5,'control_requests_used':budget.count('owner_arm')}
         if action=='bind-bootstrap':
             from .bootstrap import bind_bootstrap
             bundle=json.loads(private_bytes(request['bootstrap_config']))
@@ -300,9 +330,25 @@ def run_command(request, *, clock=None, wire=None,trusted_attempt_authority=None
                 lambda:{'trial-web-database':secret('trial-web-database')},clock,arm_provider=provider,**extra)
         adapters={name:provider for name in ('Microsoft.App','Microsoft.ManagedIdentity','Microsoft.Storage','Microsoft.Authorization')}
         adapters['Microsoft.Graph']=graph
+        window_guard=_window_guard(core,verified)
+        def execution_guard(op,now):
+            window_guard(op,now)
+            if verified is not None and verified.authority['schema']==10 and not cleanup_only(op):
+                from .attempt_dispatch import FOUNDATION
+                from . import reduction_lists as lists
+                if op['id'] in lists.CARRIED:
+                    raise Denied('carried_operation_write_forbidden')
+                if op['id'] in FOUNDATION:
+                    records=journal.values('foundation_readback')
+                    if len(records)!=1 or records[0]['attempt']!=verified.binding_digest:
+                        raise Denied('foundation_current_required')
+                    facts={slot:(resolver.resolve(slot,journal.receipts()),journal.receipts()[slot]) for slot in lists.CARRIED}
+                    lists.validate_carry(records[0]['record'],manifest,facts,now)
         control=Controller(journal,clock,resolver.resolve,resolver.allowed_ids,adapters,
-            easy_auth=auth,send_guard=_window_guard(core,verified))
+            easy_auth=auth,send_guard=execution_guard)
         ident=request.get('operation_id')
+        if verified is not None and verified.authority['schema']==10 and action in ('create','update'):
+            execution_guard(requested_operation,clock.utc())
         if action=='create':result=control.create(ident)
         elif action=='update':result=control.update(ident,request.get('creation_id'))
         elif action=='cleanup':

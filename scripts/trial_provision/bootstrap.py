@@ -103,7 +103,7 @@ def _validate(config, journal, resolver, verify_policy, *, verified_attempt=None
     budget = config['control_budget']
     local_binding = journal.values('binding')[0]
     expected_budget = {k:local_binding[k] for k in ('manifest_sha256','owner_id','task_id')}
-    if verified_attempt is not None and verified_attempt.authority['schema'] in (7, 8, 9):
+    if verified_attempt is not None and verified_attempt.authority['schema'] in (7, 8, 9, 10):
         from .attempt import origin_manifest_hash
         _need(local_binding['manifest_sha256'] == verified_attempt.authority['manifest_sha256'])
         expected_budget['manifest_sha256'] = origin_manifest_hash(verified_attempt.authority)

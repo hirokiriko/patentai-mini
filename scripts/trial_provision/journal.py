@@ -37,7 +37,7 @@ class Journal:
     """Hash chain and OS writer lock; a partial/changed chain cannot be reset."""
     def __init__(self, directory, directory_digest, binding, *, name='trial-provision', require_existing=False):
         self.mutex = threading.RLock()
-        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor','trial-provision-successor-v3','trial-provision-successor-v4','trial-provision-successor-v5','trial-provision-successor-v6','trial-provision-successor-v7','trial-provision-continuation-v7r1','trial-provision-successor-v8'):
+        if name not in ('trial-provision', 'trial-control-budget','trial-provision-next','trial-provision-successor','trial-provision-successor-v3','trial-provision-successor-v4','trial-provision-successor-v5','trial-provision-successor-v6','trial-provision-successor-v7','trial-provision-continuation-v7r1','trial-provision-successor-v8','trial-provision-continuation-v8r1'):
             raise Denied('journal_name')
         directory = Path(directory)
         if (not directory.is_absolute() or not directory.is_dir() or directory.is_symlink()
@@ -225,9 +225,10 @@ class ControlBudget:
         try:self._replay()
         except BaseException:self.close();raise
     def _assert_open(self):_budget_need(not self._closed and not self._poisoned,'budget_unavailable')
-    def _validate_plan(self,plan,*,published_successor=False,amended=False,reused_images=False,observed_identity=False,readback_continuation=False,unknown_identity=False):
+    def _validate_plan(self,plan,*,published_successor=False,amended=False,reused_images=False,observed_identity=False,readback_continuation=False,unknown_identity=False,partial_foundation=False):
         from .attempt import REUSED_IMAGE_PURPOSE_CAPS, OBSERVED_IDENTITY_PURPOSE_CAPS, READBACK_CONTINUATION_PURPOSE_CAPS, V8_PURPOSE_CAPS
-        purpose_caps=V8_PURPOSE_CAPS if unknown_identity else READBACK_CONTINUATION_PURPOSE_CAPS if readback_continuation else (OBSERVED_IDENTITY_PURPOSE_CAPS if observed_identity else (REUSED_IMAGE_PURPOSE_CAPS if reused_images else _PURPOSE_CAPS))
+        from .partial_foundation_continuation import PURPOSE_CAPS as CONTINUATION_PURPOSE_CAPS
+        purpose_caps=CONTINUATION_PURPOSE_CAPS if partial_foundation else V8_PURPOSE_CAPS if unknown_identity else READBACK_CONTINUATION_PURPOSE_CAPS if readback_continuation else (OBSERVED_IDENTITY_PURPOSE_CAPS if observed_identity else (REUSED_IMAGE_PURPOSE_CAPS if reused_images else _PURPOSE_CAPS))
         limits={**self.LIMITS,'owner_arm':631} if amended else self.LIMITS
         _budget_need(isinstance(plan,dict) and set(plan)=={'schema','attempt','limits','counts_before','phase_caps','unallocated','purpose_caps','budget_binding_sha256'}
             and type(plan['schema']) is int and plan['schema']==1 and isinstance(plan['attempt'],str) and re.fullmatch('[a-f0-9]{64}',plan['attempt']) is not None
@@ -238,7 +239,7 @@ class ControlBudget:
             _budget_need(type(before) is int and self.seed[kind]<=before<=limit and _nonnegative_int(reserve) and isinstance(caps,dict) and set(caps)==set(_PHASES)
                 and all(_nonnegative_int(v) for v in caps.values()) and sum(caps.values())+reserve<=limit-before,'budget_phase_allocation')
         owner_caps=plan['phase_caps']['owner_arm']
-        _budget_need(all(owner_caps[phase]<=cap for phase,cap in _OWNER_PHASE_MAX.items()) and owner_caps['cleanup']==120
+        _budget_need(all(owner_caps[phase]<=cap for phase,cap in _OWNER_PHASE_MAX.items()) and owner_caps['cleanup']==(117 if partial_foundation else 120)
             and (plan['unallocated']['owner_arm']==0 if published_successor else plan['unallocated']['owner_arm']>=23),'budget_owner_reservation')
     def _blank_usage(self):return {kind:{phase:0 for phase in _PHASES} for kind in self.LIMITS}
     def _blank_purposes(self):return {kind:{phase:{purpose:0 for purpose in _PURPOSES} for phase in _PHASES} for kind in self.LIMITS}
@@ -248,7 +249,7 @@ class ControlBudget:
         limit=plan['limits'][kind]
         count=self._counts[kind];_budget_need(count<limit,'request_budget');_budget_need(count<limit-plan['unallocated'][kind],'budget_unallocated_reserved')
         _budget_need(self._used[kind][phase]<plan['phase_caps'][kind][phase],'budget_phase_exhausted')
-        if kind=='owner_arm' and phase!='cleanup':_budget_need(count<(limit-120 if self._published_plan else 457),'budget_cleanup_reserved')
+        if kind=='owner_arm' and phase!='cleanup':_budget_need(count<(limit-plan['phase_caps']['owner_arm']['cleanup'] if self._published_plan else 457),'budget_cleanup_reserved')
         if kind=='owner_arm' and phase in plan['purpose_caps']:
             _budget_need(self._purpose_used[kind][phase][purpose]<plan['purpose_caps'][phase][purpose],'budget_purpose_exhausted')
         if verified is not None:
@@ -276,17 +277,20 @@ class ControlBudget:
                 _budget_need(self._plan is None,'budget_plan_repeated');self._validate_plan(value);_budget_need(value['counts_before']==self._counts,'budget_plan_snapshot');self._plan=deepcopy(value);continue
             if event=='attempt_transition':
                 from .attempt import _proof
-                _budget_need(len(self._transitions)<8,'budget_transition_repeated')
+                _budget_need(len(self._transitions)<9,'budget_transition_repeated')
                 active=verified if verified is not None and value.get('plan',{}).get('attempt')==verified.binding_digest else None
                 ordinal=len(self._transitions)
-                amended=ordinal in (2,3,4,5,6,7)
-                published=ordinal in (1,2,3,4,5,6,7)
-                if verified is not None and _proof(verified)['authority']['schema'] in (4,5,6,7,8,9):
+                amended=ordinal in (2,3,4,5,6,7,8)
+                published=ordinal in (1,2,3,4,5,6,7,8)
+                if verified is not None and _proof(verified)['authority']['schema'] in (4,5,6,7,8,9,10):
                     schema=_proof(verified)['authority']['schema']
                     _budget_need(ordinal<schema-1,'budget_transition_repeated')
                     if ordinal<schema-2:
                         _budget_need(value==_proof(verified)['succession']['previous_transitions'][ordinal],'budget_previous_transition_changed')
-                if ordinal==7:
+                if ordinal==8:
+                    from .partial_foundation_continuation import validate_transition, PREFIX_ROWS, KIND
+                    _budget_need(index in PREFIX_ROWS and value.get('kind')==KIND,'budget_transition_repeated')
+                elif ordinal==7:
                     from .unknown_identity_succession import validate_transition, PREFIX_ROWS, KIND
                     _budget_need(index==PREFIX_ROWS and value.get('kind')==KIND,'budget_transition_repeated')
                 elif ordinal==6:
@@ -312,10 +316,10 @@ class ControlBudget:
                     _budget_need(not self._transitions and index==PREFIX_ROWS,'budget_transition_repeated')
                     if verified is not None and _proof(verified)['authority']['schema']==3:
                         _budget_need(value==_proof(verified)['succession']['previous_transition'],'budget_previous_transition_changed')
-                _budget_need(len(self._transitions)<8,'budget_transition_repeated')
+                _budget_need(len(self._transitions)<9,'budget_transition_repeated')
                 plan=validate_transition(value,prefix_raw=b''.join(raw.splitlines(keepends=True)[:index]),
                     previous_plan=self._plan,counts=self._counts,used=self._used,verified=active)
-                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal in (4,5),observed_identity=ordinal==5,readback_continuation=ordinal==6,unknown_identity=ordinal==7);self._plan=plan;self._transition=deepcopy(value)
+                self._validate_plan(plan,published_successor=published,amended=amended,reused_images=ordinal in (4,5),observed_identity=ordinal==5,readback_continuation=ordinal==6,unknown_identity=ordinal==7,partial_foundation=ordinal==8);self._plan=plan;self._transition=deepcopy(value)
                 self._transitions.append(deepcopy(value));self._published_plan=published
                 self._used=self._blank_usage();self._purpose_used=self._blank_purposes();continue
             _budget_need(event=='request' and isinstance(value,dict),'budget_event');kind=value.get('kind');_budget_need(kind in self.LIMITS,'budget_kind')
@@ -345,21 +349,23 @@ class ControlBudget:
         expected=phase_plan(verified)
         with self.mutex:
             schema=_proof(verified)['authority']['schema']
-            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6,7,8,9),amended=schema in (4,5,6,7,8,9),reused_images=schema in (6,7,8,9),observed_identity=schema==7,readback_continuation=schema==8,unknown_identity=schema==9)
+            self._assert_open();self._unchanged();self._validate_plan(expected,published_successor=schema in (3,4,5,6,7,8,9,10),amended=schema in (4,5,6,7,8,9,10),reused_images=schema in (6,7,8,9,10),observed_identity=schema==7,readback_continuation=schema==8,unknown_identity=schema==9,partial_foundation=schema==10)
             if self._plan is None:
                 _budget_need('succession' not in _proof(verified),'budget_succession_prefix_required')
                 _budget_need(initialize is True,'budget_plan_not_prepared')
                 _budget_need(expected['counts_before']==self._counts,'budget_plan_snapshot');check_budget_snapshot(verified,deepcopy(self._counts),initializing=True)
                 self._append('phase_plan',expected);self._plan=deepcopy(expected)
             elif self._plan!=expected:
-                expected_transitions={2:0,3:1,4:2,5:3,6:4,7:5,8:6,9:7}.get(schema,-1)
+                expected_transitions={2:0,3:1,4:2,5:3,6:4,7:5,8:6,9:7,10:8}.get(schema,-1)
                 _budget_need(initialize is True and len(self._transitions)==expected_transitions and 'succession' in _proof(verified),'budget_phase_plan_changed')
                 self._begin_successor(verified)
             self._replay(verified);check_budget_snapshot(verified,deepcopy(self._counts),initializing=False);self._verified=verified
     def _begin_successor(self,verified):
         """One append while both counter and previous-child OS locks are held."""
         from .attempt import _proof,_sha,CHILD_JOURNAL
-        if _proof(verified)['authority']['schema']==9:
+        if _proof(verified)['authority']['schema']==10:
+            from .partial_foundation_continuation import transition_value,validate_transition
+        elif _proof(verified)['authority']['schema']==9:
             from .unknown_identity_succession import transition_value,validate_transition
         elif _proof(verified)['authority']['schema']==8:
             from .readback_continuation import transition_value,validate_transition
@@ -568,7 +574,7 @@ def scope_for_dispatch(budget,verified,*,entry_point,action,operation=None):
     elif entry_point=='publication':
         from .attempt import _proof
         schema=_proof(verified)['authority']['schema']
-        _budget_need(action==('verify-reused-images' if schema in (6,7,8,9) else 'publish'),'budget_dispatch_action');phase='publication'
+        _budget_need(action==('verify-reused-images' if schema in (6,7,8,9,10) else 'publish'),'budget_dispatch_action');phase='publication'
     elif entry_point=='registry-cleanup':_budget_need(action=='cleanup','budget_dispatch_action');phase='cleanup'
     elif entry_point=='rehearsal':_budget_need(action in ('start','poll','seed','verify'),'budget_dispatch_action');phase='run'
     elif entry_point=='owner-run':_budget_need(action=='execute','budget_dispatch_action');phase='run'

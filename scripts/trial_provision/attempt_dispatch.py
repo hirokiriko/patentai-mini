@@ -59,6 +59,8 @@ class ApprovedAttemptSession:
         need(config['verified_attempt'].binding_digest==self.verified.binding_digest and config['live'] is True)
         name,binding=journal_descriptor(config,self.verified)
         with Journal(config['recovery']['directory'],config['recovery']['directory_digest'],binding,name=name,require_existing=True) as journal:
+            from .partial_foundation_continuation import continuation_journal
+            journal=continuation_journal(journal,self.verified)
             cores=journal.values('core_plan');need(len(cores)==1)
             resolver=create_resolver(cores[0],manifest,config['authority_bundle'],config['resource_bindings'],verified_attempt=self.verified);receipts=journal.receipts()
             for event in journal.values('rehearsal_binding'):resolver.bind_rehearsal(event,receipts)
@@ -77,7 +79,10 @@ class ApprovedAttemptSession:
             return 'create',op,receipt
     def run_group(self,config_path,group,*,sleep=time.sleep):
         self._open();need(group in GROUPS);completed=[];started=self.clock.utc()
-        slots=('jobRuntime',) if group=='runtime' and self.verified.authority['schema']==9 else GROUPS[group]
+        if group=='foundation' and self.verified.authority['schema']==10:
+            result=self.dispatch('provision',{'config':str(config_path),'action':'revalidate-foundation'})
+            need(result.get('status')=='foundation_current_verified')
+        slots=('jobRuntime',) if group=='runtime' and self.verified.authority['schema'] in (9,10) else GROUPS[group]
         for slot in slots:
             attempted=False
             while True:

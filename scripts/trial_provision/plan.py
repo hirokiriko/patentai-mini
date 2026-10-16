@@ -180,7 +180,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
         _need(proof['manifest_digest'] == digest(manifest)
               and proof['authority']['manifest_sha256'] == hashes['manifest'],
               'attempt_manifest_binding')
-        fixed_ai_scope = proof['authority']['schema'] in (6, 7, 8, 9)
+        fixed_ai_scope = proof['authority']['schema'] in (6, 7, 8, 9, 10)
         from .attempt import origin_manifest_hash
         origin_manifest = origin_manifest_hash(proof['authority'])
     m, a, approved, latest = manifest, sources["annex"], sources["approval"], sources["latest"]
@@ -219,6 +219,11 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
           and _at(approved, "approved.maximumGuardianAssignmentSeconds") == 28800, "approved_limits")
 
     _keys(bindings, {"guardian_window", "owner_window", "prerequisite_digests"}, {"allocated_ids"})
+    if verified_attempt is not None and verified_attempt.authority['schema']==10:
+        from .partial_foundation_continuation import inherited_allocation
+        inherited=inherited_allocation(verified_attempt)
+        _need('allocated_ids' not in bindings or bindings['allocated_ids']==inherited,'continuation_allocations')
+        bindings={**bindings,'allocated_ids':inherited}
     current = _utc(now, allow_fractional=True)
     # Keep the observed instant for every admission check. Only serialized
     # preparation/credential starts use a conservative whole-second ceiling.
@@ -254,7 +259,7 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
     for latest_key, alias in (("web.identityResourceId", "webIdentity"), ("worker.identityResourceId", "workerIdentity"),
                               ("guardian.systemIdentityResourceId", "guard")):
         original_id = ids[alias]
-        if verified_attempt is not None and verified_attempt.authority['schema'] in (7, 8, 9) and alias == 'webIdentity':
+        if verified_attempt is not None and verified_attempt.authority['schema'] in (7, 8, 9, 10) and alias == 'webIdentity':
             from .attempt import _proof
             original_id = _proof(verified_attempt)['succession']['origin_manifest']['ids'][alias]
         _need(_at(latest, "acr." + latest_key) == original_id, "pull_principal_binding")
@@ -424,10 +429,12 @@ def build_plan(manifest: dict, authority_bundle: dict, bindings: dict,
                                "platform_secret_name": _at(auth, "platformSecretName")},
               "prepared_at": _stamp(compiled_at)}
     result["callback_binding"] = {"names": {"app": app_name}, "region": _at(m, "region")}
-    if verified_attempt is not None and verified_attempt.authority['schema'] == 9:
+    if verified_attempt is not None and verified_attempt.authority['schema'] in (9, 10):
         from .runtime_auth import PROFILE
         result['local_execution_profile'] = {'schema': 1, 'kind': PROFILE,
             'attempt_binding_digest': verified_attempt.binding_digest}
+    from .partial_foundation_continuation import inherit_core
+    result=inherit_core(result,verified_attempt)
     result["plan_sha256"] = digest(result)
     return result
 

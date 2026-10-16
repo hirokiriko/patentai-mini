@@ -77,7 +77,7 @@ class ApprovedOperations:
                 proof = _proof(verified_attempt)
                 _require(proof['manifest_digest'] == digest(manifest)
                     and proof['authority']['manifest_sha256'] == core_plan['source_sha256']['manifest'])
-                self.combined_runtime_auth = proof['authority']['schema'] == 9
+                self.combined_runtime_auth = proof['authority']['schema'] in (9, 10)
                 if self.combined_runtime_auth:
                     _require(core_plan.get('local_execution_profile') == {
                         'schema': 1, 'kind': PROFILE, 'attempt_binding_digest': verified_attempt.binding_digest})
@@ -87,6 +87,8 @@ class ApprovedOperations:
             if not self.combined_runtime_auth:
                 _require('local_execution_profile' not in core_plan)
             resources = build_resource_operations(manifest, authority_bundle, resource_bindings)
+            from .partial_foundation_continuation import inherit_resources
+            resources=inherit_resources(resources,verified_attempt)
             resource_map = {op['id']: op for op in resources}
             _require(len(resources) == len(resource_map) == 9 and len(core_plan['operations']) == 29)
             _require(not set(resource_map) & set(core_plan['operations']))
@@ -98,6 +100,7 @@ class ApprovedOperations:
             self._core = deepcopy(core_plan)
             self._manifest, self._authority, self._resources = deepcopy(manifest), deepcopy(authority_bundle), resource_map
             self._resource_bindings = deepcopy(resource_bindings)
+            self._verified_attempt = verified_attempt
             self._runtime_binding = None
             self._runtime_operations = None
             self._database_observation_digest = None
@@ -138,6 +141,12 @@ class ApprovedOperations:
         _require(digest(self._initial) == self.plan_digest)
         core._validate_plan(self._core)
 
+    def _build_runtime_operations(self, *args, **kwargs):
+        if self._verified_attempt is not None and self._verified_attempt.authority['schema']==10:
+            from .partial_foundation_continuation import build_continued_runtime_operations
+            return build_continued_runtime_operations(*args,**kwargs,verified_attempt=self._verified_attempt)
+        return build_runtime_operations(*args,**kwargs)
+
     def _sources(self, receipts):
         result = {}
         for key in SOURCE_IDS:
@@ -160,7 +169,7 @@ class ApprovedOperations:
             _require(parse(policy['startsAt']) >= parse(self._core['windows']['owner_input']['start']))
             sources = self._sources(receipts)
             e1 = core.materialize_operation(self._core, 'E1', receipts)
-            operations = build_runtime_operations(self._manifest, self._authority, self._resource_bindings,
+            operations = self._build_runtime_operations(self._manifest, self._authority, self._resource_bindings,
                 receipts, policy_environment, verify_policy=verify_policy, auth_operation=e1, deadline=deadline)
             _require(tuple(op['id'] for op in operations) == RUNTIME_IDS)
             event = {'schema': 1, 'initial_plan_digest': self.plan_digest,
@@ -181,7 +190,7 @@ class ApprovedOperations:
             _require(event == expected)
             _require(self._runtime_binding is None or self._runtime_binding == event)
             e1 = core.materialize_operation(self._core, 'E1', receipts)
-            operations = build_runtime_operations(self._manifest, self._authority, self._resource_bindings,
+            operations = self._build_runtime_operations(self._manifest, self._authority, self._resource_bindings,
                 receipts, event['policy_environment'], verify_policy=verify_policy, auth_operation=e1, deadline=event['deadline'])
             self._runtime_binding = deepcopy(event)
             self._runtime_operations = {op['id']: op for op in operations}

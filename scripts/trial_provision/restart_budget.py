@@ -64,17 +64,17 @@ def required_run_requests(schema, stage, *, http_used, owner_token_used):
     The live caller must compare this floor with both phase and global limits
     and authenticate the stage against its existing canonical ACK evidence.
     """
-    _integer(schema, 1, 9)
+    _integer(schema, 1, 10)
     if not isinstance(stage, str) or stage not in _LEGACY_FLOORS:
         raise ValueError('restart_admission_stage')
     _integer(http_used, 0, 42); _integer(owner_token_used, 0, 42)
-    if schema not in (6, 7, 8, 9):
+    if schema not in (6, 7, 8, 9, 10):
         return _LEGACY_FLOORS[stage]
-    token_allowance = 2 if schema == 9 else V7_RUN_TOKEN_ALLOWANCE if schema in (7, 8) else RUN_TOKEN_ALLOWANCE
-    poll_allowance = V7_RUN_POLL_ALLOWANCE if schema in (7, 8, 9) else RUN_POLL_ALLOWANCE
+    token_allowance = 2 if schema in (9, 10) else V7_RUN_TOKEN_ALLOWANCE if schema in (7, 8) else RUN_TOKEN_ALLOWANCE
+    poll_allowance = V7_RUN_POLL_ALLOWANCE if schema in (7, 8, 9, 10) else RUN_POLL_ALLOWANCE
     _integer(owner_token_used, 0, token_allowance)
-    normal_http = 17 if schema == 9 else sum(NORMAL_RUN_HTTP.values())
-    before = (9 if stage == 'main' else _HTTP_BEFORE[stage]) if schema == 9 else _HTTP_BEFORE[stage]
+    normal_http = 15 if schema == 10 else 17 if schema == 9 else sum(NORMAL_RUN_HTTP.values())
+    before = ((7 if schema == 10 else 9) if stage == 'main' else _HTTP_BEFORE[stage]) if schema in (9, 10) else _HTTP_BEFORE[stage]
     _integer(http_used, before, before + poll_allowance)
     # A new start must be the first run dispatch; prior requests cannot be
     # reinterpreted as another start's observation allowance.

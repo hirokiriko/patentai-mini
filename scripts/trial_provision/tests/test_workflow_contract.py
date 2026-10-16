@@ -731,14 +731,14 @@ class WorkflowContractTests(unittest.TestCase):
         # Measured adapter sends: foundation 96 + main PATCH 3 + OWNER 8 +
         # runtime PATCHes 6 + remaining Graph/secret/auth 22 = 135. The 170
         # HTTP allocation therefore preserves 35 poll/error observations.
-        self.assertEqual(provision['http'],(132 if self.verified.authority['schema']==9 else 135)+getattr(self,'expected_provision_polls',0))
-        self.assertEqual(provision['owner_token'],2 if self.verified.authority['schema']==9 else 1)
+        self.assertEqual(provision['http'],(98 if self.verified.authority['schema']==10 else 132 if self.verified.authority['schema']==9 else 135)+getattr(self,'expected_provision_polls',0))
+        self.assertEqual(provision['owner_token'],2 if self.verified.authority['schema'] in (9,10) else 1)
         self.assertLessEqual(provision['owner_token'],10)
         foundation={'webIdentity','workerIdentity','originals','artifacts','budget','journal','guard','job','app'}
         foundation.update('C'+str(i) for i in range(1,8));foundation.update('R'+str(i) for i in range(1,11))
         foundation.update('G'+str(i) for i in range(1,7))
         actions=[row for row in self.action_trace if row['action']=='create' and row['operation'] in foundation]
-        self.assertEqual(len(actions),32)
+        self.assertEqual(len(actions),19 if self.verified.authority['schema']==10 else 32)
         if getattr(self,'expected_provision_polls',0):
             self.assertTrue(all(Counter(m for m,_ in row['requests'])['PUT']==1 for row in actions))
         else:self.assertTrue(all(Counter(method for method,_ in row['requests'])=={'GET':2,'PUT':1} for row in actions))

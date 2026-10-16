@@ -23,7 +23,7 @@ def _read_child(pipe, request):
         url, headers, seconds = request
         u = urlsplit(url)
         connection = http.client.HTTPSConnection(u.hostname, timeout=seconds)
-        connection.request('GET', u.path + '?' + u.query, headers=headers)
+        connection.request('GET', (u.path or '/') + ('?' + u.query if u.query else ''), headers=headers)
         stage = 'response_headers'
         response = connection.getresponse(); status = response.status
         response_headers = {}
@@ -49,14 +49,25 @@ def _read_child(pipe, request):
 
 
 class ReadHttp:
-    def __call__(self, method, url, headers, body, deadline):
-        from .providers import RESOURCE
+    def _target(self, method, url, headers, body):
+        from .providers import RESOURCE, RG, NAME
         u = urlsplit(url)
         if (method != 'GET' or body is not None or u.scheme != 'https'
                 or u.netloc != 'management.azure.com' or u.fragment
+                or type(headers) is not dict or any(type(k) is not str or type(v) is not str for k,v in headers.items())
                 or url != 'https://management.azure.com' + u.path + '?' + u.query):
             raise Denied('read_http_target')
-        if re.fullmatch(RESOURCE['jobs'], u.path):
+        fixed = (
+            (RG + r'/providers/Microsoft\.ManagedIdentity/userAssignedIdentities', 'api-version=2023-01-31'),
+            (RG + r'/providers/Microsoft\.Storage/storageAccounts/[a-z0-9]{3,24}/blobServices/default/containers', 'api-version=2023-05-01'),
+            (RG + r'/providers/Microsoft\.CognitiveServices/accounts/' + NAME + r'/providers/Microsoft\.Authorization/roleDefinitions',
+                'api-version=2022-04-01&$filter=type%20eq%20%27CustomRole%27'),
+            (RG + r'/providers/Microsoft\.DBforPostgreSQL/flexibleServers/' + NAME + r'(?:/firewallRules)?', 'api-version=2024-08-01'),
+        )
+        matches = [query for pattern,query in fixed if re.fullmatch(pattern,u.path)]
+        if matches:
+            if matches != [u.query]: raise Denied('read_http_target')
+        elif '/providers/Microsoft.App/' in u.path and (re.fullmatch(RESOURCE['jobs'], u.path) or re.fullmatch(RESOURCE['containerApps'], u.path)):
             if u.query != 'api-version=2025-07-01':
                 raise Denied('read_http_target')
         else:
@@ -64,6 +75,9 @@ class ReadHttp:
             if collection not in dict(COLLECTIONS):
                 raise Denied('read_http_target')
             next_page(url, 'https://management.azure.com' + u.path + '?api-version=' + dict(COLLECTIONS)[collection])
+
+    def __call__(self, method, url, headers, body, deadline):
+        self._target(method, url, headers, body)
         deadline.remaining()
         ctx = multiprocessing.get_context('spawn')
         parent, child = ctx.Pipe(duplex=False)
@@ -96,6 +110,14 @@ class ReadHttp:
                 if process.is_alive(): process.kill(); process.join(timeout=1)
             parent.close(); child.close()
             if reader is not None: reader.join(timeout=1)
+
+
+class AnonymousIpHttp(ReadHttp):
+    """The two existing public-IP reads, without any authorization header."""
+    def _target(self, method, url, headers, body):
+        if (method != 'GET' or body is not None or headers != {}
+                or url not in ('https://api.ipify.org','https://checkip.amazonaws.com')):
+            raise Denied('read_http_target')
 
 
 class JobHttp(BoundedHttp):

@@ -549,3 +549,37 @@ failure body may be kept in a CurrentUser Windows DPAPI envelope in the existing
 OWNER-only directory. Neither plaintext bodies nor arbitrary provider text leave
 the protected process. Reclassification must verify the saved result's body hash
 and length, and does not issue another diagnostic or restart authority.
+
+### V8 partial-foundation continuation (schema 10)
+
+The separate continuation validates the exact 268-row lifetime prefix (384
+requests), both old stop records and the complete two-diagnostic grant/marker
+chain. It references all thirteen original intents and final ACKs without
+copying them into the new child or making their creates repeatable. The six
+resource operations and seven role operations retain their original request
+digests, allocations and cleanup deadlines. UNKNOWN reservations are unchanged.
+
+The proposed phase caps are fresh 10, publication 0, provision 102, run 18 and
+cleanup 117. The three cleanup requests already consumed plus the retained 117
+still total 120; no requests are refunded and the lifetime maximum remains 631.
+The normal continuation requires 123 HTTP requests and four token acquisitions,
+with two additional provision observations and one rehearsal poll reserved.
+All cache misses are charged, and insufficient token or observation capacity
+stops before invocation. Neither image is rebuilt or republished.
+
+Before any new foundation write, the one-shot collector reads the two fixed
+PIM collections, requiring complete responses and no references to the seven
+owned roles. A licensing error cannot be interpreted as zero references. Only
+then do three fixed Lists revalidate the two identities, four containers and
+seven roles. Main preflight separately rechecks roles and all six guardian/OWNER
+assignments through two complete Lists. Firewall absence uses the exact full
+parent List in both before/after passes. Pagination, malformed entries,
+ambiguous principals, extra guardian assignments and stale observations stop
+the attempt. These observations never replace ownership or final cleanup proof.
+
+The new guardian window must end at the original guardian deadline. OWNER and
+acceptance windows keep their prior relative offsets. No approval, license
+purchase, extra permission, live acceptance or deadline extension follows from
+the source implementation or its fictional-I/O tests. A direct approval bound
+to the final source, ledger, remaining allocation and new window is still
+required; the existing PIM licensing failure is a separate external gate.

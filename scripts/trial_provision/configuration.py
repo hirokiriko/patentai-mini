@@ -205,7 +205,7 @@ def _load_common_configuration(path, *, now, local_head, owner_context,
         preview_raw = _read_ref(config['attempt_evidence']['authority'], acl_check)
         _need(hashlib.sha256(preview_raw).hexdigest() == trusted_attempt_authority, 'attempt_trusted_authority')
         preview_authority = _json(preview_raw)
-        if type(preview_authority.get('schema')) is int and preview_authority['schema'] in (7, 8, 9):
+        if type(preview_authority.get('schema')) is int and preview_authority['schema'] in (7, 8, 9, 10):
             origin_manifest = _sha(preview_authority['origin_manifest_sha256'])
     # The V7 exception is usable only if full trusted succession verification
     # below succeeds. All unchanged source documents retain their old hashes.
