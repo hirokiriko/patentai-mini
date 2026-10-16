@@ -3,11 +3,13 @@ import Link from "next/link";
 import { caseRepo } from "@/repositories";
 import type { Case } from "@/repositories";
 import { NewCaseForm } from "./new-case-form";
+import { trialConfigured } from "../lib/trial/policy";
 
 export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
-  await requireOwner();
+  await requireOwner("/");
+  const trial = trialConfigured();
   let rows: Case[] = [];
   let dbError = false;
 
@@ -16,6 +18,7 @@ export default async function HomePage() {
   } catch {
     dbError = true;
   }
+  await requireOwner("/");
 
   if (dbError) {
     return (
@@ -35,8 +38,9 @@ export default async function HomePage() {
     <main className="mx-auto max-w-3xl px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">Patent Prior-Art Check</h1>
 
-      <p className="mb-6"><Link href="/admin/koho-updates" className="text-blue-700 underline">公報データを更新する</Link></p>
-      <NewCaseForm />
+      {!trial && <p className="mb-6"><Link href="/admin/koho-updates" className="text-blue-700 underline">公報データを更新する</Link></p>}
+      {trial && <p className="mb-6">公開サンプルを選んで比較を試せます。案件はサンプルを含め最大5件です。比較には運営者が準備したサンプルを使用します。</p>}
+      <NewCaseForm trial={trial} />
 
       <section className="mt-8">
         <h2 className="text-xl font-bold mb-3">案件一覧</h2>

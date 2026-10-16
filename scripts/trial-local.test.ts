@@ -1,0 +1,44 @@
+import { afterAll,afterEach,beforeAll,describe,expect,it,vi } from "vitest";
+import { drizzle } from "drizzle-orm/node-postgres";
+import * as schema from "../src/db/schema";
+import { isolatedPg16 } from "./watch-report-local.test-support";
+import { manualFixture } from "./koho-manual-import-fixtures";
+import { addFictionalManagedOriginal } from "./managed-base.test-support";
+import { prepareTrialPackage } from "../src/lib/trial/package";
+import { TrialLedger,trialHash } from "../src/lib/trial/ledger";
+import { ledgerFixture,pricedTrial } from "../src/lib/trial/ledger.test-support";
+import { signedTrialEnvironment } from "../src/lib/trial/policy.test-support";
+import { TRIAL_START,TRIAL_END } from "../src/lib/trial/policy";
+import { saveKohoImportPlan } from "../src/repositories/drizzle";
+import { ManagedWatchRepository } from "../src/repositories/managed-watch";
+describe.skipIf(process.env.WATCH_REPORT_LOCAL_DB_TEST!=="1")("trial isolated PG16 persistence",()=>{
+  let env:Awaited<ReturnType<typeof isolatedPg16>>;
+  beforeAll(async()=>{env=await isolatedPg16(129);},120000);
+  afterAll(async()=>{await env?.cleanup();},60000);
+  afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();});
+  it("verifies an immutable import without repairing a missing sidecar or changing the catalog",async()=>{
+    const bytes=manualFixture("JPA",1,{publicationDate:"2026-08-12",issue:"2026-148",control:"01115"}),p=await prepareTrialPackage(bytes,trialHash(bytes)),db=drizzle(env.admin,{schema});
+    await saveKohoImportPlan(db,p.plan,true,"inserted",p.managed.sources,p.managed.receipt);
+    expect((await saveKohoImportPlan(db,p.plan,true,"reused",p.managed.sources,p.managed.receipt,true)).savedDocumentCount).toBe(1);
+    await env.sql("delete from managed_publication_claims");
+    await expect(saveKohoImportPlan(db,p.plan,true,"reused",p.managed.sources,p.managed.receipt,true)).rejects.toThrow("managed_claim_source_missing");
+    expect((await env.sql("select count(*)::int as n from managed_publication_claims"))[0].n).toBe(0);
+  });
+  it("does not reserve for an active prepare; safely closes an unstarted run and settles a claimed run after expiry",async()=>{
+    const caseId=(await env.sql("insert into cases(title) values('FICTIONAL TRIAL') returning case_id"))[0].case_id as number;
+    const originals=new Map<string,Buffer>(),original=await addFictionalManagedOriginal(caseId,env.sql,originals);
+    const db=drizzle(env.admin,{schema}),repo=new ManagedWatchRepository(db,async(_id,_cat,key)=>({bytes:originals.get(key)!,contentType:"application/xml"}));
+    const period={from:"2026-01-26",to:"2026-02-25"};
+    await repo.saveSetting({caseId,contractSignedOn:"2026-01-25",monitoringStartsOn:period.from,contractEndsOn:"2026-12-31",enabled:true,base:original.base,source:original.source,selectedClaimNos:[1]});
+    const p=pricedTrial();p.samples=[{caseId,from:period.from,through:period.to}];p.cost!.databaseBaselineBytes=Number((await env.sql("select pg_database_size(current_database())::text as n"))[0].n);
+    const f=ledgerFixture(p);for(const[k,v]of Object.entries(signedTrialEnvironment(p)))vi.stubEnv(k,v);
+    vi.stubEnv("TRIAL_RUNTIME_ROLE","worker");vi.spyOn(Date,"now").mockReturnValue(Date.parse(TRIAL_START));vi.spyOn(TrialLedger,"configured").mockReturnValue(f.ledger);
+    const run=await repo.prepare(caseId,period),count=f.current().operations.length;
+    await expect(repo.prepare(caseId,period)).rejects.toThrow("in_progress");expect(f.current().operations).toHaveLength(count);
+    await repo.failUnstartedTrial(caseId,run.runId,run.snapshotDigest);expect((await repo.run(caseId,run.runId)).status).toBe("failed");
+    const second=await repo.prepare(caseId,period),claimed=await repo.claimTrial(caseId,second.runId,"trial-job-one",second.snapshotDigest,"2026-10-17T00:15:00Z");
+    await expect(repo.claimTrial(caseId,second.runId,"trial-job-two",second.snapshotDigest,"2026-10-17T00:15:00Z")).rejects.toThrow();
+    vi.spyOn(Date,"now").mockReturnValue(Date.parse(TRIAL_END));await repo.finalize(claimed);
+    expect((await repo.run(caseId,second.runId)).status).toBe("completed");
+  });
+});

@@ -10,33 +10,43 @@ import { managedDigest, validateManagedComparisons, type ManagedComparison } fro
 import { managedDeliveryDueOn, managedPeriodForPublication, JAPAN_HOLIDAYS, validateManagedPeriod, type PublicationPeriod } from "../lib/patent-watch/managed-period";
 import { ManagedWatchError } from "../lib/patent-watch/managed-types";
 import type { ManagedArtifactManifest } from "../lib/patent-watch/managed-storage";
+import { trialConfigured } from "../lib/trial/policy";
+import { reserveTrialDatabase } from "../lib/trial/database-capacity";
+import { acquireTrialFictionalDistribution, trialFictionalDistributionRows, trialFictionalManifest, trialFictionalManifestForStoredRead } from "../lib/trial/fictional-distribution";
+import { trialFictionalDigest } from "../lib/trial/fictional-manifest";
 type Database = NodePgDatabase<typeof schema>;
 const T = schema.managedWatchDeliveries, R = schema.managedWatchRuns, F = schema.managedWatchFindings;
 const requireState = (ok: unknown) => { if (!ok) throw new ManagedWatchError("incomplete"); };
 export class ManagedDeliveryRepository {
   constructor(private readonly database: Database) {}
-  async acquireDistribution() {
-    const snapshot = await acquireManagedDistribution(), T = schema.managedDistributionSnapshots;
-    await this.database.insert(T).values(snapshot).onConflictDoNothing({ target: T.sha256 });
+  async acquireDistribution(caseId?: number) {
+    const snapshot = trialConfigured() ? acquireTrialFictionalDistribution(caseId) : await acquireManagedDistribution(), T = schema.managedDistributionSnapshots;
+    const [prior]=await this.database.select().from(T).where(eq(T.sha256,snapshot.sha256));
+    const capacity=trialConfigured()&&!prior?await reserveTrialDatabase(this.database,`distribution:${snapshot.sha256}`,Buffer.byteLength(snapshot.csvText)+65536):null;
+    if(!prior)await this.database.insert(T).values(snapshot).onConflictDoNothing({ target: T.sha256 });
     const [stored] = await this.database.select().from(T).where(eq(T.sha256, snapshot.sha256));
     requireState(stored && stored.csvText === snapshot.csvText && stored.sourceUrl === snapshot.sourceUrl);
+    await capacity?.persisted();
     return { sha256: stored.sha256, acquiredAt: stored.acquiredAt };
   }
   async prepare(caseId: number, period: PublicationPeriod, coverageInput: unknown, reason: ManagedDelivery["reason"], deliveredOn: string | null = null, deliveryId:string = randomUUID(), deadline?:AbortSignal) {
     validateManagedPeriod(period);
+    const fixture = trialConfigured() ? trialFictionalManifest(caseId, period) : null;
     const coverage = validateManagedCoverage(coverageInput);
-    return this.database.transaction(async tx => {
+    const capacity=trialConfigured()?await reserveTrialDatabase(this.database,`delivery:${deliveryId}`,1024**2):null;
+    const result=await this.database.transaction(async tx => {
       await tx.execute(sql`select pg_advisory_xact_lock(129129::bigint)`);
       deadline?.throwIfAborted();
       const [already] = await tx.select({id:T.deliveryId}).from(T).where(eq(T.deliveryId,deliveryId));
       if(already)throw new ManagedWatchError("conflict");
       const setting = await new ManagedWatchRepository(tx as unknown as Database).setting(caseId);
       if (!setting) throw new ManagedWatchError("not_found");
+      if (fixture) requireState(setting.source.sha256 === fixture.records.find(row => row.caseId === caseId)?.originalXmlSha256);
       const expectedPeriod = managedPeriodForPublication(setting.monitoringStartsOn, period.to);
       requireState(expectedPeriod?.from === period.from && expectedPeriod.to === period.to);
       const [distribution] = await tx.select().from(schema.managedDistributionSnapshots).where(eq(schema.managedDistributionSnapshots.sha256, coverage.distributionTableSha256));
       requireState(distribution);
-      const packages = managedDistributionRows(distribution, period);
+      const packages = fixture ? trialFictionalDistributionRows(distribution, fixture) : managedDistributionRows(distribution, period);
       requireState(packages.length <= 64);
       const [previous] = await tx.select().from(T).where(and(eq(T.settingId, setting.settingId), eq(T.periodFrom, period.from), eq(T.periodTo, period.to))).orderBy(desc(T.version)).limit(1);
       requireState(!previous || ["stored", "abandoned"].includes(previous.status));
@@ -60,6 +70,9 @@ export class ManagedDeliveryRepository {
         requireState(matches.length <= 1);
         if (matches.length) {
           const { run, receipt: stored } = matches[0], receipt = managedPackageReceiptSchema.parse(JSON.parse(stored.receiptJson));
+          if (fixture) requireState(run.sourceSha256 === fixture.packageSha256 && receipt.sourceSha256 === fixture.packageSha256 &&
+            receipt.documentCount === fixture.records.length && receipt.publishedAmendments === 0 && receipt.translatedAmendments === 0 &&
+            (receipt.translatedCorrections ?? 0) === 0 && receipt.amendmentCount === 0 && receipt.corrections.length === 0);
           requireState(managedDigest(receipt) === stored.receiptDigest && receipt.sourceSha256 === run.sourceSha256 && stored.sourceSha256 === run.sourceSha256 &&
             stored.publicationDate === receipt.publicationDate && receipt.publicationDate === pkg.publicationDate && receipt.issueNumber === pkg.issueNumber &&
             receipt.cumulativeIssue === pkg.cumulativeIssue && run.packageStatus !== "failed" && run.documentCount === receipt.documentCount &&
@@ -112,6 +125,7 @@ export class ManagedDeliveryRepository {
           actual!.total++; actual![d.kind as "A1" | "P1"]++;
           if (!m || m.status!=="complete") incompleteDocuments++;
           const key=managedDigest({publicationNumber:d.publicationNumber,content:d.contentSha256,numberedClaims:m?.claimsDigest??null,completeness:m?.status??"missing"});
+          if (fixture) requireState(fixture.records.some(row => row.sourceKey === key && row.kind === d.kind && row.publicationDate === d.publicationDate));
           periodSources.add(key);
           if (sourceKeys.has(key)) processedDocuments++;
         }
@@ -120,6 +134,7 @@ export class ManagedDeliveryRepository {
         const actual = actualCounts.get(id)!;
         return actual.A1 === expected.A1 && actual.P1 === expected.P1 && actual.total === expected.total;
       }));
+      if (fixture) requireState(periodSources.size === fixture.records.length && fixture.records.every(row => periodSources.has(row.sourceKey)));
       const storedFindings = await tx.select().from(F).where(and(eq(F.settingId,setting.settingId),eq(F.baseDigest,setting.baseDigest),eq(F.periodFrom,period.from),eq(F.periodTo,period.to)))
         .orderBy(asc(F.publicationDate),asc(F.findingId)).limit(20_001);
       requireState(storedFindings.length<=20_000);
@@ -156,6 +171,7 @@ export class ManagedDeliveryRepository {
       const active=relevant.filter(r=>["prepared","running","unknown"].includes(r.status));
       deadline?.throwIfAborted();
       const report=projectManagedDeliveryDisplay(validateManagedDelivery({schema:1,deliveryId,caseId,version:(previous?.version??0)+1,previousDeliveryId:previous?.deliveryId??null,reason,
+        ...(fixture ? { provenance: "fictional_trial" } : {}),
         period,generatedAt:new Date().toISOString(),deliveryDueOn:managedDeliveryDueOn(period,JAPAN_HOLIDAYS),deliveredOn,
         contractSignedOn:setting.contractSignedOn,monitoringStartsOn:setting.monitoringStartsOn,contractEndsOn:setting.contractEndsOn,
         base:{publicationNumber:setting.base.publicationNumber,version:setting.base.version,selectedClaimNos:setting.selectedClaimNos},
@@ -164,17 +180,23 @@ export class ManagedDeliveryRepository {
           prefiltered:completed.reduce((n,r)=>n+r.snapshot.candidates.filter(c=>c.publicationDate>=period.from&&c.publicationDate<=period.to).length,0),compared:findings.length,completedRuns:completed.length,failedRuns:failed.length,activeRuns:active.length,
           acquiredAt:new Date(distribution.acquiredAt).toISOString(),comparedAt:lastCompleted?.completedAt?new Date(lastCompleted.completedAt).toISOString():null,
           complete:availableIds.length===packages.length && processedDocuments===importedDocuments && completed.length>0 && !incompleteDocuments && !unresolvedCorrections && !failed.length && !active.length},findings}));
-      const snapshotJson=JSON.stringify(report);requireState(Buffer.byteLength(snapshotJson)<=16*1024**2);
+      const snapshotJson=JSON.stringify(report);requireState(Buffer.byteLength(snapshotJson)<=(trialConfigured()?1:16)*1024**2);
       await tx.insert(T).values({deliveryId:report.deliveryId,settingId:setting.settingId,caseId,periodFrom:period.from,periodTo:period.to,
         version:report.version,previousDeliveryId:report.previousDeliveryId,reason,status:"prepared",baseDigest:setting.baseDigest,
         distributionSha256:distribution.sha256,snapshotJson,snapshotDigest:managedDigest(report),deliveredOn});
       return report;
     },{isolationLevel:"repeatable read"});
+    await capacity?.persisted();return result;
   }
   async get(caseId:number,deliveryId:string) {
     const [row]=await this.database.select().from(T).where(and(eq(T.caseId,caseId),eq(T.deliveryId,deliveryId)));
     if(!row)throw new ManagedWatchError("not_found");
     const report=validateManagedDelivery(JSON.parse(row.snapshotJson));
+    if (trialConfigured()) {
+      const fixture = trialFictionalManifestForStoredRead(caseId, report.period);
+      requireState(report.provenance === "fictional_trial" && row.distributionSha256 === trialFictionalDigest(fixture));
+    }
+    else requireState(report.provenance === undefined);
     requireState(report.caseId===caseId&&report.deliveryId===deliveryId&&managedDigest(report)===row.snapshotDigest&&report.version===row.version);
     return {report,status:row.status,manifest:row.blobManifestJson?JSON.parse(row.blobManifestJson) as ManagedArtifactManifest:null};
   }

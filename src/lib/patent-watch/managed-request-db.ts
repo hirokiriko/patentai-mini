@@ -3,6 +3,9 @@ import { Client, type QueryConfig } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "../../db/schema";
 import { ManagedWatchError } from "./managed-types";
+import { assertTrialDatabase, readTrialPolicy, requireTrialActive, trialConfigured, TrialError } from "../trial/policy";
+
+let trialProcessingBusy = false;
 
 /** Dedicated connection: server-side cancellation, including locks and COMMIT.
  * An expired write is left unknown; no Promise.race leaves a background query. */
@@ -35,14 +38,18 @@ export function managedDeadlineDatabase(client:Client,milliseconds:number){
 export async function withManagedDeliveryDatabase<T>(operation:(db:ReturnType<typeof managedDeadlineDatabase>,deadline:AbortSignal)=>Promise<T>,milliseconds=90_000):Promise<T>{
   if(!Number.isInteger(milliseconds)||milliseconds<1000||milliseconds>90_000)throw new ManagedWatchError("unavailable");
   const connectionString=process.env.DATABASE_URL;if(!connectionString)throw new ManagedWatchError("unavailable");
+  const trial=trialConfigured(),policy=trial?readTrialPolicy():null;
+  if(policy){requireTrialActive(policy);assertTrialDatabase(policy,connectionString);if(trialProcessingBusy)throw new TrialError("trial_busy");}
+  const url=policy?new URL(connectionString):null;
   const deadline=AbortSignal.timeout(milliseconds),started=performance.now();
-  const client=new Client({connectionString,connectionTimeoutMillis:5000,statement_timeout:20_000,query_timeout:21_000,lock_timeout:5000,
+  const client=new Client({...(policy&&url?{host:policy.database.host,port:policy.database.port,database:policy.database.database,user:policy.database.webUser,password:decodeURIComponent(url.password),ssl:{rejectUnauthorized:true},options:"-c search_path=pg_catalog,public"}:{connectionString}),connectionTimeoutMillis:5000,statement_timeout:20_000,query_timeout:21_000,lock_timeout:5000,
     idle_in_transaction_session_timeout:30_000,application_name:"managed-delivery-request"});
   client.on("error",()=>undefined);
+  if(trial)trialProcessingBusy=true;
   let closing:Promise<void>|undefined;
   // Closing this dedicated connection interrupts in-flight client IO at the
   // shared deadline. COMMIT may already have reached PG: reconcile, never resend.
   const timer=setTimeout(()=>{closing=client.end().catch(()=>undefined);},milliseconds);
   try{await client.connect();return await operation(managedDeadlineDatabase(client,milliseconds-(performance.now()-started)),deadline);}
-  finally{clearTimeout(timer);await(closing??client.end().catch(()=>undefined));}
+  finally{clearTimeout(timer);await(closing??client.end().catch(()=>undefined));if(trial)trialProcessingBusy=false;}
 }

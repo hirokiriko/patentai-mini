@@ -1,6 +1,11 @@
 import { Client } from "pg";
+import { assertTrialDatabase, readTrialPolicy, trialConfigured } from "./trial/policy";
 
 export async function checkDatabaseHealth(): Promise<boolean> {
+  if (trialConfigured()) {
+    // Trial health is a minimal process/configuration check, not a new DB connection.
+    try { assertTrialDatabase(readTrialPolicy(), process.env.DATABASE_URL); return true; } catch { return false; }
+  }
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) return false;
 

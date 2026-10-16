@@ -226,6 +226,7 @@ async function extractClaimsWithinBudget(
         });
 
         if (object.claims.length === 0) {
+          if (trialConfigured()) throw new TrialError("trial_extraction_incomplete");
           console.warn(
             "[extract-claims] AI returned no claims; using fallback parser"
           );
@@ -237,6 +238,7 @@ async function extractClaimsWithinBudget(
       { attempts: aiProviderRetries(1) + 1 }
     );
   } catch (error) {
+    if (trialConfigured()) throw new TrialError("trial_extraction_incomplete");
     if (abortSignal.aborted || isAiOperationStopped(error)) throw new AiOperationStopped();
     console.warn(
       "[extract-claims] using fallback parser after AI failure"
@@ -246,5 +248,13 @@ async function extractClaimsWithinBudget(
 }
 
 export function extractClaims(parsedText: string): Promise<ExtractedClaims> {
+  // Do not turn missing trial admission into a successful fallback extraction.
+  if (trialConfigured()) return Promise.reject(new TrialError("trial_budget_unavailable"));
   return withAiOperationBudget({ normal: 0, fast: 4 }, () => extractClaimsWithinBudget(parsedText));
 }
+/** Only callable inside the durable trial extraction scope; getFastModel enforces it. */
+export function extractTrialClaims(parsedText: string): Promise<ExtractedClaims> {
+  if (!trialConfigured() || parsedText.length > 15000) return Promise.reject(new TrialError("trial_input_limit"));
+  return extractClaimsWithinBudget(parsedText);
+}
+import { trialConfigured, TrialError } from "./trial/policy";

@@ -3,6 +3,9 @@ import { cloudTargetSchema } from "../koho-import/cloud-config";
 import { managedArtifactContextSchema, type ManagedArtifactAdmission, type ManagedArtifactContext } from "./managed-artifact-contract";
 import { ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
 import { ManagedBudgetError } from "./managed-service-budget";
+import { trialConfigured, requireTrialActive, TrialError } from "../trial/policy";
+import { TrialLedger, trialHash } from "../trial/ledger";
+import { verifyTrialBuild } from "../trial/runtime";
 
 export function managedArtifactDatabaseTarget(connectionString: string) {
   try {
@@ -22,6 +25,16 @@ export function managedArtifactDatabaseTarget(connectionString: string) {
  * nor an installed budget credential. Never return a URL/password in diagnostics. */
 export function configuredManagedArtifactAdmission(verifiedTarget?: ManagedArtifactContext["target"]): ManagedArtifactAdmission {
   return async (intent, containerUrl, deadline) => {
+    if (trialConfigured()) {
+      const ledger=TrialLedger.configured(),p=ledger.policy;requireTrialActive(p);await verifyTrialBuild(p);deadline.throwIfAborted();
+      if(intent.kind!=="delivery"||containerUrl!==`https://${p.storage.account}.blob.core.windows.net/${p.storage.artifacts}`||
+        !p.samples.some(s=>s.caseId===intent.caseId))throw new TrialError("trial_artifact_denied");
+      const hash=trialHash(JSON.stringify(intent));
+      const r=await ledger.reserve({id:trialHash(`delivery:${intent.deliveryId}`),intent:hash,kind:"artifact",bytes:48*1024**2,
+        storageKey:`cases/${intent.caseId}/managed-deliveries/${intent.deliveryId}`});
+      if(!r.created)throw new TrialError("trial_artifact_already_reserved");
+      await ledger.claimDispatch(r.operation.id);return;
+    }
     try {
       deadline.throwIfAborted();
       let target = verifiedTarget;

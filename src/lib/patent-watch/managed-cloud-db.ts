@@ -35,6 +35,67 @@ export async function inspectManagedCloudDatabase(client: Client, target: Manage
     [corpusTables.map(t=>`public.${t}`),["managed_watch_runs","managed_watch_dispatches","managed_watch_findings","managed_watch_job_starts"].map(t=>`public.${t}`),[...appTables,...corpusTables],appSequences])).rows[0];
   check(access?.no_create&&access.corpus_read&&access.watch_write&&access.bounded_scope&&access.acl_bounded&&access.no_definer);
 }
+
+// Trial workers claim an existing run. They do not create runs, mutate settings,
+// review findings, or use the standard worker's job-start reservation table.
+const trialReadTables = ["trial_network_budget", "cases", "draft_patents", "prior_art_documents", "koho_import_documents", "koho_import_runs", "managed_publication_claims",
+  "managed_import_receipts", "managed_distribution_snapshots", "managed_watch_settings", "managed_watch_runs", "managed_watch_dispatches", "managed_watch_findings", "managed_watch_deliveries"];
+const trialInsertTables = ["trial_network_budget", "managed_watch_dispatches", "managed_watch_findings"];
+const trialUpdateTables = ["managed_watch_runs", "managed_watch_dispatches"];
+const trialSequences = ["managed_watch_dispatches_dispatch_id_seq", "managed_watch_findings_finding_id_seq"];
+
+/** Validate the dedicated trial worker's effective ACL, including PUBLIC and
+ * column grants, without changing the standard managed worker contract. */
+export async function inspectTrialCloudDatabase(client: Client, target: ManagedCloudConfiguration["target"]) {
+  const identity = (await client.query(`select current_database() as db,current_user as usr,current_setting('server_version_num')::int/10000 as major,
+    pg_is_in_recovery() as recovery,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls,
+    exists(select 1 from pg_auth_members where member=(select oid from pg_roles where rolname=current_user)) as member,
+    exists(select 1 from pg_database where datname=current_database() and datdba=(select oid from pg_roles where rolname=current_user)) as owner,
+    (select ssl from pg_stat_ssl where pid=pg_backend_pid()) as tls from pg_roles where rolname=current_user`)).rows[0];
+  check(identity?.db === target.database && identity.usr === target.user && identity.major === 16 && identity.tls === true &&
+    identity.rolcanlogin && !identity.recovery && !identity.rolsuper && !identity.rolcreatedb && !identity.rolcreaterole &&
+    !identity.rolreplication && !identity.rolbypassrls && !identity.member && !identity.owner);
+  const access = (await client.query(`select
+    not has_database_privilege(current_database(),'CREATE') and has_schema_privilege('public','USAGE') and
+      not exists(select 1 from pg_namespace n where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and
+        (has_schema_privilege(n.oid,'CREATE') or n.nspowner=(select oid from pg_roles where rolname=current_user))) as no_create,
+    (select bool_and(has_table_privilege('public.'||t,'SELECT')) from unnest($1::text[]) t) as read_required,
+    (select bool_and(has_table_privilege('public.'||t,'INSERT')) from unnest($2::text[]) t) as insert_required,
+    (select bool_and(has_table_privilege('public.'||t,'UPDATE')) from unnest($3::text[]) t) as update_required,
+    (select bool_and(has_column_privilege('public.trial_network_budget',c,'UPDATE'))
+      from unnest(array['requests','reserved_bytes','observed_bytes','http_status']) c)
+      and not has_table_privilege('public.trial_network_budget','UPDATE')
+      and not exists(select 1 from pg_attribute where attrelid='public.trial_network_budget'::regclass and attnum>0 and not attisdropped
+        and attname<>all(array['requests','reserved_bytes','observed_bytes','http_status']) and has_column_privilege(attrelid,attnum,'UPDATE')) as network_columns,
+    (select bool_and(has_sequence_privilege('public.'||s,'USAGE')) from unnest($4::text[]) s) as sequence_required,
+    not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind in ('r','p','v','m','f') and (
+        c.relowner=(select oid from pg_roles where rolname=current_user) or
+        has_table_privilege(c.oid,'DELETE,TRUNCATE,REFERENCES,TRIGGER') or has_any_column_privilege(c.oid,'REFERENCES') or
+        ((n.nspname<>'public' or c.relname<>all($1::text[])) and
+          (has_table_privilege(c.oid,'SELECT') or has_any_column_privilege(c.oid,'SELECT'))) or
+        ((n.nspname<>'public' or c.relname<>all($2::text[])) and
+          (has_table_privilege(c.oid,'INSERT') or has_any_column_privilege(c.oid,'INSERT'))) or
+        ((n.nspname<>'public' or (c.relname<>all($3::text[]) and c.relname<>'trial_network_budget')) and
+          (has_table_privilege(c.oid,'UPDATE') or has_any_column_privilege(c.oid,'UPDATE'))))) as tables_bounded,
+    not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and c.relkind='S' and (
+        c.relowner=(select oid from pg_roles where rolname=current_user) or has_sequence_privilege(c.oid,'SELECT,UPDATE') or
+        ((n.nspname<>'public' or c.relname<>all($4::text[])) and has_sequence_privilege(c.oid,'USAGE')))) as sequences_bounded,
+    not exists(select 1 from pg_namespace n,lateral aclexplode(n.nspacl) a
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and a.grantee=(select oid from pg_roles where rolname=current_user) and a.is_grantable) and
+    not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace,lateral aclexplode(c.relacl) a
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and a.grantee=(select oid from pg_roles where rolname=current_user) and a.is_grantable) and
+    not exists(select 1 from pg_attribute at join pg_class c on c.oid=at.attrelid join pg_namespace n on n.oid=c.relnamespace,lateral aclexplode(at.attacl) a
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and a.grantee=(select oid from pg_roles where rolname=current_user) and a.is_grantable) as no_grant_option,
+    not exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname !~ '^pg_' and n.nspname<>'information_schema' and
+        (p.proowner=(select oid from pg_roles where rolname=current_user) or (p.prosecdef and has_function_privilege(p.oid,'EXECUTE')))) as no_definer`,
+    [trialReadTables, trialInsertTables, trialUpdateTables, trialSequences])).rows[0];
+  check(access?.no_create && access.read_required && access.insert_required && access.update_required && access.sequence_required &&
+    access.tables_bounded && access.sequences_bounded && access.no_grant_option && access.no_definer && access.network_columns);
+}
+
 /** Uses only the fixed app LOGIN and bounded TLS connection, never a generic DATABASE_URL. */
 export async function openManagedCloudDatabase(config:Pick<ManagedCloudConfiguration,"target">,password:string){
   check(typeof password==="string"&&password.length>0&&password.length<=8192);

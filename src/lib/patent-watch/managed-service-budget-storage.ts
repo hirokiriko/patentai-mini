@@ -16,6 +16,7 @@ import { managedCloudConfigSchema, parseManagedCloudConfiguration, parseManagedC
 import { parseCloudConfiguration, parseManagedCloudImportConfiguration, isManagedCloudConfiguration, parseCloudManifest, isManagedCloudManifest, sha256, cloudSourceName, cloudManifestName, cloudReceiptPrefix } from "../koho-import/cloud-config";
 import { readVerifiedArchive } from "../koho-import/managed-archive";
 import { isAzureBlobNotFound } from "../azure-blob-errors";
+import { trialConfigured, TrialError } from "../trial/policy";
 import { archiveRenewalInputSchema, archiveRenewalReferenceSchema, archiveRenewalRecordSchema, archiveRenewalName, archiveRenewalBinding, stableArchiveOperationDigest } from "../koho-import/archive-expiry-renewal";
 
 // The storage binding comes from the installed operator/worker environment, never
@@ -51,6 +52,7 @@ export class ManagedServiceBudgetStorage {
     return new ManagedServiceBudgetStorage(service.getContainerClient(b.container), b);
   }
   static configured(env: Record<string, string | undefined> = process.env) {
+    if(trialConfigured(env))throw new TrialError("trial_budget_unavailable");
     const b = managedBudgetBindingFromEnvironment(env);
     check(env.AZURE_STORAGE_CONNECTION_STRING);
     const service = BlobServiceClient.fromConnectionString(env.AZURE_STORAGE_CONNECTION_STRING!, options);

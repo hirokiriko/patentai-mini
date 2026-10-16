@@ -2,6 +2,8 @@ import { withOwnerRoute } from "@/lib/owner-http";
 import { NextResponse } from "next/server";
 import { deleteOriginalFiles } from "@/lib/blob-storage";
 import { caseRepo, removeCaseWithOriginals } from "@/repositories";
+import { trialConfigured } from "../../../../lib/trial/policy";
+import { trialCaseInput } from "../../../../lib/trial/input";
 
  async function handleGET(
   _request: Request,
@@ -19,6 +21,12 @@ import { caseRepo, removeCaseWithOriginals } from "@/repositories";
 ) {
   const { caseId } = await params;
   const body = await request.json();
+  if (trialConfigured()) {
+    const input = trialCaseInput.safeParse(body);
+    if (!input.success) return NextResponse.json({ error: "title_only_required" }, { status: 400 });
+    const updated = await caseRepo.update(Number(caseId), input.data);
+    return updated ? NextResponse.json(updated) : NextResponse.json({ error: "not found" }, { status: 404 });
+  }
   const row = await caseRepo.update(Number(caseId), body);
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json(row);

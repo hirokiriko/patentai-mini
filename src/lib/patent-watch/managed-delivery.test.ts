@@ -2,10 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 import { DOMMatrix, ImageData, Path2D } from "@napi-rs/canvas";
 import { parse } from "csv-parse/sync";
 import { mkdir, writeFile } from "node:fs/promises";
-import { generateManagedDeliveryPdf, managedDeliveryBlocks, managedDeliveryCsv, managedExplanation, managedExplanations, validateManagedDelivery } from "./managed-delivery";
+import { generateManagedDeliveryPdf, managedDeliveryBlocks, managedDeliveryCsv, managedExplanation, managedExplanations, validateManagedDelivery, FICTIONAL_TRIAL_NOTICE, FICTIONAL_TRIAL_SOURCE_NOTICE, MANAGED_SOURCE_NOTICE } from "./managed-delivery";
+import { managedDigest } from "./managed-claims";
 import { managedDeliveryFixture } from "./managed-delivery.test-support";
 Object.assign(globalThis, { DOMMatrix, ImageData, Path2D });
 describe("managed immutable delivery display", () => {
+  it("retains legacy snapshot hashes and labels fictional zero/incomplete reports from saved provenance", () => {
+    const old=managedDeliveryFixture(), before=managedDigest(old);
+    expect(managedDigest(validateManagedDelivery(old))).toBe(before);
+    expect(Object.hasOwn(validateManagedDelivery(old),"provenance")).toBe(false);
+    for(const complete of [true,false]){
+      const report={...managedDeliveryFixture(0,complete),provenance:"fictional_trial" as const};
+      const csv=managedDeliveryCsv(report).toString(), blocks=[...managedDeliveryBlocks(report)].map(b=>b.text).join("\n");
+      expect(csv).toContain(FICTIONAL_TRIAL_NOTICE);expect(blocks).toContain(FICTIONAL_TRIAL_SOURCE_NOTICE);
+      expect(csv+blocks).not.toContain(MANAGED_SOURCE_NOTICE);
+      expect(csv).toContain(complete?"詳細比較候補0件":"未完了のため候補の有無は未確定");
+      expect((parse(csv,{bom:true}) as string[][]).every(row=>row.length===44)).toBe(true);
+    }
+    expect(()=>validateManagedDelivery({...old,provenance:"official"})).toThrow("incomplete");
+  });
   it("keeps legacy values and evidence immutable while every tier disappears from new outputs", () => {
     const r = managedDeliveryFixture(4);
     const tiers = ["High", "Medium", "Low", "Unknown"] as const;

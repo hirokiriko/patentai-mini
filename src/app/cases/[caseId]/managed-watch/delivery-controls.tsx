@@ -2,12 +2,13 @@
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 const control="rounded border px-3 py-2 disabled:opacity-50";
+type FixedPeriod = { from: string; through: string };
 class RejectedInput extends Error {}
 async function post(url:string,value:unknown){
   const response=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(value),cache:"no-store",signal:AbortSignal.timeout(110_000)});
   if(!response.ok){const body=await response.json().catch(()=>null);if(response.status===400&&body?.error==="invalid_setting")throw new RejectedInput();throw Error();}return response.json();
 }
-export function WatchPrepare({caseId}:{caseId:number}){
+export function WatchPrepare({caseId,fixedPeriod}:{caseId:number;fixedPeriod?:FixedPeriod}){
   const router=useRouter(),[busy,setBusy]=useState(false),[attempted,setAttempted]=useState(false),[message,setMessage]=useState("");
   async function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(busy||attempted)return;const data=new FormData(event.currentTarget);setBusy(true);setAttempted(true);
@@ -17,8 +18,9 @@ export function WatchPrepare({caseId}:{caseId:number}){
     finally{setBusy(false);router.refresh();}
   }
   return <section className="space-y-3 rounded border p-5"><h2 className="text-xl font-semibold">比較の実行準備</h2><p>取得済み公報から対象を固定します。準備だけではAI比較は開始されません。</p>
-    <form className="flex flex-wrap items-end gap-4" onSubmit={submit}><label>対象公開期間の開始<input className={`${control} block`} type="date" name="from" required disabled={busy||attempted}/></label>
-      <label>締め日<input className={`${control} block`} type="date" name="to" required disabled={busy||attempted}/></label><button className={control} disabled={busy||attempted}>クラウドで準備</button></form><p role="status">{message}</p></section>;
+    {fixedPeriod&&<p>試用サンプルの対象公開期間は固定されています。利用可能期間とは異なります。</p>}
+    <form className="flex flex-wrap items-end gap-4" onSubmit={submit}><label>対象公開期間の開始<input className={`${control} block`} type="date" name="from" defaultValue={fixedPeriod?.from} readOnly={!!fixedPeriod} required disabled={busy||attempted}/></label>
+      <label>締め日<input className={`${control} block`} type="date" name="to" defaultValue={fixedPeriod?.through} readOnly={!!fixedPeriod} required disabled={busy||attempted}/></label><button className={control} disabled={busy||attempted}>クラウドで準備</button></form><p role="status">{message}</p></section>;
 }
 export function WatchStart({ caseId, runId, reserved }: { caseId: number; runId: string; reserved: boolean }) {
   const router = useRouter(), [busy, setBusy] = useState(false), [sent, setSent] = useState(false), [message, setMessage] = useState("");
@@ -42,19 +44,19 @@ export function WatchStart({ caseId, runId, reserved }: { caseId: number; runId:
     <button className={control} disabled={busy} onClick={() => void act("reconcile")}>比較の状態を確認</button>
   </div><p role="status">{message}</p></div>;
 }
-export function DeliveryCreate({caseId}:{caseId:number}){
+export function DeliveryCreate({caseId,fixedPeriod,fictional=false}:{caseId:number;fixedPeriod?:FixedPeriod;fictional?:boolean}){
   const router=useRouter(),[busy,setBusy]=useState(false),[attempted,setAttempted]=useState(false),[message,setMessage]=useState("");
   async function submit(event:FormEvent<HTMLFormElement>){
     event.preventDefault();if(busy||attempted)return;
     const form=new FormData(event.currentTarget),id=crypto.randomUUID();let sent=false;setBusy(true);
     try{
-      setMessage("公式配布一覧を確認しています。");
+      setMessage(fictional ? "承認済みの架空資料集合を確認しています。" : "公式配布一覧を確認しています。");
       const distribution=await post(`/api/cases/${caseId}/managed-watch/distribution`,{});
       sent=true;setAttempted(true);
       setMessage("クラウドで納品版を作成しています。応答待ちの間は再操作しないでください。");
       const result=await post(`/api/cases/${caseId}/managed-watch/deliveries`,{deliveryId:id,period:{from:form.get("from"),to:form.get("to")},
         distributionTableSha256:distribution.sha256,reason:form.get("reason"),deliveredOn:form.get("deliveredOn")||null});
-      setMessage(result.complete?"納品版を保存しました。PDF・CSVを確認してから手動で納品してください。":"未完了の範囲を明記した版を保存しました。候補0件とは扱わず、不足を確認してください。");router.refresh();
+      setMessage(result.complete ? (fictional ? "架空資料の試用版を保存しました。PDF・CSVと保存内容を確認してください。" : "納品版を保存しました。PDF・CSVを確認してから手動で納品してください。") : "未完了の範囲を明記した版を保存しました。候補0件とは扱わず、不足を確認してください。");router.refresh();
     }catch(error){if(sent&&error instanceof RejectedInput){setAttempted(false);setMessage("対象期間・納品日を確認して修正してください。納品版の作成は受け付けられていません。");}
       else setMessage(sent?`結果の照合が必要です。作成を再送せず、一覧の保存状態を確認してください。照合番号: ${id}`:"配布一覧を確認できませんでした。納品版の作成は送信していません。再度確認できます。");router.refresh();}
     finally{setBusy(false);}
@@ -62,25 +64,25 @@ export function DeliveryCreate({caseId}:{caseId:number}){
   return <section className="space-y-3 rounded border p-5"><h2 className="text-xl font-semibold">納品版を作成</h2>
     <p>公報の取得・比較と確認状態の保存を済ませてから作成します。不足がある場合は未完了の版として記録します。</p>
     <form className="flex flex-wrap items-end gap-4" onSubmit={submit}>
-      <label>対象公開期間の開始<input className={`${control} block`} type="date" name="from" required disabled={busy||attempted}/></label>
-      <label>締め日<input className={`${control} block`} type="date" name="to" required disabled={busy||attempted}/></label>
+      <label>対象公開期間の開始<input className={`${control} block`} type="date" name="from" defaultValue={fixedPeriod?.from} readOnly={!!fixedPeriod} required disabled={busy||attempted}/></label>
+      <label>締め日<input className={`${control} block`} type="date" name="to" defaultValue={fixedPeriod?.through} readOnly={!!fixedPeriod} required disabled={busy||attempted}/></label>
       <label>版の理由<select className={`${control} block`} name="reason" disabled={busy||attempted}><option value="initial">初回版</option><option value="late_publication">遅延公報の補足</option><option value="correction">訂正・変更版</option><option value="review_update">確認状態の更新</option></select></label>
       <label>納品日（未納品なら空欄）<input className={`${control} block`} type="date" name="deliveredOn" disabled={busy||attempted}/></label>
       <button className={`${control} bg-blue-700 text-white`} disabled={busy||attempted} type="submit">クラウドで作成</button>
     </form><p role="status" className="whitespace-pre-wrap">{message}</p>
   </section>;
 }
-export function DeliveryReconcile({caseId,deliveryId}:{caseId:number;deliveryId:string}){
+export function DeliveryReconcile({caseId,deliveryId,trial=false}:{caseId:number;deliveryId:string;trial?:boolean}){
   const router=useRouter(),[busy,setBusy]=useState(false),[message,setMessage]=useState("");
   async function check(abandonPartial:boolean){
     if(busy)return;setBusy(true);
     try{const result=await post(`/api/cases/${caseId}/managed-watch/deliveries/${deliveryId}/reconcile`,{abandonPartial});
-      setMessage(result.status==="stored"?"3つの保存物を確認しました。":result.status==="abandoned"?"この版の保存を中断として記録しました。必要なら新しい版を作成してください。":"保存は未完了です。10分以上経過後に中断を確定できます。");router.refresh();
-    }catch{setMessage("照合が完了していません。作成を再送しないでください。中断の確定は作成から10分以上経過後に行えます。");}
+      setMessage(result.status==="stored"?"3つの保存物を確認しました。":result.status==="abandoned"?"この版の保存を中断として記録しました。必要なら新しい版を作成してください。":trial?"保存は未完了です。再作成せず、運用担当へ照合を依頼してください。":"保存は未完了です。10分以上経過後に中断を確定できます。");router.refresh();
+    }catch{setMessage(trial?"照合が完了していません。作成を再送せず、運用担当へ照合を依頼してください。":"照合が完了していません。作成を再送しないでください。中断の確定は作成から10分以上経過後に行えます。");}
     finally{setBusy(false);}
   }
   return <div className="mt-3 space-y-2"><div className="flex gap-3"><button className={control} disabled={busy} onClick={()=>void check(false)}>保存結果を照合</button>
-    <button className={control} disabled={busy} onClick={()=>void check(true)}>10分経過後の保存中断を確定</button></div><p role="status">{message}</p></div>;
+    {!trial&&<button className={control} disabled={busy} onClick={()=>void check(true)}>10分経過後の保存中断を確定</button>}</div><p role="status">{message}</p></div>;
 }
 export function FindingReview({caseId,findingId}:{caseId:number;findingId:number}){
   const [busy,setBusy]=useState(false),[message,setMessage]=useState("");

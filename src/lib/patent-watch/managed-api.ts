@@ -4,6 +4,7 @@ import { ManagedWatchRepository } from "../../repositories/managed-watch";
 import { ManagedDeliveryRepository } from "../../repositories/managed-delivery";
 import { ManagedWatchError } from "./managed-types";
 import { managedDate, ManagedPeriodError, validateManagedPeriod } from "./managed-period";
+import { TrialError } from "../trial/policy";
 export const managedWatchRepository = () => new ManagedWatchRepository(db);
 export const managedDeliveryRepository = () => new ManagedDeliveryRepository(db);
 /** Use only for untrusted request input, never for stored rows or provider responses. */
@@ -29,6 +30,7 @@ export async function managedJson(request:Request,limit=5*1024**2):Promise<unkno
   finally{clearTimeout(timer);reader.releaseLock();}
 }
 export function managedApiError(error:unknown){
+  if (error instanceof TrialError) return Response.json({ error: error.code }, { status: 403 });
   const code=error instanceof ManagedWatchError?error.code:"unavailable";
   return Response.json({error:code},{status:code==="not_found"?404:code==="in_progress"||code==="conflict"?409:code==="invalid_setting"?400:503});
 }

@@ -70,11 +70,11 @@ export function managedGraphManifest(graph: CaseGraph) {
   return MANAGED_CASE_TABLES.map(([table, key]) => ({ table, ids: graph[table].map(row => row[key]), count: graph[table].length, digest: archiveDigest(graph[table]) }));
 }
 /** The lock spans Blob upload AND DB registration; deletion takes the same lock. */
-export async function withManagedOriginalUpload<T>(database: ManagedDatabase, caseId: number, operation: () => Promise<T>): Promise<T> {
+export async function withManagedOriginalUpload<T>(database: ManagedDatabase, caseId: number, operation: (tx:ManagedDatabase) => Promise<T>): Promise<T> {
   return database.transaction(async tx => {
     await lockManagedCase(tx as unknown as ManagedDatabase, caseId);
     const found = await tx.execute(sql`select case_id from public.cases where case_id = ${caseId}`);
     if (found.rows.length !== 1) throw new ManagedWatchError("not_found");
-    return operation();
+    return operation(tx as unknown as ManagedDatabase);
   });
 }
