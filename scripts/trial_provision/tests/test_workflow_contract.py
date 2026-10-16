@@ -48,6 +48,8 @@ from scripts.trial_guard.test_catalog_execution import Child as CatalogChild
 
 
 def response(status, value=None, headers=None):
+    if status == 404 and value is None:
+        value = {'error': {'code': 'ResourceNotFound', 'message': 'Fictional fixed target is absent.'}}
     return {'status': status, 'body': b'' if value is None else encoded(value), 'headers': headers or {}}
 
 

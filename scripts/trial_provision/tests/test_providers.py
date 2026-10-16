@@ -41,6 +41,8 @@ class Credential:
 class Http:
     def __init__(self): self.calls, self.responses = [], []
     def add(self, status, value=None, headers=None):
+        if status == 404 and value is None:
+            value = {'error': {'code': 'ResourceNotFound', 'message': 'Fictional fixed target is absent.'}}
         self.responses.append({'status': status, 'headers': headers or {},
                                'body': encoded(value) if value is not None else b''})
     def __call__(self, method, url, headers, body, deadline):

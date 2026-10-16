@@ -17,6 +17,7 @@ import sys
 from scripts.trial_guard.__main__ import Clock
 from scripts.trial_guard.adapters import AzureCredential, BoundedHttp, digest, encoded
 from .identity_http import IdentityHttp
+from .read_http import JobHttp
 from scripts.trial_guard.lifecycle import Denied, parse
 from .configuration import load_configuration
 from .controller import Controller, cleanup_only
@@ -34,7 +35,7 @@ MAX_INPUT=2*1024*1024
 MODULES={
     'trial_guard':('adapters','catalog_execution','execution','lifecycle','owner','runner','workflow','__init__','__main__'),
     'trial_provision':('attempt','attempt_dispatch','input_succession','unknown_publication_succession','acknowledged_image_succession','restart_budget','succession','published_succession','owner_tokens','auth','bootstrap','cli','configuration','controller','journal','operations','plan','private_io',
-        'providers','identity_http','unknown_observation','observed_identity_succession','readback_continuation','unknown_identity_succession','runtime_auth','guard_assignments','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
+        'providers','identity_http','read_http','read_observation','stopped_reads','unknown_observation','observed_identity_succession','readback_continuation','unknown_identity_succession','runtime_auth','guard_assignments','publication_configuration','publication_bridge','publication_only_cleanup','registry','registry_cli','registry_publish','registry_publish_cli','registry_retention',
         'rehearsal','rehearsal_cli','resources','__init__','__main__')}
 REQUIRED_SOURCES={f'scripts/{package}/{name}.py' for package,names in MODULES.items() for name in names}
 REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs','src/lib/trial/policy.ts',
@@ -48,6 +49,8 @@ REQUIRED_SOURCES.update(('scripts/__init__.py','scripts/trial-policy-verify.cjs'
 def _arm_http(operation):
     if operation is not None and (operation['provider'], operation['kind']) == ('Microsoft.ManagedIdentity', 'userAssignedIdentities'):
         return IdentityHttp()
+    if operation is not None and (operation['provider'], operation['kind']) == ('Microsoft.App', 'jobs'):
+        return JobHttp()
     return BoundedHttp()
 
 

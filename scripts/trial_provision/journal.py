@@ -437,6 +437,33 @@ class ControlBudget:
             row={'kind':'owner_arm','attempt':self._plan['attempt'],'phase':'provision','purpose':purpose}
             self._append('request',row);self._add_request(row);consumed.append(purpose)
             guard()
+    def begin_stopped_reads(self,grant,*,guard):
+        from .stopped_reads import ReadGrant,validate_counter,MARKER
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            _budget_need(type(grant) is ReadGrant and not hasattr(self,'_stopped_reads'),'stopped_read_scope')
+            g=grant.proof
+            _budget_need(self.binding==g['counter_binding'] and self.seed==g['seed']
+                and str(self.journal.path.parent)==g['directory'] and self._plan['attempt']==g['attempt']
+                and self._counts==g['counts'],'stopped_read_scope')
+            marker=self.journal.path.parent/MARKER;verify_owner_file(marker)
+            v=json.loads(marker.read_bytes())
+            _budget_need(v['grant_sha256']==grant.checksum and v['attempt']==g['attempt']
+                and v['targets_sha256']==digest(g['targets']),'stopped_read_scope')
+            validate_counter(grant,self.journal.path.read_bytes(),[]);guard()
+            self._stopped_reads=(grant,guard,[])
+            return _StoppedReadScope(self,grant)
+    def _consume_stopped_read(self,grant,purpose):
+        from .stopped_reads import validate_counter
+        with self.mutex:
+            self._assert_open();self._unchanged()
+            active,guard,consumed=self._stopped_reads
+            _budget_need(grant is active and len(consumed)<5 and purpose==('owner_token' if not consumed else 'http'),'stopped_read_exhausted')
+            guard();validate_counter(grant,self.journal.path.read_bytes(),consumed)
+            _budget_need(self._counts['owner_arm']==grant.proof['counts']['owner_arm']+len(consumed),'stopped_read_counter')
+            self._admit('owner_arm','provision',purpose)
+            row={'kind':'owner_arm','attempt':self._plan['attempt'],'phase':'provision','purpose':purpose}
+            self._append('request',row);self._add_request(row);consumed.append(purpose);guard()
     def close(self):
         with self.mutex:self._closed=True;self._verified=None;self.journal.close()
     def __enter__(self):return self
@@ -476,6 +503,14 @@ class _BudgetScope:
     def consume_owner_token(self):self.__budget._consume_scoped(self,'owner_arm',600,'owner_token')
     def count(self,kind):return self.__budget.count(kind)
     def counts(self):return self.__budget.counts()
+
+class _StoppedReadScope:
+    __slots__=('__budget','__grant')
+    def __init__(self,budget,grant):self.__budget,self.__grant=budget,grant
+    def consume_owner_token(self):self.__budget._consume_stopped_read(self.__grant,'owner_token')
+    def consume(self,kind,limit):
+        _budget_need(kind=='owner_arm' and type(limit) is int and limit==600,'stopped_read_scope')
+        self.__budget._consume_stopped_read(self.__grant,'http')
 
 class _ObservationScope:
     __slots__=('__budget','__grant')

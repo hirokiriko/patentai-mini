@@ -122,7 +122,13 @@ class Controller:
                 if result is not None:self.journal.checkpoint(op,result)
                 return self.journal.latest(op['id'])
             evidence=adapter.readback(op)
-            if evidence.get('state')!='absent':raise Denied('create_target_not_absent')
+            if evidence.get('state')!='absent':
+                # This observation is neither a mutation intent nor an ACK.
+                # Retain the safe status even when the first write is denied.
+                if 'observation' in evidence:
+                    self.journal.append('precondition_observation',{'operation_id':op['id'],
+                        'request_digest':digest(op),'observation':evidence['observation']})
+                raise Denied('create_target_not_absent')
             # Validation/readback have not sent a mutation. Journal last.
             self.before_send(op)
             result=adapter.send(op,evidence)

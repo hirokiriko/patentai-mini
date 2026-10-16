@@ -80,6 +80,18 @@ class ControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(['GET', 'PUT', 'GET'], [r[0] for r in self.http.calls])
         self.assertEqual(1, len(self.journal.values('intent')))
 
+    def test_denied_job_create_saves_diagnostic_without_mutation_intent(self):
+        op = self.add(operation('jobs'))
+        self.http.responses.append({'status': 404, 'headers': {}, 'body': b'<html>canary-secret</html>'})
+        with self.assertRaisesRegex(Denied, 'create_target_not_absent'):
+            self.controller().create(op['id'])
+        self.assertEqual(['GET'], [r[0] for r in self.http.calls])
+        self.assertEqual([], self.journal.values('intent'))
+        self.assertEqual([], self.journal.values('progress'))
+        observation=self.journal.values('precondition_observation')
+        self.assertEqual(1,len(observation));self.assertEqual(404,observation[0]['observation']['http'])
+        self.assertNotIn('canary-secret',self.journal.path.read_text())
+
     def test_unknown_put_stays_unknown_and_blocks_another_create_after_restart(self):
         op = self.add(operation())
         other = self.add(operation('userAssignedIdentities'))

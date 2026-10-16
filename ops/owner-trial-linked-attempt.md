@@ -502,3 +502,36 @@ Shorter expiry, additional polling, unknown writes or a missed window stop the
 attempt before borrowing cleanup capacity. The tests exercise production
 dispatch/adapters with fictional provider, credential and process boundaries;
 they do not establish live Azure, SQL, browser or AI acceptance.
+
+### Stopped partial-foundation diagnostics (no continuation authority)
+
+Host-only Job GETs now retain bounded HTTP/validation metadata on failure.
+An empty, HTML, parent-resource or malformed 404 cannot establish absence;
+the fixed target must return a strict ResourceNotFound JSON error with no
+conflicting target or control header. A denied create records this observation
+without writing a mutation intent. Existing unknown receipts stay unknown.
+The host transport bounds complete IPC-frame receipt, not only frame arrival.
+
+Reference-list validation rejects error-bearing 200 responses, duplicate JSON
+keys, malformed role references, untrusted pagination and incomplete traversal.
+Every page is observed before a later failure can discard its diagnostic.
+Only three complete zero-reference collections can support role cleanup.
+PIM failures and authorization errors are not empty collections, and granting
+more permissions or silently dropping an eligibility collection is forbidden.
+
+The stopped-read grant is a distinct, at-most-ten-minute diagnostic capability:
+one ARM token and four fixed first-page GETs, charged before invocation to the
+existing provisioning plan. It locks the lifetime counter and stopped child,
+validates the exact stopped prefix and all thirteen successful ACKs, and creates
+an exclusive durable marker before token acquisition. Reissuing the grant or
+restarting the process cannot repeat it. Tokens and raw responses remain in
+memory; only allowlisted status, stage, length and digest metadata is saved.
+These reads cannot issue a new attempt, create a cleanup proof, adopt a resource,
+renew a window, release historical UNKNOWN reservations or alter old receipts.
+
+A partial-foundation continuation remains a separate implementation and review
+gate. It must import exact old operations/ACKs with provenance, prevent their
+recreation, account for cleanup already consumed without refunding it, and
+validate all remaining calls against the lifetime cap. A diagnostic result or
+this document does not make that continuation executable or establish live
+acceptance. Both previously published image closures must remain compatible.

@@ -418,6 +418,10 @@ class BoundedArmProvider:
         deadline.remaining()
         if not (removing or bounded_read) and self._now() >= parse(op['deadline']):
             raise TimeoutError('operation_outcome_unknown')
+        if (type(response) is dict and type(response.get('status')) is int and 100 <= response['status'] <= 599
+                and type(response.get('body')) is bytes and len(response['body']) > 1048576):
+            from .read_http import ReadFailure
+            raise ReadFailure('response_limit', response['status'])
         if not isinstance(response, dict) or type(response.get('status')) is not int or not isinstance(response.get('body'), bytes) or len(response['body']) > 1048576 or not isinstance(response.get('headers'), dict):
             raise ValueError('invalid_response')
         return response
@@ -703,13 +707,20 @@ class BoundedArmProvider:
         return self._readback(op, None, cleanup=True, cleanup_operation=deleting)
 
     def _readback(self, op, receipt, cleanup=False, cleanup_operation=None, recovery=False):
+        from .read_observation import job_absence, summary, response_value
+        from .read_http import ReadFailure
+        result = self._base(op, 'unknown')
         try:
             response = self._request(op, 'GET', op['url'], cleanup=cleanup, recovery=recovery)
             result = self._base(op, 'mismatch', response['status'])
+            result['observation'] = summary(response)
             if response['status'] == 404:
-                result['state'] = 'absent'
+                strict_job = op['provider'] == 'Microsoft.App' and op['kind'] == 'jobs'
+                result['state'] = ('absent' if not strict_job or job_absence(response, op['expected']['resource_id']) else 'unknown')
             elif response['status'] == 200:
-                value = self._value(response)
+                value = response_value(response)
+                if type(value) is not dict or 'error' in value:
+                    raise ValueError('invalid_response')
                 result['properties'] = self._match(op, value)
                 if op['provider'] == 'Microsoft.ManagedIdentity':
                     result['identity_properties_digest'] = _identity_properties_digest(value)
@@ -719,9 +730,16 @@ class BoundedArmProvider:
                 result.update(state='matching', binding_digest=digest(op['expected']['properties']))
             else:
                 result['state'] = 'unknown'
+            result['observation']['validation'] = result['state']
             return self._readback_result(op, result, receipt)
-        except Exception:
-            return self._readback_result(op, self._base(op, 'unknown'), receipt)
+        except Exception as error:
+            result['state'] = 'unknown'
+            if isinstance(error, ReadFailure):
+                result['http'] = error.observation['http']
+                result['observation'] = error.observation
+            elif 'observation' in result:
+                result['observation']['validation'] = 'body_or_binding'
+            return self._readback_result(op, result, receipt)
 
     def _readback_result(self, op, observation, receipt):
         if receipt is None:
@@ -743,6 +761,8 @@ class BoundedArmProvider:
             result = deepcopy(receipt)
             result.update(readback_verified=False, terminal=False,
                           readback_state=observation['state'], readback_http=observation['http'])
+            if 'observation' in observation:
+                result['readback_observation'] = deepcopy(observation['observation'])
             return result
         observation.update(state='unknown', terminal=False, write_terminal=False, readback_verified=False)
         return observation
