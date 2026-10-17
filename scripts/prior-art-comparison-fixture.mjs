@@ -55,7 +55,9 @@ globalThis.fetch = async (url, init) => {
       const [docId,baseNo,candidateNo,field]=t.id.split(":");
       const ids=[...(field==="candidateObservation"?[]:[chunk.base.claims.find(c=>c.claimNo===Number(baseNo)).segments.at(-1)[0]]),
         ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
-      return { id:t.id, unitChecks:t.unitStarts.map((start,i)=>({start,evidenceIds:[...ids],
+      return { id:t.id, unitChecks:t.unitStarts.map((start,i)=>({start,
+        referenceChecks:(t.mentions??[]).filter(([a,b])=>a>=start&&b<=(t.unitStarts[i+1]??t.text.length)).map(([start])=>({start,relation:"unspecified",operatorBasis:null})),
+        evidenceIds:[...ids],
         sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent",
         rejectedTargetAnchor:mode==="review-reject"?quote(t.text.slice(start,t.unitStarts[i+1])):null})) };
     }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
