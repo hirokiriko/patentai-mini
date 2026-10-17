@@ -38,6 +38,8 @@ provider schemaも実際の側別IDを選択肢に固定し、enumの件数・�
 
 mediumの実測では8192tokensすべてが推論に使われ、査読本文を取得できなかった。推論と可視回答を合わせた枠を確保するため、既知Azure GPT-5.4の比較だけ出力上限を32768tokensとする。[公式ガイド](https://developers.openai.com/api/docs/guides/reasoning?api-mode=responses)の初期検証向け25000tokens以上という目安を満たすが、品質や所要時間を保証しない。共有transportの例外も比較capability・normal・medium・同じ既知modelに限定し、通常/managed watch/fast・他model/providerの8192上限を維持する。入力サイズ用の8192bytes framing、全文・prompt/schema・90000bytes入力guardは変更しない。実AIには新出力枠と費用予約を含む明示承認が必要で、旧8192枠の許可を流用しない。不完全/usage超過/各180秒・単一全体210秒/API240秒超過なら後続送信・保存を停止し、切捨てや再送で救済しない。
 
+32768枠で査読本文を取得しても、草稿の番号範囲を全件ANDへ補った誤拒否が残った。査読指示は、全件性を断定する草稿の実区間を先に特定し、範囲/「まで」/継承だけを拒否根拠にしない手順へ整理する。特定語の有無で自動合格にせず、暗黙の量化変更も確認する。短縮した読み/対比から対象・修飾先・経路・否定・発動を落とさず、一部の未明示を全体へ広げない。各scopeの条件整理も自己完結にする。原文・草稿全文・unit分割・schema・意味QA/停止条件は維持し、事例の番号や正解ラベルを指示へ追加しない。この指示変更の実AI品質は別途実証する。
+
 ## 保存・整合・旧結果
 
 schema/migration変更なし。実在する基準請求項と先行文献の行に、既存 `matched_elements_json` のversion付き `priorArtComparison` envelopeを追記する。旧reader用キーは維持し、旧結果へ新しい全文検証済みの意味を付けない。案件画面は新形式を旧スコア一覧へ混ぜず専用の保存結果へ案内する。
