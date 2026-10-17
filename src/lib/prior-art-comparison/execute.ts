@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { getModel, getGoogleThinkingProviderOptions } from "../ai-model";
+import { getModel } from "../ai-model";
 import { aiOperationDeadline, withAiOperationBudget } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
@@ -8,6 +8,7 @@ import { decodeGeneration } from "./generation";
 import { batchInput, batchSchema, batchSchemaFor, generationBatches } from "./generation-batch";
 import { assertReviewSize, reviewInput, reviewSchemaFor, REVIEW_SYSTEM, validateReview, type ReviewDraft } from "./semantic-review";
 import type { z } from "zod";
+import { comparisonProviderOptions } from "./provider-options";
 
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
@@ -19,9 +20,10 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
     try {
       const generate = async (system: string, prompt: string, schema: z.ZodType) => {
         if (absolute.aborted) throw new ComparisonError("ai_incomplete");
-        const options = getGoogleThinkingProviderOptions();
+        const model = getModel();
+        const options = comparisonProviderOptions(model);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(35_000)]);
-        const answer = await generateObject({ model: getModel(), schema,
+        const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
           maxOutputTokens: LIMITS.outputTokens, abortSignal: signal,
           ...(options ? { providerOptions: options } : {}),

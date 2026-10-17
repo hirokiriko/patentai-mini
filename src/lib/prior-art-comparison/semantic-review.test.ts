@@ -28,11 +28,33 @@ describe("separate original-text review before saving", () => {
     expect(batches.flatMap(b=>b.map(c=>c.candidateId))).toEqual([21,22,23]);
     expect(input.targets).toHaveLength(15);
     expect(input.documents).toHaveLength(3);
+    expect(input.scopes.map(s=>s.id)).toEqual(["base:1","candidate:21:1","candidate:22:1","candidate:23:1"]);
     expect(input.base.claims[0].text).toContain("補助装置は音又は振動");
     for (const batch of batches) expect(requestBytes(SYSTEM,JSON.stringify(batchInput(batch)),batchSchemaFor(batch))).toBeLessThan(LIMITS.inputBytes);
     expect(()=>validateReview(input, answer)).not.toThrow();
   });
-  it.each(["failed","uncertain","missing","duplicate","unknown","wrong_digest","wrong_scope","wrong_side","empty_support","modified_result"])("rejects %s review", mode=>{
+  it.each(["missing","duplicate","unknown","unresolved","empty","whitespace","too_long"])("rejects %s source condition analysis even when every field is consistent",mode=>{
+    const {input,answer}=example();
+    if(mode==="missing") answer.sourceAnalyses.pop();
+    if(mode==="duplicate") answer.sourceAnalyses[1]=answer.sourceAnalyses[0];
+    if(mode==="unknown") answer.sourceAnalyses[0].id="candidate:999:1";
+    if(mode==="unresolved") Object.assign(answer.sourceAnalyses[0],{status:"unresolved"});
+    if(mode==="empty") answer.sourceAnalyses[0].conditions="";
+    if(mode==="whitespace") answer.sourceAnalyses[0].conditions=" 　";
+    if(mode==="too_long") answer.sourceAnalyses[0].conditions="漢".repeat(401);
+    expect(()=>validateReview(input,answer)).toThrow("ai_incomplete");
+  });
+  it("keeps selected claims with shared ancestors as separate review scopes",()=>{
+    const {inputs,selection}=compactThree();selection.documents=selection.documents.slice(0,2);
+    selection.documents.forEach(d=>d.claimNos=[1,2]);
+    const plan=makePlan(inputs,selection);
+    const drafts=plan.flatMap(c=>validateAnswer(c,fictionalAnswer(c)).map(p=>({...p,baseObservation:"基準",candidateObservation:"候補"})));
+    const input=reviewInput(plan,drafts);
+    expect(input.scopes.map(s=>s.id)).toEqual(["base:1","candidate:21:1","candidate:21:2","candidate:22:1","candidate:22:2"]);
+    expect(input.scopes.find(s=>s.id==="candidate:21:2")?.contextClaimNos).toEqual([1,2]);
+    expect(()=>validateReview(input,fictionalReview(input))).not.toThrow();
+  });
+  it.each(["failed","uncertain","missing","duplicate","unknown","wrong_digest","wrong_scope","wrong_side","empty_support","empty_reason","modified_result"])("rejects %s review", mode=>{
     const {input,answer}=example();
     if(mode==="failed" || mode==="uncertain") Object.assign(answer.checks.at(-1)!,{verdict:mode==="failed"?"inconsistent":"uncertain"});
     if(mode==="missing") answer.checks.pop();
@@ -42,6 +64,7 @@ describe("separate original-text review before saving", () => {
     if(mode==="wrong_scope") answer.checks[0].baseClaimNos=[2];
     if(mode==="wrong_side") answer.checks[0].candidateClaimNos=[1];
     if(mode==="empty_support") answer.checks[2].candidateClaimNos=[];
+    if(mode==="empty_reason") answer.checks[0].reason=" 　";
     if(mode==="modified_result") Object.assign(answer,{correctedResult:"silently changed"});
     expect(()=>validateReview(input,answer)).toThrow("ai_incomplete");
   });
@@ -87,10 +110,13 @@ describe("separate original-text review before saving", () => {
     saved.snapshotDigest=savedDigest(saved);
     expect(validateSaved(saved).pairs).toHaveLength(6);
   });
-  it("bounds all twenty review assessments within the output envelope",()=>{
+  it("bounds source analyses and twenty assessments without treating text length as a token guarantee",()=>{
     const ids=Array.from({length:4},(_,i)=>["baseObservation","candidateObservation","common","differences","unconfirmed"].map(field=>`${Number.MAX_SAFE_INTEGER-i}:1000:1000:${field}`)).flat();
-    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],verdict:"inconsistent"}))});
-    expect(Buffer.byteLength(JSON.stringify(answer))+1024).toBeLessThan(LIMITS.outputTokens);
+    const sourceAnalyses=Array.from({length:8},(_,i)=>({id:`base:${i+1}`,conditions:"漢".repeat(400),status:"resolved"}));
+    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],verdict:"inconsistent"}))});
+    expect(answer.sourceAnalyses).toHaveLength(8);
+    expect(answer.checks).toHaveLength(20);
+    expect(()=>reviewSchema.parse({...answer,sourceAnalyses:[...sourceAnalyses,sourceAnalyses[0]]})).toThrow();
     const {input}=example();expect(requestBytes(REVIEW_SYSTEM,JSON.stringify(input),reviewSchemaFor(input))).toBeLessThan(LIMITS.inputBytes);
   });
 });

@@ -46,7 +46,9 @@ globalThis.fetch = async (url, init) => {
   if (mode === "fail") return new Response("FICTIONAL_PRIVATE_ERROR_SENTINEL", { status: 429 });
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
-  const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest, checks: chunk.targets.map(t => ({ id:t.id,
+  const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
+    sourceAnalyses: chunk.scopes.map(s => ({ id:s.id, conditions:"架空transportの原文条件整理。意味品質の実証ではない。", status:"resolved" })),
+    checks: chunk.targets.map(t => ({ id:t.id,
     reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
     baseClaimNos:t.field==="candidateObservation"?[]:[t.baseClaimNo],candidateClaimNos:t.field==="baseObservation"?[]:[t.candidateClaimNo],
     verdict:mode==="review-reject"?"inconsistent":"consistent" })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {

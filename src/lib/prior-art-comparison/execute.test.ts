@@ -80,7 +80,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(3);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
   });
-  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
+  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "source_unresolved", "source_missing", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
@@ -91,11 +91,29 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "missing") value.checks.pop();
       if (mode === "duplicate") value.checks[1] = value.checks[0];
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
+      if (mode === "source_unresolved") Object.assign(value.sourceAnalyses[0],{status:"unresolved"});
+      if (mode === "source_missing") value.sourceAnalyses.pop();
       return response(value, mode === "unknown_usage" ? null : undefined);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
+  });
+  it("sends low reasoning for the existing GPT-5.4 deployment through the actual guarded SDK",async()=>{
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","gpt-5.4");
+    const {inputs,selection}=fictionalInputs();
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const body=JSON.parse(String(init?.body));
+      expect(body.model).toBe("gpt-5.4");
+      expect(body.reasoning).toEqual({effort:"low"});
+      expect(body.max_output_tokens).toBe(8192);
+      expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
+      const input=JSON.parse(body.input[1].content[0].text);
+      return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
+    });
+    vi.stubGlobal("fetch",transport);
+    expect((await executeComparison(inputs,selection)).status).toBe("complete");
+    expect(transport).toHaveBeenCalledTimes(3);
   });
   it("stops at the existing per-send deadline and never starts a second call", async () => {
     vi.useFakeTimers();
