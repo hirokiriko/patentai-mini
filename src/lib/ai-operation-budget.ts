@@ -163,6 +163,9 @@ export class AiOperationBudget {
         if (target.protocol !== "https:" || !target.pathname.endsWith("/responses")) throw stop("request_rejected");
         const body = JSON.parse(init.body);
         const keys = new Set(["model", "input", "max_output_tokens", "temperature", "top_p", "text", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "include"]);
+        if (this.comparison && role === "normal" && body?.service_tier === "default" &&
+            comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "review") === comparisonLimits.azureReasoningOutputTokens)
+          keys.add("service_tier");
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
         const outputLimit = this.comparison && role === "normal" && ["low", "medium"].includes(body.reasoning?.effort) &&

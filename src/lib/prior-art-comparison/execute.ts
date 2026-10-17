@@ -35,6 +35,8 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         if (signal.aborted || !Number.isSafeInteger(answer.usage.inputTokens) || answer.usage.inputTokens! < 0 ||
             !Number.isSafeInteger(answer.usage.outputTokens) || answer.usage.outputTokens! < 0 ||
             answer.usage.inputTokens! > 150_000 || answer.usage.outputTokens! > outputTokens) throw new ComparisonError("ai_incomplete");
+        if (options?.azure?.serviceTier === "default" && answer.providerMetadata?.azure?.serviceTier !== "default")
+          throw new ComparisonError("ai_incomplete");
         return answer.object;
       };
       for (const batch of generationBatches(plan, SYSTEM)) {

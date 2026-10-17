@@ -15,6 +15,25 @@ describe("comparison-only time capability", () => {
     });
   });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  it.each(["gpt-5.4", "gpt-5.4-2026-03-05", "patentai-gpt54"])("allows explicit default tier only for identified normal comparisons: %s", async model => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => response());
+    vi.stubGlobal("fetch", transport);
+    const request = init(); request.body = JSON.stringify({ ...JSON.parse(request.body), model, service_tier: "default" });
+    await withPriorArtComparisonBudget(() => boundedAzureFetch("normal")(url, request));
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it.each(["ordinary", "managed", "unknown", "mini", "priority", "auto", "null", "fast"])("does not broaden the tier allowlist for %s", async mode => {
+    const transport = vi.fn<typeof fetch>(); vi.stubGlobal("fetch", transport);
+    const request = init(); request.body = JSON.stringify({ ...JSON.parse(request.body),
+      model: mode === "unknown" ? "fictional" : mode === "mini" ? "gpt-5.4-mini" : "patentai-gpt54",
+      service_tier: mode === "priority" || mode === "auto" ? mode : mode === "null" ? null : "default" });
+    const reserve = vi.fn(async () => undefined), reconcile = vi.fn(async () => undefined);
+    const send = () => boundedAzureFetch(mode === "fast" ? "fast" : "normal")(url, request);
+    const pending = mode === "ordinary" ? withAiOperationBudget({ normal: 1, fast: 0 }, send) : mode === "managed" ?
+      withManagedWatchBudget({ consumed: 0, deadlineAt: Date.now() + 100_000, journal: { reserve, reconcile } }, send) : withPriorArtComparisonBudget(send);
+    await expect(pending).rejects.toThrow("ai_operation_stopped");
+    expect(transport).not.toHaveBeenCalled(); expect(reserve).not.toHaveBeenCalled();
+  });
   it("allows a response after 35 seconds only within the comparison capability", async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => { await new Promise(r => setTimeout(r, 40_000)); return response(); });
     vi.stubGlobal("fetch", transport);

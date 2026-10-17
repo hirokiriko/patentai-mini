@@ -10,8 +10,8 @@ import type { reviewTransportInput } from "./review-transport";
 import { parseComparisonSource } from "./source";
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
-function response(value: unknown, usage: unknown = { input_tokens: 100, output_tokens: 30 }) {
-  return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
+function response(value: unknown, usage: unknown = { input_tokens: 100, output_tokens: 30 }, tier: Record<string, unknown> = { service_tier: "default" }) {
+  return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed", ...tier,
     output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
       content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }], usage });
 }
@@ -176,13 +176,39 @@ describe("real installed SDK, guarded fictional transport", () => {
       const phase = JSON.parse(body.input[1].content[0].text).task;
       expect(body.reasoning).toEqual({effort:phase === "review" ? "medium" : "low"});
       expect(body.max_output_tokens).toBe(phase === "review" ? 22528 : 8192);
-      expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
+      expect(body.service_tier).toBe("default");
+      expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
       return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
     });
     vi.stubGlobal("fetch",transport);
     expect((await executeComparison(inputs,selection)).status).toBe("complete");
     expect(transport).toHaveBeenCalledTimes(3);
+  });
+  it.each(["generation", "review"])("rejects missing or nonstandard %s tier without a later send", async phase => {
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
+    const { inputs, selection } = fictionalInputs();
+    for (const tier of ["priority", "auto", null, undefined]) {
+      const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+        const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
+        expect(body.service_tier).toBe("default");
+        return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input), undefined,
+          (input.task === "review" ? phase === "review" : phase === "generation") ? { service_tier: tier } : { service_tier: "default" });
+      });
+      vi.stubGlobal("fetch", transport);
+      await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
+      expect(transport).toHaveBeenCalledTimes(phase === "generation" ? 1 : 3);
+    }
+  });
+  it("preserves unidentified deployment tier behavior", async () => {
+    const { inputs, selection } = fictionalInputs();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
+      expect(body.service_tier).toBeUndefined();
+      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input), undefined, { service_tier: "priority" });
+    });
+    vi.stubGlobal("fetch", transport);
+    expect((await executeComparison(inputs, selection)).status).toBe("complete");
   });
   it.each(["generation", "review"])("stops on %s usage above its own cap without another send", async phase => {
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
