@@ -28,10 +28,6 @@ pg.Client.prototype.query = function (...args) {
   return result;
 };
 const originalFetch = globalThis.fetch;
-const quote = text => {
-  for(let end=text.length;end>0;end--){const value=text.slice(Math.max(0,end-120),end);if(value.trim()&&text.indexOf(value)===text.lastIndexOf(value)&&!/^[\uDC00-\uDFFF]/.test(value)&&!/[\uD800-\uDBFF]$/.test(value))return value;}
-  throw Error("fictional_unique_quote_unavailable");
-};
 globalThis.fetch = async (url, init) => {
   const target = new URL(String(url));
   if (target.protocol === "http:" && ["127.0.0.1", "localhost"].includes(target.hostname)) return originalFetch(url, init);
@@ -57,9 +53,9 @@ globalThis.fetch = async (url, init) => {
         ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
       return { id:t.id, unitChecks:t.unitStarts.map((start,i)=>({start,
         referenceChecks:(t.mentions??[]).filter(([a,b])=>a>=start&&b<=(t.unitStarts[i+1]??t.text.length)).map(([start])=>({start,relation:"unspecified",operatorBasis:null})),
-        evidenceIds:[...ids],
-        sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent",
-        rejectedTargetAnchor:mode==="review-reject"?quote(t.text.slice(start,t.unitStarts[i+1])):null})) };
+        contrasts:[{end:t.unitStarts[i+1]??t.text.length,kind:"technical",referenceStart:null,evidenceIds:[...ids],
+          sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent",
+          rejectedTargetSpan:mode==="review-reject"?[start,t.unitStarts[i+1]??t.text.length]:null}]})) };
     }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
