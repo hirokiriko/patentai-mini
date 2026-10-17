@@ -47,15 +47,15 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    checks: chunk.targets.map(t => {
+    checks: chunk.targets.flatMap(t => {
       const [docId,baseNo,candidateNo,field]=t.id.split(":");
       const ids=[...(field==="candidateObservation"?[]:[chunk.base.claims.find(c=>c.claimNo===Number(baseNo)).segments.at(-1)[0]]),
         ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
-      return { id:t.id, unitChecks:t.unitStarts.map((start,i)=>({start,
-        referenceChecks:(t.mentions??[]).filter(([a,b])=>a>=start&&b<=(t.unitStarts[i+1]??t.text.length)).map(([start])=>({start,relation:"unspecified",operatorBasis:null})),
-        contrasts:[{end:t.unitStarts[i+1]??t.text.length,kind:"technical",referenceStart:null,evidenceIds:[...ids],
-          sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent",
-          rejectedTargetSpan:mode==="review-reject"?[start,t.unitStarts[i+1]??t.text.length]:null}]})) };
+      const starts=[0];for(let at=0;at<t.text.length-1;at++)if(t.text[at]==="。"&&t.text[at+1]!=="。"&&t.text.slice(at+1).trim())starts.push(at+1);
+      return starts.map((start,i)=>({unitId:t.unitIds[i],
+        referenceChecks:(t.mentions??[]).filter(([a,b])=>a>=start&&b<=(starts[i+1]??t.text.length)).map(()=>({relation:"unspecified",operatorBasis:null})),
+        kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
+        sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));
     }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);

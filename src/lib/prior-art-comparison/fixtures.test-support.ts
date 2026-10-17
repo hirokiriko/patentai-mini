@@ -4,6 +4,7 @@ import type { generationInput } from "./generation";
 import type { batchInput } from "./generation-batch";
 import { reviewTargetIdentity, reviewTargetUnits, type reviewInput } from "./semantic-review";
 import { reviewReferenceMentions, type ReferenceRelationCheck } from "./reference-mentions";
+import type { reviewTransportInput } from "./review-transport";
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -57,6 +58,23 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
           evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
           verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", rejectedTargetSpan: null as [number, number] | null }] })) };
     }) };
+}
+/** Fictional raw transport only; never evidence of semantic quality. */
+export function fictionalTransportReview(input: ReturnType<typeof reviewTransportInput>) {
+  return { draftDigest: input.draftDigest, checks: input.targets.flatMap(t => {
+    const identity = reviewTargetIdentity(t.id);
+    const ids = [
+      ...(identity.field === "candidateObservation" ? [] : [input.base.claims.find(c => c.claimNo === identity.baseClaimNo)!.segments.at(-1)![0]]),
+      ...(identity.field === "baseObservation" ? [] : [input.documents.find(d => d.docId === identity.docId)!.source.claims.find(c => c.claimNo === identity.candidateClaimNo)!.segments.at(-1)![0]]),
+    ];
+    return reviewTargetUnits(t.text).map((unit, index) => ({ unitId: t.unitIds[index],
+      referenceChecks: reviewReferenceMentions(t.text).filter(m => m.start >= unit.start && m.end <= unit.end)
+        .map(() => ({ relation: "unspecified" as const, operatorBasis: null })),
+      kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
+      evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
+      verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", scopeWitness: null,
+    }));
+  }) };
 }
 export function fictionalSaved(): SavedComparison {
   const { inputs, selection } = fictionalInputs();

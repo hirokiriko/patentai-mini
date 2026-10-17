@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
+import { fictionalBatch, fictionalInputs, fictionalTransportReview as fictionalReview } from "./fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
-import { inspectReviewCoverage, type reviewInput } from "./semantic-review";
+import { inspectReviewCoverage } from "./semantic-review";
+import * as semanticReview from "./semantic-review";
+import type { reviewTransportInput } from "./review-transport";
 import { parseComparisonSource } from "./source";
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
@@ -35,7 +37,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(String(url)).toMatch(/^https:\/\/example\.invalid\/openai\//);
       payloads.push(String(init?.body));
       const body = JSON.parse(String(init?.body));
-      const chunk: ReturnType<typeof batchInput> | ReturnType<typeof reviewInput> = JSON.parse(body.input[1].content[0].text);
+      const chunk: ReturnType<typeof batchInput> | ReturnType<typeof reviewTransportInput> = JSON.parse(body.input[1].content[0].text);
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "review") {
@@ -138,30 +140,32 @@ describe("real installed SDK, guarded fictional transport", () => {
   it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
     let validNegativeProtocolPassed = false;
+    const reviewGate = vi.spyOn(semanticReview, "validateReview");
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
       const value = fictionalReview(input);
       if (mode === "http") return new Response(SECRET, { status: 429 });
-      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0].unitChecks[0].contrasts[0], { verdict: mode });
+      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0], { verdict: mode });
       if (mode === "missing") value.checks.pop();
       if (mode === "duplicate") value.checks[1] = value.checks[0];
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
-      if (mode === "missing_support") value.checks[2].unitChecks[0].contrasts[0].evidenceIds = [];
-      if (mode === "wrong_side") value.checks[0].unitChecks[0].contrasts[0].evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
+      if (mode === "missing_support") value.checks[2].evidenceIds = [];
+      if (mode === "wrong_side") value.checks[0].evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
       if (mode === "legacy_wire") Object.assign(value, { sourceFacts: [] });
-      if (mode === "evidence_id") value.checks[0].unitChecks[0].contrasts[0].evidenceIds = [999999];
-      if (mode === "anchor" || mode === "valid_negative") {
-        Object.assign(value.checks[0].unitChecks[0].contrasts[0], { verdict: "inconsistent",
-          rejectedTargetSpan: mode === "anchor" ? [0, 999] : [0, input.targets[0].unitStarts[1] ?? input.targets[0].text.length] });
-      }
-      if (mode === "valid_negative") validNegativeProtocolPassed = inspectReviewCoverage(input, value).checks[0].verdict === "inconsistent";
+      if (mode === "evidence_id") value.checks[0].evidenceIds = [999999];
+      if (mode === "anchor") Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetSpan: [0, 999] });
+      if (mode === "valid_negative") value.checks[0].verdict = "inconsistent";
       return response(value, mode === "unknown_usage" ? null : undefined);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
-    if (mode === "valid_negative") expect(validNegativeProtocolPassed).toBe(true);
+    if (mode === "valid_negative") {
+      const [logical, decoded] = reviewGate.mock.calls.at(-1)!;
+      validNegativeProtocolPassed = inspectReviewCoverage(logical, decoded).checks[0].verdict === "inconsistent";
+      expect(validNegativeProtocolPassed).toBe(true);
+    }
   });
   it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends phase-specific reasoning and output through the actual guarded SDK on %s",async model=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
@@ -171,7 +175,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
       expect(body.reasoning).toEqual({effort:"low"});
-      expect(body.max_output_tokens).toBe(phase === "review" ? 24576 : 8192);
+      expect(body.max_output_tokens).toBe(phase === "review" ? 22528 : 8192);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
       return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
@@ -186,7 +190,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input),
-        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 24577 : 8193) : 30 });
+        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 22529 : 8193) : 30 });
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");

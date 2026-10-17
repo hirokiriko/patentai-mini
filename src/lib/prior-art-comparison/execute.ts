@@ -6,7 +6,8 @@ import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
 import { ComparisonError } from "./source";
 import { decodeGeneration } from "./generation";
 import { batchInput, batchSchema, batchSchemaFor, generationBatches } from "./generation-batch";
-import { assertReviewSize, reviewInput, reviewSchemaFor, REVIEW_SYSTEM, validateReview, type ReviewDraft } from "./semantic-review";
+import { assertReviewSize, reviewInput, REVIEW_SYSTEM, validateReview, type ReviewDraft } from "./semantic-review";
+import { decodeReviewTransport, reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
 import type { z } from "zod";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
@@ -53,7 +54,8 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       }
       const review = reviewInput(plan, drafts);
       assertReviewSize(review);
-      validateReview(review, await generate(REVIEW_SYSTEM, JSON.stringify(review), reviewSchemaFor(review), "review"));
+      const rawReview = await generate(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(review)), reviewTransportSchemaFor(review), "review");
+      validateReview(review, decodeReviewTransport(review, rawReview));
       if (absolute.aborted) throw new ComparisonError("ai_incomplete");
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),
         inputs, selection, pairs, status: "complete" as const, review: "human_review_required" as const };

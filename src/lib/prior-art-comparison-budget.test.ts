@@ -119,14 +119,14 @@ describe("comparison-only time capability", () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
   it.each(["low","medium"].flatMap(effort=>["gpt-5.4", "gpt-5.4-2026-03-05", "patentai-gpt54"].map(model=>({effort,model}))))("allows reasoning output only for the comparison review on $model/$effort", async ({model,effort}) => {
-    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:24576}));vi.stubGlobal("fetch",transport);
-    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:reviewInput(),model,reasoning:{effort},max_output_tokens:24576})};
+    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:22528}));vi.stubGlobal("fetch",transport);
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:reviewInput(),model,reasoning:{effort},max_output_tokens:22528})};
     await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).resolves.toHaveProperty("status",200);
     expect(transport).toHaveBeenCalledTimes(1);
   });
   it.each(["ordinary", "managed", "unknown", "mini", "generation", "high", "missing", "excess", "fast"])("keeps the larger output unavailable for %s", async mode => {
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
-    const body={...JSON.parse(init().body),input:mode==="generation"?JSON.parse(init().body).input:reviewInput(),model:mode==="unknown"?"custom-alias":mode==="mini"?"gpt-5.4-mini":"patentai-gpt54",reasoning:mode==="missing"?undefined:{effort:mode==="generation"?"low":mode==="high"?"high":"medium"},max_output_tokens:mode==="excess"?24577:8193};
+    const body={...JSON.parse(init().body),input:mode==="generation"?JSON.parse(init().body).input:reviewInput(),model:mode==="unknown"?"custom-alias":mode==="mini"?"gpt-5.4-mini":"patentai-gpt54",reasoning:mode==="missing"?undefined:{effort:mode==="generation"?"low":mode==="high"?"high":"medium"},max_output_tokens:mode==="excess"?22529:8193};
     const send=()=>boundedAzureFetch(mode==="fast"?"fast":"normal")(url,{...init(),body:JSON.stringify(body)});
     const run=()=>mode==="ordinary"?withAiOperationBudget({normal:1,fast:0},send):mode==="managed"?withManagedWatchBudget({consumed:0,deadlineAt:Date.now()+100000,journal:{reserve:vi.fn(async()=>undefined),reconcile:vi.fn(async()=>undefined)}},send):withPriorArtComparisonBudget(send);
     await expect(run()).rejects.toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
@@ -136,19 +136,19 @@ describe("comparison-only time capability", () => {
     [{role:"user",content:[{type:"input_text",text:'{"task":"review"}'},{type:"input_text",text:"extra"}]}]
   ])("rejects a missing, malformed or ambiguous review stage (%#)", async input => {
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
-    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input,model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:24576})};
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input,model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:22528})};
     await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).rejects.toThrow("ai_operation_stopped");
     expect(transport).not.toHaveBeenCalled();
   });
   it("accepts a single string review payload only inside the comparison capability", async () => {
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
-    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:[{role:"user",content:'{"task":"review"}'}],model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:24576})};
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:[{role:"user",content:'{"task":"review"}'}],model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:22528})};
     await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).resolves.toHaveProperty("status",200);
     expect(transport).toHaveBeenCalledTimes(1);
   });
   it("stops without retry when usage exceeds the reasoning request cap", async () => {
-    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:24577}));vi.stubGlobal("fetch",transport);
-    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:reviewInput(),model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:24576})};
+    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:22529}));vi.stubGlobal("fetch",transport);
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),input:reviewInput(),model:"patentai-gpt54",reasoning:{effort:"low"},max_output_tokens:22528})};
     await withPriorArtComparisonBudget(async()=>{
       const send=boundedAzureFetch("normal");await expect(send(url,request)).rejects.toThrow("ai_operation_stopped");
       await expect(send(url,request)).rejects.toThrow("ai_operation_stopped");

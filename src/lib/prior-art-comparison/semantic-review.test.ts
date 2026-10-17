@@ -4,6 +4,9 @@ import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalSaved } fro
 import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
 import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, resolveReviewAnchor, resolveReviewSpan, reviewContrastCuts, reviewEvidenceCatalog, reviewInput, reviewSchema, reviewSchemaFor, reviewTargetUnits, REVIEW_SYSTEM, validateReview } from "./semantic-review";
 import { parseComparisonSource } from "./source";
+import { reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
+
+const transportBytes = (input: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input));
 
 function compactThree() {
   const { inputs, selection } = fictionalInputs();
@@ -144,12 +147,12 @@ describe("complete original-text contrast review before saving", () => {
     expect(()=>resolveReviewSpan(text,0,[0,end],{start:0,end:cuts[0]})).toThrow("ai_incomplete");
     const repeated="あ".repeat(200), grid=reviewContrastCuts(repeated);
     expect(()=>resolveReviewSpan(repeated,0,[0,grid[0]],{start:0,end:200})).toThrow("ai_incomplete");
-    expect(()=>resolveReviewSpan(repeated,0,[0,200],{start:0,end:200})).toThrow("ai_incomplete");
+    expect(resolveReviewSpan(repeated,0,[0,200],{start:0,end:200})).toEqual({start:0,end:200,quote:repeated});
   });
   it("preflights mixed surrogate/reference metadata at every bounded field length", () => {
     const { plan, drafts } = example();
     const envelope = (text: (n: number) => string) => drafts.map(d => ({ ...d, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120) }));
-    const size = (d: typeof drafts) => { const input = reviewInput(plan, d); return requestBytes(REVIEW_SYSTEM, JSON.stringify(input), reviewSchemaFor(input)); };
+    const size = (d: typeof drafts) => { const input = reviewInput(plan, d); return transportBytes(input); };
     const maximum = envelope(n => "\ud800".repeat(n)), hints = reviewInput(plan, maximum);
     const upper = size(maximum) + hints.targets.reduce((n,t)=>n+32+Math.floor(t.text.length/4)*2,0);
     for (const mention of ["請求項1", "請求項１", "請求項一", "請求項1/2", "請求項１乃至請求項９９", "請求項12まで", "請求項999から9999"]) {
@@ -267,10 +270,10 @@ describe("complete original-text contrast review before saving", () => {
   it("bounds dense commas, references and mixed Unicode without clipping any field",()=>{
     const {plan,drafts}=example();
     const envelope=(pattern:string)=>drafts.map(d=>{const text=(n:number)=>pattern.repeat(n).slice(0,n);return {...d,baseObservation:text(120),candidateObservation:text(120),common:text(200),differences:text(200),unconfirmed:text(120)};});
-    const max=reviewInput(plan,envelope("\ud800")),upper=requestBytes(REVIEW_SYSTEM,JSON.stringify(max),reviewSchemaFor(max))+max.targets.reduce((n,t)=>n+32+2*Math.floor(t.text.length/4),0);
+    const max=reviewInput(plan,envelope("\ud800")),upper=transportBytes(max)+max.targets.reduce((n,t)=>n+32+2*Math.floor(t.text.length/4),0);
     for(const pattern of ["、","請求項一\ud800","請求項1\ud800","請求項一、","𠮷、","\ud800。","請求項1/2、","\ud842、\udc00"]){
       const variants=envelope(pattern),input=reviewInput(plan,variants);
-      expect(requestBytes(REVIEW_SYSTEM,JSON.stringify(input),reviewSchemaFor(input))).toBeLessThanOrEqual(upper);
+      expect(transportBytes(input)).toBeLessThanOrEqual(upper);
       expect(input.targets[2].text).toBe(variants[0].common);
     }
   });
@@ -348,13 +351,13 @@ describe("complete original-text contrast review before saving", () => {
     const {plan,drafts}=example();
     const envelope=(character:string)=>drafts.map(d=>({...d,baseObservation:character.repeat(120),candidateObservation:character.repeat(120),common:character.repeat(200),differences:character.repeat(200),unconfirmed:character.repeat(120)}));
     const pad=(n:number)=>plan.map(c=>({...c,base:{...c.base,claims:c.base.claims.map((claim,i)=>i?claim:{...claim,text:claim.text+"X".repeat(n)})}}));
-    const size=(n:number)=>{const input=reviewInput(pad(n),envelope("\\"));return requestBytes(REVIEW_SYSTEM,JSON.stringify(input),reviewSchemaFor(input));};
+    const size=(n:number)=>{const input=reviewInput(pad(n),envelope("\\"));return transportBytes(input);};
     let lower=0,upper:number=LIMITS.inputBytes;while(lower+1<upper){const middle=Math.floor((lower+upper)/2);if(size(middle)<=LIMITS.inputBytes)lower=middle;else upper=middle;}
     expect(size(lower+1)).toBeGreaterThan(LIMITS.inputBytes);expect(()=>assertReviewSize(reviewInput(pad(lower),envelope("\\")))).not.toThrow();
     expect(()=>assertReviewSize(reviewInput(pad(lower),envelope("\ud800")))).toThrow("plan_limit");expect(()=>assertReviewPlan(pad(lower))).toThrow("plan_limit");
   });
   it("keeps complete partition text, punctuation and the lone-surrogate envelope",()=>{
-    const {plan,drafts}=example();const size=(text:string)=>{const input=reviewInput(plan,drafts.map(d=>({...d,common:text,differences:text})));return requestBytes(REVIEW_SYSTEM,JSON.stringify(input),reviewSchemaFor(input));};
+    const {plan,drafts}=example();const size=(text:string)=>{const input=reviewInput(plan,drafts.map(d=>({...d,common:text,differences:text})));return transportBytes(input);};
     for(const text of ["基準は光。候補は音。","𠮷は青色。　次は赤色。　","一文だけ","句点。。次。","。".repeat(200)]){
       const units=reviewTargetUnits(text);expect(units.map(u=>u.text).join("")).toBe(text);for(const u of units)expect(text.slice(u.start,u.end)).toBe(u.text);
     }
