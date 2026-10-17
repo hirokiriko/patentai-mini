@@ -36,6 +36,8 @@
 
 各文の読みは命題、命題全体の断定状態、量化、当該文のliteral根拠に分ける。未量化や分類名だけで合格にはせず、不明な読みはuncertain、断定されない命題を理由とする拒否も停止する。原文の条件整理は自由文の短い要約から、出所IDを持つ条件/選択群のfactsへ置き換える。調べた軸と存在する事実を区別し、軸のチェック数を条件網羅の証明にしない。全member、条件の発動閾値、経路/位置、参照枝を省かず整理し、収まらない/不明ならunresolved。1scope最大24facts、各factの根拠は最大12片だが、32768tokens内の出力完了を保証する値ではない。
 
+回答の`sourceFacts`は同一の原文条件・同一の適用条件だけを共有する辞書である。各scopeは全`factIds`を列挙し、Localでそのscopeだけの完全なfactsへ展開してから側・文献・参照閉包を再検査する。他scopeの継承による省略は認めず、未使用fact、重複ID/内容/参照、未知ID、閉包外根拠を拒否する。辞書→scope分析→全欄判定の順を保ち、展開後の上限と意味QAは従来通り。共有件数は条件網羅や意味合格の指標ではない。実SDKは非streamで完全JSON応答を受ける。今回の実測はヘッダー観測前の期限切れであり、原因を推論量・出力量・待ち行列のいずれかに特定できない。辞書化の時間改善も実AIで別途確認する。
+
 査読の原文は既存generationの可逆分割を共有し、compact IDと本文のtupleで全片を渡す。反復片や空白も送信から落とさず、空白片だけをfact根拠にする回答は拒否する。source版/全文、参照guideの連結全文座標、全対象文を保持し、組合せの引用はclaim/start/endで同じ全文へ結び付ける。重複するquote本文だけを省き、保存v1の引用や原文は変更しない。factのIDは側・文献・参照閉包を検証し、ID存在だけで説明の意味を合格にしない。単一の査読呼出しと通常最大3送信を維持し、意味の修正効果は実AIで全欄/全scope/全文対比を独立確認する。
 
 この比較のAzure GPT-5.4 Responses呼出しだけは推論量mediumを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)にある同じモデルの設定を使用し、共有AI選択・モデル・Azure設定は変更しない。OpenAIの既存low、Googleのminimal指定や他モデルの挙動は維持する。未知Azure aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとmediumを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取と実SDK要求のreasoning.effort=mediumを送信前に検査し、旧lowの承認範囲を流用しない。推論指定や架空テストだけを実AIの意味品質合格にしない。

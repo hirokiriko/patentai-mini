@@ -39,9 +39,9 @@ describe("separate original-text review before saving", () => {
     if(mode==="duplicate") answer.sourceAnalyses[1]=answer.sourceAnalyses[0];
     if(mode==="unknown") answer.sourceAnalyses[0].id="candidate:999:1";
     if(mode==="unresolved") Object.assign(answer.sourceAnalyses[0],{status:"unresolved"});
-    if(mode==="empty") answer.sourceAnalyses[0].facts[0].statement="";
-    if(mode==="whitespace") answer.sourceAnalyses[0].facts[0].statement=" 　";
-    if(mode==="too_long") answer.sourceAnalyses[0].facts[0].statement="漢".repeat(161);
+    if(mode==="empty") answer.sourceFacts[0].statement="";
+    if(mode==="whitespace") answer.sourceFacts[0].statement=" 　";
+    if(mode==="too_long") answer.sourceFacts[0].statement="漢".repeat(161);
     expect(()=>validateReview(input,answer)).toThrow("ai_incomplete");
   });
   it("keeps selected claims with shared ancestors as separate review scopes",()=>{
@@ -153,8 +153,9 @@ describe("separate original-text review before saving", () => {
   });
   it("bounds source analyses and twenty assessments without treating text length as a token guarantee",()=>{
     const ids=Array.from({length:4},(_,i)=>["baseObservation","candidateObservation","common","differences","unconfirmed"].map(field=>`${Number.MAX_SAFE_INTEGER-i}:1000:1000:${field}`)).flat();
-    const sourceAnalyses=Array.from({length:8},(_,i)=>({id:`base:${i+1}`,inspectedKinds:[...SOURCE_FACT_KINDS],facts:[{kind:"required",statement:"漢".repeat(160),evidenceIds:["b:1:0"]}],status:"resolved"}));
-    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],unitChecks:[{start:0,targetReading:{statement:"漢".repeat(60),quantification:"other",basisQuote:"漢".repeat(120),assertionStatus:"explicit"},sourceComparison:"漢".repeat(80),verdict:"inconsistent"}],verdict:"inconsistent",rejectedTargetAnchor:{unitStart:0,quote:"漢".repeat(120)}}))});
+    const sourceAnalyses=Array.from({length:8},(_,i)=>({id:`base:${i+1}`,inspectedKinds:[...SOURCE_FACT_KINDS],factIds:[1],status:"resolved"}));
+    const sourceFacts=[{id:1,kind:"required",statement:"漢".repeat(160),evidenceIds:["b:1:0"]}];
+    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceFacts,sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],unitChecks:[{start:0,targetReading:{statement:"漢".repeat(60),quantification:"other",basisQuote:"漢".repeat(120),assertionStatus:"explicit"},sourceComparison:"漢".repeat(80),verdict:"inconsistent"}],verdict:"inconsistent",rejectedTargetAnchor:{unitStart:0,quote:"漢".repeat(120)}}))});
     expect(answer.sourceAnalyses).toHaveLength(8);
     expect(answer.checks).toHaveLength(20);
     expect(()=>reviewSchema.parse({...answer,sourceAnalyses:[...sourceAnalyses,sourceAnalyses[0]]})).toThrow();
@@ -220,26 +221,50 @@ describe("separate original-text review before saving", () => {
     }
   });
   it.each(["unknown_id", "wrong_side", "wrong_document", "duplicate_id", "no_id", "duplicate_fact", "empty_fact", "missing_axis", "duplicate_axis", "legacy_conditions", "too_many_facts"])("refuses %s source proof", mode => {
-    const { input, answer } = example(), analysis = answer.sourceAnalyses[0], fact = analysis.facts[0];
+    const { input, answer } = example(), analysis = answer.sourceAnalyses[0], fact = answer.sourceFacts[0];
     if (mode === "unknown_id") fact.evidenceIds = ["b:999:0"];
     if (mode === "wrong_side") fact.evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
-    if (mode === "wrong_document") answer.sourceAnalyses[1].facts[0].evidenceIds = [input.documents[1].source.claims[0].segments[0][0]];
+    if (mode === "wrong_document") answer.sourceFacts[1].evidenceIds = [input.documents[1].source.claims[0].segments[0][0]];
     if (mode === "duplicate_id") fact.evidenceIds.push(fact.evidenceIds[0]);
     if (mode === "no_id") fact.evidenceIds = [];
-    if (mode === "duplicate_fact") analysis.facts.push({ ...fact });
-    if (mode === "empty_fact") analysis.facts = [];
+    if (mode === "duplicate_fact") answer.sourceFacts.push({ ...fact, id: 100 });
+    if (mode === "empty_fact") analysis.factIds = [];
     if (mode === "missing_axis") analysis.inspectedKinds.pop();
     if (mode === "duplicate_axis") analysis.inspectedKinds[1] = analysis.inspectedKinds[0];
     if (mode === "legacy_conditions") Object.assign(analysis, { conditions: "引用のない旧要約。" });
-    if (mode === "too_many_facts") analysis.facts = Array.from({ length: 25 }, (_, i) => ({ ...fact, statement: `架空の条件${i}` }));
+    if (mode === "too_many_facts") analysis.factIds = Array.from({ length: 25 }, (_, i) => i + 1);
     expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
   });
   it("retains blank original partitions but refuses them as fact support", () => {
     const { input, answer } = example();
     input.base.claims[0].segments.push(["b:1:999", "　 "]);
-    answer.sourceAnalyses[0].facts[0].evidenceIds = ["b:1:999"];
+    answer.sourceFacts[0].evidenceIds = ["b:1:999"];
     expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
     expect(input.base.claims[0].segments.at(-1)![1]).toBe("　 ");
+  });
+  it.each(["missing_catalog", "empty_catalog", "unknown_fact", "duplicate_fact_id", "duplicate_scope_ref", "unused_fact", "legacy_inline"])("refuses %s source catalog", mode => {
+    const { input, answer } = example();
+    if (mode === "missing_catalog") delete (answer as Partial<typeof answer>).sourceFacts;
+    if (mode === "empty_catalog") answer.sourceFacts = [];
+    if (mode === "unknown_fact") answer.sourceAnalyses[0].factIds = [100];
+    if (mode === "duplicate_fact_id") answer.sourceFacts.push({ ...answer.sourceFacts[0], statement: "別の架空条件。" });
+    if (mode === "duplicate_scope_ref") answer.sourceAnalyses[0].factIds.push(answer.sourceAnalyses[0].factIds[0]);
+    if (mode === "unused_fact") answer.sourceFacts.push({ ...answer.sourceFacts[0], id: 100, statement: "未使用の架空条件。" });
+    if (mode === "legacy_inline") Object.assign(answer.sourceAnalyses[0], { facts: [answer.sourceFacts[0]] });
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
+  });
+  it("expands a shared fact under every scope and still rejects a different document", () => {
+    const { inputs, selection } = compactThree(); selection.documents = selection.documents.slice(0, 2);
+    selection.documents.forEach(document => document.claimNos = [1, 2]);
+    const plan = makePlan(inputs, selection), drafts = plan.flatMap(chunk => validateAnswer(chunk, fictionalAnswer(chunk))
+      .map(pair => ({ ...pair, baseObservation: "基準", candidateObservation: "候補" })));
+    const input = reviewInput(plan, drafts), answer = fictionalReview(input);
+    const first = answer.sourceAnalyses.find(scope => scope.id === "candidate:21:1")!.factIds[0];
+    const second = answer.sourceAnalyses.find(scope => scope.id === "candidate:21:2")!;
+    second.factIds.push(first);
+    expect(() => validateReview(input, answer)).not.toThrow();
+    answer.sourceAnalyses.find(scope => scope.id === "candidate:22:2")!.factIds.push(first);
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
   });
   it.each(["legacy_string", "empty_statement", "long_statement", "empty_basis", "foreign_basis", "source_basis", "long_basis", "unknown_quantifier", "unknown_status", "unclear_quantifier", "unclear_assertion", "unasserted_rejection"])("refuses %s draft proof", mode => {
     const { input, answer } = example(), check = answer.checks[2], unit = check.unitChecks[0], reading = unit.targetReading;

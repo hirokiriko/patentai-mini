@@ -95,7 +95,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "source_unresolved") Object.assign(value.sourceAnalyses[0],{status:"unresolved"});
       if (mode === "source_missing") value.sourceAnalyses.pop();
       if (mode === "draft_basis") value.checks[0].unitChecks[0].targetReading.basisQuote = "当該文に存在しない断定";
-      if (mode === "fact_id") value.sourceAnalyses[0].facts[0].evidenceIds = ["c999:1:0"];
+      if (mode === "fact_id") value.sourceFacts[0].evidenceIds = ["c999:1:0"];
       if (mode === "anchor" || mode === "valid_negative") {
         Object.assign(value.checks[0].unitChecks[0], { verdict: "inconsistent" });
         Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetAnchor: { unitStart: 0,

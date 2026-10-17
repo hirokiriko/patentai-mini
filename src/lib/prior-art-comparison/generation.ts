@@ -85,7 +85,7 @@ export function decodeGeneration(chunk: ManagedComparisonChunk, answer: unknown)
     const parsed = generationSchema.parse(answer);
     // Protocol metadata is not a patent condition or a reason that source text
     // cannot be compared. Apply this only to new generations, not saved readers.
-    if (parsed.results.some(r => /quotable|referenceLogic|referenceClauses|guaranteedClaimNos|conditionalClaimNos|unknownClaimNos|rejectedTargetSpan|rejectedTargetAnchor|unitStarts|unitChecks|targetReading|sourceComparison|inspectedKinds|basisQuote|assertionStatus|evidenceIds|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
+    if (parsed.results.some(r => /quotable|referenceLogic|referenceClauses|guaranteedClaimNos|conditionalClaimNos|unknownClaimNos|rejectedTargetSpan|rejectedTargetAnchor|unitStarts|unitChecks|targetReading|sourceComparison|inspectedKinds|basisQuote|assertionStatus|evidenceIds|sourceFacts|factIds|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
       [r.baseObservation, r.candidateObservation, r.common, r.differences, r.unconfirmed].join("\n"),
     ))) throw Error();
     const input = generationInput(chunk);

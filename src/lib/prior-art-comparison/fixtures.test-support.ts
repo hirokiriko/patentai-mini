@@ -51,12 +51,13 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
     throw new Error("fictional_unique_quote_unavailable");
   };
   return { draftDigest: input.draftDigest,
-    sourceAnalyses: input.scopes.map(s => {
+    sourceFacts: input.scopes.map((s, index) => {
       const source = s.side === "base" ? input.base : input.documents.find(d => d.docId === s.docId)!.source;
       const claim = source.claims.find(c => c.claimNo === s.selectedClaimNo)!;
-      return { id: s.id, inspectedKinds: [...SOURCE_FACT_KINDS], facts: [{ kind: "required" as const,
-        statement: "架空transportによる形式確認。意味品質の実証ではない。", evidenceIds: [claim.segments.at(-1)![0]] }], status: "resolved" as const };
+      return { id: index + 1, kind: "required" as const,
+        statement: "架空transportによる形式確認。意味品質の実証ではない。", evidenceIds: [claim.segments.at(-1)![0]] };
     }),
+    sourceAnalyses: input.scopes.map((s, index) => ({ id: s.id, inspectedKinds: [...SOURCE_FACT_KINDS], factIds: [index + 1], status: "resolved" as const })),
     checks: input.targets.map(t => ({ id: t.id, reason: "架空transportによるgate動作の確認。意味品質の実証ではない。",
     baseClaimNos: reviewTargetIdentity(t.id).field === "candidateObservation" ? [] : [reviewTargetIdentity(t.id).baseClaimNo],
     candidateClaimNos: reviewTargetIdentity(t.id).field === "baseObservation" ? [] : [reviewTargetIdentity(t.id).candidateClaimNo],

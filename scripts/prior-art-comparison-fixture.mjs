@@ -51,7 +51,8 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    sourceAnalyses: chunk.scopes.map(s => {const source=s.side==="base"?chunk.base:chunk.documents.find(d=>d.docId===s.docId).source,claim=source.claims.find(c=>c.claimNo===s.selectedClaimNo);return {id:s.id,inspectedKinds:["reference","required","alternatives","activation","routing_or_position"],facts:[{kind:"required",statement:"架空transportの形式確認。意味品質の実証ではない。",evidenceIds:[claim.segments.at(-1)[0]]}],status:"resolved"};}),
+    sourceFacts: chunk.scopes.map((s,index) => {const source=s.side==="base"?chunk.base:chunk.documents.find(d=>d.docId===s.docId).source,claim=source.claims.find(c=>c.claimNo===s.selectedClaimNo);return {id:index+1,kind:"required",statement:"架空transportの形式確認。意味品質の実証ではない。",evidenceIds:[claim.segments.at(-1)[0]]};}),
+    sourceAnalyses: chunk.scopes.map((s,index) => ({id:s.id,inspectedKinds:["reference","required","alternatives","activation","routing_or_position"],factIds:[index+1],status:"resolved"})),
     checks: chunk.targets.map(t => ({ id:t.id,
     reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
     baseClaimNos:t.id.split(":")[3]==="candidateObservation"?[]:[Number(t.id.split(":")[1])],candidateClaimNos:t.id.split(":")[3]==="baseObservation"?[]:[Number(t.id.split(":")[2])],
