@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
-import { LIMITS as comparisonLimits } from "./prior-art-comparison/limits";
+import { LIMITS as comparisonLimits, comparisonOutputTokens } from "./prior-art-comparison/limits";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -152,8 +152,10 @@ export class AiOperationBudget {
         const keys = new Set(["model", "input", "max_output_tokens", "temperature", "top_p", "text", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "include"]);
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
+        const outputLimit = this.comparison && role === "normal" && body.reasoning?.effort === "medium"
+          ? comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }) : 8192;
         if (!Array.isArray(body.input) || body.input.length > 2 ||
-            !Number.isInteger(body.max_output_tokens) || body.max_output_tokens < 1 || body.max_output_tokens > 8192 ||
+            !Number.isInteger(body.max_output_tokens) || body.max_output_tokens < 1 || body.max_output_tokens > outputLimit ||
             body.tools?.length || body.previous_response_id || body.conversation) throw stop("request_rejected");
         // UTF-8 bytes plus framing is an engineering estimate; reconcile usage.
         // Preserve the existing text/schema-only request shape and every limit.

@@ -1,1 +1,7 @@
-export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 210_000, requestMilliseconds: 180_000, inputBytes: 90_000, outputTokens: 8192 } as const);
+export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 210_000, requestMilliseconds: 180_000, inputBytes: 90_000, outputTokens: 8192, azureReasoningOutputTokens: 32768 } as const);
+
+/** Reasoning and the visible structured answer share this output allowance. */
+export function comparisonOutputTokens(model: { provider: string; modelId: string }): number {
+  return model.provider === "azure.responses" && (model.modelId === "patentai-gpt54" || /^gpt-5\.4(?:-\d{4}-\d{2}-\d{2})?$/.test(model.modelId))
+    ? LIMITS.azureReasoningOutputTokens : LIMITS.outputTokens;
+}

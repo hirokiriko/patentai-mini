@@ -99,14 +99,14 @@ describe("real installed SDK, guarded fictional transport", () => {
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
   });
-  it("sends low reasoning for the existing GPT-5.4 deployment through the actual guarded SDK",async()=>{
+  it("sends medium reasoning with room for its answer through the actual guarded SDK",async()=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","gpt-5.4");
     const {inputs,selection}=fictionalInputs();
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe("gpt-5.4");
       expect(body.reasoning).toEqual({effort:"medium"});
-      expect(body.max_output_tokens).toBe(8192);
+      expect(body.max_output_tokens).toBe(32768);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
       return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));

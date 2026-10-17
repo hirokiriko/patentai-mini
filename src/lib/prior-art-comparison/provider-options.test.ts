@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { comparisonProviderOptions } from "./provider-options";
+import { comparisonOutputTokens } from "./limits";
 
 afterEach(()=>vi.unstubAllEnvs());
 describe("comparison-only reasoning",()=>{
@@ -18,5 +19,13 @@ describe("comparison-only reasoning",()=>{
   it("preserves the existing Google options and does not force Azure reasoning",()=>{
     vi.stubEnv("AI_PROVIDER","google");
     expect(comparisonProviderOptions({provider:"google.generative-ai",modelId:"gemini-3.1-flash-lite"})).toEqual({google:{thinkingConfig:{thinkingLevel:"minimal"}}});
+  });
+  it("reserves reasoning output only for identified Azure GPT-5.4 comparisons",()=>{
+    for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"])
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(32768);
+    for(const provider of ["openai.responses","google.generative-ai","unknown"])
+      expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"})).toBe(8192);
+    for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini","patentai-gpt54-mini"])
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(8192);
   });
 });
