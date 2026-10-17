@@ -54,6 +54,19 @@ export function isAiOperationStopped(error: unknown): boolean {
 const deadlines = new WeakSet<AbortSignal>();
 const managedWatchCapability = Symbol("managed_full_claims_watch");
 const comparisonCapability = Symbol("prior_art_comparison");
+
+/** Identify only the comparison's review wire stage. This is a transport
+ * allowance; the review schema and semantic gates still validate its contents. */
+function isComparisonReviewInput(input: unknown): boolean {
+  if (!Array.isArray(input)) return false;
+  const users = input.filter(message => message?.role === "user");
+  if (users.length !== 1) return false;
+  const content = users[0].content;
+  const text = typeof content === "string" ? content : Array.isArray(content) && content.length === 1 &&
+    content[0]?.type === "input_text" ? content[0].text : undefined;
+  if (typeof text !== "string") return false;
+  try { return JSON.parse(text)?.task === "review"; } catch { return false; }
+}
 type ComparisonBudgetOptions = {
   capability: typeof comparisonCapability;
   deadline: AbortSignal;
@@ -152,7 +165,8 @@ export class AiOperationBudget {
         const keys = new Set(["model", "input", "max_output_tokens", "temperature", "top_p", "text", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "include"]);
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
-        const outputLimit = this.comparison && role === "normal" && body.reasoning?.effort === "medium"
+        const outputLimit = this.comparison && role === "normal" && ["low", "medium"].includes(body.reasoning?.effort) &&
+          isComparisonReviewInput(body.input)
           ? comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "review") : 8192;
         if (!Array.isArray(body.input) || body.input.length > 2 ||
             !Number.isInteger(body.max_output_tokens) || body.max_output_tokens < 1 || body.max_output_tokens > outputLimit ||
