@@ -1,5 +1,6 @@
 import { getGoogleThinkingProviderOptions } from "../ai-model";
 import type { generateObject } from "ai";
+import type { ComparisonPhase } from "./limits";
 type ProviderOptions = NonNullable<Parameters<typeof generateObject>[0]["providerOptions"]>;
 
 /** Scoped to this comparison, without changing shared providers or deployment
@@ -8,12 +9,13 @@ type ProviderOptions = NonNullable<Parameters<typeof generateObject>[0]["provide
  * real acceptance. Unknown aliases remain unidentified. The SDK needs an explicit
  * reasoning-model override for this verified alias; request guards still verify
  * the actual model and the serialized reasoning option before sending. */
-export function comparisonProviderOptions(model: { provider: string; modelId: string }): ProviderOptions | undefined {
+export function comparisonProviderOptions(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation"): ProviderOptions | undefined {
+  const reasoningEffort = phase === "review" ? "medium" as const : "low" as const;
   if (model.provider === "azure.responses" && model.modelId === "patentai-gpt54") {
-    return { azure: { reasoningEffort: "low" as const, forceReasoning: true } };
+    return { azure: { reasoningEffort, forceReasoning: true } };
   }
   if (/^gpt-5\.4(?:-\d{4}-\d{2}-\d{2})?$/.test(model.modelId)) {
-    if (model.provider === "azure.responses") return { azure: { reasoningEffort: "low" as const } };
+    if (model.provider === "azure.responses") return { azure: { reasoningEffort } };
     if (model.provider === "openai.responses") return { openai: { reasoningEffort: "low" as const } };
   }
   return getGoogleThinkingProviderOptions();

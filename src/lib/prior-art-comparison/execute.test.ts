@@ -80,7 +80,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(3);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
   });
-  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "source_unresolved", "source_missing", "draft_basis", "fact_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
+  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
     let validNegativeProtocolPassed = false;
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
@@ -88,18 +88,17 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (input.task === "compare") return response(fictionalBatch(input));
       const value = fictionalReview(input);
       if (mode === "http") return new Response(SECRET, { status: 429 });
-      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0], { verdict: mode });
+      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0].unitChecks[0], { verdict: mode });
       if (mode === "missing") value.checks.pop();
       if (mode === "duplicate") value.checks[1] = value.checks[0];
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
-      if (mode === "source_unresolved") Object.assign(value.sourceAnalyses[0],{status:"unresolved"});
-      if (mode === "source_missing") value.sourceAnalyses.pop();
-      if (mode === "draft_basis") value.checks[0].unitChecks[0].targetReading.basisQuote = "当該文に存在しない断定";
-      if (mode === "fact_id") value.sourceFacts[0].evidenceIds = ["c999:1:0"];
+      if (mode === "missing_support") value.checks[2].unitChecks[0].evidenceIds = [];
+      if (mode === "wrong_side") value.checks[0].unitChecks[0].evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
+      if (mode === "legacy_wire") Object.assign(value, { sourceFacts: [] });
+      if (mode === "evidence_id") value.checks[0].unitChecks[0].evidenceIds = ["c999:1:0"];
       if (mode === "anchor" || mode === "valid_negative") {
-        Object.assign(value.checks[0].unitChecks[0], { verdict: "inconsistent" });
-        Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetAnchor: { unitStart: 0,
-          quote: mode === "anchor" ? "当該文に存在しない断定" : input.targets[0].text.slice(0, input.targets[0].unitStarts[1]) } });
+        Object.assign(value.checks[0].unitChecks[0], { verdict: "inconsistent",
+          rejectedTargetAnchor: mode === "anchor" ? "当該文に存在しない断定" : input.targets[0].text.slice(0, input.targets[0].unitStarts[1]) });
       }
       if (mode === "valid_negative") validNegativeProtocolPassed = inspectReviewCoverage(input, value).checks[0].verdict === "inconsistent";
       return response(value, mode === "unknown_usage" ? null : undefined);
@@ -109,14 +108,15 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
     if (mode === "valid_negative") expect(validNegativeProtocolPassed).toBe(true);
   });
-  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends low reasoning with room for its answer through the actual guarded SDK on %s",async model=>{
+  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends phase-specific reasoning and output through the actual guarded SDK on %s",async model=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
     const {inputs,selection}=fictionalInputs();
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe(model);
-      expect(body.reasoning).toEqual({effort:"low"});
-      expect(body.max_output_tokens).toBe(32768);
+      const phase = JSON.parse(body.input[1].content[0].text).task;
+      expect(body.reasoning).toEqual({effort:phase === "review" ? "medium" : "low"});
+      expect(body.max_output_tokens).toBe(phase === "review" ? 32768 : 8192);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
       return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
@@ -124,6 +124,18 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch",transport);
     expect((await executeComparison(inputs,selection)).status).toBe("complete");
     expect(transport).toHaveBeenCalledTimes(3);
+  });
+  it.each(["generation", "review"])("stops on %s usage above its own cap without another send", async phase => {
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
+    const { inputs, selection } = fictionalInputs();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input),
+        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 32769 : 8193) : 30 });
+    });
+    vi.stubGlobal("fetch", transport);
+    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
+    expect(transport).toHaveBeenCalledTimes(phase === "generation" ? 1 : 3);
   });
   it("can complete all SDK calls beyond 35 seconds without omitting review",async()=>{
     vi.useFakeTimers();

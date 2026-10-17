@@ -9,7 +9,7 @@ import { batchInput, batchSchema, batchSchemaFor, generationBatches } from "./ge
 import { assertReviewSize, reviewInput, reviewSchemaFor, REVIEW_SYSTEM, validateReview, type ReviewDraft } from "./semantic-review";
 import type { z } from "zod";
 import { comparisonProviderOptions } from "./provider-options";
-import { comparisonOutputTokens } from "./limits";
+import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
 
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
@@ -18,11 +18,11 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
     const pairs: SavedComparison["pairs"] = [];
     const drafts: ReviewDraft[] = [];
     try {
-      const generate = async (system: string, prompt: string, schema: z.ZodType) => {
+      const generate = async (system: string, prompt: string, schema: z.ZodType, phase: ComparisonPhase) => {
         if (absolute.aborted) throw new ComparisonError("ai_incomplete");
         const model = getModel();
-        const options = comparisonProviderOptions(model);
-        const outputTokens = comparisonOutputTokens(model);
+        const options = comparisonProviderOptions(model, phase);
+        const outputTokens = comparisonOutputTokens(model, phase);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(LIMITS.requestMilliseconds)]);
         const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
@@ -37,7 +37,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         return answer.object;
       };
       for (const batch of generationBatches(plan, SYSTEM)) {
-        const answer = batchSchema.parse(await generate(SYSTEM, JSON.stringify(batchInput(batch)), batchSchemaFor(batch)));
+        const answer = batchSchema.parse(await generate(SYSTEM, JSON.stringify(batchInput(batch)), batchSchemaFor(batch), "generation"));
         if (answer.results.some(r => !batch.some(c => c.candidateId === r.docId))) throw new ComparisonError("ai_incomplete");
         for (const chunk of batch) {
           const results = answer.results.filter(r => r.docId === chunk.candidateId).map(r => ({
@@ -53,7 +53,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       }
       const review = reviewInput(plan, drafts);
       assertReviewSize(review);
-      validateReview(review, await generate(REVIEW_SYSTEM, JSON.stringify(review), reviewSchemaFor(review)));
+      validateReview(review, await generate(REVIEW_SYSTEM, JSON.stringify(review), reviewSchemaFor(review), "review"));
       if (absolute.aborted) throw new ComparisonError("ai_incomplete");
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),
         inputs, selection, pairs, status: "complete" as const, review: "human_review_required" as const };

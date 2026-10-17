@@ -2,7 +2,7 @@ import { parseComparisonSource } from "./source";
 import { makePlan, savedDigest, validateAnswer, type ComparisonInputs, type Selection, type SavedComparison } from "./comparison";
 import type { generationInput } from "./generation";
 import type { batchInput } from "./generation-batch";
-import { reviewTargetIdentity, reviewTargetUnits, SOURCE_FACT_KINDS, type reviewInput } from "./semantic-review";
+import { reviewTargetIdentity, reviewTargetUnits, type reviewInput } from "./semantic-review";
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -42,29 +42,17 @@ export function fictionalBatch(input: ReturnType<typeof batchInput>) {
   return { results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
 }
 export function fictionalReview(input: ReturnType<typeof reviewInput>) {
-  const quote = (text: string) => {
-    for (let end = text.length; end > 0; end--) {
-      const part = text.slice(Math.max(0, end - 120), end);
-      if (part.trim() && text.indexOf(part) === text.lastIndexOf(part) &&
-          !/^[\uDC00-\uDFFF]/.test(part) && !/[\uD800-\uDBFF]$/.test(part)) return part;
-    }
-    throw new Error("fictional_unique_quote_unavailable");
-  };
   return { draftDigest: input.draftDigest,
-    sourceFacts: input.scopes.map((s, index) => {
-      const source = s.side === "base" ? input.base : input.documents.find(d => d.docId === s.docId)!.source;
-      const claim = source.claims.find(c => c.claimNo === s.selectedClaimNo)!;
-      return { id: index + 1, kind: "required" as const,
-        statement: "架空transportによる形式確認。意味品質の実証ではない。", evidenceIds: [claim.segments.at(-1)![0]] };
-    }),
-    sourceAnalyses: input.scopes.map((s, index) => ({ id: s.id, inspectedKinds: [...SOURCE_FACT_KINDS], factIds: [index + 1], status: "resolved" as const })),
-    checks: input.targets.map(t => ({ id: t.id, reason: "架空transportによるgate動作の確認。意味品質の実証ではない。",
-    baseClaimNos: reviewTargetIdentity(t.id).field === "candidateObservation" ? [] : [reviewTargetIdentity(t.id).baseClaimNo],
-    candidateClaimNos: reviewTargetIdentity(t.id).field === "baseObservation" ? [] : [reviewTargetIdentity(t.id).candidateClaimNo],
-    unitChecks: reviewTargetUnits(t.text).map(unit => ({ start: unit.start, targetReading: { statement: "架空の文単位確認。",
-      quantification: "other" as const, basisQuote: quote(unit.text), assertionStatus: "explicit" as const },
-      sourceComparison: "架空原文との対応。意味品質の実証ではない。", verdict: "consistent" as const })), verdict: "consistent" as const,
-    rejectedTargetAnchor: null as { unitStart: number; quote: string } | null })) };
+    checks: input.targets.map(t => {
+      const identity = reviewTargetIdentity(t.id);
+      const ids = [
+        ...(identity.field === "candidateObservation" ? [] : [input.base.claims.find(c => c.claimNo === identity.baseClaimNo)!.segments.at(-1)![0]]),
+        ...(identity.field === "baseObservation" ? [] : [input.documents.find(d => d.docId === identity.docId)!.source.claims.find(c => c.claimNo === identity.candidateClaimNo)!.segments.at(-1)![0]]),
+      ];
+      return { id: t.id, unitChecks: reviewTargetUnits(t.text).map(unit => ({ start: unit.start,
+        evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
+        verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", rejectedTargetAnchor: null as string | null })) };
+    }) };
 }
 export function fictionalSaved(): SavedComparison {
   const { inputs, selection } = fictionalInputs();

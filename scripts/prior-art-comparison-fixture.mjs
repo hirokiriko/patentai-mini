@@ -51,14 +51,14 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    sourceFacts: chunk.scopes.map((s,index) => {const source=s.side==="base"?chunk.base:chunk.documents.find(d=>d.docId===s.docId).source,claim=source.claims.find(c=>c.claimNo===s.selectedClaimNo);return {id:index+1,kind:"required",statement:"架空transportの形式確認。意味品質の実証ではない。",evidenceIds:[claim.segments.at(-1)[0]]};}),
-    sourceAnalyses: chunk.scopes.map((s,index) => ({id:s.id,inspectedKinds:["reference","required","alternatives","activation","routing_or_position"],factIds:[index+1],status:"resolved"})),
-    checks: chunk.targets.map(t => ({ id:t.id,
-    reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
-    baseClaimNos:t.id.split(":")[3]==="candidateObservation"?[]:[Number(t.id.split(":")[1])],candidateClaimNos:t.id.split(":")[3]==="baseObservation"?[]:[Number(t.id.split(":")[2])],
-    unitChecks:t.unitStarts.map((start,i)=>({start,targetReading:{statement:"架空の文単位確認。",quantification:"other",basisQuote:quote(t.text.slice(start,t.unitStarts[i+1])),assertionStatus:"explicit"},sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"})),
-    verdict:mode==="review-reject"?"inconsistent":"consistent",
-    rejectedTargetAnchor:mode==="review-reject"?{unitStart:0,quote:quote(t.text.slice(0,t.unitStarts[1]))}:null })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
+    checks: chunk.targets.map(t => {
+      const [docId,baseNo,candidateNo,field]=t.id.split(":");
+      const ids=[...(field==="candidateObservation"?[]:[chunk.base.claims.find(c=>c.claimNo===Number(baseNo)).segments.at(-1)[0]]),
+        ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
+      return { id:t.id, unitChecks:t.unitStarts.map((start,i)=>({start,evidenceIds:[...ids],
+        sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent",
+        rejectedTargetAnchor:mode==="review-reject"?quote(t.text.slice(start,t.unitStarts[i+1])):null})) };
+    }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
     const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;
