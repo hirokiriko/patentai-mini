@@ -26,7 +26,7 @@ provider schemaも実際の側別IDを選択肢に固定し、enumの件数・�
 
 査読は、指定請求項ごとの原文参照範囲を重複なく列挙し、最初に各範囲の条件整理を返す。対象・必須条件・選択群全体と接続条件・否定/数量・従属関係を原文番号と結び付け、整理できない範囲はunresolvedとする。範囲の欠落/重複/追加、未整理を含む結果は、個々の欄がconsistentでも保存しない。整理文もAIの仮説であり、その真偽や論理の完全性を構造検査が保証するものではない。無省略の原文から独立に意味を照合する必要がある。
 
-この比較のGPT-5.4 Responses呼出しだけは推論量lowを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)では未指定時noneである。共有AI選択、モデル、Azure設定は変更せず、Googleの既存minimal指定や他モデルの挙動は維持する。Azure deployment名から未知aliasの実モデルを推測してforceReasoningしない。実AI受入では正規ARM読取の実モデル確認に加え、実SDK要求がreasoning.effort=lowであることを送信前に検査する。推論tokensも出力8192枠の内数であり、条件整理の最大文字数からtoken数や所要時間の達成は保証できない。35秒/全体50秒/出力上限を超えた場合は全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
+この比較のGPT-5.4 Responses呼出しだけは推論量lowを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)では未指定時noneである。共有AI選択、モデル、Azure設定は変更せず、Googleの既存minimal指定や他モデルの挙動は維持する。Azure deployment名から未知aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとlowを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取の実モデル確認に加え、実SDK要求がreasoning.effort=lowであることを送信前に検査する。推論tokensも出力8192枠の内数であり、条件整理の最大文字数からtoken数や所要時間の達成は保証できない。35秒/全体50秒/出力上限を超えた場合は全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
 
 ## 保存・整合・旧結果
 
