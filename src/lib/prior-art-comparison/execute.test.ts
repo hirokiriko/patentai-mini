@@ -109,13 +109,13 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
     if (mode === "valid_negative") expect(validNegativeProtocolPassed).toBe(true);
   });
-  it("sends medium reasoning with room for its answer through the actual guarded SDK",async()=>{
-    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","gpt-5.4");
+  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends low reasoning with room for its answer through the actual guarded SDK on %s",async model=>{
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
     const {inputs,selection}=fictionalInputs();
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const body=JSON.parse(String(init?.body));
-      expect(body.model).toBe("gpt-5.4");
-      expect(body.reasoning).toEqual({effort:"medium"});
+      expect(body.model).toBe(model);
+      expect(body.reasoning).toEqual({effort:"low"});
       expect(body.max_output_tokens).toBe(32768);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
