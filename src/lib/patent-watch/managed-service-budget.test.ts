@@ -4,7 +4,7 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, managedReleaseCaps, emptyManagedBudgetUnits, managedBudgetStateSchema,
   managedBudgetForecast, reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage,
   markManagedBudgetUnknown, settleManagedBudget as settleSequence, setManagedMonthPlan, activateManagedBudgetProfile,
-  managedCompletionAllowanceSchema, checkManagedCompletionBudget,
+  managedCompletionAllowanceSchema, checkManagedCompletionBudget, checkManagedStandardBudget,
   type ManagedBudgetState, type ManagedBudgetProfile } from "./managed-service-budget";
 import { validateManagedBudgetState } from "./managed-service-budget";
 
@@ -50,6 +50,27 @@ function completionFixture() {
   const r = request({ scope: "standard", profileDigest: managedDigest(p), cases: [1] });
   return { p, now, september, s, allowance, input, allowed, r };
 }
+it("checks ordinary cost and every ordinary unit even under an installed completion allowance", () => {
+  const f = completionFixture();
+  expect(() => checkManagedStandardBudget(f.allowed, f.p, f.now)).toThrow(); // 31,200 exceeds the ordinary 30,000
+  const s = structuredClone(f.allowed); s.plans[1].baseYen = 10_000;
+  checkManagedStandardBudget(s, f.p, f.now);
+  for (const unit of Object.keys(emptyManagedBudgetUnits()) as Array<keyof typeof f.p.monthlyUnits>) {
+    const original = structuredClone(s), p = { ...f.p, monthlyUnits: { ...f.p.monthlyUnits, [unit]: 0 } };
+    original.activeProfileDigest = managedDigest(p);
+    // Unresolved prior-month units carry forward; no historical use is dropped.
+    original.operations[0].knownUnits = {}; original.operations[0].units[unit] = 1;
+    const o = original.operations[0];
+    o.intentDigest = managedDigest({ operationId: o.operationId, requestDigest: o.requestDigest, scope: o.scope,
+      kind: o.kind, profileDigest: o.profileDigest, pricingDigest: o.pricingDigest, cases: o.cases, reservationYen: o.reservationYen, units: o.units });
+    original.plans[1].completionAllowance!.profileDigest = managedDigest(p);
+    const positive = structuredClone(original), allowed = { ...p, monthlyUnits: { ...p.monthlyUnits, [unit]: 1 } };
+    positive.activeProfileDigest = managedDigest(allowed);
+    positive.plans[1].completionAllowance!.profileDigest = managedDigest(allowed);
+    checkManagedStandardBudget(positive, allowed, f.now);
+    expect(() => checkManagedStandardBudget(original, p, f.now)).toThrow();
+  }
+});
 it("uses the signed completion allowance for the whole history while retaining ordinary profiles and old plans", () => {
   const f = completionFixture(), before = structuredClone(f.allowed);
   const first = reserveManagedBudget(f.allowed, f.r, f.p, f.now).state;

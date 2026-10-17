@@ -5,8 +5,10 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage, markManagedBudgetUnknown,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
-  managedBudgetForecast, checkManagedCompletionBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
-import { verifyManagedSettlementReview, verifyManagedAdministrationReview, managedSettlementProof, managedReleaseBudgetRequest, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
+  managedBudgetForecast, checkManagedCompletionBudget, checkManagedStandardBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
+import { verifyManagedSettlementReview, verifyManagedAdministrationReview, verifyManagedAdministrationHistory,
+  managedIssue150PreflightSchema, managedIssue150ForwardResultSchema, managedSettlementProof, managedReleaseBudgetRequest,
+  type ManagedBudgetEvidencePins, type ManagedAdministrationReview } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
 import { managedWatchBudgetRequest, managedImportBudgetRequest, managedUploadBudgetRequest, managedArtifactBudgetRequest, type ManagedImportJob } from "./managed-execution-budget";
@@ -492,6 +494,96 @@ export class ManagedServiceBudgetStorage {
       check(actual.bytes === entry.bytes && actual.sha256 === entry.digest);
     }
   }
+  private async issue150Preflight(review: ManagedAdministrationReview) {
+    check(review.action.kind === "release-start");
+    if (review.action.kind !== "release-start") throw new ManagedBudgetError();
+    const step = review.action.step, approval = step.issue150Integration;
+    check(step.issue === 150 && approval);
+    const source = async (digest: string) => {
+      const declared = review.sources.find(s => s.digest === digest); check(declared);
+      const saved = await this.readJson(`${MANAGED_BUDGET_PREFIX}evidence/${digest}.json`, 128 * 1024);
+      check(saved.sha256 === digest && saved.bytes === declared!.bytes); return saved.value;
+    };
+    await source(approval!.ownerApprovalDigest);
+    const preflight = managedIssue150PreflightSchema.parse(await source(step.preflightDigest));
+    check(preflight.ownerApprovalDigest === approval!.ownerApprovalDigest &&
+      Date.parse(review.issuedAt) >= Date.parse(approval!.approvedAt) &&
+      Date.parse(review.validUntil) <= Date.parse(approval!.validUntil));
+    const result = preflight.forwardResultDigest === null ? null :
+      managedIssue150ForwardResultSchema.parse(await source(preflight.forwardResultDigest));
+    if (result) {
+      check(new Set(result.evidenceDigests).size === result.evidenceDigests.length);
+      for (const digest of result.evidenceDigests) await source(digest);
+    }
+    return { step, approval: approval!, preflight, result };
+  }
+  private async issue150History(saved: ReadState, pins: ManagedBudgetEvidencePins) {
+    const history: Awaited<ReturnType<ManagedServiceBudgetStorage["issue150Preflight"]>>[] = [];
+    // Retained admin rows are never compacted/reset. Authenticate all later
+    // actions so an expired, renamed or different-approval step cannot hide a use.
+    for (const [i, entry] of saved.state.administration.entries()) {
+      if (i === 0) continue; // independently checked opening marker
+      const source = await this.readJson(`${MANAGED_BUDGET_PREFIX}administration-reviews/${entry.digest}.json`, 128 * 1024);
+      const envelope = verifyManagedAdministrationHistory(source.value, entry.digest, pins, saved.date), r = envelope.review;
+      check(r.sequence === entry.sequence && r.previousReviewDigest === saved.state.administration[i - 1].digest);
+      if (r.action.kind !== "release-start" || r.action.step.issue !== 150) continue;
+      verifyManagedAdministrationReview(envelope, entry.digest, pins, saved.date, false);
+      await this.verifySources(r.sources);
+      const record = await this.issue150Preflight(r), request = managedReleaseBudgetRequest(record.step, pins.targetBindingHash, pins.ownerBindingHash);
+      const o = saved.state.operations.find(o => o.operationId === request.operationId);
+      check(o && o.start === "claimed" && o.requestDigest === request.requestDigest && o.intentDigest === managedDigest(request));
+      check(Date.parse(o!.reservedAt) >= Date.parse(r.issuedAt) && Date.parse(o!.reservedAt) < Date.parse(r.validUntil));
+      history.push(record);
+    }
+    return history;
+  }
+  private checkIssue150Start(state: ManagedBudgetState, current: Awaited<ReturnType<ManagedServiceBudgetStorage["issue150Preflight"]>>,
+    history: Awaited<ReturnType<ManagedServiceBudgetStorage["issue150History"]>>, clock: ManagedBudgetClock) {
+    const { step, approval, preflight, result } = current, at = clock.blobDate.getTime();
+    check(at >= Date.parse(approval.approvedAt) && at + clock.maximumActionMs < Date.parse(approval.validUntil));
+    const records = [...history, current];
+    for (const kind of ["forward", "rollback"] as const) check(records.filter(r => r.step.kind === kind).length <= 1);
+    for (const trigger of ["pr-push", "pr-open"] as const)
+      check(records.filter(r => r.step.kind === "validation" && r.step.trigger === trigger).length <= 1);
+    const exposure = history.reduce((total, r) => {
+      const o = state.operations.find(o => o.operationId === r.step.operationId); check(o);
+      return total + Math.max(o!.actualYen ?? o!.reservationYen, o!.observedYen ?? 0);
+    }, step.reservationYen);
+    // Missing/unknown costs keep the original reservation. New signatures or a
+    // zero-unit settlement never reset the permanent operation counts above.
+    const forecast = exposure + preflight.rollbackReserveYen;
+    check(Number.isSafeInteger(forecast) && exposure <= 2000 && forecast <= 1600 &&
+      forecast + preflight.aiExposureYen <= 5000 && history.every(r => preflight.aiExposureYen >= r.preflight.aiExposureYen));
+    const month = new Date(at + 9 * 60 * 60_000).toISOString().slice(0, 7), plan = state.plans.find(p => p.month === month); check(plan);
+    const recoveryUsed = state.operations.filter(o => o.processingMonth === month && (o.kind === "recovery" || o.units.rollback > 0))
+      .reduce((n, o) => n + Math.max(o.actualYen ?? o.reservationYen, o.observedYen ?? 0), 0);
+    check(recoveryUsed + preflight.rollbackReserveYen + (step.kind === "rollback" ? step.reservationYen : 0) <= plan!.pools.recovery);
+    if (step.kind === "forward") {
+      check(history.length === 0 && result === null && approval.forwardOperationId === null &&
+        preflight.rollbackReserveYen > 0 && preflight.technicalGoHeadSha === step.headSha && preflight.technicalGoTreeSha === step.treeSha);
+      return;
+    }
+    const forward = history.find(r => r.step.kind === "forward");
+    check(forward && result && approval.forwardOperationId === forward!.step.operationId &&
+      preflight.technicalGoHeadSha === forward!.preflight.technicalGoHeadSha &&
+      preflight.technicalGoTreeSha === forward!.preflight.technicalGoTreeSha && preflight.baseTreeSha === forward!.preflight.baseTreeSha);
+    const f = forward!.step, request = managedReleaseBudgetRequest(f, state.targetBindingHash, this.binding.ownerBindingHash);
+    check(result!.forwardOperationId === f.operationId && result!.forwardRequestDigest === request.requestDigest &&
+      result!.prNumber === f.prNumber && result!.prHeadSha === f.headSha && result!.baseSha === f.baseSha &&
+      result!.mergeParentSha === f.baseSha && result!.mergeTreeSha === f.treeSha && step.baseSha === result!.mergeSha &&
+      step.treeSha === forward!.preflight.baseTreeSha && !history.some(r => r.step.kind === "rollback"));
+    const push = history.find(r => r.step.kind === "validation" && r.step.trigger === "pr-push");
+    const open = history.find(r => r.step.kind === "validation" && r.step.trigger === "pr-open");
+    if (step.kind === "validation" && step.trigger === "pr-push") check(!push && !open && preflight.rollbackReserveYen > 0);
+    else {
+      check(push && push!.step.headSha === step.headSha && push!.step.baseSha === step.baseSha && push!.step.treeSha === step.treeSha &&
+        push!.preflight.forwardResultDigest === preflight.forwardResultDigest);
+      if (step.kind === "validation") check(!open && step.targetRef === push!.step.targetRef && preflight.rollbackReserveYen > 0);
+      else check(open && open!.step.targetRef === push!.step.targetRef && open!.step.headSha === step.headSha &&
+        open!.step.baseSha === step.baseSha && open!.step.treeSha === step.treeSha &&
+        open!.preflight.forwardResultDigest === preflight.forwardResultDigest && step.prNumber !== f.prNumber && preflight.rollbackReserveYen === 0);
+    }
+  }
   private async createJson(name: string, value: unknown, maximum: number) {
     const bytes = Buffer.from(JSON.stringify(value)); check(bytes.length <= maximum);
     const result = await this.container.getBlockBlobClient(name).uploadData(bytes, { conditions: { ifNoneMatch: "*" },
@@ -565,7 +657,9 @@ export class ManagedServiceBudgetStorage {
         r.previousReviewDigest === (value.state.administration.at(-1)?.digest ?? null);
       if (reconcileOnly) return { status: matches(saved) ? "not_applied" as const : "review_stale" as const };
       check(matches(saved)); await this.verifySources(r.sources);
-      const releasePolicy = r.action.kind === "release-start" ? await this.executionPolicy(saved!, r.action.step.pricingDigest, 90) : undefined;
+      const releaseMinutes = r.action.kind === "release-start" && r.action.step.issue === 150 ?
+        (r.action.step.kind === "validation" ? 20 : 40) : 90;
+      const releasePolicy = r.action.kind === "release-start" ? await this.executionPolicy(saved!, r.action.step.pricingDigest, releaseMinutes) : undefined;
       let p: z.infer<typeof managedBudgetProfileSchema> | undefined;
       if (r.action.kind === "activate") {
         p = managedBudgetProfileSchema.parse((await this.readJson(`${MANAGED_BUDGET_PREFIX}profiles/${r.action.profileDigest}.json`, 64 * 1024)).value);
@@ -574,6 +668,11 @@ export class ManagedServiceBudgetStorage {
       if (r.action.kind === "release-start" && r.action.step.completionAllowance) {
         const profile = await this.profile(saved!.state, r.action.step.completionAllowance.profileDigest);
         check(profile); p = profile!;
+      }
+      const issue150 = r.action.kind === "release-start" && r.action.step.issue === 150 ? await this.issue150Preflight(r) : null;
+      const issue150History = issue150 ? await this.issue150History(saved!, pins) : [];
+      if (issue150) {
+        const profile = await this.profile(saved!.state, issue150.approval.profileDigest); check(profile); p = profile!;
       }
       saved = await readOptional();
       if (applied(saved)) return { status: "already_applied" as const };
@@ -593,13 +692,18 @@ export class ManagedServiceBudgetStorage {
         // triggers. The existing connector/CLI is invoked once only after this
         // fresh ACK; reconciliation must never recreate an execution permit.
         const request = managedReleaseBudgetRequest(r.action.step, pins.targetBindingHash, pins.ownerBindingHash);
-        const executionClock = this.clock(saved!, 90);
+        const executionClock = this.clock(saved!, releaseMinutes);
         validateManagedBudgetPolicy(releasePolicy, this.binding, date, executionClock.maximumActionMs);
+        if (issue150) {
+          this.checkIssue150Start(saved!.state, issue150, issue150History, executionClock);
+          checkManagedStandardBudget(saved!.state, p, executionClock);
+        }
         const reserved = reserveManagedBudget(saved!.state, request, p ?? null, executionClock); check(reserved.created);
         state = claimManagedBudgetPhase(reserved.state, request.operationId, "start", p ?? null, executionClock);
         // Bootstrap writes only the historical state format. The signed exact
         // step adds a cumulative check; it never overrides normal admission.
         if (r.action.step.completionAllowance) checkManagedCompletionBudget(state, r.action.step.completionAllowance, executionClock);
+        if (issue150) checkManagedStandardBudget(state, p, executionClock);
       }
       state.administration.push({ sequence: r.sequence, digest: evidenceDigest });
       state = validateManagedBudgetState(state, this.binding.targetBindingHash);

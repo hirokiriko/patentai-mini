@@ -81,4 +81,10 @@ PDFとCSVは保存snapshotのみから生成し、再取得もAI送信0。既存
 
 Draft PRと`codex:no-auto-merge`はTECHNICAL_GO、現headのCI/独立レビュー、#148の所有/統合順と固定imageへの非影響、App/Manual Job配備の費用/回数/codeSha/署名/停止/rollback条件がすべて成立するまで維持する。Production実受入は別判定。rollbackは本差分のrevert PRと承認済み通常deployで、旧部分比較の品質制限を明示する。元worktree、既存原本/DB/試用資材のreset・削除をrollbackと呼ばない。
 
+Issue150の通常統合は既存`managed-budget-admin`の署名済み`release-start`を使用する。`issue150Integration`は本Issueだけに存在し、通常のactive standard profileへ束縛する。129/140の既存形式・digest・完了例外は変更しない。期限は継続承認の2026-10-18 15:41:40 JST、配備1回・rollback1回。各配備40分（計80分）、revert準備のCIは各20分を既存IO余裕とともに開始時の期限へ含める。署名preflightには同headのTECHNICAL_GO、統合tree、baseline tree、全AI既知費用とunknown保持額を切上げたexposure、全triggerを含む税込予約とrollback留保を記録する。AI3000円・追加統合2000円・統合開始見通し1600円・総5000円を超えない。留保は将来の開始許可ではなく、各開始で通常profileの費用と全9unit、当月pricing、pool、期限を再検査する。140の拡張が同月にあっても通常上限を借用しない。
+
+保持されたadmin sequenceから原本署名・digest・連鎖を読み戻し、150の全承認digestを横断して消費を集計する。各150 stepのrequest/intent/start claimとpreflight原本を再照合し、unknown/ACK不明や精算0から配備回数を復活させない。過去activateの署名を現在のGO pinへ再束縛せず、新規activateの既存GO検査は維持する。最後にstateを再読取し、reserve/claim/admin sequenceを既存の単一CASへ保存する。新規ACKの`admitted`だけが最大60秒以内の指定操作を許可し、readback/reconcileから再実行権を作らない。
+
+rollbackは、署名したforward結果原本が実merged PRのhead/base/merge/tree/parentとterminal配備metadataへ一致することをLocalで照合してから行う。署名者による外部事実の照合が信頼境界であり、hashだけで実配備成功を証明しない。失敗した配備はrevertできるが、結果不明の配備と重ねない。専用`codex/issue-150-revert-` branchの初回push、PR作成、通常squashを各一度だけ予約し、head/base/treeとforward operationを拘束する。revert treeは元baseline、baseは実forward merge SHAに一致させる。別変更でmainが進んだ場合、この最小経路で全treeを戻さず停止する。新infra/state schema/資格情報/設定は追加しない。
+
 比較結果の確定・文献削除時の切離しは同一transaction内のDELETE RETURNINGと同一実resultIdのINSERTで行い、既存のSELECT/INSERT/DELETE権限だけを使用する。比較tableのUPDATE権限やsequence再設定を追加しない。専用DBの非管理者roleからcomparison_resultsのUPDATEをrevokeして検証する。通常配備前の既存権限確認は別で行い、watch/import用LOGINを流用・拡張しない。
