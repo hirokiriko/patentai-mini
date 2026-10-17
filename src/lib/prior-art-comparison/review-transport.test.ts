@@ -37,8 +37,12 @@ function response(logical: ReturnType<typeof reviewInput>) {
   }) };
 }
 
-const wireText = (unit: ReturnType<typeof reviewTransportInput>["targets"][number]["units"][number]) => typeof unit === "string" ? unit : unit.join("");
-const wireIds = (target: ReturnType<typeof reviewTransportInput>["targets"][number]) => target.units.map((_, index) => target.firstUnitId + index);
+const wireText = (unit: ReturnType<typeof reviewTransportInput>["units"][number]) => typeof unit === "string" ? unit : unit.join("");
+// Reconstruct field context from the transmitted partition, independently of
+// the original text used below as the lossless round-trip oracle.
+const fieldRows = (input: ReturnType<typeof reviewTransportInput>) => input.fields.map(([id, firstUnitId, endUnitId]) =>
+  ({ id, firstUnitId, units: input.units.slice(firstUnitId, endUnitId) }));
+const wireIds = (target: ReturnType<typeof fieldRows>[number]) => target.units.map((_, index) => target.firstUnitId + index);
 
 describe("whole-unit review transport", () => {
   it("keeps every source, scope, pair and field unchanged while numbering all units once", () => {
@@ -46,12 +50,15 @@ describe("whole-unit review transport", () => {
     expect(input.task).toBe("review"); expect(input.draftDigest).not.toBe(logical.draftDigest);
     expect(input.base).toBe(logical.base); expect(input.documents).toBe(logical.documents);
     expect(input.scopes).toBe(logical.scopes); expect(input.pairs).toBe(logical.pairs);
-    const ids = input.targets.flatMap(wireIds);
+    expect(input.fields.at(-1)![2]).toBe(input.units.length);
+    expect(input.fields.map(([id]) => id)).toEqual(logical.targets.map(t => t.id));
+    const ids = fieldRows(input).flatMap(wireIds);
     expect(ids).toEqual(ids.map((_, i) => i));
-    input.targets.forEach((target, i) => {
+    fieldRows(input).forEach((target, i) => {
       expect(target.units.map(wireText)).toEqual(reviewTargetUnits(logical.targets[i].text).map(unit => unit.text));
       expect(target.units.map(wireText).join("")).toBe(logical.targets[i].text);
-      expect(Object.keys(target)).toEqual(["id", "firstUnitId", "units"]);
+      expect(input.fields[i]).toEqual([logical.targets[i].id, i ? input.fields[i - 1][2] : 0,
+        (i ? input.fields[i - 1][2] : 0) + reviewTargetUnits(logical.targets[i].text).length]);
       expect(target).not.toHaveProperty("unitStarts"); expect(target).not.toHaveProperty("contrastCuts");
     });
     const raw = response(logical), before = JSON.stringify(raw), decoded = decodeReviewTransport(logical, raw);
@@ -65,13 +72,13 @@ describe("whole-unit review transport", () => {
     drafts[0].baseObservation = "𠮷の装置。請求項１／二までの構成。請求項１／二までと請求項2を備える。";
     drafts[0].candidateObservation = "請求項2の装置。請求項２";
     const logical = reviewInput(plan, drafts), input = reviewTransportInput(logical);
-    expect(input.targets[0]).toEqual({ id: logical.targets[0].id, firstUnitId: 0, units: [
+    expect(fieldRows(input)[0]).toEqual({ id: logical.targets[0].id, firstUnitId: 0, units: [
       "𠮷の装置。", ["", "請求項１／二まで", "の構成。"], ["", "請求項１／二まで", "と", "請求項2", "を備える。"],
     ] });
-    expect(input.targets[1]).toEqual({ id: logical.targets[1].id, firstUnitId: 3, units: [
+    expect(fieldRows(input)[1]).toEqual({ id: logical.targets[1].id, firstUnitId: 3, units: [
       ["", "請求項2", "の装置。"], ["", "請求項２", ""],
     ] });
-    input.targets.forEach((target, index) => {
+    fieldRows(input).forEach((target, index) => {
       expect(target.units.map(wireText).join("")).toBe(logical.targets[index].text);
       target.units.forEach(unit => {
         const text = wireText(unit), slots = typeof unit === "string" ? [] : unit.filter((_, index) => index % 2 === 1);
@@ -117,7 +124,7 @@ describe("whole-unit review transport", () => {
     const { plan, drafts } = example();
     drafts[0].differences = "𠮷の温度が上限を超えた場合、制御を実行しない。　次の条件。。末尾。　";
     const logical = reviewInput(plan, drafts), raw = response(logical), target = logical.targets[3], units = reviewTargetUnits(target.text);
-    const ids = wireIds(reviewTransportInput(logical).targets[3]);
+    const ids = wireIds(fieldRows(reviewTransportInput(logical))[3]);
     for (const id of ids) raw.checks[id].verdict = "inconsistent";
     const decoded = decodeReviewTransport(logical, raw), checks = decoded.checks[3].unitChecks;
     expect(checks.map(c => target.text.slice(...c.contrasts[0].rejectedTargetSpan!)).join("")).toBe(target.text);
@@ -135,7 +142,7 @@ describe("whole-unit review transport", () => {
   it("keeps a full legal 200-unit review rejection while generation quote coordinates stay untouched", () => {
     const { plan, drafts } = example(), evidence = structuredClone(drafts[0].baseEvidence);
     drafts[0].differences = "甲".repeat(198) + "乙。";
-    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[3].firstUnitId;
+    const logical = reviewInput(plan, drafts), raw = response(logical), id = fieldRows(reviewTransportInput(logical))[3].firstUnitId;
     raw.checks[id].verdict = "inconsistent";
     const decoded = decodeReviewTransport(logical, raw);
     expect(decoded.checks[3].unitChecks[0].contrasts[0].rejectedTargetSpan).toEqual([0, 200]);
@@ -207,7 +214,7 @@ describe("whole-unit review transport", () => {
 
   it("requires a validated numeric scope witness only for a scope I", () => {
     const { plan, drafts } = example(2); drafts[0].candidateObservation = "候補側は請求項3の装置を継承する。";
-    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[1].firstUnitId, answer = raw.checks[id];
+    const logical = reviewInput(plan, drafts), raw = response(logical), id = fieldRows(reviewTransportInput(logical))[1].firstUnitId, answer = raw.checks[id];
     answer.kind = "reference_scope"; answer.reference = 1; answer.verdict = "inconsistent";
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
     answer.scopeWitness = { scopeId: "candidate:21:2", invalidMember: 3, mode: "ancestor", subjectReference: null, directnessBasis: null };
@@ -235,9 +242,9 @@ describe("whole-unit review transport", () => {
     for (const pattern of ["。\ud800", "。a", "、", "請求項一\ud800", "請求項1/2、", "𠮷。", "\ud842、\udc00"]) {
       const logical = make(pattern), input = reviewTransportInput(logical);
       expect(size(logical)).toBeLessThanOrEqual(upper);
-      expect(input.targets.map(t => t.units.map(wireText).join(""))).toEqual(logical.targets.map(t => t.text));
-      input.targets.forEach((target, i) => expect(target.units).toHaveLength(reviewTargetUnits(logical.targets[i].text).length));
-      const ids = input.targets.flatMap(wireIds);
+      expect(fieldRows(input).map(t => t.units.map(wireText).join(""))).toEqual(logical.targets.map(t => t.text));
+      fieldRows(input).forEach((target, i) => expect(target.units).toHaveLength(reviewTargetUnits(logical.targets[i].text).length));
+      const ids = fieldRows(input).flatMap(wireIds);
       expect(ids).toEqual(ids.map((_, i) => i));
     }
     for (const fullWidth of [false, true]) {
@@ -255,7 +262,7 @@ describe("whole-unit review transport", () => {
       // exceed the preflight envelope despite a repeated-reference test passing.
       expect(size(logical)).toBeLessThanOrEqual(upper);
       expect(input).not.toHaveProperty("refs");
-      input.targets.forEach((target, i) => {
+      fieldRows(input).forEach((target, i) => {
         expect(target.units.map(wireText).join("")).toBe(logical.targets[i].text);
         target.units.forEach(unit => {
           if (typeof unit === "string") return;
@@ -280,12 +287,12 @@ describe("whole-unit review transport", () => {
       return { ...d, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120) };
     }));
     const maximum = make("\ud800"), actual = make("。\ud800"), wire = reviewTransportInput(actual);
-    const ids = wire.targets.flatMap(wireIds);
-    expect(wire.targets).toHaveLength(20); expect(ids).toHaveLength(1540);
+    const ids = fieldRows(wire).flatMap(wireIds);
+    expect(fieldRows(wire)).toHaveLength(20); expect(ids).toHaveLength(1540);
     expect(ids[999]).toBe(999); expect(ids[1000]).toBe(1000); expect(ids.at(-1)).toBe(1539);
     const size = (input: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input));
     const allowance = maximum.targets.reduce((sum, target) => sum + 32 + Math.floor(target.text.length / 4) * 2, 0);
     expect(size(actual)).toBeLessThanOrEqual(size(maximum) + allowance);
-    expect(wire.targets.map(target => target.units.map(wireText).join(""))).toEqual(actual.targets.map(target => target.text));
+    expect(fieldRows(wire).map(target => target.units.map(wireText).join(""))).toEqual(actual.targets.map(target => target.text));
   });
 });

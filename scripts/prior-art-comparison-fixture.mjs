@@ -47,11 +47,11 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    checks: chunk.targets.flatMap(t => {
-      const [docId,baseNo,candidateNo,field]=t.id.split(":");
+    checks: chunk.fields.flatMap(([id,firstUnitId,endUnitId]) => {
+      const [docId,baseNo,candidateNo,field]=id.split(":");
       const ids=[...(field==="candidateObservation"?[]:[chunk.base.claims.find(c=>c.claimNo===Number(baseNo)).segments.at(-1)[0]]),
         ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
-      return t.units.map((unit,i)=>({unitId:t.firstUnitId+i,
+      return chunk.units.slice(firstUnitId,endUnitId).map((unit,i)=>({unitId:firstUnitId+i,
         referenceChecks:(typeof unit==="string"?[]:unit.filter((_,part)=>part%2===1)).map(()=>({relation:"unspecified",operatorBasis:null})),
         kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
         sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));

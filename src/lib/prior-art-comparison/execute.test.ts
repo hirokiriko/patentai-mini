@@ -42,7 +42,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "review") {
         expect(chunk.base.claims[0].segments.map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
-        expect(chunk.targets).toHaveLength(10);
+        expect(chunk.fields).toHaveLength(10);
         expect(chunk.documents.map(d => d.source.claims[0].segments.map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
         return response(fictionalReview(chunk));
       }
@@ -94,7 +94,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = compactFour(), phases: string[] = [];
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
-      if (input.task === "review") { expect(input.targets).toHaveLength(20); return response(fictionalReview(input)); }
+      if (input.task === "review") { expect(input.fields).toHaveLength(20); return response(fictionalReview(input)); }
       expect(body.max_output_tokens).toBe(8192); expect(body.text.format.schema.properties.results.maxItems).toBe(4);
       expect(input.documents.map((d: {pairs: unknown[]}) => d.pairs.length)).toEqual([2, 2]);
       for (const d of input.documents) for (const c of d.candidate.claims)

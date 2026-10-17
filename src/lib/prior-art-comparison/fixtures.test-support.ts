@@ -61,13 +61,13 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
 }
 /** Fictional raw transport only; never evidence of semantic quality. */
 export function fictionalTransportReview(input: ReturnType<typeof reviewTransportInput>) {
-  return { draftDigest: input.draftDigest, checks: input.targets.flatMap(t => {
-    const identity = reviewTargetIdentity(t.id);
+  return { draftDigest: input.draftDigest, checks: input.fields.flatMap(([id, firstUnitId, endUnitId]) => {
+    const identity = reviewTargetIdentity(id);
     const ids = [
       ...(identity.field === "candidateObservation" ? [] : [input.base.claims.find(c => c.claimNo === identity.baseClaimNo)!.segments.at(-1)![0]]),
       ...(identity.field === "baseObservation" ? [] : [input.documents.find(d => d.docId === identity.docId)!.source.claims.find(c => c.claimNo === identity.candidateClaimNo)!.segments.at(-1)![0]]),
     ];
-    return t.units.map((unit, index) => ({ unitId: t.firstUnitId + index,
+    return input.units.slice(firstUnitId, endUnitId).map((unit, index) => ({ unitId: firstUnitId + index,
       referenceChecks: (typeof unit === "string" ? [] : unit.filter((_, part) => part % 2 === 1))
         .map(() => ({ relation: "unspecified" as const, operatorBasis: null })),
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
