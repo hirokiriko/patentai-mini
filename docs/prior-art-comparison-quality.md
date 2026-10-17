@@ -8,7 +8,11 @@
 
 ## 有限な計画と検証
 
-既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。同期APIは60秒、比較と保存前査読の合計50秒、個別35秒、最大3回、retry 0、出力8,192 tokensを維持する。新規生成は最大4組・2組/回・最大2回とし、残る1回で全4組までを査読する。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ねるため、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
+既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。比較専用の同期API metadataは240秒、比較と保存前査読は単一の全体210秒、個別最大180秒とする。後続の呼出しも全体期限の残時間に制限され、各回180秒を保証するものではない。最大3回、retry 0、出力8,192 tokensは維持する。新規生成は最大4組・2組/回・最大2回とし、残る1回で全4組までを査読する。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ねるため、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
+
+時間枠は共有budget内の閉じた比較専用capabilityで適用し、通常処理とmanaged watchの35秒は変更しない。既存budgetとの入れ子、上限の上書き、scope終了後の新しい送信を拒否し、終了時には進行中の比較通信も中断する。比較の全体期限をtransportと生成/査読で共有する。費用・回数・入力/出力・usage照合・失敗後停止の条件は緩めない。新しい時間枠で実AIを行うには、そのheadと時間/回数/費用/期限に一致するOWNER承認が必要。
+
+[Azure Container AppsのHTTP ingress](https://learn.microsoft.com/en-us/azure/container-apps/ingress?tabs=bash)は240秒のrequest timeoutを持つ。[Next.jsのmaxDuration](https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config#maxduration)は配備platform向けmetadataであり、それだけで実ホストの時間制限を変えるものではない。AI全体210秒はDB予約後に始まるため、予約・保存等を含む実際のHTTP所要時間と240秒内の完了を実アプリ受入で確認する。Azure設定は変更しない。35秒停止の観測だけから、180秒で完了することや意味品質の改善を保証しない。
 
 入力はsystem・schema・二重JSON escapeと余白を含めて90,000 bytes以内か事前検査する。全原文と最大長の生成欄を含む査読要求も、DB予約・最初の送信より前に検査する。生成後は実際の査読要求も再検査する。完全な計画が収まらなければ最初の送信前に停止し、対象を絞るよう案内する。managed watchの41回枠・本番承認は継承しない。
 
@@ -26,7 +30,7 @@ provider schemaも実際の側別IDを選択肢に固定し、enumの件数・�
 
 査読は、指定請求項ごとの原文参照範囲を重複なく列挙し、最初に各範囲の条件整理を返す。対象・必須条件・選択群全体と接続条件・否定/数量・従属関係を原文番号と結び付け、整理できない範囲はunresolvedとする。範囲の欠落/重複/追加、未整理を含む結果は、個々の欄がconsistentでも保存しない。整理文もAIの仮説であり、その真偽や論理の完全性を構造検査が保証するものではない。無省略の原文から独立に意味を照合する必要がある。
 
-この比較のGPT-5.4 Responses呼出しだけは推論量lowを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)では未指定時noneである。共有AI選択、モデル、Azure設定は変更せず、Googleの既存minimal指定や他モデルの挙動は維持する。Azure deployment名から未知aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとlowを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取の実モデル確認に加え、実SDK要求がreasoning.effort=lowであることを送信前に検査する。推論tokensも出力8192枠の内数であり、条件整理の最大文字数からtoken数や所要時間の達成は保証できない。35秒/全体50秒/出力上限を超えた場合は全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
+この比較のGPT-5.4 Responses呼出しだけは推論量lowを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)では未指定時noneである。共有AI選択、モデル、Azure設定は変更せず、Googleの既存minimal指定や他モデルの挙動は維持する。Azure deployment名から未知aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとlowを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取の実モデル確認に加え、実SDK要求がreasoning.effort=lowであることを送信前に検査する。推論tokensも出力8192枠の内数であり、条件整理の最大文字数からtoken数や所要時間の達成は保証できない。個別180秒/全体210秒/出力上限を超えた場合は全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
 
 ## 保存・整合・旧結果
 

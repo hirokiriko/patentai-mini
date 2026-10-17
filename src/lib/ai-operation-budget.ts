@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
+import { LIMITS as comparisonLimits } from "./prior-art-comparison/limits";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -52,6 +53,11 @@ export function isAiOperationStopped(error: unknown): boolean {
 
 const deadlines = new WeakSet<AbortSignal>();
 const managedWatchCapability = Symbol("managed_full_claims_watch");
+const comparisonCapability = Symbol("prior_art_comparison");
+type ComparisonBudgetOptions = {
+  capability: typeof comparisonCapability;
+  deadline: AbortSignal;
+};
 export type ManagedWatchDispatchJournal = {
   /** Atomic durable reservation ACK is required before network dispatch. */
   reserve(input: { ordinal: number; requestSha256: string; estimatedInputTokens: number; maximumOutputTokens: number }): Promise<void>;
@@ -94,7 +100,15 @@ export class AiOperationBudget {
   closeManagedScope(): void {
     if (this.managed) this.stopped ??= new AiOperationStopped("unknown");
   }
-  constructor(maximum: Record<Role, number>, private readonly managed?: ManagedWatchBudgetOptions) {
+  get isComparisonScope(): boolean { return this.comparison !== undefined; }
+  closeComparisonScope(): void {
+    if (this.comparison) this.stopped ??= new AiOperationStopped("unknown");
+  }
+  constructor(maximum: Record<Role, number>, private readonly managed?: ManagedWatchBudgetOptions,
+    private readonly comparison?: ComparisonBudgetOptions) {
+    const comparisonAllowed = comparison?.capability === comparisonCapability && !managed &&
+      (maximum.normal === 1 || maximum.normal === comparisonLimits.calls) && maximum.fast === 0;
+    if (comparison && !comparisonAllowed) throw new AiOperationStopped();
     const managedAllowed = managed?.capability === managedWatchCapability && maximum.normal === 41 && maximum.fast === 0 &&
       Number.isSafeInteger(managed.consumed) && managed.consumed >= 0 && managed.consumed <= 41;
     if (managed && !managedAllowed) throw new AiOperationStopped();
@@ -127,6 +141,7 @@ export class AiOperationBudget {
       try {
         if (this.stopped) throw this.stopped;
         if (this.managed?.deadline.aborted) throw stop("timeout");
+        if (this.comparison?.deadline.aborted) throw stop("timeout");
         if (this.managedInFlight) throw stop("request_rejected");
         if (this.consumed[role] >= this.maximum[role]) throw stop("request_limit");
         if (init?.signal?.aborted) throw stop(callerReason());
@@ -172,9 +187,9 @@ export class AiOperationBudget {
         if (this.managed.deadline.aborted) throw stop("timeout");
         if (init?.signal?.aborted) throw stop(callerReason());
       }
-      const deadline = aiOperationDeadline(35_000);
-      const signal = AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : []), ...(this.managed ? [this.managed.deadline] : [])]);
-      const abortReason = (): PatentWatchStopReason => deadline.aborted || this.managed?.deadline.aborted ? "timeout" : callerReason();
+      const deadline = aiOperationDeadline(this.comparison ? comparisonLimits.requestMilliseconds : 35_000);
+      const signal = AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : []), ...(this.managed ? [this.managed.deadline] : []), ...(this.comparison ? [this.comparison.deadline] : [])]);
+      const abortReason = (): PatentWatchStopReason => deadline.aborted || this.managed?.deadline.aborted || this.comparison?.deadline.aborted ? "timeout" : callerReason();
       let abort: (() => void) | undefined;
       const aborted = new Promise<never>((_, reject) => {
         abort = () => reject(stop(abortReason()));
@@ -233,8 +248,24 @@ export class AiOperationBudget {
 }
 const active = new AsyncLocalStorage<AiOperationBudget>();
 export function withAiOperationBudget<T>(maximum: Record<Role, number>, operation: () => Promise<T>): Promise<T> {
-  if (active.getStore()) return operation();
+  const existing = active.getStore();
+  if (existing?.isComparisonScope) throw new AiOperationStopped("request_rejected");
+  if (existing) return operation();
   return active.run(new AiOperationBudget(maximum), operation);
+}
+/** Comparison-only scope. Other workflows retain their existing 35-second
+ * transport cap. One absolute deadline is shared by every call and body read. */
+export function withPriorArtComparisonBudget<T>(operation: (deadline: AbortSignal) => Promise<T>, maximumNormalCalls: 1 | 3 = 3): Promise<T> {
+  if (active.getStore() || (maximumNormalCalls !== 1 && maximumNormalCalls !== comparisonLimits.calls)) throw new AiOperationStopped("request_rejected");
+  const closing = new AbortController();
+  const deadline = AbortSignal.any([aiOperationDeadline(comparisonLimits.milliseconds), closing.signal]);
+  deadlines.add(deadline);
+  const budget = new AiOperationBudget({ normal: maximumNormalCalls, fast: 0 }, undefined,
+    Object.freeze({ capability: comparisonCapability, deadline }));
+  return active.run(budget, async () => {
+    try { return await operation(deadline); }
+    finally { budget.closeComparisonScope(); closing.abort(); }
+  });
 }
 /** Only the durable standard watch worker owns this scope, once per logical run. */
 export function withManagedWatchBudget<T>(input: { consumed: number; deadlineAt: number; journal: ManagedWatchDispatchJournal }, operation: () => Promise<T>): Promise<T> {

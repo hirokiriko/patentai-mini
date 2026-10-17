@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { getModel } from "../ai-model";
-import { aiOperationDeadline, withAiOperationBudget } from "../ai-operation-budget";
+import { aiOperationDeadline, withPriorArtComparisonBudget } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
@@ -13,8 +13,7 @@ import { comparisonProviderOptions } from "./provider-options";
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
   const plan = makePlan(inputs, selection); // Entire scope must fit before any send.
-  return withAiOperationBudget({ normal: LIMITS.calls, fast: 0 }, async () => {
-    const absolute = aiOperationDeadline(LIMITS.milliseconds);
+  return withPriorArtComparisonBudget(async absolute => {
     const pairs: SavedComparison["pairs"] = [];
     const drafts: ReviewDraft[] = [];
     try {
@@ -22,7 +21,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         if (absolute.aborted) throw new ComparisonError("ai_incomplete");
         const model = getModel();
         const options = comparisonProviderOptions(model);
-        const signal = AbortSignal.any([absolute, aiOperationDeadline(35_000)]);
+        const signal = AbortSignal.any([absolute, aiOperationDeadline(LIMITS.requestMilliseconds)]);
         const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
           maxOutputTokens: LIMITS.outputTokens, abortSignal: signal,

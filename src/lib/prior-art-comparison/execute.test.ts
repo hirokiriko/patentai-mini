@@ -115,7 +115,20 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect((await executeComparison(inputs,selection)).status).toBe("complete");
     expect(transport).toHaveBeenCalledTimes(3);
   });
-  it("stops at the existing per-send deadline and never starts a second call", async () => {
+  it("can complete all SDK calls beyond 35 seconds without omitting review",async()=>{
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});
+    const {inputs,selection}=fictionalInputs();
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      await new Promise(r=>setTimeout(r,40000));return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
+    });
+    vi.stubGlobal("fetch",transport);
+    const result=executeComparison(inputs,selection);
+    await vi.advanceTimersByTimeAsync(120001);
+    expect((await result).status).toBe("complete");expect(transport).toHaveBeenCalledTimes(3);
+  });
+  it("stops at the comparison-only per-send deadline and never starts a second call", async () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => { const controller = new AbortController(); setTimeout(() => controller.abort(), ms); return controller.signal; });
     const { inputs, selection } = fictionalInputs();
@@ -123,22 +136,22 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch", transport);
     const promise = executeComparison(inputs, selection);
     const rejected = expect(promise).rejects.toThrow("ai_incomplete");
-    await vi.advanceTimersByTimeAsync(35001);
+    await vi.advanceTimersByTimeAsync(180001);
     await rejected;
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("shares the absolute fifty-second deadline with the final review",async()=>{
+  it("shares one absolute 210-second deadline with the final review",async()=>{
     vi.useFakeTimers();
     vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});
     const {inputs,selection}=fictionalInputs();
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if(input.task==="review") return new Promise(()=>undefined);
-      await new Promise(r=>setTimeout(r,18000));return response(fictionalBatch(input));
+      await new Promise(r=>setTimeout(r,80000));return response(fictionalBatch(input));
     });
     vi.stubGlobal("fetch",transport);
     const rejected=expect(executeComparison(inputs,selection)).rejects.toThrow("ai_incomplete");
-    await vi.advanceTimersByTimeAsync(50001);await rejected;
+    await vi.advanceTimersByTimeAsync(210001);await rejected;
     expect(transport).toHaveBeenCalledTimes(3);
   });
 });
