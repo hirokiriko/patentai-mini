@@ -67,8 +67,8 @@ export function fictionalTransportReview(input: ReturnType<typeof reviewTranspor
       ...(identity.field === "candidateObservation" ? [] : [input.base.claims.find(c => c.claimNo === identity.baseClaimNo)!.segments.at(-1)![0]]),
       ...(identity.field === "baseObservation" ? [] : [input.documents.find(d => d.docId === identity.docId)!.source.claims.find(c => c.claimNo === identity.candidateClaimNo)!.segments.at(-1)![0]]),
     ];
-    return reviewTargetUnits(t.text).map((unit, index) => ({ unitId: t.unitIds[index],
-      referenceChecks: reviewReferenceMentions(t.text).filter(m => m.start >= unit.start && m.end <= unit.end)
+    return t.units.map((unit, index) => ({ unitId: t.firstUnitId + index,
+      referenceChecks: (typeof unit === "string" ? [] : unit.filter((_, part) => part % 2 === 1))
         .map(() => ({ relation: "unspecified" as const, operatorBasis: null })),
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
       evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",

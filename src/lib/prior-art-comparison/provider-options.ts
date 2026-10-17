@@ -10,7 +10,7 @@ type ProviderOptions = NonNullable<Parameters<typeof generateObject>[0]["provide
  * reasoning-model override for this verified alias; request guards still verify
  * the actual model and the serialized reasoning option before sending. */
 export function comparisonProviderOptions(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation"): ProviderOptions | undefined {
-  const reasoningEffort = ({ generation: "low", review: "low" } as const)[phase];
+  const reasoningEffort = ({ generation: "low", review: "medium" } as const)[phase];
   if (model.provider === "azure.responses" && model.modelId === "patentai-gpt54") {
     return { azure: { reasoningEffort, forceReasoning: true } };
   }

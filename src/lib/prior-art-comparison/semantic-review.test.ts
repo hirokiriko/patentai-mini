@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makePlan, SYSTEM, validateAnswer, validateSaved, savedDigest, LIMITS } from "./comparison";
 import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalSaved } from "./fixtures.test-support";
 import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
-import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, resolveReviewAnchor, resolveReviewSpan, reviewContrastCuts, reviewEvidenceCatalog, reviewInput, reviewSchema, reviewSchemaFor, reviewTargetUnits, REVIEW_SYSTEM, validateReview } from "./semantic-review";
+import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, resolveReviewAnchor, resolveReviewSpan, reviewContrastCuts, reviewEvidenceCatalog, reviewInput, reviewSchema, reviewTargetUnits, REVIEW_SYSTEM, validateReview } from "./semantic-review";
 import { parseComparisonSource } from "./source";
 import { reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
 
@@ -361,7 +361,9 @@ describe("complete original-text contrast review before saving", () => {
     for(const text of ["基準は光。候補は音。","𠮷は青色。　次は赤色。　","一文だけ","句点。。次。","。".repeat(200)]){
       const units=reviewTargetUnits(text);expect(units.map(u=>u.text).join("")).toBe(text);for(const u of units)expect(text.slice(u.start,u.end)).toBe(u.text);
     }
-    for(const text of ["あ。".repeat(100),"\ud800。".repeat(100),"。x".repeat(100),"a。".repeat(100),"。".repeat(200)])expect(size(text)).toBeLessThanOrEqual(size("\ud800".repeat(200)));
+    const maximum=reviewInput(plan,drafts.map(d=>({...d,common:"\ud800".repeat(200),differences:"\ud800".repeat(200)})));
+    const upper=transportBytes(maximum)+maximum.targets.reduce((sum,target)=>sum+32+Math.floor(target.text.length/4)*2,0);
+    for(const text of ["あ。".repeat(100),"\ud800。".repeat(100),"。x".repeat(100),"a。".repeat(100),"。".repeat(200)])expect(size(text)).toBeLessThanOrEqual(upper);
     expect(reviewSchema.safeParse({draftDigest:"a".repeat(64),checks:Array.from({length:20},(_,i)=>({id:String(i),unitChecks:Array.from({length:200},(_,start)=>({start,referenceChecks:[],contrasts:[{end:start+1,kind:"technical",referenceStart:null,evidenceIds:[],sourceComparison:"境界",verdict:"uncertain",rejectedTargetSpan:null}]}))}))}).success).toBe(true);
   });
   it("preserves original quote coordinates and old six-pair saved snapshots",()=>{

@@ -51,9 +51,8 @@ globalThis.fetch = async (url, init) => {
       const [docId,baseNo,candidateNo,field]=t.id.split(":");
       const ids=[...(field==="candidateObservation"?[]:[chunk.base.claims.find(c=>c.claimNo===Number(baseNo)).segments.at(-1)[0]]),
         ...(field==="baseObservation"?[]:[chunk.documents.find(d=>d.docId===Number(docId)).source.claims.find(c=>c.claimNo===Number(candidateNo)).segments.at(-1)[0]])];
-      const starts=[0];for(let at=0;at<t.text.length-1;at++)if(t.text[at]==="。"&&t.text[at+1]!=="。"&&t.text.slice(at+1).trim())starts.push(at+1);
-      return starts.map((start,i)=>({unitId:t.unitIds[i],
-        referenceChecks:(t.mentions??[]).filter(([a,b])=>a>=start&&b<=(starts[i+1]??t.text.length)).map(()=>({relation:"unspecified",operatorBasis:null})),
+      return t.units.map((unit,i)=>({unitId:t.firstUnitId+i,
+        referenceChecks:(typeof unit==="string"?[]:unit.filter((_,part)=>part%2===1)).map(()=>({relation:"unspecified",operatorBasis:null})),
         kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
         sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));
     }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePlan, validateAnswer } from "./comparison";
-import { fictionalAnswer, fictionalInputs, fictionalReview } from "./fixtures.test-support";
+import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalTransportReview } from "./fixtures.test-support";
 import { inspectReviewCoverage, reviewInput, reviewTargetUnits, validateReview } from "./semantic-review";
 import { reviewReferenceMentions } from "./reference-mentions";
 import { decodeReviewTransport, REVIEW_TRANSPORT_SYSTEM, reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
@@ -37,23 +37,52 @@ function response(logical: ReturnType<typeof reviewInput>) {
   }) };
 }
 
+const wireText = (unit: ReturnType<typeof reviewTransportInput>["targets"][number]["units"][number]) => typeof unit === "string" ? unit : unit.join("");
+const wireIds = (target: ReturnType<typeof reviewTransportInput>["targets"][number]) => target.units.map((_, index) => target.firstUnitId + index);
+
 describe("whole-unit review transport", () => {
   it("keeps every source, scope, pair and field unchanged while numbering all units once", () => {
     const { logical } = example(), input = reviewTransportInput(logical);
     expect(input.task).toBe("review"); expect(input.draftDigest).not.toBe(logical.draftDigest);
     expect(input.base).toBe(logical.base); expect(input.documents).toBe(logical.documents);
     expect(input.scopes).toBe(logical.scopes); expect(input.pairs).toBe(logical.pairs);
-    const ids = input.targets.flatMap(t => t.unitIds);
+    const ids = input.targets.flatMap(wireIds);
     expect(ids).toEqual(ids.map((_, i) => i));
     input.targets.forEach((target, i) => {
-      expect(target.text).toBe(logical.targets[i].text);
-      expect(target.unitIds).toHaveLength(reviewTargetUnits(target.text).length);
+      expect(target.units.map(wireText)).toEqual(reviewTargetUnits(logical.targets[i].text).map(unit => unit.text));
+      expect(target.units.map(wireText).join("")).toBe(logical.targets[i].text);
+      expect(Object.keys(target)).toEqual(["id", "firstUnitId", "units"]);
       expect(target).not.toHaveProperty("unitStarts"); expect(target).not.toHaveProperty("contrastCuts");
     });
     const raw = response(logical), before = JSON.stringify(raw), decoded = decodeReviewTransport(logical, raw);
     expect(decoded.draftDigest).toBe(logical.draftDigest);
     expect(inspectReviewCoverage(logical, decoded).checks).toHaveLength(logical.targets.length);
     expect(JSON.stringify(raw)).toBe(before);
+  });
+
+  it("exposes exact reference slots without duplicated text, normalized literals or interpreted relations", () => {
+    const { plan, drafts } = example();
+    drafts[0].baseObservation = "𠮷の装置。請求項１／二までの構成。請求項１／二までと請求項2を備える。";
+    drafts[0].candidateObservation = "請求項2の装置。請求項２";
+    const logical = reviewInput(plan, drafts), input = reviewTransportInput(logical);
+    expect(input.targets[0]).toEqual({ id: logical.targets[0].id, firstUnitId: 0, units: [
+      "𠮷の装置。", ["", "請求項１／二まで", "の構成。"], ["", "請求項１／二まで", "と", "請求項2", "を備える。"],
+    ] });
+    expect(input.targets[1]).toEqual({ id: logical.targets[1].id, firstUnitId: 3, units: [
+      ["", "請求項2", "の装置。"], ["", "請求項２", ""],
+    ] });
+    input.targets.forEach((target, index) => {
+      expect(target.units.map(wireText).join("")).toBe(logical.targets[index].text);
+      target.units.forEach(unit => {
+        const text = wireText(unit), slots = typeof unit === "string" ? [] : unit.filter((_, index) => index % 2 === 1);
+        expect(slots).toEqual(reviewReferenceMentions(text).map(m => text.slice(m.start, m.end)));
+        if (Array.isArray(unit)) expect(unit.length % 2).toBe(1);
+        if (!slots.length) expect(typeof unit).toBe("string");
+      });
+    });
+    const decoded = decodeReviewTransport(logical, fictionalTransportReview(input));
+    expect(decoded.checks[0].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([0, 1, 2]);
+    expect(decoded.checks[1].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([1, 1]);
   });
 
   it.each(["missing", "extra", "duplicate", "reordered", "foreign", "wrong_digest", "logical_digest", "legacy_root", "legacy_row", "missing_witness", "blank_reason", "control", "fraction_id", "string_id", "unsafe_evidence"])("strictly refuses %s raw coverage", mode => {
@@ -88,7 +117,7 @@ describe("whole-unit review transport", () => {
     const { plan, drafts } = example();
     drafts[0].differences = "𠮷の温度が上限を超えた場合、制御を実行しない。　次の条件。。末尾。　";
     const logical = reviewInput(plan, drafts), raw = response(logical), target = logical.targets[3], units = reviewTargetUnits(target.text);
-    const ids = reviewTransportInput(logical).targets[3].unitIds;
+    const ids = wireIds(reviewTransportInput(logical).targets[3]);
     for (const id of ids) raw.checks[id].verdict = "inconsistent";
     const decoded = decodeReviewTransport(logical, raw), checks = decoded.checks[3].unitChecks;
     expect(checks.map(c => target.text.slice(...c.contrasts[0].rejectedTargetSpan!)).join("")).toBe(target.text);
@@ -106,7 +135,7 @@ describe("whole-unit review transport", () => {
   it("keeps a full legal 200-unit review rejection while generation quote coordinates stay untouched", () => {
     const { plan, drafts } = example(), evidence = structuredClone(drafts[0].baseEvidence);
     drafts[0].differences = "甲".repeat(198) + "乙。";
-    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[3].unitIds[0];
+    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[3].firstUnitId;
     raw.checks[id].verdict = "inconsistent";
     const decoded = decodeReviewTransport(logical, raw);
     expect(decoded.checks[3].unitChecks[0].contrasts[0].rejectedTargetSpan).toEqual([0, 200]);
@@ -178,7 +207,7 @@ describe("whole-unit review transport", () => {
 
   it("requires a validated numeric scope witness only for a scope I", () => {
     const { plan, drafts } = example(2); drafts[0].candidateObservation = "候補側は請求項3の装置を継承する。";
-    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[1].unitIds[0], answer = raw.checks[id];
+    const logical = reviewInput(plan, drafts), raw = response(logical), id = reviewTransportInput(logical).targets[1].firstUnitId, answer = raw.checks[id];
     answer.kind = "reference_scope"; answer.reference = 1; answer.verdict = "inconsistent";
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
     answer.scopeWitness = { scopeId: "candidate:21:2", invalidMember: 3, mode: "ancestor", subjectReference: null, directnessBasis: null };
@@ -196,20 +225,45 @@ describe("whole-unit review transport", () => {
     const plan = selection.documents.flatMap(d => planManagedComparisons(managedClaimContext(inputs.draft.source, selection.draftClaimNos), selection.draftClaimNos,
       [{ candidateId: d.docId, source: managedClaimContext(inputs.documents.find(s => s.id === d.docId)!.source, d.claimNos) }]).chunks);
     const evidence = { claimNo: Number.MAX_SAFE_INTEGER, start: Number.MAX_SAFE_INTEGER, end: Number.MAX_SAFE_INTEGER, quote: "\ud800".repeat(120) };
-    const make = (pattern: string) => reviewInput(plan, plan.flatMap(c => c.pairs.map(p => {
-      const text = (n: number) => pattern.repeat(n).slice(0, n);
+    const makeWith = (text: (n: number) => string) => reviewInput(plan, plan.flatMap(c => c.pairs.map(p => {
       return { ...p, docId: c.candidateId, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120), baseEvidence: evidence, candidateEvidence: evidence };
     })));
+    const make = (pattern: string) => makeWith(n => pattern.repeat(n).slice(0, n));
     const size = (logical: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(reviewTransportInput(logical)), reviewTransportSchemaFor(logical));
-    const max = make("\ud800"), upper = size(max) + max.targets.length * 32;
+    const max = make("\ud800"), upper = size(max) + max.targets.reduce((sum, target) => sum + 32 + Math.floor(target.text.length / 4) * 2, 0);
     expect(upper).toBeLessThanOrEqual(90000);
     for (const pattern of ["。\ud800", "。a", "、", "請求項一\ud800", "請求項1/2、", "𠮷。", "\ud842、\udc00"]) {
       const logical = make(pattern), input = reviewTransportInput(logical);
       expect(size(logical)).toBeLessThanOrEqual(upper);
-      expect(input.targets.map(t => t.text)).toEqual(logical.targets.map(t => t.text));
-      input.targets.forEach(target => expect(target.unitIds).toHaveLength(reviewTargetUnits(target.text).length));
-      const ids = input.targets.flatMap(target => target.unitIds);
+      expect(input.targets.map(t => t.units.map(wireText).join(""))).toEqual(logical.targets.map(t => t.text));
+      input.targets.forEach((target, i) => expect(target.units).toHaveLength(reviewTargetUnits(logical.targets[i].text).length));
+      const ids = input.targets.flatMap(wireIds);
       expect(ids).toEqual(ids.map((_, i) => i));
+    }
+    for (const fullWidth of [false, true]) {
+      let nextReference = 0;
+      const logical = makeWith(n => {
+        let text = "";
+        while (text.length < n) {
+          const number = String(nextReference++);
+          text += `請求項${fullWidth ? number.replace(/[0-9]/g, digit => String.fromCharCode(0xff10 + Number(digit))) : number}。`;
+        }
+        return text.slice(0, n);
+      });
+      const input = reviewTransportInput(logical);
+      // A dictionary would duplicate every distinct full-width reference and
+      // exceed the preflight envelope despite a repeated-reference test passing.
+      expect(size(logical)).toBeLessThanOrEqual(upper);
+      expect(input).not.toHaveProperty("refs");
+      input.targets.forEach((target, i) => {
+        expect(target.units.map(wireText).join("")).toBe(logical.targets[i].text);
+        target.units.forEach(unit => {
+          if (typeof unit === "string") return;
+          const text = unit.join("");
+          expect(unit.length % 2).toBe(1);
+          expect(unit.filter((_, part) => part % 2 === 1)).toEqual(reviewReferenceMentions(text).map(m => text.slice(m.start, m.end)));
+        });
+      });
     }
   });
 
@@ -226,12 +280,12 @@ describe("whole-unit review transport", () => {
       return { ...d, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120) };
     }));
     const maximum = make("\ud800"), actual = make("。\ud800"), wire = reviewTransportInput(actual);
-    const ids = wire.targets.flatMap(target => target.unitIds);
+    const ids = wire.targets.flatMap(wireIds);
     expect(wire.targets).toHaveLength(20); expect(ids).toHaveLength(1540);
     expect(ids[999]).toBe(999); expect(ids[1000]).toBe(1000); expect(ids.at(-1)).toBe(1539);
     const size = (input: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input));
     const allowance = maximum.targets.reduce((sum, target) => sum + 32 + Math.floor(target.text.length / 4) * 2, 0);
     expect(size(actual)).toBeLessThanOrEqual(size(maximum) + allowance);
-    expect(wire.targets.map(target => target.text)).toEqual(actual.targets.map(target => target.text));
+    expect(wire.targets.map(target => target.units.map(wireText).join(""))).toEqual(actual.targets.map(target => target.text));
   });
 });

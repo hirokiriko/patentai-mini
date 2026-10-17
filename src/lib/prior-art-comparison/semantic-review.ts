@@ -136,13 +136,10 @@ export function assertReviewPlan(plan: readonly ManagedComparisonChunk[]): void 
     common: text(200), differences: text(200), unconfirmed: text(120), baseEvidence: evidence, candidateEvidence: evidence })));
   if (!drafts.length || drafts.length > LIMITS.reviewPairs) throw new ComparisonError("plan_limit");
   const input = reviewInput(plan, drafts);
-  // Wire unit IDs replace start offsets; text and all references remain exact.
-  // Each sentence delimiter saves four nested-JSON bytes versus a surrogate.
-  // This pays for an added ID through999. At most1540 units exist across the
-  // accepted3040 UTF16 draft, so the <=540 extra four-digit bytes plus key and
-  // first-ID framing fit the aggregate20*32 allowance. Reference literals save
-  // at least16 bytes per shortest mention, covering their original position
-  // tuples; the old extra2/mention remains a conservative reserve.
+  // Wire sentences preserve every character and expose exact reference slots.
+  // Reserve field framing plus sentence/reference metadata against the maximal
+  // nested-JSON surrogate envelope; dense punctuation, references and Unicode
+  // are also measured with the full wire/schema and actual SDK serialization.
   const metadataAllowance = input.targets.reduce((n, t) => n + 32 + Math.floor(t.text.length / 4) * 2, 0);
   if (requestBytes(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input)) + metadataAllowance > LIMITS.inputBytes) throw new ComparisonError("plan_limit");
 }
