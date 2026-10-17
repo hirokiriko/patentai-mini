@@ -169,6 +169,16 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
     const total = totals(s, "month", m); for (const k of unitKeys)
       if (!completion || !["jobs", "minutes", "forward"].includes(k)) check(total[k] <= profile.monthlyUnits[k]); }
 }
+/** Issue150 must fit the ordinary active profile, even when Issue140's signed
+ * completion exception is installed. This grants no new allowance/state. */
+export function checkManagedStandardBudget(value: unknown, profile: unknown, clock: ManagedBudgetClock) {
+  const { s, month: m } = current(value, clock), p = active(s, profile);
+  admit(s, m, p, clock.maximumActionMs);
+  check(p.pricingDigest === s.plans.find(plan => plan.month === m)?.pricingDigest &&
+    managedBudgetForecast(s, m) <= p.monthlyCapYen);
+  const total = totals(s, "month", m);
+  for (const k of unitKeys) check(total[k] <= p.monthlyUnits[k]);
+}
 function find(s: ManagedBudgetState, id: string) { const o = s.operations.find(o => o.operationId === id); check(o); return o; }
 function evidence(o: Operation, digest: string) {
   hash.parse(digest);

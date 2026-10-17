@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { managedReleaseBudgetRequest, managedReleaseStepSchema } from "./managed-budget-evidence";
 import { emptyManagedBudgetUnits } from "./managed-service-budget";
+import { managedDigest } from "./managed-claims";
 const hash="a".repeat(64),sha="a".repeat(40);
 function step(){return {issue:129,repository:"hirokiriko/patentai-mini",operationId:randomUUID(),kind:"validation",trigger:"pr-push",
   prNumber:130,targetRef:"refs/heads/codex/issue-129-test",remoteBeforeSha:"b".repeat(40),headSha:sha,baseSha:"c".repeat(40),treeSha:"d".repeat(40),
@@ -39,3 +40,30 @@ it("admits an exact main dispatch but rejects using a PR candidate as its curren
   expect(managedReleaseStepSchema.parse(value)).toEqual(value);
   expect(()=>managedReleaseStepSchema.parse({...value,headSha:"e".repeat(40)})).toThrow();
 });
+function issue150Step() { return { ...step(), issue: 150, kind: "forward", trigger: "squash-merge", prNumber: 151,
+  targetRef: "refs/heads/main", remoteBeforeSha: "c".repeat(40), issue150Integration: {
+    scope: "ISSUE150_INTEGRATION_V1", ownerApprovalDigest: hash, profileDigest: "e".repeat(64),
+    approvedAt: "2026-10-17T06:41:40Z", validUntil: "2026-10-18T06:41:40Z", forwardOperationId: null } }; }
+it("preserves old canonical requests and binds Issue150's ordinary authority separately", () => {
+  const old = step(), r = managedReleaseBudgetRequest(old, hash, hash);
+  expect(managedReleaseStepSchema.parse(old)).toEqual(old);
+  expect(r.requestDigest).toBe(managedDigest({ schema: 1, purpose: "MANAGED_WATCH_RELEASE_STEP_V1", targetBindingHash: hash, ownerBindingHash: hash, step: old }));
+  const s = issue150Step(), current = managedReleaseBudgetRequest(s, hash, hash);
+  expect(current).toMatchObject({ scope: "standard", profileDigest: s.issue150Integration.profileDigest,
+    units: { ...emptyManagedBudgetUnits(), forward: 1 } });
+  for (const patch of [{ profileDigest: hash }, { ownerApprovalDigest: "f".repeat(64) }])
+    expect(managedReleaseBudgetRequest({ ...s, issue150Integration: { ...s.issue150Integration, ...patch } }, hash, hash).requestDigest).not.toBe(current.requestDigest);
+});
+it.each(["missing", "other-issue", "dispatch", "forward-pointer", "expiry", "approval-time", "completion-borrow", "unbounded-field"])(
+  "rejects invalid Issue150 authority: %s", reason => {
+    const s = issue150Step();
+    if (reason === "missing") Reflect.deleteProperty(s, "issue150Integration");
+    if (reason === "other-issue") s.issue = 129;
+    if (reason === "dispatch") Object.assign(s, { trigger: "workflow-dispatch", prNumber: null, headSha: s.baseSha });
+    if (reason === "forward-pointer") Object.assign(s.issue150Integration, { forwardOperationId: randomUUID() });
+    if (reason === "expiry") s.issue150Integration.validUntil = "2026-10-19T06:41:40Z";
+    if (reason === "approval-time") s.issue150Integration.approvedAt = "2026-10-18T06:41:40Z";
+    if (reason === "completion-borrow") Object.assign(s, { completionAllowance: {} });
+    if (reason === "unbounded-field") Object.assign(s.issue150Integration, { forward: 10 });
+    expect(() => managedReleaseStepSchema.parse(s)).toThrow();
+  });

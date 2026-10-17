@@ -16,7 +16,6 @@ vi.mock("@/lib/analyze-overlap", () => ({ screenPriorArt: seam.screen, analyzeOv
 vi.mock("@/lib/integrate-claims", () => ({ integrateClaims: seam.integrate }));
 vi.mock("@/lib/ai-operation-budget", () => ({ isAiOperationStopped: () => false }));
 import { POST as queries } from "../app/api/cases/[caseId]/queries/route";
-import { POST as analyze } from "../app/api/cases/[caseId]/analyze/route";
 import { POST as integrate } from "../app/api/cases/[caseId]/integrate/route";
 const context = () => ({ params: Promise.resolve({ caseId: "7" }) });
 const request = () => new Request("http://localhost/fictional", { method: "POST" });
@@ -41,22 +40,21 @@ describe("current draft selection through real routes", () => {
     }
     expect(rows).toEqual(before); expect(latestDraft([], "main")).toBeUndefined();
   });
-  it.each([queries, analyze])("passes the exact latest main claims into the model boundary", async post => {
+  it.each([queries])("passes the exact latest main claims into the query model boundary", async post => {
     expect((await post(request(), context())).status).toBeLessThan(300);
     const expected = JSON.parse(fictionalDraft(9).extractedClaimsJson!);
-    expect((post === queries ? seam.queries : seam.screen).mock.calls[0][0]).toEqual(expected);
-    if (post === analyze) expect(seam.analyze.mock.calls[0][0]).toEqual(expected);
+    expect(seam.queries.mock.calls[0][0]).toEqual(expected);
   });
   it.each([null, "", " ", "{broken"])("does not use older prepared claims when newest main is %s", async value => {
     seam.drafts.mockResolvedValue([fictionalDraft(1), fictionalDraft(2, "main", { extractedClaimsJson: value }), fictionalDraft(99, "base")]);
-    for (const post of [queries, analyze]) expect((await post(request(), context())).status).toBe(400);
+    for (const post of [queries]) expect((await post(request(), context())).status).toBe(400);
     for (const fn of [seam.queries, seam.screen, seam.analyze, seam.saveQueries, seam.saveResults]) expect(fn).not.toHaveBeenCalled();
   });
   it.each([[], [fictionalDraft(3, "base"), fictionalDraft(4, "addition")],
     [fictionalDraft(8, "main", { kind: "" as DraftPatent["kind"] })],
     [fictionalDraft(8, "main", { kind: null as unknown as DraftPatent["kind"] })]].map(rows => ({ rows })))("does not infer missing main from another kind", async ({ rows }) => {
     seam.drafts.mockResolvedValue(rows);
-    for (const post of [queries, analyze]) expect((await post(request(), context())).status).toBe(400);
+    for (const post of [queries]) expect((await post(request(), context())).status).toBe(400);
     expect(seam.screen).not.toHaveBeenCalled(); expect(seam.queries).not.toHaveBeenCalled();
   });
   it("preserves the single-main case and case-not-found boundaries", async () => {
@@ -64,7 +62,7 @@ describe("current draft selection through real routes", () => {
     expect((await queries(request(), context())).status).toBe(201);
     expect(seam.queries.mock.calls[0][0]).toEqual(JSON.parse(fictionalDraft(1).extractedClaimsJson!));
     vi.clearAllMocks(); seam.case.mockResolvedValue(null);
-    for (const post of [queries, analyze, integrate]) expect((await post(request(), context())).status).toBe(404);
+    for (const post of [queries, integrate]) expect((await post(request(), context())).status).toBe(404);
     expect(seam.drafts).not.toHaveBeenCalled(); expect(seam.queries).not.toHaveBeenCalled();
   });
   it("integrates the latest base and addition, then updates main through the existing repository", async () => {

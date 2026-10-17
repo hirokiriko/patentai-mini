@@ -18,6 +18,7 @@ import { UploadCsvForm } from "./upload-csv-form";
 import { UploadPatentFilesForm } from "./upload-patent-files-form";
 import { KohoCorpusPicker } from "./koho-corpus-picker";
 import { AnalyzeButton } from "./analyze-button";
+import { hasSavedComparisonMarker } from "@/lib/prior-art-comparison/marker";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { StepProgressBar } from "@/components/step-progress-bar";
 import { NextActionBanner } from "@/components/next-action-banner";
@@ -1124,7 +1125,7 @@ export default async function CaseDetailPage({
       )}
 
       {/* ── Step 5: 重なり比較レポート ── */}
-      {priorArts.length > 0 && extracted && (
+      {(priorArts.length > 0 || analysisResults.some(r => hasSavedComparisonMarker(r.matchedElementsJson))) && (
         <section
           id="step-5"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(5)}`}
@@ -1140,10 +1141,11 @@ export default async function CaseDetailPage({
           {analysisResults.length > 0 && (
             <div className="mt-4 space-y-4">
               <p className="text-base text-gray-600 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3">
-                ※ 類似度が高い＝新規性なし ではありません。最終判断には専門家の確認が必要です。
+                根拠付き比較の保存結果・原文・版・PDF/CSVは上のボタンから確認できます。以下にある旧形式の比較は部分比較または単語一致であり、全文・根拠を再検証していません。
               </p>
 
               {analysisResults
+                .filter(r => !hasSavedComparisonMarker(r.matchedElementsJson))
                 .sort((a, b) => {
                   return comparePublicationNumbers(docMap.get(a.priorDocId ?? 0)?.publicationNo ?? "", docMap.get(b.priorDocId ?? 0)?.publicationNo ?? "") || comparePublicationNumbers(a.draftClaimId ?? "", b.draftClaimId ?? "") || a.resultId - b.resultId;
                 })

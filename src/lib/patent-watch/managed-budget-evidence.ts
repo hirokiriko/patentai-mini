@@ -9,10 +9,30 @@ const source = z.object({ digest: hash, bytes: z.number().int().positive().max(1
 const unitNames = managedBudgetUnitsSchema.keyof();
 const signature = z.string().regex(/^[A-Za-z0-9+/]{86}==$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
+// A bounded ordinary release, not Issue140's completion allowance. Keeping the
+// field absent on old steps preserves their canonical serialization/digests.
+export const managedIssue150IntegrationSchema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_V1"),
+  ownerApprovalDigest: hash, profileDigest: hash,
+  approvedAt: z.literal("2026-10-17T06:41:40Z"), validUntil: z.literal("2026-10-18T06:41:40Z"),
+  forwardOperationId: z.uuidv4().nullable(),
+}).strict();
+export const managedIssue150PreflightSchema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V1"),
+  ownerApprovalDigest: hash, technicalGoHeadSha: commit, technicalGoTreeSha: commit, baseTreeSha: commit,
+  aiExposureYen: yen.max(3000), rollbackReserveYen: yen.max(1600),
+  forwardResultDigest: hash.nullable(),
+}).strict();
+export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
+  forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
+  prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,
+  // The signer checks actual merged PR/commit and terminal deployment metadata.
+  // A failed deployment can need a revert; an unknown deployment cannot overlap.
+  deployment: z.enum(["succeeded", "failed", "cancelled"]), evidenceDigests: z.array(hash).min(1).max(16),
+}).strict();
 /** One reviewed Local operation, including every automated trigger it causes.
  * No GitHub/Azure credentials or private records are sent to public CI. */
-export const managedReleaseStepSchema = z.object({ issue: z.union([z.literal(129), z.literal(140)]), repository: z.literal("hirokiriko/patentai-mini"),
+export const managedReleaseStepSchema = z.object({ issue: z.union([z.literal(129), z.literal(140), z.literal(150)]), repository: z.literal("hirokiriko/patentai-mini"),
   completionAllowance: managedCompletionAllowanceSchema.optional(),
+  issue150Integration: managedIssue150IntegrationSchema.optional(),
   operationId: z.uuidv4(), kind: z.enum(["validation", "forward", "rollback"]),
   trigger: z.enum(["pr-push", "pr-open", "pr-reopen", "squash-merge", "workflow-dispatch"]),
   prNumber: z.number().int().positive().nullable(), targetRef: z.string().max(200).regex(/^refs\/heads\/(?:main|codex\/[a-zA-Z0-9_-][a-zA-Z0-9_/-]*)$/),
@@ -21,6 +41,15 @@ export const managedReleaseStepSchema = z.object({ issue: z.union([z.literal(129
   reservationYen: yen.refine(v => v > 0 && v <= 30_000),
 }).strict().refine(s => {
   if ((s.issue === 140) !== (s.completionAllowance !== undefined)) return false;
+  if ((s.issue === 150) !== (s.issue150Integration !== undefined)) return false;
+  if (s.issue150Integration) {
+    const rollback = s.issue150Integration.forwardOperationId !== null;
+    if (s.kind === "forward" ? rollback || s.trigger !== "squash-merge" : !rollback) return false;
+    if (s.kind === "rollback" && s.trigger !== "squash-merge") return false;
+    if (s.kind === "validation" && !["pr-push", "pr-open"].includes(s.trigger)) return false;
+    if (s.kind === "validation" && !s.targetRef.startsWith("refs/heads/codex/issue-150-revert-")) return false;
+    if (s.kind === "validation" && (s.prNumber !== null || s.trigger === "pr-push" && s.remoteBeforeSha !== null)) return false;
+  }
   if (s.targetRef.includes("//") || s.targetRef.endsWith("/")) return false;
   if (s.kind === "validation") return s.targetRef.startsWith("refs/heads/codex/") &&
     ["pr-push", "pr-open", "pr-reopen"].includes(s.trigger) &&
@@ -33,7 +62,8 @@ export type ManagedReleaseStep = z.infer<typeof managedReleaseStepSchema>;
 export function managedReleaseBudgetRequest(value: unknown, targetBindingHash: string, ownerBindingHash: string) {
   const step = managedReleaseStepSchema.parse(value);
   return managedBudgetRequestSchema.parse({ operationId: step.operationId,
-    scope: step.issue === 140 ? "standard" : "release", profileDigest: step.completionAllowance?.profileDigest ?? null,
+    scope: step.issue === 140 || step.issue === 150 ? "standard" : "release",
+    profileDigest: step.issue150Integration?.profileDigest ?? step.completionAllowance?.profileDigest ?? null,
     requestDigest: managedDigest({ schema: 1, purpose: "MANAGED_WATCH_RELEASE_STEP_V1", targetBindingHash: hash.parse(targetBindingHash),
       ownerBindingHash: hash.parse(ownerBindingHash), step }),
     kind: step.kind === "validation" ? "validation" : "deploy", cases: [], pricingDigest: step.pricingDigest,
@@ -122,6 +152,20 @@ export function verifyManagedAdministrationReview(value: unknown, expectedDigest
       Date.parse(r.validUntil) <= Date.parse(completion.validUntil));
     if (r.action.kind === "release-start") check(sources.has(r.action.step.pricingDigest) && sources.has(r.action.step.preflightDigest) &&
       Date.parse(r.validUntil) - Date.parse(r.issuedAt) <= 15 * 60_000);
+    if (r.action.kind === "release-start" && r.action.step.issue150Integration) {
+      const a = r.action.step.issue150Integration;
+      check(sources.has(a.ownerApprovalDigest) && Date.parse(r.issuedAt) >= Date.parse(a.approvedAt) &&
+        Date.parse(r.validUntil) <= Date.parse(a.validUntil));
+    }
+    return envelope;
+  } catch { throw new ManagedBudgetError(); }
+}
+/** Read-only historical authentication. A past activation keeps its original GO
+ * binding; it is not reapplied against today's production GO pin. */
+export function verifyManagedAdministrationHistory(value: unknown, expectedDigest: string, pins: ManagedBudgetEvidencePins, at: Date) {
+  try {
+    const envelope = managedSignedAdministrationSchema.parse(value);
+    verifyReview(envelope, expectedDigest, pins, at, false);
     return envelope;
   } catch { throw new ManagedBudgetError(); }
 }

@@ -1,4 +1,5 @@
 import { db } from "../db";
+import { hasSavedComparisonMarker } from "../lib/prior-art-comparison/marker";
 import { lockManagedCase } from "./managed-case-graph";
 import { isOriginalFileBlobName, parseUploadedOriginalFileMetadata } from "../lib/original-file-metadata";
 import { APPLICANTS_JSON_BYTES, projectFindingBibliography } from "../lib/patent-watch/bibliography";
@@ -892,17 +893,20 @@ export const priorArtDocumentRepo: PriorArtDocumentRepository = {
     if (docIds.length === 0) return 0;
     return db.transaction(async tx=>{
     await lockManagedCase(tx,caseId);
-    // comparison_results.prior_doc_id が priorArtDocuments.docId を外部キー参照しているため、
-    // 先に該当 docId を参照する分析結果を削除しないと FK 制約違反になる。
-    // confirm ダイアログで「重なり分析の結果も影響を受ける」と警告済み。
-    await tx
-      .delete(comparisonResults)
-      .where(
-        and(
-          eq(comparisonResults.caseId, caseId),
-          inArray(comparisonResults.priorDocId, docIds)
-        )
-      );
+    // Retain immutable comparison snapshots when a source is explicitly removed.
+    // The nullable FK is detached; the original real ID remains in the envelope.
+    const affected = await tx.select().from(comparisonResults).where(and(
+      eq(comparisonResults.caseId, caseId), inArray(comparisonResults.priorDocId, docIds)));
+    for (const row of affected.filter(r => hasSavedComparisonMarker(r.matchedElementsJson))) {
+      const [removed] = await tx.delete(comparisonResults).where(eq(comparisonResults.resultId, row.resultId)).returning();
+      if (!removed) throw Error("comparison_snapshot_unavailable");
+      await tx.insert(comparisonResults).values({ ...removed, priorDocId: null,
+        matchedElementsJson: JSON.stringify({ ...JSON.parse(removed.matchedElementsJson!), detachedPriorDocId: removed.priorDocId }),
+      });
+    }
+    const legacyIds = affected.filter(r => !hasSavedComparisonMarker(r.matchedElementsJson)).map(r => r.resultId);
+    if (legacyIds.length) await tx
+      .delete(comparisonResults).where(inArray(comparisonResults.resultId, legacyIds));
     const deleted = await tx
       .delete(priorArtDocuments)
       .where(
@@ -2065,9 +2069,13 @@ export const kohoCorpusRepo: KohoCorpusRepository = {
         }
 
         if (plan.analysisCleared) {
-          await tx
+          // Legacy analyses are invalidated; immutable source snapshots remain
+          // readable as historical results and are labelled stale by their reader.
+          const rows = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+          const legacyIds = rows.filter(row => !hasSavedComparisonMarker(row.matchedElementsJson)).map(row => row.resultId);
+          if (legacyIds.length) await tx
             .delete(comparisonResults)
-            .where(eq(comparisonResults.caseId, caseId));
+            .where(and(eq(comparisonResults.caseId, caseId), inArray(comparisonResults.resultId, legacyIds)));
         }
 
         return {
