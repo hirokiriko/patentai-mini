@@ -23,7 +23,7 @@ function example(candidateClaimNo = 1) {
 /** Fictional protocol responses only; these reasons are not semantic evidence. */
 function response(logical: ReturnType<typeof reviewInput>) {
   let unitId = 0;
-  return { draftDigest: reviewTransportInput(logical).draftDigest, checks: logical.targets.flatMap(target => {
+  const checks = logical.targets.flatMap(target => {
     const [doc, base, candidate, field] = target.id.split(":");
     const ids = [...(field === "candidateObservation" ? [] : [logical.base.claims.find(c => c.claimNo === Number(base))!.segments[0][0]]),
       ...(field === "baseObservation" ? [] : [logical.documents.find(d => d.docId === Number(doc))!.source.claims.find(c => c.claimNo === Number(candidate))!.segments[0][0]])];
@@ -34,7 +34,9 @@ function response(logical: ReturnType<typeof reviewInput>) {
       evidenceIds: ids, sourceComparison: "架空原文との対応。意味品質の実証ではない。",
       verdict: "consistent" as "consistent" | "inconsistent" | "uncertain",
       scopeWitness: null as { scopeId: string; invalidMember: number; mode: "ancestor" | "direct"; subjectReference: number | null; directnessBasis: { word: "直接"; occurrence: number } | null } | null }));
-  }) };
+  });
+  return { draftDigest: reviewTransportInput(logical).draftDigest, referenceChecks: checks.flatMap(row => row.referenceChecks),
+    checks: checks.map(({ referenceChecks, ...row }) => { void referenceChecks; return row; }) };
 }
 
 const wireText = (unit: ReturnType<typeof reviewTransportInput>["units"][number]) => typeof unit === "string" ? unit : unit.join("");
@@ -48,7 +50,23 @@ describe("whole-unit review transport", () => {
   it("keeps every source, scope, pair and field unchanged while numbering all units once", () => {
     const { logical } = example(), input = reviewTransportInput(logical);
     expect(input.task).toBe("review"); expect(input.draftDigest).not.toBe(logical.draftDigest);
-    expect(input.base).toBe(logical.base); expect(input.documents).toBe(logical.documents);
+    const wireSources = [input.base, ...input.documents.map(d => d.source)];
+    const logicalSources = [logical.base, ...logical.documents.map(d => d.source)];
+    wireSources.forEach((source, i) => {
+      const original = logicalSources[i];
+      expect(source.publicationNumber).toBe(original.publicationNumber); expect(source.version).toBe(original.version);
+      expect(source.referenceLogic.relations).toEqual(original.referenceLogic.relations);
+      expect(source.referenceLogic.scopes).toEqual(original.referenceLogic.scopes.map(scope => ({ claimNo: scope.claimNo,
+        closureClaimNos: [...scope.guaranteedClaimNos, ...scope.conditionalClaimNos].sort((a, b) => a - b) })));
+      source.claims.forEach(([claimNo, dependsOn, text, evidence], at) => {
+        expect(claimNo).toBe(original.claims[at].claimNo); expect(dependsOn).toEqual(original.claims[at].dependsOn);
+        expect(text).toBe(original.claims[at].segments.map(([, part]) => part).join(""));
+        let start = 0;
+        expect(evidence.slice(1).map((end, offset) => { const entry = [evidence[0] + offset, text.slice(start, end)]; start = end; return entry; }))
+          .toEqual(original.claims[at].segments);
+        expect(start).toBe(text.length);
+      });
+    });
     expect(input.scopes).toBe(logical.scopes); expect(input.pairs).toBe(logical.pairs);
     expect(input.fields.at(-1)![2]).toBe(input.units.length);
     expect(input.fields.map(([id]) => id)).toEqual(logical.targets.map(t => t.id));
@@ -90,6 +108,43 @@ describe("whole-unit review transport", () => {
     const decoded = decodeReviewTransport(logical, fictionalTransportReview(input));
     expect(decoded.checks[0].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([0, 1, 2]);
     expect(decoded.checks[1].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([1, 1]);
+  });
+
+  it("preserves the decisive long-source tail, Unicode boundaries and original evidence IDs", () => {
+    const { inputs, selection } = fictionalInputs();
+    const original = inputs.draft.source.claims[0].text;
+    inputs.draft = parseComparisonSource(`【請求項1】\n${original.replace("末尾条件", "𠮷😀e\u0301の末尾条件")}\n【請求項2】\n請求項1に記載の装置であって、確認値を翌朝に消去する装置。`, 11, "draft-11");
+    selection.draftClaimNos = [2];
+    const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(pair => ({ ...pair,
+      baseObservation: "基準の確認値を翌朝に消去する。", candidateObservation: "候補の末尾条件を保持する。" })));
+    const logical = reviewInput(plan, drafts), source = reviewTransportInput(logical).base;
+    const claim = source.claims.find(c => c[0] === 1)!;
+    expect(claim[2].length).toBeGreaterThan(15000);
+    expect(claim[2]).toContain("𠮷😀e\u0301の末尾条件は温度が七度を超えると青色弁を閉じる");
+    let start = 0;
+    const reconstructed = claim[3].slice(1).map((end, index) => {
+      const segment = [claim[3][0] + index, claim[2].slice(start, end)]; start = end; return segment;
+    });
+    expect(reconstructed).toEqual(logical.base.claims.find(c => c.claimNo === 1)!.segments);
+    expect(start).toBe(claim[2].length);
+    expect(source.referenceLogic.relations).toEqual(logical.base.referenceLogic.relations);
+    expect(source.referenceLogic.scopes.find(s => s.claimNo === 2)?.closureClaimNos).toEqual([1, 2]);
+    expect(logical.base.referenceLogic.scopes.find(s => s.claimNo === 2)).toHaveProperty("guaranteedClaimNos");
+  });
+
+  it("covers more than200 total references without adding a global cap or accepting legacy per-row references", () => {
+    const { plan, drafts } = example();
+    const text = "請求項1と請求項2を備える。".repeat(18);
+    for (const draft of drafts) { draft.baseObservation = text; draft.candidateObservation = text; }
+    const logical = reviewInput(plan, drafts), input = reviewTransportInput(logical), raw = response(logical);
+    expect(input.referenceCount).toBe(216);
+    expect(raw.referenceChecks).toHaveLength(input.referenceCount);
+    const decoded = decodeReviewTransport(logical, raw);
+    expect(decoded.checks.flatMap(c => c.unitChecks).flatMap(u => u.referenceChecks)).toHaveLength(216);
+    expect(() => decodeReviewTransport(logical, { ...raw, referenceChecks: raw.referenceChecks.slice(0, -1) })).toThrow("ai_incomplete");
+    expect(() => decodeReviewTransport(logical, { ...raw, referenceChecks: [...raw.referenceChecks, raw.referenceChecks[0]] })).toThrow("ai_incomplete");
+    Object.assign(raw.checks[0], { referenceChecks: [] });
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
   it.each(["missing", "extra", "duplicate", "reordered", "foreign", "wrong_digest", "logical_digest", "legacy_root", "legacy_row", "missing_witness", "blank_reason", "control", "fraction_id", "string_id", "unsafe_evidence"])("strictly refuses %s raw coverage", mode => {
@@ -158,7 +213,7 @@ describe("whole-unit review transport", () => {
 
   it("zips reference occurrence order and resolves a literal quantifier's nth occurrence locally", () => {
     const { logical, raw, first } = referenceExample();
-    first.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
+    raw.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
     first.kind = "reference_combination"; first.reference = 1;
     const decoded = decodeReviewTransport(logical, raw), check = decoded.checks[0].unitChecks[0];
     expect(check.referenceChecks[0].start).toBe(logical.targets[0].text.indexOf("請求項"));
@@ -170,35 +225,35 @@ describe("whole-unit review transport", () => {
 
   it.each(["missing", "extra", "zero", "fraction", "unsafe", "nonexistent", "wrong_relation", "basis_for_unspecified", "technical_reference", "null_reference", "foreign_reference", "unresolved_c"])("refuses %s reference binding", mode => {
     const { logical, raw, first } = referenceExample();
-    first.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
-    if (mode === "missing") first.referenceChecks.pop();
-    if (mode === "extra") first.referenceChecks.push({ ...first.referenceChecks[0] });
-    if (mode === "zero") first.referenceChecks[0].operatorBasis!.occurrence = 0;
-    if (mode === "fraction") first.referenceChecks[0].operatorBasis!.occurrence = 1.5;
-    if (mode === "unsafe") first.referenceChecks[0].operatorBasis!.occurrence = Number.MAX_SAFE_INTEGER + 1;
-    if (mode === "nonexistent") first.referenceChecks[0].operatorBasis!.occurrence = 3;
-    if (mode === "wrong_relation") first.referenceChecks[0].relation = "any";
-    if (mode === "basis_for_unspecified") first.referenceChecks[0].relation = "unspecified";
+    raw.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
+    if (mode === "missing") raw.referenceChecks.pop();
+    if (mode === "extra") raw.referenceChecks.push({ ...raw.referenceChecks[0] });
+    if (mode === "zero") raw.referenceChecks[0].operatorBasis!.occurrence = 0;
+    if (mode === "fraction") raw.referenceChecks[0].operatorBasis!.occurrence = 1.5;
+    if (mode === "unsafe") raw.referenceChecks[0].operatorBasis!.occurrence = Number.MAX_SAFE_INTEGER + 1;
+    if (mode === "nonexistent") raw.referenceChecks[0].operatorBasis!.occurrence = 3;
+    if (mode === "wrong_relation") raw.referenceChecks[0].relation = "any";
+    if (mode === "basis_for_unspecified") raw.referenceChecks[0].relation = "unspecified";
     if (mode === "technical_reference") first.reference = 1;
     if (mode === "null_reference") first.kind = "reference_scope";
     if (mode === "foreign_reference") { first.kind = "reference_scope"; first.reference = 2; }
-    if (mode === "unresolved_c") first.referenceChecks[0] = { relation: "unresolved", operatorBasis: null };
+    if (mode === "unresolved_c") raw.referenceChecks[0] = { relation: "unresolved", operatorBasis: null };
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
   it("counts basis occurrences inside this unit only", () => {
     const { logical, raw } = referenceExample("全ての弁を備える。請求項1-2の全てを備える。");
-    raw.checks[1].referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
+    raw.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 2 } };
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
-    raw.checks[1].referenceChecks[0].operatorBasis!.occurrence = 1;
+    raw.referenceChecks[0].operatorBasis!.occurrence = 1;
     expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[1].referenceChecks[0].operatorBasis?.start)
       .toBe(logical.targets[0].text.lastIndexOf("全て"));
   });
 
   it("binds multiple references in their exact Unicode source order", () => {
-    const { logical, raw, first } = referenceExample("𠮷の装置は、請求項１の全て、又は請求項２の装置を備える。");
-    first.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 1 } };
-    first.referenceChecks[1] = { relation: "any", operatorBasis: { quote: "又は", occurrence: 1 } };
+    const { logical, raw } = referenceExample("𠮷の装置は、請求項１の全て、又は請求項２の装置を備える。");
+    raw.referenceChecks[0] = { relation: "all", operatorBasis: { quote: "全て", occurrence: 1 } };
+    raw.referenceChecks[1] = { relation: "any", operatorBasis: { quote: "又は", occurrence: 1 } };
     const checks = decodeReviewTransport(logical, raw).checks[0].unitChecks[0].referenceChecks;
     expect(checks.map(c => c.start)).toEqual(reviewReferenceMentions(logical.targets[0].text).map(m => m.start));
     expect(checks.map(c => c.operatorBasis?.start)).toEqual([logical.targets[0].text.indexOf("全て"), logical.targets[0].text.indexOf("又は")]);
