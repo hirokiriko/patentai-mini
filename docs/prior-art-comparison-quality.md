@@ -32,7 +32,11 @@
 
 査読の入力は指定請求項ごとの全原文参照範囲・版・参照分岐guide・組合せ・全生成欄を保持する。原文はgenerationの可逆分割を共有し、IDと本文のtupleで空白・反復を含む全片を渡す。代表引用はclaim/start/endを同じ原文へ結び付け、重複quote本文だけを省く。全sourceと全scopeの条件の意味を確認し、引用された抜粋だけへ評価を狭めない。
 
-各欄を句点単位へ可逆分割し、全文と各unitの開始位置を入力する。回答は各unitのevidenceIds・sourceComparison・verdict・rejectedTargetAnchorに集中する。AIが再作成するglobal facts/status、草稿の再要約/分類、欄単位の理由/番号/集約判定はraw契約から除く。これらを含む旧wireはstrict拒否し、自動移行・字段削除・旧回答の再分類はしない。対比文の旧80文字上限を撤廃し、総token/応答bytes境界で停止する。切断した説明を補完して合格にしない。
+各欄を句点単位へ可逆分割し、全文と各unitの開始位置を入力する。回答は各unitのreferenceChecks・evidenceIds・sourceComparison・verdict・rejectedTargetAnchorに集中する。AIが再作成するglobal facts/status、草稿の再要約/分類、欄単位の理由/番号/集約判定はraw契約から除く。これらを含む旧wireやreferenceChecksのない旧応答はstrict拒否し、自動移行・字段削除・旧回答の再分類はしない。対比文の旧80文字上限を撤廃し、総token/応答bytes境界で停止する。切断した説明を補完して合格にしない。
+
+草稿の請求項参照表記は無損失のUTF-16 span `mentions=[start,end]` として示す。数字・全角数字・漢数字、範囲・スラッシュ・「まで」等の認識できる構文の位置だけであり、完全な日本語依存構造解析でもAND/ORの推論でもない。全対象文は引き続き読む。unit内の全mentionにreferenceChecksを一度ずつ返し、unspecified/all/any/unresolvedを区別する。all/anyのoperatorBasisはprovider schemaへ公開した量化語の完全一致・同じunit内のUTF-16位置・参照番号列の外であることを機械検査する。量化語が本当に当該参照へ係るかは独立意味QAで確認し、別対象からの借用を認めない。対応できない解釈はunresolvedかつuncertainで保存停止。unspecifiedは自動consistentにならず、他の実断定も検査する。新schema・構文情報は新digestへ拘束し、旧回答へ補充しない。
+
+構文情報の最悪枠も生成前に予約する。120/200 UTF-16以内の各欄で、最短参照表記4単位がlone-surrogate envelopeから節約するbytesと位置tupleの上限を比較し、key/framing等にさらに32bytes/欄を予約する。参照を多数含む最大長・Unicode混在の入力もこの保守枠以内であることを確認する。実際の査読要求は改めて同じ総90000bytes上限で検査し、本文・欄・原文を削って収めない。
 
 全target/unitを一度ずつ照合し、欠落・重複・追加・境界改変・空の対比文・制御文字を拒否する。根拠IDは実際のcatalogに照合し、当該側・文献・参照閉包内の空白でないsegmentだけを許す。baseObservationは基準側のみ、candidateObservationは当該候補側のみ。確定した各unitには最低1根拠、common/differences/unconfirmedの欄全体には両側根拠を求める。片側ずつ述べる文に無関係な反対側根拠を要求しない。未知・重複・別文献・閉包外根拠はuncertainでも拒否する。uncertainは不足根拠を空配列で示せるため、Uを含む欄の両側根拠は未確定を許すが、保存不可。請求項番号は実際の根拠から導出し、選択番号で穴埋めしたり3件へ切り捨てたりしない。
 
@@ -47,6 +51,8 @@ inconsistentの各unitは、そのunit内に一意に完全一致する最大120
 新形式のprobe20はHTTP200/約165秒で全24文が完結したが、既知3誤り中1件の選択集合縮小を見逃し、査読理由の誤一般化・根拠不足・留保への過剰Uも残って意味品質不合格だった。AND補完による誤拒否の解消や構造PASSをTECHNICAL_GOにしない。Local補助工具が、正しい経路根拠の祖先番号1/2を認めず選択番号3を強制した過剰制約も別件として記録する。修正は次の新namespaceだけに適用し、旧応答・旧工具・旧不合格は保全する。新head・全検証/独立レビュー/CI・新operatorのstage別guard・全hash・費用/保持予約・具体的公開記録のreadback後に、新しい応答で実証する。
 
 probe21は180秒でheaders未到達・0bytesのまま停止し、使用量不明328円を保持した。全文packingと比較専用の時間配分修正を次headへ適用し、旧21の応答を補修・再分類しない。入力framing8192bytes込み90000bytes、各入力150000tokens、応答1MiB、各210秒/単一全体230秒/API240秒、通常最大3送信・retry0を維持する。usage不明/上限超過/timeout/不完全応答は後続送信・保存停止。継続承認はIssue本文の有限期限・累計回数・AI3000円/総5000円内だけで適用し、旧unknown予約を解放しない。probe/査読328円、生成206円のstage別予約を検査する。架空テストや小さいschemaだけを実AI意味品質合格とは呼ばない。
+
+probe22はHTTP200・約193秒で構造合格したが、参照の番号範囲へ全項ANDを補う誤拒否3件、暖房の明示条件を落とす査読理由1件、必要な定義・必須条件・不実行結論の根拠欠落が残り意味品質不合格だった。既知4誤り検出・正対照2件維持だけでは合格にせず、後続生成・査読は未送信で停止した。次の構文・量化機構は新headだけに適用し、効果と実時間は未実証。理由の真偽・根拠不足は別軸で引き続き全件独立原文照合する。
 
 ## 保存・整合・旧結果
 

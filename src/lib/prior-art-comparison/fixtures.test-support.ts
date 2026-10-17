@@ -3,6 +3,7 @@ import { makePlan, savedDigest, validateAnswer, type ComparisonInputs, type Sele
 import type { generationInput } from "./generation";
 import type { batchInput } from "./generation-batch";
 import { reviewTargetIdentity, reviewTargetUnits, type reviewInput } from "./semantic-review";
+import { reviewReferenceMentions, type ReferenceRelationCheck } from "./reference-mentions";
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -50,6 +51,8 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
         ...(identity.field === "baseObservation" ? [] : [input.documents.find(d => d.docId === identity.docId)!.source.claims.find(c => c.claimNo === identity.candidateClaimNo)!.segments.at(-1)![0]]),
       ];
       return { id: t.id, unitChecks: reviewTargetUnits(t.text).map(unit => ({ start: unit.start,
+        referenceChecks: reviewReferenceMentions(t.text).filter(m => m.start >= unit.start && m.end <= unit.end)
+          .map(m => ({ start: m.start, relation: "unspecified", operatorBasis: null }) as ReferenceRelationCheck),
         evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
         verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", rejectedTargetAnchor: null as string | null })) };
     }) };

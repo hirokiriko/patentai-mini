@@ -22,6 +22,63 @@ function example() {
 }
 
 describe("complete original-text contrast review before saving", () => {
+  function referenceExample(text = "請求項1-2の装置。") {
+    const { plan, drafts } = example(); drafts[0].baseObservation = text;
+    const input = reviewInput(plan, drafts), answer = fictionalReview(input);
+    return { input, answer, unit: answer.checks[0].unitChecks[0] };
+  }
+  it("binds lexical reference hints to full target text without normalizing it", () => {
+    const text = "𠮷。請求項１／２の装置。請求項2までの装置。", { input, answer } = referenceExample(text);
+    expect(input.targets[0].text).toBe(text);
+    expect(input.targets[0].mentions).toEqual([[3, 9], [13, 19]]);
+    expect(answer.checks[0].unitChecks.map(u => u.referenceChecks.map(r => r.start))).toEqual([[], [3], [13]]);
+    expect(() => validateReview(input, answer)).not.toThrow();
+    input.targets[0].mentions = [[3, 8], [13, 19]];
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
+  });
+  it.each(["missing", "duplicate", "foreign", "all_without_basis", "any_without_basis", "range_basis", "wrong_basis", "legacy", "unresolved_as_c"])("refuses %s reference readings before saving", mode => {
+    const { input, answer, unit } = referenceExample();
+    if (mode === "missing") unit.referenceChecks = [];
+    if (mode === "duplicate") unit.referenceChecks.push({ ...unit.referenceChecks[0] });
+    if (mode === "foreign") unit.referenceChecks[0].start++;
+    if (mode === "all_without_basis") unit.referenceChecks[0].relation = "all";
+    if (mode === "any_without_basis") unit.referenceChecks[0].relation = "any";
+    if (mode === "range_basis") Object.assign(unit.referenceChecks[0], { relation: "all", operatorBasis: { start: 0, quote: "請求項1-2" } });
+    if (mode === "wrong_basis") Object.assign(unit.referenceChecks[0], { relation: "all", operatorBasis: { start: 0, quote: "全て" } });
+    if (mode === "legacy") delete (unit as Partial<typeof unit>).referenceChecks;
+    if (mode === "unresolved_as_c") unit.referenceChecks[0].relation = "unresolved";
+    expect(() => validateReview(input, answer)).toThrow("ai_incomplete");
+  });
+  it("keeps unresolved and inconsistent units stopped instead of promoting unspecified to C", () => {
+    const { input, answer, unit } = referenceExample();
+    unit.referenceChecks[0].relation = "unresolved"; unit.verdict = "uncertain";
+    expect(inspectReviewCoverage(input, answer).checks[0].verdict).toBe("uncertain");
+    expect(() => validateReview(input, answer)).toThrow("ai_incomplete");
+    unit.referenceChecks[0].relation = "unspecified"; unit.verdict = "inconsistent"; unit.rejectedTargetAnchor = input.targets[0].text;
+    expect(inspectReviewCoverage(input, answer).checks[0].verdict).toBe("inconsistent");
+    expect(() => validateReview(input, answer)).toThrow("ai_incomplete");
+  });
+  it("checks an explicit quantifier at the exact position without rewriting the raw reply", () => {
+    const { input, answer, unit } = referenceExample("請求項1-2の全てを継承する。");
+    Object.assign(unit.referenceChecks[0], { relation: "all", operatorBasis: { start: input.targets[0].text.indexOf("全て"), quote: "全て" } });
+    const before = JSON.stringify(answer);
+    expect(() => validateReview(input, answer)).not.toThrow(); expect(JSON.stringify(answer)).toBe(before);
+    unit.referenceChecks[0].operatorBasis!.start--;
+    expect(() => validateReview(input, answer)).toThrow("ai_incomplete");
+  });
+  it("preflights mixed surrogate/reference metadata at every bounded field length", () => {
+    const { plan, drafts } = example();
+    const envelope = (text: (n: number) => string) => drafts.map(d => ({ ...d, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120) }));
+    const size = (d: typeof drafts) => { const input = reviewInput(plan, d); return requestBytes(REVIEW_SYSTEM, JSON.stringify(input), reviewSchemaFor(input)); };
+    const upper = size(envelope(n => "\ud800".repeat(n))) + drafts.length * 5 * 32;
+    for (const mention of ["請求項1", "請求項１", "請求項一", "請求項1/2", "請求項１乃至請求項９９", "請求項12まで", "請求項999から9999"]) {
+      for (const offset of [0, 1, 9, 99, 110, 119, 190]) {
+        const actual = envelope(n => { const prefix = "\ud800".repeat(Math.min(offset, n)); return (prefix + (mention + "。").repeat(n)).slice(0, n); });
+        expect(size(actual)).toBeLessThanOrEqual(upper);
+      }
+    }
+    expect(() => assertReviewPlan(plan)).not.toThrow();
+  });
   it("keeps complete sources and every exact field within two generation calls plus one review", () => {
     const { plan, input, answer } = example();
     const batches = generationBatches(plan, SYSTEM);
@@ -176,7 +233,7 @@ describe("complete original-text contrast review before saving", () => {
       const units=reviewTargetUnits(text);expect(units.map(u=>u.text).join("")).toBe(text);for(const u of units)expect(text.slice(u.start,u.end)).toBe(u.text);
     }
     for(const text of ["あ。".repeat(100),"\ud800。".repeat(100),"。x".repeat(100),"a。".repeat(100),"。".repeat(200)])expect(size(text)).toBeLessThanOrEqual(size("\ud800".repeat(200)));
-    expect(reviewSchema.safeParse({draftDigest:"a".repeat(64),checks:Array.from({length:20},(_,i)=>({id:String(i),unitChecks:Array.from({length:200},(_,start)=>({start,evidenceIds:[],sourceComparison:"境界",verdict:"uncertain",rejectedTargetAnchor:null}))}))}).success).toBe(true);
+    expect(reviewSchema.safeParse({draftDigest:"a".repeat(64),checks:Array.from({length:20},(_,i)=>({id:String(i),unitChecks:Array.from({length:200},(_,start)=>({start,referenceChecks:[],evidenceIds:[],sourceComparison:"境界",verdict:"uncertain",rejectedTargetAnchor:null}))}))}).success).toBe(true);
   });
   it("preserves original quote coordinates and old six-pair saved snapshots",()=>{
     const {plan,drafts,input,inputs,selection}=example();
