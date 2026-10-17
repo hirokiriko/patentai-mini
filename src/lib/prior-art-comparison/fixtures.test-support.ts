@@ -2,7 +2,7 @@ import { parseComparisonSource } from "./source";
 import { makePlan, savedDigest, validateAnswer, type ComparisonInputs, type Selection, type SavedComparison } from "./comparison";
 import type { generationInput } from "./generation";
 import type { batchInput } from "./generation-batch";
-import type { reviewInput } from "./semantic-review";
+import { reviewTargetIdentity, type reviewInput } from "./semantic-review";
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -45,7 +45,9 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
   return { draftDigest: input.draftDigest,
     sourceAnalyses: input.scopes.map(s => ({ id: s.id, conditions: "架空transportによる条件整理の形式確認。意味品質の実証ではない。", status: "resolved" as const })),
     checks: input.targets.map(t => ({ id: t.id, reason: "架空transportによるgate動作の確認。意味品質の実証ではない。",
-    baseClaimNos: t.field === "candidateObservation" ? [] : [t.baseClaimNo], candidateClaimNos: t.field === "baseObservation" ? [] : [t.candidateClaimNo], verdict: "consistent" as const,
+    baseClaimNos: reviewTargetIdentity(t.id).field === "candidateObservation" ? [] : [reviewTargetIdentity(t.id).baseClaimNo],
+    candidateClaimNos: reviewTargetIdentity(t.id).field === "baseObservation" ? [] : [reviewTargetIdentity(t.id).candidateClaimNo],
+    unitChecks: t.unitStarts.map(start => ({ start, targetReading: "架空の文単位確認。", sourceComparison: "架空原文との対応。意味品質の実証ではない。", verdict: "consistent" as const })), verdict: "consistent" as const,
     rejectedTargetSpan: null as { start: number; end: number; quote: string } | null })) };
 }
 export function fictionalSaved(): SavedComparison {

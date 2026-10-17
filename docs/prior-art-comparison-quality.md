@@ -56,6 +56,8 @@ PDFとCSVは保存snapshotのみから生成し、再取得もAI送信0。既存
 
 ## 実行と受入判定
 
+査読は各欄の全文を句点単位へ可逆分割し、開始位置だけを補助情報として渡す。各文について草稿の実際の断定と、同じ対象の原文条件の対比を必須にする。文の欠落・重複・範囲外・空の照合、全体判定と文判定の不一致を拒否し、不整合箇所は不整合と判定した文の中に限定する。正しい後半だけで欄全体を合格にしない。番号範囲から全条件の同時継承を推定しない。これらは確認範囲と集約の検査であり、対比文や意味判定の正しさは独立原文照合が必要。全文・保存v1・回数/時間/byte/token上限は維持する。
+
 - 通常の架空テスト: `pnpm test`、`pnpm lint`、`pnpm type-check`、`pnpm build`。
 - 専用実アプリ受入: build後、`PRIOR_ART_COMPARISON_ACCEPTANCE=1` と `PRIOR_ART_COMPARISON_DB_TEST=1` を明示し、既存Playwright packageを `PRIOR_ART_PLAYWRIGHT_MODULE` へ指定して `pnpm test scripts/prior-art-comparison-acceptance.test.ts --maxWorkers=1`。`DATABASE_URL`等が親にあれば空PG作成前に拒否する。専用PG16へ既存migrationだけを適用し、loopback・専用Chrome profile・架空principal/AI/Blob transportを使用する。実Azure認証/Storageの受入ではない。TXT multipart→実parser→架空Blob transport/実DB→原文選択まで照合する。各テストの資源だけをlabel照合して回収する。
 - 原文末尾/依存参照、保存/再表示/サーバー再起動、全PDFページ/CSV全行、誤引用・欠落、auth/CSRF、失敗時保全を確認し、fixtureの実アプリ一巡だけを `LOCAL_INTEGRATION_PASS` と呼ぶ。

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makePlan, SYSTEM, validateAnswer, validateSaved, savedDigest, LIMITS } from "./comparison";
 import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalSaved } from "./fixtures.test-support";
 import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
-import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, reviewInput, reviewSchema, reviewSchemaFor, REVIEW_SYSTEM, validateReview } from "./semantic-review";
+import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, reviewInput, reviewSchema, reviewSchemaFor, reviewTargetUnits, REVIEW_SYSTEM, validateReview } from "./semantic-review";
 import { parseComparisonSource } from "./source";
 
 function compactThree() {
@@ -83,6 +83,7 @@ describe("separate original-text review before saving", () => {
     const { input, answer } = example(), target = input.targets[2];
     const rejected = { ...answer, checks: answer.checks.map((check, i) => i !== 2 ? check : {
       ...check, verdict: "inconsistent", reason: "架空の対象関係が原文と矛盾。",
+      unitChecks: check.unitChecks.map(unit => ({ ...unit, verdict: "inconsistent" })),
       rejectedTargetSpan: { start: 0, end: target.text.length, quote: target.text },
     }) };
     expect(inspectReviewCoverage(input, rejected).checks[2].verdict).toBe("inconsistent");
@@ -92,6 +93,7 @@ describe("separate original-text review before saving", () => {
     const { input, answer } = example(), target = input.targets[2];
     const bad = { ...answer, checks: answer.checks.map((check, i) => i !== 2 ? check : {
       ...check, verdict: mode === "consistent" ? "consistent" : mode === "uncertain" ? "uncertain" : "inconsistent",
+      unitChecks: check.unitChecks.map(unit => ({ ...unit, verdict: mode === "consistent" ? "consistent" : mode === "uncertain" ? "uncertain" : "inconsistent" })),
       rejectedTargetSpan: { start: 0, end: target.text.length, quote: target.text },
     }) };
     if (mode === "missing") Object.assign(bad.checks[2], { rejectedTargetSpan: null });
@@ -105,6 +107,7 @@ describe("separate original-text review before saving", () => {
     const { plan, drafts } = example(); drafts[0].common = "𠮷の表示は青色。　";
     const input = reviewInput(plan, drafts), answer = fictionalReview(input), target = answer.checks[2];
     Object.assign(target, { verdict: "inconsistent", rejectedTargetSpan: { start: 0, end: 2, quote: "𠮷" } });
+    Object.assign(target.unitChecks[0], { verdict: "inconsistent" });
     expect(() => inspectReviewCoverage(input, answer)).not.toThrow();
     target.rejectedTargetSpan = { start: 0, end: 1, quote: "\ud842" };
     expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
@@ -145,10 +148,51 @@ describe("separate original-text review before saving", () => {
   it("bounds source analyses and twenty assessments without treating text length as a token guarantee",()=>{
     const ids=Array.from({length:4},(_,i)=>["baseObservation","candidateObservation","common","differences","unconfirmed"].map(field=>`${Number.MAX_SAFE_INTEGER-i}:1000:1000:${field}`)).flat();
     const sourceAnalyses=Array.from({length:8},(_,i)=>({id:`base:${i+1}`,conditions:"漢".repeat(400),status:"resolved"}));
-    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],verdict:"inconsistent",rejectedTargetSpan:{start:0,end:120,quote:"漢".repeat(120)}}))});
+    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],unitChecks:[{start:0,targetReading:"漢".repeat(60),sourceComparison:"漢".repeat(80),verdict:"inconsistent"}],verdict:"inconsistent",rejectedTargetSpan:{start:0,end:120,quote:"漢".repeat(120)}}))});
     expect(answer.sourceAnalyses).toHaveLength(8);
     expect(answer.checks).toHaveLength(20);
     expect(()=>reviewSchema.parse({...answer,sourceAnalyses:[...sourceAnalyses,sourceAnalyses[0]]})).toThrow();
     const {input}=example();expect(requestBytes(REVIEW_SYSTEM,JSON.stringify(input),reviewSchemaFor(input))).toBeLessThan(LIMITS.inputBytes);
+  });
+  it("partitions complete fields without changing text, punctuation or UTF-16 coordinates", () => {
+    for (const text of ["基準は光が必須。候補は音又は振動。", "𠮷は青色。　次は赤色。　", "一文だけ", "句点の列。。次の文。", "。".repeat(200)]) {
+      const units = reviewTargetUnits(text);
+      expect(units.map(unit => unit.text).join("")).toBe(text);
+      expect(units[0].start).toBe(0);
+      expect(units.at(-1)!.end).toBe(text.length);
+      for (const unit of units) expect(text.slice(unit.start, unit.end)).toBe(unit.text);
+    }
+  });
+  it.each(["missing", "duplicate", "foreign", "blank_reading", "blank_comparison", "contradiction", "uncertain", "wrong_span_unit", "tampered_boundaries"])("refuses %s sentence review even if the field says consistent", mode => {
+    const { plan, drafts } = example();
+    drafts[0].differences = "主装置又は補助装置は光を備える。候補は音又は振動を備える。";
+    const input = reviewInput(plan, drafts), answer = fictionalReview(input), check = answer.checks[3];
+    expect(check.unitChecks).toHaveLength(2);
+    if (mode === "missing") check.unitChecks.shift();
+    if (mode === "duplicate") check.unitChecks[1] = check.unitChecks[0];
+    if (mode === "foreign") check.unitChecks[0].start = 1;
+    if (mode === "blank_reading") check.unitChecks[0].targetReading = "　";
+    if (mode === "blank_comparison") check.unitChecks[0].sourceComparison = " ";
+    if (mode === "contradiction" || mode === "uncertain") Object.assign(check.unitChecks[0], { verdict: mode === "contradiction" ? "inconsistent" : "uncertain" });
+    if (mode === "wrong_span_unit") {
+      Object.assign(check, { verdict: "inconsistent", rejectedTargetSpan: { start: check.unitChecks[1].start, end: drafts[0].differences.length, quote: reviewTargetUnits(drafts[0].differences)[1].text } });
+      Object.assign(check.unitChecks[0], { verdict: "inconsistent" });
+    }
+    if (mode === "tampered_boundaries") input.targets[3].unitStarts = [0];
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
+  });
+  it("aggregates a rejected first sentence before an otherwise supported second sentence", () => {
+    const { plan, drafts } = example(); drafts[0].differences = "主装置又は補助装置は光を備える。候補は音又は振動を備える。";
+    const input = reviewInput(plan, drafts), answer = fictionalReview(input), check = answer.checks[3], first = reviewTargetUnits(drafts[0].differences)[0];
+    Object.assign(check.unitChecks[0], { verdict: "inconsistent", targetReading: "主装置と補助装置を一群として光を選択。", sourceComparison: "原文は主装置の光が必須。補助装置の音/振動とは別対象。" });
+    Object.assign(check, { verdict: "inconsistent", rejectedTargetSpan: { start: first.start, end: first.end, quote: first.text } });
+    expect(inspectReviewCoverage(input, answer).checks[3].unitChecks[1].verdict).toBe("consistent");
+    expect(() => validateReview(input, answer)).toThrow("ai_incomplete");
+  });
+  it("keeps the lone-surrogate envelope above punctuation-heavy unit-boundary wire costs", () => {
+    const { plan, drafts } = example();
+    const size = (text: string) => { const input = reviewInput(plan, drafts.map(d => ({ ...d, common: text, differences: text }))); return requestBytes(REVIEW_SYSTEM, JSON.stringify(input), reviewSchemaFor(input)); };
+    const worst = size("\ud800".repeat(200));
+    for (const text of ["あ。".repeat(100), "\ud800。".repeat(100), "。x".repeat(100), "a。".repeat(100), "。".repeat(200)]) expect(size(text)).toBeLessThanOrEqual(worst);
   });
 });

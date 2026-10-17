@@ -50,7 +50,8 @@ globalThis.fetch = async (url, init) => {
     sourceAnalyses: chunk.scopes.map(s => ({ id:s.id, conditions:"架空transportの原文条件整理。意味品質の実証ではない。", status:"resolved" })),
     checks: chunk.targets.map(t => ({ id:t.id,
     reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
-    baseClaimNos:t.field==="candidateObservation"?[]:[t.baseClaimNo],candidateClaimNos:t.field==="baseObservation"?[]:[t.candidateClaimNo],
+    baseClaimNos:t.id.split(":")[3]==="candidateObservation"?[]:[Number(t.id.split(":")[1])],candidateClaimNos:t.id.split(":")[3]==="baseObservation"?[]:[Number(t.id.split(":")[2])],
+    unitChecks:t.unitStarts.map(start=>({start,targetReading:"架空の文単位確認。",sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"})),
     verdict:mode==="review-reject"?"inconsistent":"consistent",
     rejectedTargetSpan:mode==="review-reject"?{start:0,end:Math.min(120,t.text.length),quote:t.text.slice(0,120)}:null })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
