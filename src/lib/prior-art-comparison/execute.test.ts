@@ -13,6 +13,14 @@ function response(value: unknown, usage: unknown = { input_tokens: 100, output_t
     output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
       content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }], usage });
 }
+function compactFour() {
+  const f = fictionalInputs();
+  f.inputs.draft = parseComparisonSource("【請求項1】\n温度を記録する基準装置。", 11, "基準");
+  const body = "【請求項1】\n温度を記録する装置。\n【請求項2】\n請求項1に記載の装置であって、末尾で赤色信号を保持する。\n【請求項3】\n請求項1に記載の装置であって、末尾で青色信号を送信する。";
+  f.inputs.documents = [21, 22].map(id => parseComparisonSource(body, id, `架空${id}`));
+  f.selection.documents = f.inputs.documents.map(d => ({ docId: d.id, claimNos: [2, 3], identity: { publication: d.label, edition: "架空" } }));
+  return f;
+}
 describe("real installed SDK, guarded fictional transport", () => {
   beforeEach(() => {
     for (const [key, value] of Object.entries({ AI_PROVIDER: "azure", AZURE_OPENAI_BASE_URL: "https://example.invalid/openai", AZURE_API_KEY: "fictional",
@@ -77,8 +85,55 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     const saved=await executeComparison(inputs,selection);
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(2);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
+  });
+  it("sends all four complete pairs through one guarded generation and one review", async () => {
+    const { inputs, selection } = compactFour(), phases: string[] = [];
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
+      if (input.task === "review") { expect(input.targets).toHaveLength(20); return response(fictionalReview(input)); }
+      expect(body.max_output_tokens).toBe(8192); expect(body.text.format.schema.properties.results.maxItems).toBe(4);
+      expect(input.documents.map((d: {pairs: unknown[]}) => d.pairs.length)).toEqual([2, 2]);
+      for (const d of input.documents) for (const c of d.candidate.claims)
+        expect(c.segments.map((s: {text:string}) => s.text).join(""))
+          .toBe(inputs.documents.find(source => source.id === d.candidateId)!.source.claims.find(source => source.claimNo === c.claimNo)!.text);
+      return response(fictionalBatch(input), { input_tokens: 100, output_tokens: 8192 });
+    });
+    vi.stubGlobal("fetch", transport);
+    const saved = await executeComparison(inputs, selection);
+    expect(phases).toEqual(["compare", "review"]); expect(saved.pairs).toHaveLength(4);
+    expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 2], [21, 3], [22, 2], [22, 3]]);
+    expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+  });
+  it.each(["missing", "duplicate", "foreign-document", "cross-document-evidence", "truncated"])("stops a malformed four-pair generation: %s", async mode => {
+    const { inputs, selection } = compactFour();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text), answer = fictionalBatch(input);
+      if (mode === "missing") answer.results.pop();
+      if (mode === "duplicate") answer.results[3] = { ...answer.results[0] };
+      if (mode === "foreign-document") answer.results[0].docId = 999;
+      if (mode === "cross-document-evidence") answer.results[0].candidateEvidenceId = answer.results[2].candidateEvidenceId;
+      if (mode === "truncated") {
+        const outer = await response(answer).json(); outer.output[0].content[0].text = JSON.stringify(answer).slice(0, -1);
+        return Response.json(outer);
+      }
+      return response(answer);
+    });
+    vi.stubGlobal("fetch", transport);
+    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete"); expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it("completes a packed generation and 205-second review within one absolute deadline", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; });
+    const { inputs, selection } = compactFour();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      await new Promise(r => setTimeout(r, input.task === "review" ? 205_000 : 10_000));
+      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input));
+    });
+    vi.stubGlobal("fetch", transport); const pending = executeComparison(inputs, selection);
+    await vi.advanceTimersByTimeAsync(215_001); expect((await pending).status).toBe("complete"); expect(transport).toHaveBeenCalledTimes(2);
   });
   it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
@@ -158,11 +213,11 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch", transport);
     const promise = executeComparison(inputs, selection);
     const rejected = expect(promise).rejects.toThrow("ai_incomplete");
-    await vi.advanceTimersByTimeAsync(180001);
+    await vi.advanceTimersByTimeAsync(210001);
     await rejected;
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("shares one absolute 210-second deadline with the final review",async()=>{
+  it("shares one absolute 230-second deadline with the final review",async()=>{
     vi.useFakeTimers();
     vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});
     const {inputs,selection}=fictionalInputs();
@@ -173,7 +228,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     const rejected=expect(executeComparison(inputs,selection)).rejects.toThrow("ai_incomplete");
-    await vi.advanceTimersByTimeAsync(210001);await rejected;
+    await vi.advanceTimersByTimeAsync(230001);await rejected;
     expect(transport).toHaveBeenCalledTimes(3);
   });
 });

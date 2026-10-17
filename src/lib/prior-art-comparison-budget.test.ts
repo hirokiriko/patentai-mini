@@ -21,6 +21,13 @@ describe("comparison-only time capability", () => {
     await vi.advanceTimersByTimeAsync(40_001);
     await expect(completed).resolves.toBe(200); expect(transport).toHaveBeenCalledTimes(1);
   });
+  it("accepts a complete 205-second response within the new comparison deadline", async () => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => { await new Promise(r => setTimeout(r, 205_000)); return response(); });
+    vi.stubGlobal("fetch", transport);
+    const pending = withPriorArtComparisonBudget(() => boundedAzureFetch("normal")(url, init()));
+    await vi.advanceTimersByTimeAsync(205_001); await expect(pending).resolves.toHaveProperty("status", 200);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it.each(["ordinary", "managed"])("preserves the 35-second transport limit for %s", async mode => {
     const transport = vi.fn<typeof fetch>().mockImplementation(() => new Promise(() => undefined));
     vi.stubGlobal("fetch", transport);
@@ -32,28 +39,28 @@ describe("comparison-only time capability", () => {
     await vi.advanceTimersByTimeAsync(35_001); await rejected; expect(transport).toHaveBeenCalledTimes(1);
     if (mode === "managed") { expect(reserve).toHaveBeenCalledTimes(1); expect(reconcile).not.toHaveBeenCalled(); }
   });
-  it("stops a comparison send at 180 seconds and retains its stopped state", async () => {
+  it("stops a comparison send at 210 seconds and retains its stopped state", async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(() => new Promise(() => undefined)); vi.stubGlobal("fetch", transport);
     const pending = withPriorArtComparisonBudget(async () => {
       const send = boundedAzureFetch("normal");
       await expect(send(url, init())).rejects.toThrow("ai_operation_stopped");
       await expect(send(url, init())).rejects.toThrow("ai_operation_stopped");
     });
-    await vi.advanceTimersByTimeAsync(180_001); await pending; expect(transport).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(210_001); await pending; expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("shares the absolute 210 seconds across requests instead of resetting it", async () => {
+  it("shares the absolute 230 seconds across requests instead of resetting it", async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => { await new Promise(r => setTimeout(r, 150_000)); return response(); });
     vi.stubGlobal("fetch", transport);
     const pending = withPriorArtComparisonBudget(async () => { const send = boundedAzureFetch("normal"); await send(url, init()); await send(url, init()); });
     const rejected = expect(pending).rejects.toThrow("ai_operation_stopped");
-    await vi.advanceTimersByTimeAsync(210_001); await rejected; expect(transport).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(230_001); await rejected; expect(transport).toHaveBeenCalledTimes(2);
   });
   it("applies the send deadline to a stalled response body too", async () => {
     const transport = vi.fn<typeof fetch>().mockResolvedValue(new Response(new ReadableStream({ start() {} })));
     vi.stubGlobal("fetch", transport);
     const pending = withPriorArtComparisonBudget(() => boundedAzureFetch("normal")(url, init()));
     const rejected = expect(pending).rejects.toThrow("ai_operation_stopped");
-    await vi.advanceTimersByTimeAsync(180_001); await rejected; expect(transport).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(210_001); await rejected; expect(transport).toHaveBeenCalledTimes(1);
   });
   it("keeps normal3/fast0 and never retries unknown usage", async () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => response()); vi.stubGlobal("fetch", transport);

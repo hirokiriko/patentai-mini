@@ -25,7 +25,7 @@ describe("complete original-text contrast review before saving", () => {
   it("keeps complete sources and every exact field within two generation calls plus one review", () => {
     const { plan, input, answer } = example();
     const batches = generationBatches(plan, SYSTEM);
-    expect(batches.map(b=>b.reduce((n,c)=>n+c.pairs.length,0))).toEqual([2,1]);
+    expect(batches.map(b=>b.reduce((n,c)=>n+c.pairs.length,0))).toEqual([3]);
     expect(input.targets).toHaveLength(15);
     expect(input.scopes.map(s=>s.id)).toEqual(["base:1","candidate:21:1","candidate:22:1","candidate:23:1"]);
     for (const batch of batches) expect(requestBytes(SYSTEM,JSON.stringify(batchInput(batch)),batchSchemaFor(batch))).toBeLessThan(LIMITS.inputBytes);

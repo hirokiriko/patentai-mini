@@ -8,11 +8,11 @@
 
 ## 有限な計画と検証
 
-既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。比較専用の同期API metadataは240秒、比較と保存前査読は単一の全体210秒、個別最大180秒とする。後続の呼出しも全体期限の残時間に制限され、各回180秒を保証するものではない。最大3回、retry 0。出力は生成8,192 tokens、既知Azure GPT-5.4の査読32,768 tokensとする。新規生成は最大4組・2組/回・最大2回とし、残る1回で全4組までを査読する。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ねるため、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
+既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。比較専用の同期API metadataは240秒、比較と保存前査読は単一の全体230秒、個別最大210秒とする。後続の呼出しも全体期限の残時間に制限され、各回210秒を保証するものではない。最大3回、retry 0。出力は生成8,192 tokens、既知Azure GPT-5.4の査読32,768 tokensとする。新規生成は最大4組・最大2回。全文とschemaとframing込み90,000bytes以下で、batch全体は最大4組を束ねるが文献単位のdecodeは従来の2組以下を維持する。収まらなければ4→3→2→1組へ下げ、完全な計画が生成最大2回に収まらなければ送信前に停止する。残る1回で全4組までを査読し、収まる2文献×2組は生成1回＋査読1回となる。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ね、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
 
 時間枠は共有budget内の閉じた比較専用capabilityで適用し、通常処理とmanaged watchの35秒は変更しない。既存budgetとの入れ子、上限の上書き、scope終了後の新しい送信を拒否し、終了時には進行中の比較通信も中断する。比較の全体期限をtransportと生成/査読で共有する。費用・回数・入力/出力・usage照合・失敗後停止の条件は緩めない。新しい時間枠で実AIを行うには、そのheadと時間/回数/費用/期限に一致するOWNER承認が必要。
 
-[Azure Container AppsのHTTP ingress](https://learn.microsoft.com/en-us/azure/container-apps/ingress?tabs=bash)は240秒のrequest timeoutを持つ。[Next.jsのmaxDuration](https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config#maxduration)は配備platform向けmetadataであり、それだけで実ホストの時間制限を変えるものではない。AI全体210秒はDB予約後に始まるため、予約・保存等を含む実際のHTTP所要時間と240秒内の完了を実アプリ受入で確認する。Azure設定は変更しない。35秒停止の観測だけから、180秒で完了することや意味品質の改善を保証しない。
+[Azure Container AppsのHTTP ingress](https://learn.microsoft.com/en-us/azure/container-apps/ingress?tabs=bash)は240秒のrequest timeoutを持つ。[Next.jsのmaxDuration](https://nextjs.org/docs/app/api-reference/file-conventions/route-segment-config#maxduration)は配備platform向けmetadataであり、それだけで実ホストの時間制限を変えるものではない。AI全体230秒はDB予約後に始まるため、残る10秒で予約・保存等を必ず完了できるという保証はしない。実際のHTTP所要時間と240秒内の完了を実アプリ受入で確認し、失敗/応答不明はdurable reservationの読取だけで照合する。Azure設定は変更しない。timeoutの観測だけから、210秒で完了することや意味品質の改善を保証しない。
 
 入力はsystem・schema・二重JSON escapeと余白を含めて90,000 bytes以内か事前検査する。全原文と最大長の生成欄を含む査読要求も、DB予約・最初の送信より前に検査する。生成後は実際の査読要求も再検査する。完全な計画が収まらなければ最初の送信前に停止し、対象を絞るよう案内する。managed watchの41回枠・本番承認は継承しない。
 
@@ -46,7 +46,7 @@ inconsistentの各unitは、そのunit内に一意に完全一致する最大120
 
 新形式のprobe20はHTTP200/約165秒で全24文が完結したが、既知3誤り中1件の選択集合縮小を見逃し、査読理由の誤一般化・根拠不足・留保への過剰Uも残って意味品質不合格だった。AND補完による誤拒否の解消や構造PASSをTECHNICAL_GOにしない。Local補助工具が、正しい経路根拠の祖先番号1/2を認めず選択番号3を強制した過剰制約も別件として記録する。修正は次の新namespaceだけに適用し、旧応答・旧工具・旧不合格は保全する。新head・全検証/独立レビュー/CI・新operatorのstage別guard・全hash・費用/保持予約・具体的公開記録のreadback後に、新しい応答で実証する。
 
-入力framing8192bytes込み90000bytes、各入力150000tokens、応答1MiB、各180秒/単一全体210秒/API240秒、通常最大3送信・retry0を維持する。usage不明/上限超過/timeout/不完全応答は後続送信・保存停止。継続承認はIssue本文の有限期限・累計回数・AI3000円/総5000円内だけで適用し、旧unknown予約を解放しない。probe/査読328円、生成206円のstage別予約を検査する。架空テストや小さいschemaだけを実AI意味品質合格とは呼ばない。
+probe21は180秒でheaders未到達・0bytesのまま停止し、使用量不明328円を保持した。全文packingと比較専用の時間配分修正を次headへ適用し、旧21の応答を補修・再分類しない。入力framing8192bytes込み90000bytes、各入力150000tokens、応答1MiB、各210秒/単一全体230秒/API240秒、通常最大3送信・retry0を維持する。usage不明/上限超過/timeout/不完全応答は後続送信・保存停止。継続承認はIssue本文の有限期限・累計回数・AI3000円/総5000円内だけで適用し、旧unknown予約を解放しない。probe/査読328円、生成206円のstage別予約を検査する。架空テストや小さいschemaだけを実AI意味品質合格とは呼ばない。
 
 ## 保存・整合・旧結果
 

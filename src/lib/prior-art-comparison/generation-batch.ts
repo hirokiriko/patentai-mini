@@ -29,7 +29,7 @@ export function batchInput(chunks: readonly ManagedComparisonChunk[]) {
   };
 }
 const resultSchema = generationSchema.shape.results.element.extend({ docId: z.number().int().positive() });
-export const batchSchema = z.object({ results: z.array(resultSchema).min(1).max(LIMITS.pairsPerCall) }).strict();
+export const batchSchema = z.object({ results: z.array(resultSchema).min(1).max(LIMITS.reviewPairs) }).strict();
 export type BatchAnswer = z.infer<typeof batchSchema>;
 
 export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
@@ -37,14 +37,14 @@ export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
   const ids = (sources: (typeof input.base)[]) => [...new Set(sources.flatMap(s => s.claims.flatMap(c => c.segments.filter(s => s.quotable).map(s => s.id))))];
   const base = ids([input.base]), candidate = ids(input.documents.map(d => d.candidate));
   if (base.length + candidate.length > 1000 || [base, candidate].some(v => v.length > 250 && v.join("").length > 15000)) throw new ComparisonError("plan_limit");
-  return batchSchema.extend({ results: z.array(resultSchema.extend({ baseEvidenceId: z.enum(base), candidateEvidenceId: z.enum(candidate) })).min(1).max(LIMITS.pairsPerCall) });
+  return batchSchema.extend({ results: z.array(resultSchema.extend({ baseEvidenceId: z.enum(base), candidateEvidenceId: z.enum(candidate) })).min(1).max(LIMITS.reviewPairs) });
 }
 export function requestBytes(system: string, prompt: string, schema: z.ZodType): number {
   return Buffer.byteLength(JSON.stringify({ system, prompt, schema: z.toJSONSchema(schema) }), "utf8") + 8192;
 }
 
-/** Up to two generated pairs per call, including pairs from different documents.
- * Leave the third call for review. All packing and size checks precede any send. */
+/** Pack up to the four planned pairs, while preserving the two-pair document
+ * decoder. Leave a call for review; check complete payloads before any send. */
 export function generationBatches(plan: readonly ManagedComparisonChunk[], system: string): ManagedComparisonChunk[][] {
   const singles = plan.flatMap(c => c.pairs.map(p => ({ ...c, pairs: [p], base: managedClaimContext(c.base, [p.baseClaimNo]), candidate: managedClaimContext(c.candidate, [p.candidateClaimNo]) })));
   if (!singles.length || singles.length > LIMITS.reviewPairs) throw new ComparisonError("plan_limit");
@@ -55,14 +55,15 @@ export function generationBatches(plan: readonly ManagedComparisonChunk[], syste
     return [...byDocument.values()].map(cs => ({ ...cs[0], pairs: cs.flatMap(c => c.pairs), base: unionSource(cs.map(c => c.base)), candidate: unionSource(cs.map(c => c.candidate)) }));
   };
   const fits = (batch: ManagedComparisonChunk[]) => {
+    if (batch.some(c => c.pairs.length > LIMITS.pairsPerCall)) return false;
     try { return requestBytes(system, JSON.stringify(batchInput(batch)), batchSchemaFor(batch)) <= LIMITS.inputBytes; }
     catch (e) { if (e instanceof ComparisonError && e.code === "plan_limit") return false; throw e; }
   };
   const batches: ManagedComparisonChunk[][] = [];
   for (let at = 0; at < singles.length;) {
-    let take = Math.min(LIMITS.pairsPerCall, singles.length - at);
+    let take = Math.min(LIMITS.reviewPairs, singles.length - at);
     let batch = combine(singles.slice(at, at + take));
-    if (!fits(batch) && take === 2) { take = 1; batch = combine(singles.slice(at, at + take)); }
+    while (take > 1 && !fits(batch)) { take--; batch = combine(singles.slice(at, at + take)); }
     if (!fits(batch)) throw new ComparisonError("plan_limit");
     batches.push(batch); at += take;
   }
