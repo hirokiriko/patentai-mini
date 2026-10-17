@@ -68,7 +68,7 @@ export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Cat
       </div>
       {catalog.draft?.source ? <ClaimSelection name="draft-claims" source={catalog.draft.source} /> : <p role="alert">基準文献の原文を確認できません。案件画面で、請求項番号と全文を含む資料を取り込んでください。</p>}
       <h3 className="font-semibold">対象文献を2〜3件選択</h3>
-      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大6組、3回のAI呼出しに収まらない場合は送信前に停止します。</p>
+      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大4組です。保存前の原文照合を含む3回のAI呼出しに収まらない場合は送信前に停止します。</p>
       {catalog.documents.map(doc => <fieldset key={doc.id} className="space-y-3 rounded border border-slate-300 bg-white p-4">
         <legend className="px-2"><label><input type="checkbox" name={`doc-${doc.id}`} disabled={!doc.source} /> {doc.publicationNo || doc.title || `文献 ${doc.id}`}</label></legend>
         <div className="flex flex-wrap gap-3">

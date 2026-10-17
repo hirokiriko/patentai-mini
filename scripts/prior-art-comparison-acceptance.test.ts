@@ -8,7 +8,8 @@ import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isolatedComparisonPg16, isolatedChildEnv } from "./prior-art-comparison-local.test-support";
 import { fictionalInputs } from "../src/lib/prior-art-comparison/fixtures.test-support";
-import type { Selection } from "../src/lib/prior-art-comparison/comparison";
+import { makePlan, SYSTEM, type Selection } from "../src/lib/prior-art-comparison/comparison";
+import { generationBatches } from "../src/lib/prior-art-comparison/generation-batch";
 import { comparisonBlocks } from "../src/lib/prior-art-comparison/report";
 import { neutralizeFormula } from "../src/lib/patent-watch/csv";
 import { parse } from "csv-parse/sync";
@@ -28,6 +29,8 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
   const identity = Buffer.from(JSON.stringify({ auth_typ: "aad", claims: [{typ:"tid",val:tenant},{typ:"oid",val:owner},{typ:"aud",val:client}] })).toString("base64");
   const headers = { "x-ms-client-principal": identity, origin: "https://fictional.invalid", "Content-Type": "application/json" };
   const counts = async () => { try { return (await readFile(join(output,"fixture-sends.jsonl"),"utf8")).trim().split("\n").length; } catch { return 0; } };
+  const fixture = fictionalInputs();
+  const completeSends = generationBatches(makePlan(fixture.inputs, fixture.selection), SYSTEM).length + 1;
   const post = (caseId: number, selection: Selection) => fetch(`${appOrigin}/api/cases/${caseId}/analyze`, {method:"POST",headers,body:JSON.stringify(selection)});
   const mode = (value: string) => writeFile(join(output,"fixture-mode.txt"),value);
   async function freshCase() {
@@ -106,7 +109,7 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       await page.getByRole("button",{name:"指定範囲を比較して保存"}).click();
       await page.getByText("根拠付き比較を保存しました。下の保存結果からPDF/CSVを取得できます。",{exact:true}).waitFor({timeout:55_000});
       await page.getByRole("link",{name:"PDFを取得"}).waitFor();
-      expect(await counts()).toBe(2);
+      expect(await counts()).toBe(completeSends);
       const rows=await pg.sql("select matched_elements_json from comparison_results where case_id=7 order by result_id");expect(rows).toHaveLength(2);
       const saved=JSON.parse(rows[0].matched_elements_json).priorArtComparison;expect(saved.inputs.draft.id).toBe(11);expect(saved.pairs.every((p:{baseEvidence:{start:number}})=>p.baseEvidence.start>15000)).toBe(true);
       await writeFile(join(output,"saved-fictional-result.json"),JSON.stringify(saved,null,2));
@@ -121,9 +124,9 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       expect(parse(csv,{bom:true})).toEqual([["区分","内容"],...blocks.map(b=>[b.heading?"見出し":"本文",neutralizeFormula(b.text)])]);
       await writeFile(join(output,"report-blocks.json"),JSON.stringify(blocks));
       for(const format of ["pdf","csv"]) expect((await fetch(`${appOrigin}/api/cases/7/analyze/${saved.operationId}/${format}`,{headers})).status).toBe(200);
-      expect(await counts()).toBe(2);
+      expect(await counts()).toBe(completeSends);
       await page.getByRole("heading",{name:"保存済み比較結果",exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:join(output,"saved-result.png")});
-      await writeFile(join(output,"browser-evidence.json"),JSON.stringify({caseId:7,operationId:saved.operationId,aiSends:2,serverRestart:true,reload:true,pdfBytes:pdf.length,csvCharacters:csv.length,csvAllRows:true},null,2));
+      await writeFile(join(output,"browser-evidence.json"),JSON.stringify({caseId:7,operationId:saved.operationId,aiSends:completeSends,serverRestart:true,reload:true,pdfBytes:pdf.length,csvCharacters:csv.length,csvAllRows:true},null,2));
       await context.close();
     } finally {await browser.close();}
   },120_000);
@@ -154,6 +157,22 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
     expect(logs).not.toContain("FICTIONAL_PRIVATE_ERROR_SENTINEL");
   },60_000);
 
+  check("rejects an inconsistent final review without replacing a saved result or allowing redispatch",async()=>{
+    const {caseId,selection}=await freshCase();await mode("ok");
+    expect((await post(caseId,selection)).status).toBe(200);
+    const old=JSON.stringify(await pg.sql("select * from comparison_results where case_id=$1 order by result_id",[caseId]));
+    const failed={...selection,operationId:crypto.randomUUID()};const before=await counts();
+    try {
+      await mode("review-reject");
+      const response=await post(caseId,failed);expect(response.status).toBe(422);expect(await response.text()).not.toContain("FICTIONAL_PRIVATE_ERROR_SENTINEL");
+      expect(await counts()).toBe(before+completeSends);
+      expect(JSON.stringify(await pg.sql("select * from comparison_results where case_id=$1 and (matched_elements_json::json->'priorArtComparison'->>'status')='complete' order by result_id",[caseId]))).toBe(old);
+      expect((await fetch(`${appOrigin}/api/cases/${caseId}/analyze/${failed.operationId}/pdf`,{headers})).status).toBe(404);
+      expect((await fetch(`${appOrigin}/api/cases/${caseId}/analyze/${selection.operationId}/pdf`,{headers})).status).toBe(200);
+      expect((await post(caseId,{...failed,operationId:crypto.randomUUID()})).status).toBe(409);expect(await counts()).toBe(before+completeSends);
+    } finally {await mode("ok");}
+  });
+
   check("rolls back reservation and final write failures without replacing old success",async()=>{
     const {caseId,selection}=await freshCase();const before=await counts();
     await pg.sql("create function issue150_fail_insert() returns trigger language plpgsql as $$ begin raise exception 'FICTIONAL_PRIVATE_ERROR_SENTINEL'; end $$");
@@ -174,8 +193,8 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
     const running=post(first.caseId,first.selection);await waitForSend(before);
     expect((await post(first.caseId,first.selection)).status).toBe(409);
     expect((await post(first.caseId,{...first.selection,operationId:crypto.randomUUID()})).status).toBe(409);
-    expect((await running).status).toBe(200);expect(await counts()).toBe(before+2);
-    expect((await post(first.caseId,first.selection)).status).toBe(200);expect(await counts()).toBe(before+2);
+    expect((await running).status).toBe(200);expect(await counts()).toBe(before+completeSends);
+    expect((await post(first.caseId,first.selection)).status).toBe(200);expect(await counts()).toBe(before+completeSends);
     const second=await freshCase();const beforeStale=await counts();const stale=post(second.caseId,second.selection);await waitForSend(beforeStale);
     await pg.sql("update draft_patents set parsed_text=parsed_text || E'\n' where case_id=$1",[second.caseId]);
     expect((await stale).status).toBe(409);
@@ -187,8 +206,8 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
     await stopApp();await startApp();
     const final=await freshCase();await mode("commit-ack");const before=await counts();
     expect((await post(final.caseId,final.selection)).status).toBe(200);
-    expect(await counts()).toBe(before+2);expect(await readFile(join(output,"fixture-faults.jsonl"),"utf8")).toContain("commit-ack");
-    await mode("ok");expect((await post(final.caseId,final.selection)).status).toBe(200);expect(await counts()).toBe(before+2);
+    expect(await counts()).toBe(before+completeSends);expect(await readFile(join(output,"fixture-faults.jsonl"),"utf8")).toContain("commit-ack");
+    await mode("ok");expect((await post(final.caseId,final.selection)).status).toBe(200);expect(await counts()).toBe(before+completeSends);
     await stopApp();await startApp();const reserve=await freshCase();await mode("reserve-ack");const sent=await counts();
     expect((await post(reserve.caseId,reserve.selection)).status).toBe(409);expect(await counts()).toBe(sent);
     await mode("ok");await stopApp();await startApp();
@@ -196,7 +215,7 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
     await stopApp();await startApp();const unknown=await freshCase();await mode("commit-readback");const unknownBefore=await counts();
     expect((await post(unknown.caseId,unknown.selection)).status).toBe(409);
     await mode("ok");await stopApp();await startApp();
-    expect((await post(unknown.caseId,unknown.selection)).status).toBe(200);expect(await counts()).toBe(unknownBefore+2);
+    expect((await post(unknown.caseId,unknown.selection)).status).toBe(200);expect(await counts()).toBe(unknownBefore+completeSends);
   });
 
   check("keeps dispatch reservations across process loss and rejects altered reservations",async()=>{

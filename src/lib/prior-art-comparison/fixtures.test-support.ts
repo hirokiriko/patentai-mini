@@ -1,6 +1,8 @@
 import { parseComparisonSource } from "./source";
 import { makePlan, savedDigest, validateAnswer, type ComparisonInputs, type Selection, type SavedComparison } from "./comparison";
 import type { generationInput } from "./generation";
+import type { batchInput } from "./generation-batch";
+import type { reviewInput } from "./semantic-review";
 export function fictionalInputs() {
   const body = "架空の温度制御装置は、各区域の測定値を保持する。".repeat(650);
   const draftText = `【請求項1】\n${body}末尾条件は温度が七度を超えると青色弁を閉じることである。\n【請求項2】\n請求項1に記載の装置であって、確認値を翌朝に消去する装置。`;
@@ -33,6 +35,13 @@ export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
     differences: chunk.candidateId === 22 ? "引用箇所は基準の超過・閉動作に対し、文献では低下・開動作である。" : "引用した末尾条件に差は確認できない。",
     unconfirmed: "装置全体の作用と図面は未確認。",
   })) };
+}
+export function fictionalBatch(input: ReturnType<typeof batchInput>) {
+  return { results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
+}
+export function fictionalReview(input: ReturnType<typeof reviewInput>) {
+  return { draftDigest: input.draftDigest, checks: input.targets.map(t => ({ id: t.id, reason: "架空transportによるgate動作の確認。意味品質の実証ではない。",
+    baseClaimNos: t.field === "candidateObservation" ? [] : [t.baseClaimNo], candidateClaimNos: t.field === "baseObservation" ? [] : [t.candidateClaimNo], verdict: "consistent" as const })) };
 }
 export function fictionalSaved(): SavedComparison {
   const { inputs, selection } = fictionalInputs();
