@@ -28,6 +28,10 @@ pg.Client.prototype.query = function (...args) {
   return result;
 };
 const originalFetch = globalThis.fetch;
+const quote = text => {
+  for(let end=text.length;end>0;end--){const value=text.slice(Math.max(0,end-120),end);if(value.trim()&&text.indexOf(value)===text.lastIndexOf(value)&&!/^[\uDC00-\uDFFF]/.test(value)&&!/[\uD800-\uDBFF]$/.test(value))return value;}
+  throw Error("fictional_unique_quote_unavailable");
+};
 globalThis.fetch = async (url, init) => {
   const target = new URL(String(url));
   if (target.protocol === "http:" && ["127.0.0.1", "localhost"].includes(target.hostname)) return originalFetch(url, init);
@@ -36,7 +40,7 @@ globalThis.fetch = async (url, init) => {
   const chunk = JSON.parse(body.input[1].content[0].text);
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
-  const fullText = claim => claim.text ?? claim.segments.map(s => s.text).join("");
+  const fullText = claim => claim.text ?? claim.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
   const event = { phase: chunk.task, bytes: Buffer.byteLength(init.body), baseTailPresent: chunk.base.claims.some(c => fullText(c).includes("超えると青色弁を閉じる")),
     candidateTailPresent: chunk.documents.some(d => (d.candidate ?? d.source).claims.some(c => /青色弁を(?:開く|閉じる)/.test(fullText(c)))),
     pairs: chunk.task === "review" ? chunk.pairs.length : chunk.documents.reduce((n,d)=>n+d.pairs.length,0) };
@@ -47,13 +51,13 @@ globalThis.fetch = async (url, init) => {
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
   const value = chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    sourceAnalyses: chunk.scopes.map(s => ({ id:s.id, conditions:"架空transportの原文条件整理。意味品質の実証ではない。", status:"resolved" })),
+    sourceAnalyses: chunk.scopes.map(s => {const source=s.side==="base"?chunk.base:chunk.documents.find(d=>d.docId===s.docId).source,claim=source.claims.find(c=>c.claimNo===s.selectedClaimNo);return {id:s.id,inspectedKinds:["reference","required","alternatives","activation","routing_or_position"],facts:[{kind:"required",statement:"架空transportの形式確認。意味品質の実証ではない。",evidenceIds:[claim.segments.at(-1)[0]]}],status:"resolved"};}),
     checks: chunk.targets.map(t => ({ id:t.id,
     reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
     baseClaimNos:t.id.split(":")[3]==="candidateObservation"?[]:[Number(t.id.split(":")[1])],candidateClaimNos:t.id.split(":")[3]==="baseObservation"?[]:[Number(t.id.split(":")[2])],
-    unitChecks:t.unitStarts.map(start=>({start,targetReading:"架空の文単位確認。",sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"})),
+    unitChecks:t.unitStarts.map((start,i)=>({start,targetReading:{statement:"架空の文単位確認。",quantification:"other",basisQuote:quote(t.text.slice(start,t.unitStarts[i+1])),assertionStatus:"explicit"},sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"})),
     verdict:mode==="review-reject"?"inconsistent":"consistent",
-    rejectedTargetSpan:mode==="review-reject"?{start:0,end:Math.min(120,t.text.length),quote:t.text.slice(0,120)}:null })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
+    rejectedTargetAnchor:mode==="review-reject"?{unitStart:0,quote:quote(t.text.slice(0,t.unitStarts[1]))}:null })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
     const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;

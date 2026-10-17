@@ -4,7 +4,7 @@ import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.tes
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
-import type { reviewInput } from "./semantic-review";
+import { inspectReviewCoverage, type reviewInput } from "./semantic-review";
 import { parseComparisonSource } from "./source";
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
@@ -31,9 +31,9 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "review") {
-        expect(chunk.base.claims[0].text).toBe(inputs.draft.source.claims[0].text);
+        expect(chunk.base.claims[0].segments.map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
         expect(chunk.targets).toHaveLength(10);
-        expect(chunk.documents.map(d => d.source.claims[0].text)).toEqual(inputs.documents.map(d => d.source.claims[0].text));
+        expect(chunk.documents.map(d => d.source.claims[0].segments.map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
         return response(fictionalReview(chunk));
       }
       expect(chunk.base.claims[0].segments.map(s => s.text).join("")).toBe(inputs.draft.source.claims[0].text);
@@ -80,8 +80,9 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(3);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
   });
-  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "source_unresolved", "source_missing", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
+  it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "source_unresolved", "source_missing", "draft_basis", "fact_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
+    let validNegativeProtocolPassed = false;
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
@@ -93,11 +94,20 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
       if (mode === "source_unresolved") Object.assign(value.sourceAnalyses[0],{status:"unresolved"});
       if (mode === "source_missing") value.sourceAnalyses.pop();
+      if (mode === "draft_basis") value.checks[0].unitChecks[0].targetReading.basisQuote = "当該文に存在しない断定";
+      if (mode === "fact_id") value.sourceAnalyses[0].facts[0].evidenceIds = ["c999:1:0"];
+      if (mode === "anchor" || mode === "valid_negative") {
+        Object.assign(value.checks[0].unitChecks[0], { verdict: "inconsistent" });
+        Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetAnchor: { unitStart: 0,
+          quote: mode === "anchor" ? "当該文に存在しない断定" : input.targets[0].text.slice(0, input.targets[0].unitStarts[1]) } });
+      }
+      if (mode === "valid_negative") validNegativeProtocolPassed = inspectReviewCoverage(input, value).checks[0].verdict === "inconsistent";
       return response(value, mode === "unknown_usage" ? null : undefined);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
+    if (mode === "valid_negative") expect(validNegativeProtocolPassed).toBe(true);
   });
   it("sends medium reasoning with room for its answer through the actual guarded SDK",async()=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","gpt-5.4");
