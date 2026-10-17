@@ -3,6 +3,7 @@ import { managedClaimContext, type ManagedClaimSet, type ManagedComparisonChunk 
 import { assertGenerationEvidence, generationInput, generationSchema } from "./generation";
 import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
+import { referenceLogicInput } from "./reference-logic";
 
 // Combine only identical source versions; claim text is never summarized.
 export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSet {
@@ -19,7 +20,8 @@ export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSe
 export function batchInput(chunks: readonly ManagedComparisonChunk[]) {
   const base = unionSource(chunks.map(c => c.base));
   return { task: "compare" as const,
-    base: generationInput({ ...chunks[0], base }).base,
+    base: { ...generationInput({ ...chunks[0], base }).base,
+      referenceLogic: referenceLogicInput(base, [...new Set(chunks.flatMap(c => c.pairs.map(p => p.baseClaimNo)))]) },
     documents: chunks.map(chunk => {
       const d = generationInput(chunk);
       return { candidateId: d.candidateId, baseDigest: d.baseDigest, candidateDigest: d.candidateDigest, pairs: d.pairs, candidate: d.candidate };

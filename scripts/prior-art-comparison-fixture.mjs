@@ -51,7 +51,8 @@ globalThis.fetch = async (url, init) => {
     checks: chunk.targets.map(t => ({ id:t.id,
     reason:"架空transportの査読gate動作確認。意味品質の実証ではない。",
     baseClaimNos:t.field==="candidateObservation"?[]:[t.baseClaimNo],candidateClaimNos:t.field==="baseObservation"?[]:[t.candidateClaimNo],
-    verdict:mode==="review-reject"?"inconsistent":"consistent" })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
+    verdict:mode==="review-reject"?"inconsistent":"consistent",
+    rejectedTargetSpan:mode==="review-reject"?{start:0,end:Math.min(120,t.text.length),quote:t.text.slice(0,120)}:null })) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
     const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;

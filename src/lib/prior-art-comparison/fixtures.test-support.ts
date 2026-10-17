@@ -45,7 +45,8 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
   return { draftDigest: input.draftDigest,
     sourceAnalyses: input.scopes.map(s => ({ id: s.id, conditions: "架空transportによる条件整理の形式確認。意味品質の実証ではない。", status: "resolved" as const })),
     checks: input.targets.map(t => ({ id: t.id, reason: "架空transportによるgate動作の確認。意味品質の実証ではない。",
-    baseClaimNos: t.field === "candidateObservation" ? [] : [t.baseClaimNo], candidateClaimNos: t.field === "baseObservation" ? [] : [t.candidateClaimNo], verdict: "consistent" as const })) };
+    baseClaimNos: t.field === "candidateObservation" ? [] : [t.baseClaimNo], candidateClaimNos: t.field === "baseObservation" ? [] : [t.candidateClaimNo], verdict: "consistent" as const,
+    rejectedTargetSpan: null as { start: number; end: number; quote: string } | null })) };
 }
 export function fictionalSaved(): SavedComparison {
   const { inputs, selection } = fictionalInputs();

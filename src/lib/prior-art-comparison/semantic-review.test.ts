@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makePlan, SYSTEM, validateAnswer, validateSaved, savedDigest, LIMITS } from "./comparison";
 import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalSaved } from "./fixtures.test-support";
 import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
-import { assertReviewPlan, assertReviewSize, reviewInput, reviewSchema, reviewSchemaFor, REVIEW_SYSTEM, validateReview } from "./semantic-review";
+import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, reviewInput, reviewSchema, reviewSchemaFor, REVIEW_SYSTEM, validateReview } from "./semantic-review";
 import { parseComparisonSource } from "./source";
 
 function compactThree() {
@@ -79,6 +79,38 @@ describe("separate original-text review before saving", () => {
     expect(()=>validateReview(changed,failed)).toThrow("ai_incomplete");
     // A fixture proves the gate, not whether a real model detects this error.
   });
+  it("requires an exact rejected assertion while still refusing a negative review for saving", () => {
+    const { input, answer } = example(), target = input.targets[2];
+    const rejected = { ...answer, checks: answer.checks.map((check, i) => i !== 2 ? check : {
+      ...check, verdict: "inconsistent", reason: "架空の対象関係が原文と矛盾。",
+      rejectedTargetSpan: { start: 0, end: target.text.length, quote: target.text },
+    }) };
+    expect(inspectReviewCoverage(input, rejected).checks[2].verdict).toBe("inconsistent");
+    expect(() => validateReview(input, rejected)).toThrow("ai_incomplete");
+  });
+  it.each(["missing", "foreign", "offset", "empty", "past_end", "consistent", "uncertain"])("rejects %s problem spans", mode => {
+    const { input, answer } = example(), target = input.targets[2];
+    const bad = { ...answer, checks: answer.checks.map((check, i) => i !== 2 ? check : {
+      ...check, verdict: mode === "consistent" ? "consistent" : mode === "uncertain" ? "uncertain" : "inconsistent",
+      rejectedTargetSpan: { start: 0, end: target.text.length, quote: target.text },
+    }) };
+    if (mode === "missing") Object.assign(bad.checks[2], { rejectedTargetSpan: null });
+    if (mode === "foreign") bad.checks[2].rejectedTargetSpan!.quote = "草稿に存在しない断定";
+    if (mode === "offset") bad.checks[2].rejectedTargetSpan!.start = 1;
+    if (mode === "empty") Object.assign(bad.checks[2].rejectedTargetSpan!, { end: 0, quote: "" });
+    if (mode === "past_end") bad.checks[2].rejectedTargetSpan!.end++;
+    expect(() => inspectReviewCoverage(input, bad)).toThrow("ai_incomplete");
+  });
+  it("requires a visible whole-character problem span in UTF-16 coordinates", () => {
+    const { plan, drafts } = example(); drafts[0].common = "𠮷の表示は青色。　";
+    const input = reviewInput(plan, drafts), answer = fictionalReview(input), target = answer.checks[2];
+    Object.assign(target, { verdict: "inconsistent", rejectedTargetSpan: { start: 0, end: 2, quote: "𠮷" } });
+    expect(() => inspectReviewCoverage(input, answer)).not.toThrow();
+    target.rejectedTargetSpan = { start: 0, end: 1, quote: "\ud842" };
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
+    target.rejectedTargetSpan = { start: drafts[0].common.length - 1, end: drafts[0].common.length, quote: "　" };
+    expect(() => inspectReviewCoverage(input, answer)).toThrow("ai_incomplete");
+  });
   it("preflights maximum draft sizes and the complete original before sending",()=>{
     const {plan,input}=example();
     expect(()=>assertReviewPlan(plan)).not.toThrow();
@@ -113,7 +145,7 @@ describe("separate original-text review before saving", () => {
   it("bounds source analyses and twenty assessments without treating text length as a token guarantee",()=>{
     const ids=Array.from({length:4},(_,i)=>["baseObservation","candidateObservation","common","differences","unconfirmed"].map(field=>`${Number.MAX_SAFE_INTEGER-i}:1000:1000:${field}`)).flat();
     const sourceAnalyses=Array.from({length:8},(_,i)=>({id:`base:${i+1}`,conditions:"漢".repeat(400),status:"resolved"}));
-    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],verdict:"inconsistent"}))});
+    const answer=reviewSchema.parse({draftDigest:"a".repeat(64),sourceAnalyses,checks:ids.map(id=>({id,reason:"漢".repeat(40),baseClaimNos:[998,999,1000],candidateClaimNos:[998,999,1000],verdict:"inconsistent",rejectedTargetSpan:{start:0,end:120,quote:"漢".repeat(120)}}))});
     expect(answer.sourceAnalyses).toHaveLength(8);
     expect(answer.checks).toHaveLength(20);
     expect(()=>reviewSchema.parse({...answer,sourceAnalyses:[...sourceAnalyses,sourceAnalyses[0]]})).toThrow();

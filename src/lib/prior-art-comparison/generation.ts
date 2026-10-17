@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { managedClaimContext, type ManagedClaimSet, type ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { ComparisonError } from "./source";
+import { referenceLogicInput } from "./reference-logic";
 
 const claimNo = z.number().int().positive();
 const text = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f-\x9f]*$/);
@@ -44,8 +45,10 @@ export function generationInput(chunk: ManagedComparisonChunk) {
       baseContextClaimNos: managedClaimContext(chunk.base, [pair.baseClaimNo]).claims.map(c => c.claimNo),
       candidateContextClaimNos: managedClaimContext(chunk.candidate, [pair.candidateClaimNo]).claims.map(c => c.claimNo),
     })),
-    base: sourceSegments(chunk.base, `b${chunk.baseDigest}:0`),
-    candidate: sourceSegments(chunk.candidate, `c${chunk.candidateDigest}:${chunk.candidateId}`),
+    base: { ...sourceSegments(chunk.base, `b${chunk.baseDigest}:0`),
+      referenceLogic: referenceLogicInput(chunk.base, [...new Set(chunk.pairs.map(p => p.baseClaimNo))]) },
+    candidate: { ...sourceSegments(chunk.candidate, `c${chunk.candidateDigest}:${chunk.candidateId}`),
+      referenceLogic: referenceLogicInput(chunk.candidate, [...new Set(chunk.pairs.map(p => p.candidateClaimNo))]) },
   };
 }
 
@@ -82,7 +85,7 @@ export function decodeGeneration(chunk: ManagedComparisonChunk, answer: unknown)
     const parsed = generationSchema.parse(answer);
     // Protocol metadata is not a patent condition or a reason that source text
     // cannot be compared. Apply this only to new generations, not saved readers.
-    if (parsed.results.some(r => /quotable|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
+    if (parsed.results.some(r => /quotable|referenceLogic|referenceClauses|guaranteedClaimNos|conditionalClaimNos|unknownClaimNos|rejectedTargetSpan|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
       [r.baseObservation, r.candidateObservation, r.common, r.differences, r.unconfirmed].join("\n"),
     ))) throw Error();
     const input = generationInput(chunk);

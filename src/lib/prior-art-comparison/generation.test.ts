@@ -3,6 +3,8 @@ import { generationInput, generationSchema, generationSchemaFor, decodeGeneratio
 import { LIMITS, makePlan, savedDigest, validateAnswer, validateSaved } from "./comparison";
 import { fictionalGeneration, fictionalInputs, fictionalSaved } from "./fixtures.test-support";
 import { parseComparisonSource } from "./source";
+import { batchInput } from "./generation-batch";
+import { reviewInput } from "./semantic-review";
 
 function example() {
   const { inputs, selection } = fictionalInputs();
@@ -11,6 +13,32 @@ function example() {
 }
 
 describe("literal evidence selection", () => {
+  it("keeps reference alternatives separate from context coverage in generation and review", () => {
+    const { inputs, selection } = fictionalInputs();
+    const text = "【請求項1】\n架空の光装置を備える。\n【請求項2】\n架空の光装置と記録部を備える。\n【請求項3】\n請求項1又は請求項2に記載の装置は表示部を備える。\n【請求項4】\n請求項3に記載の装置は警報部を備える。";
+    inputs.draft = parseComparisonSource(text, 11, "draft");
+    inputs.documents = [21, 22].map(id => parseComparisonSource(text, id, `FICT-${id}`));
+    selection.draftClaimNos = [3];
+    selection.documents.forEach(d => d.claimNos = [4]);
+    const plan = makePlan(inputs, selection), generated = generationInput(plan[0]);
+    expect(generated.pairs[0].candidateContextClaimNos).toEqual([1, 2, 3, 4]);
+    expect(generated.candidate.referenceLogic.scopes[0]).toMatchObject({ guaranteedClaimNos: [3, 4], conditionalClaimNos: [1, 2] });
+    expect(generated.candidate.referenceLogic.relations.find(c => c.claimNo === 3)?.relation).toBe("any_of");
+    expect(generated.candidate.claims.map(c => c.segments.map(s => s.text).join(""))).toEqual(plan[0].candidate.claims.map(c => c.text));
+    const drafts = plan.flatMap(c => validateAnswer(c, decodeGeneration(c, fictionalGeneration(generationInput(c)))).map(p => ({ ...p, baseObservation: "架空基準。", candidateObservation: "架空候補。" })));
+    const reviewed = reviewInput(plan, drafts);
+    expect(reviewed.documents.find(d => d.docId === 21)?.source.referenceLogic).toEqual(generated.candidate.referenceLogic);
+    const otherBase = { ...plan[1], pairs: plan[1].pairs.map(p => ({ ...p, baseClaimNo: 1 })) };
+    expect(batchInput([plan[0], otherBase]).base.referenceLogic.scopes.map(s => s.claimNo)).toEqual([3, 1]);
+    const invalid = fictionalGeneration(generated); invalid.results[0].unconfirmed = "referenceLogicが不足している。";
+    expect(() => decodeGeneration(plan[0], invalid)).toThrow("ai_incomplete");
+  });
+  it("stops before generation when original reference relations cannot be resolved", () => {
+    const { inputs, selection } = fictionalInputs();
+    const text = "【請求項1】\n架空の装置。\n【請求項2】\n架空の記録装置。\n【請求項3】\n請求項1、2に記載の架空の表示装置。";
+    inputs.draft = parseComparisonSource(text, 11, "draft"); selection.draftClaimNos = [3];
+    expect(() => makePlan(inputs, selection)).toThrow("source_review_required");
+  });
   it("partitions all source characters losslessly, including whitespace and surrogate boundaries", () => {
     const { inputs, selection } = fictionalInputs();
     inputs.draft = parseComparisonSource(`【請求項1】\n${"あ".repeat(119)}𠮷é\r\n${" ".repeat(121)}${"装置。".repeat(80)}末尾の否定条件。`, 11, "draft-11");
