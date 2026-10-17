@@ -58,11 +58,13 @@ describe("whole-unit review transport", () => {
       expect(source.referenceLogic.relations).toEqual(original.referenceLogic.relations);
       expect(source.referenceLogic.scopes).toEqual(original.referenceLogic.scopes.map(scope => ({ claimNo: scope.claimNo,
         closureClaimNos: [...scope.guaranteedClaimNos, ...scope.conditionalClaimNos].sort((a, b) => a - b) })));
-      source.claims.forEach(([claimNo, dependsOn, text, evidence], at) => {
-        expect(claimNo).toBe(original.claims[at].claimNo); expect(dependsOn).toEqual(original.claims[at].dependsOn);
+      source.claims.forEach((claim, at) => {
+        expect(claim.claimNo).toBe(original.claims[at].claimNo); expect(claim.dependsOn).toEqual(original.claims[at].dependsOn);
+        expect(claim.segments).toEqual(original.claims[at].segments);
+        const text = claim.segments.map(([, part]) => part).join("");
         expect(text).toBe(original.claims[at].segments.map(([, part]) => part).join(""));
         let start = 0;
-        expect(evidence.slice(1).map((end, offset) => { const entry = [evidence[0] + offset, text.slice(start, end)]; start = end; return entry; }))
+        expect(claim.segments.map(([id, part]) => { const entry = [id, text.slice(start, start + part.length)]; start += part.length; return entry; }))
           .toEqual(original.claims[at].segments);
         expect(start).toBe(text.length);
       });
@@ -118,18 +120,32 @@ describe("whole-unit review transport", () => {
     const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(pair => ({ ...pair,
       baseObservation: "基準の確認値を翌朝に消去する。", candidateObservation: "候補の末尾条件を保持する。" })));
     const logical = reviewInput(plan, drafts), source = reviewTransportInput(logical).base;
-    const claim = source.claims.find(c => c[0] === 1)!;
-    expect(claim[2].length).toBeGreaterThan(15000);
-    expect(claim[2]).toContain("𠮷😀e\u0301の末尾条件は温度が七度を超えると青色弁を閉じる");
+    const claim = source.claims.find(c => c.claimNo === 1)!, text = claim.segments.map(([, part]) => part).join("");
+    expect(text.length).toBeGreaterThan(15000);
+    expect(text).toContain("𠮷😀e\u0301の末尾条件は温度が七度を超えると青色弁を閉じる");
     let start = 0;
-    const reconstructed = claim[3].slice(1).map((end, index) => {
-      const segment = [claim[3][0] + index, claim[2].slice(start, end)]; start = end; return segment;
+    const reconstructed = claim.segments.map(([id, part]) => {
+      const segment = [id, text.slice(start, start + part.length)]; start += part.length; return segment;
     });
     expect(reconstructed).toEqual(logical.base.claims.find(c => c.claimNo === 1)!.segments);
-    expect(start).toBe(claim[2].length);
+    expect(start).toBe(text.length);
     expect(source.referenceLogic.relations).toEqual(logical.base.referenceLogic.relations);
     expect(source.referenceLogic.scopes.find(s => s.claimNo === 2)?.closureClaimNos).toEqual([1, 2]);
     expect(logical.base.referenceLogic.scopes.find(s => s.claimNo === 2)).toHaveProperty("guaranteedClaimNos");
+  });
+
+  it("does not reinterpret a unit number as evidence when it points to the wrong source", () => {
+    const { inputs, selection } = fictionalInputs(), plan = makePlan(inputs, selection);
+    const drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(pair => ({ ...pair,
+      baseObservation: "基準の末尾条件。", candidateObservation: "候補の末尾条件。" })));
+    const logical = reviewInput(plan, drafts), input = reviewTransportInput(logical), raw = response(logical);
+    const candidateUnit = input.fields[1][1];
+    expect(input.fields[1][0]).toContain("candidateObservation");
+    expect(input.base.claims.flatMap(c => c.segments).some(([id]) => id === candidateUnit)).toBe(true);
+    raw.checks[candidateUnit].evidenceIds = [candidateUnit];
+    const before = JSON.stringify(raw), decoded = decodeReviewTransport(logical, raw);
+    expect(() => inspectReviewCoverage(logical, decoded)).toThrow("ai_incomplete");
+    expect(JSON.stringify(raw)).toBe(before);
   });
 
   it("covers more than200 total references without adding a global cap or accepting legacy per-row references", () => {

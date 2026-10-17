@@ -41,9 +41,9 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "review") {
-        expect(chunk.base.claims[0][2]).toBe(inputs.draft.source.claims[0].text);
+        expect(chunk.base.claims[0].segments.map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
         expect(chunk.fields).toHaveLength(10);
-        expect(chunk.documents.map(d => d.source.claims[0][2])).toEqual(inputs.documents.map(d => d.source.claims[0].text));
+        expect(chunk.documents.map(d => d.source.claims[0].segments.map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
         return response(fictionalReview(chunk));
       }
       expect(chunk.base.claims[0].segments.map(s => s.text).join("")).toBe(inputs.draft.source.claims[0].text);
@@ -174,7 +174,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
-      expect(body.reasoning).toEqual({effort:"low"});
+      expect(body.reasoning).toEqual({effort:phase === "review" ? "medium" : "low"});
       expect(body.max_output_tokens).toBe(phase === "review" ? 22528 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);

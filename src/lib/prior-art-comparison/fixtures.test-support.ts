@@ -62,8 +62,7 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
 /** Fictional raw transport only; never evidence of semantic quality. */
 export function fictionalTransportReview(input: ReturnType<typeof reviewTransportInput>) {
   const lastEvidence = (source: typeof input.base, claimNo: number) => {
-    const claim = source.claims.find(c => c[0] === claimNo)!;
-    return claim[3][0] + claim[3].length - 2;
+    return source.claims.find(c => c.claimNo === claimNo)!.segments.at(-1)![0];
   };
   return { draftDigest: input.draftDigest,
     referenceChecks: input.units.flatMap(unit => (typeof unit === "string" ? [] : unit.filter((_, part) => part % 2 === 1)))
