@@ -100,10 +100,13 @@ function relationPhrase(text: string, mentions: ReturnType<typeof reviewReferenc
   if (!prefixMatch) throw Error();
   const tail = text.slice(mentions[last].end);
   const noun = /^(?:の[\p{Script=Han}\p{Script=Katakana}ー々A-Za-z0-9０-９・／/]+)?[\t ]*/u.exec(tail)![0];
-  const predicate = /^(を|に)[\t ]*(直接(?:に)?[\t ]*)?(継承|引用|従属)(?:する|し)(?=[\t ]*(?:[、，,。．]|$))/u.exec(tail.slice(noun.length));
+  const predicate = /^(を|に)[\t ]*(直接(?:に)?[\t ]*)?(継承|引用|従属)する/u.exec(tail.slice(noun.length));
   if (!predicate || (predicate[3] === "従属" ? predicate[1] !== "に" : predicate[1] !== "を")) throw Error();
   const suffix = tail.slice(noun.length + predicate[0].length);
-  if (/^[\t ]*[、，,][\t ]*(?:と(?:いう|の|は)|可能|場合|なら|仮定|記述|説明)/u.test(suffix)) throw Error();
+  // Close the complete unit instead of trying to enumerate negative suffixes.
+  // Even an apparently affirmative comma/continuative clause can qualify or
+  // deny this relation later; those unsupported forms must stop the reply.
+  if (!/^\s*(?:[。．]\s*)?$/u.test(suffix)) throw Error();
   const directPositions = [
     ...(prefixMatch[1] ? [prefixStart + prefix.indexOf("直接")] : []),
     ...(predicate[2] ? [mentions[last].end + noun.length + predicate[0].indexOf("直接")] : []),
@@ -113,8 +116,9 @@ function relationPhrase(text: string, mentions: ReturnType<typeof reviewReferenc
 
 /** Narrow necessary evidence of a scope finding, not sufficient proof of its
  * semantic truth. Only the supported affirmative phrase forms above qualify;
- * ambiguous subjects, quotation, negation, hedges and unsupported wording stop
- * the reply, and are never promoted to a consistent verdict. */
+ * only a finite affirmative predicate at the unit end qualifies. Ambiguous
+ * subjects, quotation, negation, hedges, continuations and unsupported wording
+ * stop the reply, and are never promoted to a consistent verdict. */
 export function validateReviewScopeWitness(
   logical: ReturnType<typeof reviewInput>, targetId: string,
   unit: { start: number; end: number; text: string }, referenceOrdinal: number, value: unknown,

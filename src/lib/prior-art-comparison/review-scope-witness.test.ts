@@ -84,6 +84,9 @@ describe("literal selected-scope rejection witnesses", () => {
     "候補側は請求項4を継承しない。", "候補側は請求項4を引用しない。",
     "候補側は請求項4を継承するとは限らない。", "候補側は請求項4を継承する可能性がある。",
     "候補側は請求項4を継承し得る。", "候補側は請求項4を継承する、という仮定を置く。",
+    "候補側は請求項4を継承する、わけではない。", "候補側は請求項4を継承する，わけではない。",
+    "候補側は請求項4を継承する,わけではない。", "候補側は請求項4を継承する 、 わけではない。",
+    "候補側は請求項4を継承する、冷媒を加熱する。", "候補側は請求項4を継承し、冷媒を加熱する。",
     "候補側は「請求項4を継承する」と述べる。", "「候補側は請求項4を継承する。」",
     "候補側は請求項4の装置。",
   ])("does not treat an unsupported, negative or quoted relation as proof: %s", text => {
@@ -103,6 +106,9 @@ describe("literal selected-scope rejection witnesses", () => {
   });
   it.each([
     "候補側は請求項1に直接従属しない。", "候補側は請求項1に直接従属するとは限らない。",
+    "候補側は請求項1に直接従属する、わけではない。", "候補側は請求項1に直接従属する，わけではない。",
+    "候補側は請求項1に直接従属する,わけではない。", "候補側は請求項1に直接従属する、記録する。",
+    "候補側は請求項1に直接従属し、冷媒を加熱する。",
     "候補側は請求項1の制御器へ直接接続する。", "候補側は請求項1の制御器に直接従属する。",
     "候補側は請求項1の構成を継承し、冷媒を直接加熱する。",
     "候補側は請求項1を引用し、直接加熱する。", "候補側は「直接」という語で請求項1に従属する。",
@@ -110,9 +116,14 @@ describe("literal selected-scope rejection witnesses", () => {
   ])("does not borrow a negative, quoted or technical directly: %s", text => {
     expect(() => check(text, direct)).toThrow("ai_incomplete");
   });
-  it("retains a real inheritance assertion despite a later technical directly", () => {
-    expect(() => check("候補側は請求項4の構成を継承し、冷媒を直接加熱する。", ancestor)).not.toThrow();
+  it("stops unsupported continuations without changing a standalone true inheritance finding", () => {
+    expect(() => check("候補側は請求項4の構成を継承し、冷媒を直接加熱する。", ancestor)).toThrow("ai_incomplete");
+    expect(() => check("候補側は請求項4の構成を継承する。", ancestor)).not.toThrow();
     expect(() => check("候補側は直接請求項1に従属する。", direct)).not.toThrow();
+  });
+  it.each(["", "。", "．", " \t", "。\t\r\n　"])("allows only whitespace and an optional final full stop: %j", suffix => {
+    expect(() => check(`候補側は請求項4を継承する${suffix}`, ancestor)).not.toThrow();
+    expect(() => check(`候補側は請求項1に直接従属する${suffix}`, direct)).not.toThrow();
   });
   it("uses unit-local ordinals without counting or rewriting Unicode text", () => {
     const text = "𠮷。候補側は請求項四の装置を継承する。", e = example(text), before = JSON.stringify(e.input);
