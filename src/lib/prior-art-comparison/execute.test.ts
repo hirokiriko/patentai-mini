@@ -143,17 +143,17 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (input.task === "compare") return response(fictionalBatch(input));
       const value = fictionalReview(input);
       if (mode === "http") return new Response(SECRET, { status: 429 });
-      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0].unitChecks[0], { verdict: mode });
+      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0].unitChecks[0].contrasts[0], { verdict: mode });
       if (mode === "missing") value.checks.pop();
       if (mode === "duplicate") value.checks[1] = value.checks[0];
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
-      if (mode === "missing_support") value.checks[2].unitChecks[0].evidenceIds = [];
-      if (mode === "wrong_side") value.checks[0].unitChecks[0].evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
+      if (mode === "missing_support") value.checks[2].unitChecks[0].contrasts[0].evidenceIds = [];
+      if (mode === "wrong_side") value.checks[0].unitChecks[0].contrasts[0].evidenceIds = [input.documents[0].source.claims[0].segments[0][0]];
       if (mode === "legacy_wire") Object.assign(value, { sourceFacts: [] });
-      if (mode === "evidence_id") value.checks[0].unitChecks[0].evidenceIds = ["c999:1:0"];
+      if (mode === "evidence_id") value.checks[0].unitChecks[0].contrasts[0].evidenceIds = [999999];
       if (mode === "anchor" || mode === "valid_negative") {
-        Object.assign(value.checks[0].unitChecks[0], { verdict: "inconsistent",
-          rejectedTargetAnchor: mode === "anchor" ? "当該文に存在しない断定" : input.targets[0].text.slice(0, input.targets[0].unitStarts[1]) });
+        Object.assign(value.checks[0].unitChecks[0].contrasts[0], { verdict: "inconsistent",
+          rejectedTargetSpan: mode === "anchor" ? [0, 999] : [0, input.targets[0].unitStarts[1] ?? input.targets[0].text.length] });
       }
       if (mode === "valid_negative") validNegativeProtocolPassed = inspectReviewCoverage(input, value).checks[0].verdict === "inconsistent";
       return response(value, mode === "unknown_usage" ? null : undefined);
@@ -171,7 +171,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
       expect(body.reasoning).toEqual({effort:"low"});
-      expect(body.max_output_tokens).toBe(phase === "review" ? 32768 : 8192);
+      expect(body.max_output_tokens).toBe(phase === "review" ? 24576 : 8192);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
       return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
@@ -186,7 +186,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input),
-        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 32769 : 8193) : 30 });
+        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 24577 : 8193) : 30 });
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");

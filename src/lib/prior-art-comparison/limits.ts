@@ -1,4 +1,4 @@
-export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 230_000, requestMilliseconds: 210_000, inputBytes: 90_000, outputTokens: 8192, azureReasoningOutputTokens: 32768 } as const);
+export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 230_000, requestMilliseconds: 210_000, inputBytes: 90_000, outputTokens: 8192, azureReasoningOutputTokens: 24576 } as const);
 
 /** Reasoning and the visible structured answer share this output allowance. */
 export type ComparisonPhase = "generation" | "review";

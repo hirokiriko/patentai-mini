@@ -53,8 +53,9 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
       return { id: t.id, unitChecks: reviewTargetUnits(t.text).map(unit => ({ start: unit.start,
         referenceChecks: reviewReferenceMentions(t.text).filter(m => m.start >= unit.start && m.end <= unit.end)
           .map(m => ({ start: m.start, relation: "unspecified", operatorBasis: null }) as ReferenceRelationCheck),
-        evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
-        verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", rejectedTargetAnchor: null as string | null })) };
+        contrasts: [{ end: unit.end, kind: "technical" as "technical" | "reference_scope" | "reference_combination", referenceStart: null as number | null,
+          evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
+          verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", rejectedTargetSpan: null as [number, number] | null }] })) };
     }) };
 }
 export function fictionalSaved(): SavedComparison {

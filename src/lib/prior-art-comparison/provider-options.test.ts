@@ -25,7 +25,7 @@ describe("comparison-only reasoning",()=>{
   it("reserves reasoning output only for identified Azure GPT-5.4 comparisons",()=>{
     for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"]) {
       expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(8192);
-      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"review")).toBe(32768);
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"review")).toBe(24576);
     }
     for(const provider of ["openai.responses","google.generative-ai","unknown"])
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"})).toBe(8192);

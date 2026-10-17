@@ -8,7 +8,7 @@
 
 ## 有限な計画と検証
 
-既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。比較専用の同期API metadataは240秒、比較と保存前査読は単一の全体230秒、個別最大210秒とする。後続の呼出しも全体期限の残時間に制限され、各回210秒を保証するものではない。最大3回、retry 0。出力は生成8,192 tokens、既知Azure GPT-5.4の査読32,768 tokensとする。新規生成は最大4組・最大2回。全文とschemaとframing込み90,000bytes以下で、batch全体は最大4組を束ねるが文献単位のdecodeは従来の2組以下を維持する。収まらなければ4→3→2→1組へ下げ、完全な計画が生成最大2回に収まらなければ送信前に停止する。残る1回で全4組までを査読し、収まる2文献×2組は生成1回＋査読1回となる。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ね、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
+既存managedの参照閉包、比較計画、全組合せ検査、引用一意性・原文一致・UTF-16位置の検証をadapterから再利用する。明示した文献をAI screeningで落とさない。比較専用の同期API metadataは240秒、比較と保存前査読は単一の全体230秒、個別最大210秒とする。後続の呼出しも全体期限の残時間に制限され、各回210秒を保証するものではない。最大3回、retry 0。出力は生成8,192 tokens、既知Azure GPT-5.4の査読24,576 tokensとする。新規生成は最大4組・最大2回。全文とschemaとframing込み90,000bytes以下で、batch全体は最大4組を束ねるが文献単位のdecodeは従来の2組以下を維持する。収まらなければ4→3→2→1組へ下げ、完全な計画が生成最大2回に収まらなければ送信前に停止する。残る1回で全4組までを査読し、収まる2文献×2組は生成1回＋査読1回となる。査読は比較結果の再生成ではない。異なる候補文献の組を文献ID付きで束ね、3文献各1組にも対応する。旧6組の保存結果は引き続き読めるが、新規の5〜6組は範囲を絞る必要がある。
 
 時間枠は共有budget内の閉じた比較専用capabilityで適用し、通常処理とmanaged watchの35秒は変更しない。既存budgetとの入れ子、上限の上書き、scope終了後の新しい送信を拒否し、終了時には進行中の比較通信も中断する。比較の全体期限をtransportと生成/査読で共有する。費用・回数・入力/出力・usage照合・失敗後停止の条件は緩めない。新しい時間枠で実AIを行うには、そのheadと時間/回数/費用/期限に一致するOWNER承認が必要。
 
@@ -32,21 +32,23 @@
 
 査読の入力は指定請求項ごとの全原文参照範囲・版・参照分岐guide・組合せ・全生成欄を保持する。原文はgenerationの可逆分割を共有し、IDと本文のtupleで空白・反復を含む全片を渡す。代表引用はclaim/start/endを同じ原文へ結び付け、重複quote本文だけを省く。全sourceと全scopeの条件の意味を確認し、引用された抜粋だけへ評価を狭めない。
 
-各欄を句点単位へ可逆分割し、全文と各unitの開始位置を入力する。回答は各unitのreferenceChecks・evidenceIds・sourceComparison・verdict・rejectedTargetAnchorに集中する。AIが再作成するglobal facts/status、草稿の再要約/分類、欄単位の理由/番号/集約判定はraw契約から除く。これらを含む旧wireやreferenceChecksのない旧応答はstrict拒否し、自動移行・字段削除・旧回答の再分類はしない。対比文の旧80文字上限を撤廃し、総token/応答bytes境界で停止する。切断した説明を補完して合格にしない。
+各欄を句点単位へ可逆分割し、全文とunit開始位置を入力する。読点、請求項参照の始終、60 UTF-16前後の安全な位置をcontrastCutsで補助するが、意味境界とは扱わない。回答のcontrastsは隣接区間をまとめて条件・否定・結論の文脈を保持し、原順・無欠落・非重複にunitを被覆する。groupごとの根拠・対比・判定からunit判定を導出し、独立したunit自由判定は返させない。global facts/status、草稿の再要約、旧unit集約、文字列anchor等を含む旧wireはstrict拒否し、自動変換・字段削除・旧回答の再分類はしない。対比文の旧80文字上限は撤廃し、総token/応答bytes境界で停止する。切断した説明を補完して合格にしない。
 
 草稿の請求項参照表記は無損失のUTF-16 span `mentions=[start,end]` として示す。数字・全角数字・漢数字、範囲・スラッシュ・「まで」等の認識できる構文の位置だけであり、完全な日本語依存構造解析でもAND/ORの推論でもない。全対象文は引き続き読む。unit内の全mentionにreferenceChecksを一度ずつ返し、unspecified/all/any/unresolvedを区別する。all/anyのoperatorBasisはprovider schemaへ公開した量化語の完全一致・同じunit内のUTF-16位置・参照番号列の外であることを機械検査する。量化語が本当に当該参照へ係るかは独立意味QAで確認し、別対象からの借用を認めない。対応できない解釈はunresolvedかつuncertainで保存停止。unspecifiedは自動consistentにならず、他の実断定も検査する。新schema・構文情報は新digestへ拘束し、旧回答へ補充しない。
 
-構文情報の最悪枠も生成前に予約する。120/200 UTF-16以内の各欄で、最短参照表記4単位がlone-surrogate envelopeから節約するbytesと位置tupleの上限を比較し、key/framing等にさらに32bytes/欄を予約する。参照を多数含む最大長・Unicode混在の入力もこの保守枠以内であることを確認する。実際の査読要求は改めて同じ総90000bytes上限で検査し、本文・欄・原文を削って収めない。
+groupのkindはtechnical、reference_scope、reference_combinationを区別する。後二者は実在するreferenceStartへ束縛する。unspecifiedのreference_combinationはC/I/Uを問わず不正wireとし、参照番号scopeや技術断定を評価させる。group全体をCに固定せず、本当の番号範囲誤りはscopeのIで拒否できる。kindや対比内容の正しさは独立意味QAで確認する。
 
-全target/unitを一度ずつ照合し、欠落・重複・追加・境界改変・空の対比文・制御文字を拒否する。根拠IDは実際のcatalogに照合し、当該側・文献・参照閉包内の空白でないsegmentだけを許す。baseObservationは基準側のみ、candidateObservationは当該候補側のみ。確定した各unitには最低1根拠、common/differences/unconfirmedの欄全体には両側根拠を求める。片側ずつ述べる文に無関係な反対側根拠を要求しない。未知・重複・別文献・閉包外根拠はuncertainでも拒否する。uncertainは不足根拠を空配列で示せるため、Uを含む欄の両側根拠は未確定を許すが、保存不可。請求項番号は実際の根拠から導出し、選択番号で穴埋めしたり3件へ切り捨てたりしない。
+構文情報の最悪枠も生成前に予約する。120/200 UTF-16以内の欄で、読点の節約bytesがcut位置を賄い、最短4単位参照のtupleと2cutsの最大18bytesに対する不足を2bytes/参照で予約する。key/framingとUnicode grid変動に32bytes/欄を追加する。unit境界は二重送信しない。参照・読点を多数含む最大長・Unicode混在も保守枠以内で確認する。実際の査読要求は総90000bytesで再検査し、本文・欄・原文を削って収めない。
 
-inconsistentの各unitは、そのunit内に一意に完全一致する最大120 UTF16単位の問題引用文字列を返す。空白・不存在・反復による曖昧さ・隣文・サロゲート対途中・正規化差を拒否し、Localで位置を導出する。consistent/uncertainではnull。欄の集約はI＞U＞C、最初のnegativeは回答配列順でなく原文開始位置で決める。inspectReviewCoverageは構造検査のみで、validateReviewは形式が正しいnegative/uncertainも拒否する。派生レポートをrawへ再投入せず、元の回答を検証する。全unitがconsistentのときだけ元の草稿を保存し、保存v1は変更しない。
+全target/unit/groupを照合し、欠落・重複・追加・境界改変・空の対比文・制御文字を拒否する。査読専用の根拠IDはbase→documents→claims→segmentsの通算整数とし、0からの一意連続性を検査する。全文・順序・文献ID・版・請求項番号を保持し、claim内UTF-16累計位置から従来のstable keyをLocalで再構成する。対応表を重複送信せず、生成代表IDと保存v1は変更しない。根拠は当該側・文献・閉包内の空白でないsegmentだけを許す。baseObservationは基準側のみ、candidateObservationは当該候補側のみ。確定した各groupには最低1根拠、common/differences/unconfirmedの欄全体には両側根拠を求める。片側文へ無関係な反対側を要求しない。未知・重複・別文献・閉包外根拠はUでも拒否する。Uは空根拠を許すが保存不可。請求項番号は実根拠から導出し、穴埋めや切捨てをしない。
+
+IのgroupだけrejectedTargetSpanの整数2座標を返し、C/Uはnullとする。catalog境界、同じgroupとunitの内部、120 UTF16以下、非空白、unit内一意、サロゲート対を分断しないことを検査して原草稿から引用する。引用文字列の再生成・正規化・補修はしない。集約はI＞U＞C、最初のnegativeは原文順で決める。inspectReviewCoverageは構造検査だけで、validateReviewは正しいnegative/Uも拒否する。派生レポートをrawへ再投入せず、元回答を検証する。全groupがCのときだけ元の草稿を保存する。
 
 必要scope・参照枝・条件や断定の解釈を解決できなければ、それを必要とするunitをuncertainにする。番号範囲/スラッシュ/「まで」/継承から全項ANDを補わない。択一枝に共通する技術条件の上位要約と、選択群・必須部分・発動条件を変える省略を区別する。主体・修飾・経路/順序/位置・否定・全member・閾値・終了/例外条件を保持する。隣文の正しさで誤りを救済せず、関連語や引用の存在だけで合格にしない。構造検査は対比文の真偽を保証せず、全原文条件・全説明のrootと独立レビューによる意味QAが必要である。
 
 選択集合を全体として定義する断定は、原文の許容集合全体と比較する。列挙を狭めた定義を部分例示へ読み替えず、「のみ」の有無だけで限定を捨てない。「含む/一例/少なくとも一部」等も自動合格の合図にせず、文全体の集合・修飾範囲を読む。unconfirmedも留保命題自体を査読し、原文が同一性不明を支持するならconsistentとする。対象構成の不明と、留保の妥当性を判断できないことを区別する。査読の対比説明自身の全称・否定・限定も全原文へ照合し、根拠IDは必要な文節と結論までを示す。正しく誤りを指摘しても、理由に別の排除・一般化・根拠欠落があれば意味品質不合格である。
 
-既知Azure GPT-5.4の比較だけ、生成low/8192、probeと保存前査読low/32768を明示引数で分ける。対象は通常名・日付版・既存normal alias `patentai-gpt54` の完全一致で、aliasにはSDKのforceReasoningも指定する。ARMで実モデルを確認し、実SDKの段階別要求も送信前検査する。未知aliasやminiへ推測適用しない。OpenAIの既存low/8192、Googleのminimal/8192を維持する。共有transportの大出力例外はprivate comparison capability・normal・既知Azure model・low/mediumかつ単一user入力のJSON task=reviewだけ。生成、high/指定欠落、通常/managed/fast等の8192既定を変えない。段階識別は意味品質を保証せず、raw schema・全件独立QA・保存前gateを引き続き適用する。モデル・Azure設定は変更しない。
+既知Azure GPT-5.4の比較だけ、生成low/8192、probeと保存前査読low/24576を明示引数で分ける。対象は通常名・日付版・既存normal alias `patentai-gpt54` の完全一致で、aliasにはSDKのforceReasoningも指定する。ARMで実モデルを確認し、実SDKの段階別要求も送信前検査する。未知aliasやminiへ推測適用しない。OpenAIの既存low/8192、Googleのminimal/8192を維持する。共有transportの大出力例外はprivate comparison capability・normal・既知Azure model・low/mediumかつ単一user入力のJSON task=reviewだけ。生成、high/指定欠落、通常/managed/fast等の8192既定を変えない。段階識別は意味品質を保証せず、raw schema・全件独立QA・保存前gateを引き続き適用する。モデル・Azure設定は変更しない。
 
 新形式のprobe20はHTTP200/約165秒で全24文が完結したが、既知3誤り中1件の選択集合縮小を見逃し、査読理由の誤一般化・根拠不足・留保への過剰Uも残って意味品質不合格だった。AND補完による誤拒否の解消や構造PASSをTECHNICAL_GOにしない。Local補助工具が、正しい経路根拠の祖先番号1/2を認めず選択番号3を強制した過剰制約も別件として記録する。修正は次の新namespaceだけに適用し、旧応答・旧工具・旧不合格は保全する。新head・全検証/独立レビュー/CI・新operatorのstage別guard・全hash・費用/保持予約・具体的公開記録のreadback後に、新しい応答で実証する。
 
@@ -74,7 +76,7 @@ PDFとCSVは保存snapshotのみから生成し、再取得もAI送信0。既存
 
 ## 実行と受入判定
 
-査読は各欄の全文を句点単位へ可逆分割し、開始位置だけを補助情報として渡す。各文について草稿の実際の断定と、同じ対象の原文条件の対比を必須にする。文の欠落・重複・範囲外・空の照合、判定をサーバー側で集約し、不整合箇所は不整合と判定した文の中に限定する。正しい後半だけで欄全体を合格にしない。番号範囲から全条件の同時継承を推定しない。これらは確認範囲と集約の検査であり、対比文や意味判定の正しさは独立原文照合が必要。全文・保存v1・回数/時間/byte/token上限は維持する。
+査読は各欄の全文を句点unitと隣接区間の対比groupへ結び付ける。条件・否定・結論は全文脈で一緒に評価し、独立した技術断定・経路修飾・必須/任意の量化を一般的な要約へ置換しない。全groupの欠落・重複・範囲・根拠・判定を検査し、正しい後半だけで欄全体を合格にしない。番号範囲から同時継承を補わない。文字の被覆やkindは意味上の全断定被覆の証明ではなく、全原文と全説明の独立照合が必須。全文・保存v1・回数/時間/入力上限を維持する。
 
 - 通常の架空テスト: `pnpm test`、`pnpm lint`、`pnpm type-check`、`pnpm build`。
 - 専用実アプリ受入: build後、`PRIOR_ART_COMPARISON_ACCEPTANCE=1` と `PRIOR_ART_COMPARISON_DB_TEST=1` を明示し、既存Playwright packageを `PRIOR_ART_PLAYWRIGHT_MODULE` へ指定して `pnpm test scripts/prior-art-comparison-acceptance.test.ts --maxWorkers=1`。`DATABASE_URL`等が親にあれば空PG作成前に拒否する。専用PG16へ既存migrationだけを適用し、loopback・専用Chrome profile・架空principal/AI/Blob transportを使用する。実Azure認証/Storageの受入ではない。TXT multipart→実parser→架空Blob transport/実DB→原文選択まで照合する。各テストの資源だけをlabel照合して回収する。
@@ -96,3 +98,5 @@ rollbackは、署名したforward結果原本が実merged PRのhead/base/merge/t
 比較結果の確定・文献削除時の切離しは同一transaction内のDELETE RETURNINGと同一実resultIdのINSERTで行い、既存のSELECT/INSERT/DELETE権限だけを使用する。比較tableのUPDATE権限やsequence再設定を追加しない。専用DBの非管理者roleからcomparison_resultsのUPDATEをrevokeして検証する。通常配備前の既存権限確認は別で行い、watch/import用LOGINを流用・拡張しない。
 
 probe23は新しい参照span契約を使ったが、210秒でheaders未到達・0bytes・回答/usageなしとなり、328円を保持して後続を停止した。推論時間とservice待機を区別できず、意味品質は判定していない。比較査読だけlowへ戻す変更は実時間と品質を改善する候補であり、過去lowの不合格を解消したとは扱わない。同じ全原文・草稿・参照protocolを新応答で全件照合し、合格時だけ生成・保存前査読・保存/再表示/帳票へ進む。旧23のpolicy/manifest/台帳/lockと凍結証拠は不変更。
+
+probe24はlow/32768でHTTP200・約159秒の完全応答だったが、既知4誤りの検出1件、見逃し3件、範囲へのAND補完による誤拒否2件、原草稿と一致しない拒否引用2件、必要根拠不足が残り、形式・意味とも不合格だった。後続生成・査読・通常保存は停止し、旧応答/判定/unknown予約/実行時証拠を保持する。新しい対比groupと整数catalog、位置からの引用、Azure比較査読24576は未実証の候補で、無料検証・新費用証明・具体的実行記録・独立監査の後にだけ新しい応答で検証する。完全応答がtoken枠に収まらなければ停止し、切断や判定の緩和で採用しない。
