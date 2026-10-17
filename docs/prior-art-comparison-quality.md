@@ -34,7 +34,7 @@ provider schemaも実際の側別IDを選択肢に固定し、enumの件数・�
 
 不整合判定には、草稿内の正確な問題箇所をrejectedTargetSpanとして要求する。UTF-16 start/end、最大120単位のquoteを原欄へ照合し、空白だけ・範囲外・サロゲート対途中・別の文字列を拒否する。consistent/uncertainではnullとする。これは問題箇所と理由を結び付けるprotocol検査で、意味の正しさを証明しない。構造だけを照合するinspectReviewCoverageから保存を許可せず、実行経路のvalidateReviewは有効なnegative/uncertainも従来どおり拒否する。上位要約や単なる詳述省略へ、本文にない排他性・任意性を補って誤拒否しない。一方、網羅性・対象・必須/任意を変える省略は引き続き不整合とし、基準を緩めない。旧保存v1へ新しいguide/spanを要求しない。
 
-この比較のGPT-5.4 Responses呼出しだけは推論量lowを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)では未指定時noneである。共有AI選択、モデル、Azure設定は変更せず、Googleの既存minimal指定や他モデルの挙動は維持する。Azure deployment名から未知aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとlowを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取の実モデル確認に加え、実SDK要求がreasoning.effort=lowであることを送信前に検査する。推論tokensも出力8192枠の内数であり、条件整理の最大文字数からtoken数や所要時間の達成は保証できない。個別180秒/全体210秒/出力上限を超えた場合は全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
+この比較のAzure GPT-5.4 Responses呼出しだけは推論量mediumを明示する。[公式仕様](https://developers.openai.com/api/docs/models/gpt-5.4)にある同じモデルの設定を使用し、共有AI選択・モデル・Azure設定は変更しない。OpenAIの既存low、Googleのminimal指定や他モデルの挙動は維持する。未知Azure aliasの実モデルを推測してforceReasoningしない。例外は既存運用文書のnormal deployment `patentai-gpt54` の完全一致だけで、ARMで実モデルを確認し、この比較ではSDKのforceReasoningとmediumを併用する。miniや他のaliasには適用しない。実AI受入では正規ARM読取と実SDK要求のreasoning.effort=mediumを送信前に検査し、旧lowの承認範囲を流用しない。推論tokensも出力8192枠の内数であり、思考量を変えても出力不足や個別180秒/全体210秒超過なら全体停止する。推論指定や架空テストだけを実AIの意味品質合格にしない。
 
 ## 保存・整合・旧結果
 

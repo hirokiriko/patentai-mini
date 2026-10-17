@@ -105,7 +105,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe("gpt-5.4");
-      expect(body.reasoning).toEqual({effort:"low"});
+      expect(body.reasoning).toEqual({effort:"medium"});
       expect(body.max_output_tokens).toBe(8192);
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
