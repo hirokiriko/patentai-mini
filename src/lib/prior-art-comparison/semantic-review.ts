@@ -8,6 +8,9 @@ import { referenceLogicInput } from "./reference-logic";
 import { sourceSegments } from "./generation";
 import { reviewReferenceMentions, validateReferenceRelations, REFERENCE_ALL_WORDS, REFERENCE_ANY_WORDS } from "./reference-mentions";
 import { REVIEW_TRANSPORT_SYSTEM, reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
+import { sourceAnalysisInput, type SourceAnalysis } from "./source-analysis";
+import { generationBatches } from "./generation-batch";
+import { SYSTEM } from "./comparison";
 
 export type ReviewDraft = PairResult & { baseObservation: string; candidateObservation: string };
 export const REVIEW_FIELDS = ["baseObservation", "candidateObservation", "common", "differences", "unconfirmed"] as const;
@@ -45,7 +48,7 @@ export function reviewTargetIdentity(id: string) {
   const [docId, baseClaimNo, candidateClaimNo, field] = id.split(":");
   return { docId: Number(docId), baseClaimNo: Number(baseClaimNo), candidateClaimNo: Number(candidateClaimNo), field };
 }
-export function reviewInput(plan: readonly ManagedComparisonChunk[], drafts: readonly ReviewDraft[]) {
+export function reviewInput(plan: readonly ManagedComparisonChunk[], drafts: readonly ReviewDraft[], sourceAnalysis: SourceAnalysis = []) {
   const documents = [...new Set(plan.map(c => c.candidateId))].map(docId => ({ docId, source: unionSource(plan.filter(c => c.candidateId === docId).map(c => c.candidate)) }));
   const base = unionSource(plan.map(c => c.base));
   const pairs = drafts.map(draft => {
@@ -72,7 +75,16 @@ export function reviewInput(plan: readonly ManagedComparisonChunk[], drafts: rea
     return { ...partitioned, claims: partitioned.claims.map(({ segments, ...claim }) => ({ ...claim,
       segments: segments.map(segment => [evidenceOrdinal++, segment.text] as const) })) };
   };
-  const content = { base: { ...catalog(base, "b"), referenceLogic: logic(base, pairs.map(p => p.baseClaimNo)) },
+  // Raw logical-review inspection also accepts ungenerated diagnostic plans.
+  // Only supplied analyses require binding to actual generation batches.
+  const identities = sourceAnalysis.length ? generationBatches(plan, SYSTEM).flatMap(batch => sourceAnalysisInput(batch).sources) : [];
+  const analyses = sourceAnalysis.map(note => {
+    const original = identities.find(s => s.sourceDigest === note.sourceDigest);
+    if (!original) throw new ComparisonError("ai_incomplete");
+    return { ...note, side: original.side, docId: original.docId, selected: original.selected,
+      contextClaimNos: original.source.claims.map(c => c.claimNo) };
+  });
+  const content = { sourceAnalysis: analyses, base: { ...catalog(base, "b"), referenceLogic: logic(base, pairs.map(p => p.baseClaimNo)) },
     documents: documents.map(d => ({ ...d, source: { ...catalog(d.source, `c${d.docId}`),
       referenceLogic: logic(d.source, pairs.filter(p => p.docId === d.docId).map(p => p.candidateClaimNo)) } })), scopes, pairs,
     // IDs already bind the pair and field. Do not repeat that metadata for
@@ -135,12 +147,18 @@ export function assertReviewPlan(plan: readonly ManagedComparisonChunk[]): void 
   const drafts = plan.flatMap(c => c.pairs.map(p => ({ ...p, docId: c.candidateId, baseObservation: text(120), candidateObservation: text(120),
     common: text(200), differences: text(200), unconfirmed: text(120), baseEvidence: evidence, candidateEvidence: evidence })));
   if (!drafts.length || drafts.length > LIMITS.reviewPairs) throw new ComparisonError("plan_limit");
-  const input = reviewInput(plan, drafts);
+  const analyses = generationBatches(plan, SYSTEM).flatMap(batch => sourceAnalysisInput(batch).sources.map(s => ({ sourceDigest: s.sourceDigest, reading: text(90) })));
+  const input = reviewInput(plan, drafts, analyses);
   // Wire sentences preserve every character and expose exact reference slots.
   // Reserve field framing plus sentence/reference metadata against the maximal
   // nested-JSON surrogate envelope; dense punctuation, references and Unicode
   // are also measured with the full wire/schema and actual SDK serialization.
-  const metadataAllowance = input.targets.reduce((n, t) => n + 32 + Math.floor(t.text.length / 4) * 2, 0);
+  // In the marker form, each extra unit boundary costs three nested-JSON bytes,
+  // below the four bytes saved by its original Japanese full stop against the
+  // seven-byte lone-surrogate maximum. Reference TAB markers similarly cost
+  // six bytes, below the saving from even the shortest reference phrase.
+  // Reserve the increasing unit-index/reference-count digits separately.
+  const metadataAllowance = input.targets.length * 16;
   if (requestBytes(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input)) + metadataAllowance > LIMITS.inputBytes) throw new ComparisonError("plan_limit");
 }
 /** Resolve the new wire anchor without repairing or reinterpreting old replies.

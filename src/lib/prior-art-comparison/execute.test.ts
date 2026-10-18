@@ -7,6 +7,7 @@ import { SYSTEM } from "./comparison";
 import { inspectReviewCoverage } from "./semantic-review";
 import * as semanticReview from "./semantic-review";
 import type { reviewTransportInput } from "./review-transport";
+import { expandReviewTransportInput } from "./review-transport";
 import { parseComparisonSource } from "./source";
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
@@ -41,9 +42,10 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "review") {
-        expect(chunk.base.claims[0][2].map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
+        const expanded = expandReviewTransportInput(chunk);
+        expect(expanded.base.claims[0][2].map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
         expect(chunk.fields).toHaveLength(10);
-        expect(chunk.documents.map(d => d.source.claims[0][2].map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
+        expect(expanded.documents.map(d => d.source.claims[0][2].map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
         return response(fictionalReview(chunk));
       }
       expect(chunk.base.claims[0].segments.map(s => s.text).join("")).toBe(inputs.draft.source.claims[0].text);
@@ -55,10 +57,13 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(payloads.at(-1)).toContain("下回ると青色弁を開く");
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
-  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
+  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "missing_analysis", "foreign_analysis", "blank_analysis", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
     const { inputs, selection } = fictionalInputs(); const answer = fictionalBatch(batchInput(generationBatches(makePlan(inputs, selection), SYSTEM)[0]));
     if (mode === "quote") answer.results[0].baseEvidenceId = "unknown";
     if (mode === "missing_pair") answer.results = [];
+    if (mode === "missing_analysis") answer.sourceAnalysis.pop();
+    if (mode === "foreign_analysis") answer.sourceAnalysis[0].sourceDigest = "f".repeat(64);
+    if (mode === "blank_analysis") answer.sourceAnalysis[0].reading = "　 ";
     if (mode === "protocol_metadata") answer.results[0].unconfirmed = "quotable=falseのため比較できません。";
     const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
       if (mode === "secret_error") throw Error(SECRET);
@@ -145,22 +150,23 @@ describe("real installed SDK, guarded fictional transport", () => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
       const value = fictionalReview(input);
+      const expanded = expandReviewTransportInput(input);
       if (mode === "http") return new Response(SECRET, { status: 429 });
       if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0], { verdict: mode });
       if (mode === "missing") value.checks.pop();
       if (mode === "duplicate") value.checks[1] = value.checks[0];
       if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
       if (mode === "missing_support") value.checks[2].evidenceIds = [];
-      if (mode === "wrong_side") value.checks[0].evidenceIds = [input.documents[0].source.claims[0][2][0][0]];
+      if (mode === "wrong_side") value.checks[0].evidenceIds = [expanded.documents[0].source.claims[0][2][0][0]];
       if (mode === "legacy_wire") Object.assign(value, { sourceFacts: [] });
       if (mode === "evidence_id") value.checks[0].evidenceIds = [999999];
       if (mode === "anchor") Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetSpan: [0, 999] });
       if (mode === "valid_negative") {
         value.checks[0].verdict = "inconsistent";
-        const id = value.checks[0].evidenceIds[0], segment = input.base.claims.flatMap((c: [number, number[], [number, string][]]) => c[2])
-          .find(([key]: [number, string]) => key === id)!;
-        Object.assign(value.checks[0], { counterEvidence: { targetQuote: typeof input.units[0] === "string" ? input.units[0] : input.units[0].join(""),
-          sourceWitness: [{ evidenceId: id, quote: segment[1], occurrence: 1 }] } });
+        const id = value.checks[0].evidenceIds[0], segment = expanded.base.claims.flatMap(c => c[2])
+          .find(([key]) => key === id)!;
+        Object.assign(value.checks[0], { counterEvidence: { targetQuote: typeof expanded.units[0] === "string" ? expanded.units[0] : expanded.units[0].join(""),
+          sourceWitness: [{ evidenceId: id, quote: segment[1] }] } });
       }
       return response(value, mode === "unknown_usage" ? null : undefined);
     });

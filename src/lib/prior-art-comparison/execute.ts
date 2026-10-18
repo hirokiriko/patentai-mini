@@ -11,6 +11,7 @@ import { decodeReviewTransport, reviewTransportInput, reviewTransportSchemaFor }
 import type { z } from "zod";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
+import { mergeSourceAnalyses, validateSourceAnalysis, type SourceAnalysis } from "./source-analysis";
 
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
@@ -18,6 +19,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
   return withPriorArtComparisonBudget(async absolute => {
     const pairs: SavedComparison["pairs"] = [];
     const drafts: ReviewDraft[] = [];
+    const analyses: SourceAnalysis[] = [];
     try {
       const generate = async (system: string, prompt: string, schema: z.ZodType, phase: ComparisonPhase) => {
         if (absolute.aborted) throw new ComparisonError("ai_incomplete");
@@ -41,6 +43,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       };
       for (const batch of generationBatches(plan, SYSTEM)) {
         const answer = batchSchema.parse(await generate(SYSTEM, JSON.stringify(batchInput(batch)), batchSchemaFor(batch), "generation"));
+        analyses.push(validateSourceAnalysis(batch, answer.sourceAnalysis));
         if (answer.results.some(r => !batch.some(c => c.candidateId === r.docId))) throw new ComparisonError("ai_incomplete");
         for (const chunk of batch) {
           const results = answer.results.filter(r => r.docId === chunk.candidateId).map(r => ({
@@ -54,7 +57,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           }
         }
       }
-      const review = reviewInput(plan, drafts);
+      const review = reviewInput(plan, drafts, mergeSourceAnalyses(analyses));
       assertReviewSize(review);
       const rawReview = await generate(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(review)), reviewTransportSchemaFor(review), "review");
       validateReview(review, decodeReviewTransport(review, rawReview));

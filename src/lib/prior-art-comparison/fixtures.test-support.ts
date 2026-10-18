@@ -4,7 +4,7 @@ import type { generationInput } from "./generation";
 import type { batchInput } from "./generation-batch";
 import { reviewTargetIdentity, reviewTargetUnits, type reviewInput } from "./semantic-review";
 import { reviewReferenceMentions, type ReferenceRelationCheck } from "./reference-mentions";
-import type { reviewTransportInput } from "./review-transport";
+import { expandReviewTransportInput, type reviewTransportInput } from "./review-transport";
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -41,7 +41,8 @@ export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
   })) };
 }
 export function fictionalBatch(input: ReturnType<typeof batchInput>) {
-  return { results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
+  return { sourceAnalysis: input.sourceDigests.map(sourceDigest => ({ sourceDigest, reading: "架空原文の索引。意味品質の証明ではない。" })),
+    results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
 }
 export function fictionalReview(input: ReturnType<typeof reviewInput>) {
   return { draftDigest: input.draftDigest,
@@ -60,7 +61,8 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
     }) };
 }
 /** Fictional raw transport only; never evidence of semantic quality. */
-export function fictionalTransportReview(input: ReturnType<typeof reviewTransportInput>) {
+export function fictionalTransportReview(raw: ReturnType<typeof reviewTransportInput>) {
+  const input = expandReviewTransportInput(raw);
   const lastEvidence = (source: typeof input.base, claimNo: number) => {
     return source.claims.find(c => c[0] === claimNo)![2].at(-1)![0];
   };
@@ -74,7 +76,7 @@ export function fictionalTransportReview(input: ReturnType<typeof reviewTranspor
       ...(identity.field === "baseObservation" ? [] : [lastEvidence(input.documents.find(d => d.docId === identity.docId)!.source, identity.candidateClaimNo)]),
     ];
     return input.units.slice(firstUnitId, endUnitId).map((unit, index) => ({ unitId: firstUnitId + index,
-      sourceReading: "架空原文の条件。意味品質の実証ではない。", assertion: "fact" as const, counterEvidence: null,
+      assertion: "fact" as const, counterEvidence: null,
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
       evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
       verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", scopeWitness: null,

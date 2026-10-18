@@ -3,10 +3,12 @@ import { makePlan, validateAnswer } from "./comparison";
 import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalTransportReview } from "./fixtures.test-support";
 import { inspectReviewCoverage, reviewInput, reviewTargetUnits, validateReview } from "./semantic-review";
 import { reviewReferenceMentions } from "./reference-mentions";
-import { decodeReviewTransport, REVIEW_TRANSPORT_SYSTEM, reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
+import { decodeReviewTransport, REVIEW_TRANSPORT_SYSTEM, reviewTransportInput as packedReviewTransportInput, expandReviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
 import { parseComparisonSource } from "./source";
 import { requestBytes } from "./generation-batch";
 import { managedClaimContext, planManagedComparisons } from "../patent-watch/managed-claims";
+
+const reviewTransportInput = (logical: Parameters<typeof packedReviewTransportInput>[0]) => expandReviewTransportInput(packedReviewTransportInput(logical));
 
 function example(candidateClaimNo = 1) {
   const { inputs, selection } = fictionalInputs();
@@ -28,8 +30,8 @@ function response(logical: ReturnType<typeof reviewInput>) {
     const ids = [...(field === "candidateObservation" ? [] : [logical.base.claims.find(c => c.claimNo === Number(base))!.segments[0][0]]),
       ...(field === "baseObservation" ? [] : [logical.documents.find(d => d.docId === Number(doc))!.source.claims.find(c => c.claimNo === Number(candidate))!.segments[0][0]])];
     return reviewTargetUnits(target.text).map(unit => ({ unitId: unitId++,
-      sourceReading: "架空原文の条件。意味品質の実証ではない。", assertion: "fact" as "fact" | "reservation" | "mixed",
-      counterEvidence: null as null | { targetQuote: string; sourceWitness: { evidenceId: number; quote: string; occurrence: number }[] },
+      assertion: "fact" as "fact" | "reservation" | "mixed",
+      counterEvidence: null as null | { targetQuote: string; sourceWitness: { evidenceId: number; quote: string }[] },
       referenceChecks: reviewReferenceMentions(target.text).filter(m => m.start >= unit.start && m.end <= unit.end)
         .map(() => ({ relation: "unspecified" as "unspecified" | "all" | "any" | "unresolved", operatorBasis: null as { quote: "全て" | "又は"; occurrence: number } | null })),
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
@@ -49,7 +51,7 @@ function negative(logical: ReturnType<typeof reviewInput>, answer: ReturnType<ty
     .flatMap(s => s.claims).flatMap(c => c.segments).find(([key]) => key === id)!;
   answer.verdict = "inconsistent";
   answer.counterEvidence = { targetQuote: unit.text, sourceWitness: [{ evidenceId: id,
-    quote: source[1].includes("記録を保持する。") ? "記録を保持する。" : source[1], occurrence: 1 }] };
+    quote: source[1].includes("記録を保持する。") ? "記録を保持する。" : source[1] }] };
 }
 
 const wireText = (unit: ReturnType<typeof reviewTransportInput>["units"][number]) => typeof unit === "string" ? unit : unit.join("");
@@ -60,6 +62,21 @@ const fieldRows = (input: ReturnType<typeof reviewTransportInput>) => input.fiel
 const wireIds = (target: ReturnType<typeof fieldRows>[number]) => target.units.map((_, index) => target.firstUnitId + index);
 
 describe("whole-unit review transport", () => {
+  it("uses exact marker framing and retains literal LF/TAB through the array fallback", () => {
+    const { plan, drafts } = example();
+    drafts[0].common = "請求項1の共通条件。後続条件。";
+    let logical = reviewInput(plan, drafts), packed = packedReviewTransportInput(logical);
+    expect(packed.units).toEqual([]);
+    expect(packed.texts[2]).toBe("\t請求項1\tの共通条件。\n後続条件。");
+    expect(expandReviewTransportInput(packed).units.map(wireText).join(""))
+      .toBe(logical.targets.map(t => t.text).join(""));
+    drafts[0].common = "原文の\t文字。後続\n文字。";
+    logical = reviewInput(plan, drafts); packed = packedReviewTransportInput(logical);
+    expect(packed.texts).toEqual([]);
+    expect(expandReviewTransportInput(packed).units.map(wireText).join(""))
+      .toBe(logical.targets.map(t => t.text).join(""));
+  });
+
   it("keeps every source, scope, pair and field unchanged while numbering all units once", () => {
     const { logical } = example(), input = reviewTransportInput(logical);
     expect(input.task).toBe("review"); expect(input.draftDigest).not.toBe(logical.draftDigest);
@@ -123,7 +140,7 @@ describe("whole-unit review transport", () => {
         if (!slots.length) expect(typeof unit).toBe("string");
       });
     });
-    const decoded = decodeReviewTransport(logical, fictionalTransportReview(input));
+    const decoded = decodeReviewTransport(logical, fictionalTransportReview(packedReviewTransportInput(logical)));
     expect(decoded.checks[0].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([0, 1, 2]);
     expect(decoded.checks[1].unitChecks.map(unit => unit.referenceChecks.length)).toEqual([1, 1]);
   });
@@ -316,19 +333,19 @@ describe("whole-unit review transport", () => {
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
-  it.each(["missing", "blank_source", "target_absent", "target_repeated", "witness_absent", "wrong_side", "wrong_start", "wrong_occurrence", "empty_witness", "duplicate_witness", "control", "counter_for_c", "counter_for_u"])("refuses %s counter evidence without repairing the verdict", mode => {
+  it.each(["missing", "legacy_source", "target_absent", "target_repeated", "witness_absent", "wrong_side", "wrong_start", "wrong_occurrence", "empty_witness", "duplicate_witness", "control", "counter_for_c", "counter_for_u"])("refuses %s counter evidence without repairing the verdict", mode => {
     const { plan, drafts } = example(); drafts[0].baseObservation = "光を備える。光光を備える。";
     const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[mode === "target_repeated" ? 1 : 0];
     negative(logical, answer);
     const counter = answer.counterEvidence!;
     if (mode === "missing") answer.counterEvidence = null;
-    if (mode === "blank_source") answer.sourceReading = "　 ";
+    if (mode === "legacy_source") Object.assign(answer, {sourceReading:"legacy"});
     if (mode === "target_absent") counter.targetQuote = "温度上限を超える";
     if (mode === "target_repeated") counter.targetQuote = "光";
     if (mode === "witness_absent") counter.sourceWitness[0].quote = "原文に存在しない結論";
     if (mode === "wrong_side") counter.sourceWitness[0].evidenceId = logical.documents[0].source.claims[0].segments[0][0];
     if (mode === "wrong_start") counter.sourceWitness[0].evidenceId = 99999;
-    if (mode === "wrong_occurrence") counter.sourceWitness[0].occurrence = 2;
+    if (mode === "wrong_occurrence") Object.assign(counter.sourceWitness[0], {occurrence:2});
     if (mode === "empty_witness") counter.sourceWitness = [];
     if (mode === "duplicate_witness") counter.sourceWitness.push({ ...counter.sourceWitness[0] });
     if (mode === "control") counter.sourceWitness[0].quote += "\n";
@@ -352,7 +369,7 @@ describe("whole-unit review transport", () => {
     const segments = logical.base.claims[0].segments;
     expect(segments.length).toBeGreaterThan(1);
     answer.evidenceIds = segments.map(([id]) => id);
-    answer.counterEvidence!.sourceWitness = [{ evidenceId: segments[0][0], quote: text, occurrence: 1 }];
+    answer.counterEvidence!.sourceWitness = [{ evidenceId: segments[0][0], quote: text }];
     expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
     answer.evidenceIds.pop();
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
@@ -367,7 +384,7 @@ describe("whole-unit review transport", () => {
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
-  it("binds repeated source quotes to the requested occurrence without changing their text", () => {
+  it("rejects ambiguous starts inside a part and accepts an exact unique longer quote", () => {
     const { inputs, selection } = fictionalInputs(), body = "【請求項1】\n同条件で弁を閉じる。同条件で弁を閉じる。温度の記録を保持する。";
     inputs.draft = parseComparisonSource(body, 11, "draft");
     inputs.documents = [21, 22].map(id => parseComparisonSource(body, id, "candidate"));
@@ -376,10 +393,9 @@ describe("whole-unit review transport", () => {
     const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[0];
     negative(logical, answer);
     answer.counterEvidence!.sourceWitness[0].quote = "同条件で弁を閉じる。";
-    answer.counterEvidence!.sourceWitness[0].occurrence = 2;
-    expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
-    answer.counterEvidence!.sourceWitness[0].occurrence = 3;
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    answer.counterEvidence!.sourceWitness[0].quote = "同条件で弁を閉じる。温度の記録を保持する。";
+    expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
   });
 
   it.each(["document", "closure"])("rejects a counter witness from another %s even when its ID is included", mode => {
@@ -393,7 +409,7 @@ describe("whole-unit review transport", () => {
     negative(logical, answer);
     const other = logical.documents[mode === "document" ? 1 : 0].source.claims.find(c => c.claimNo === (mode === "document" ? 1 : 2))!.segments[0];
     answer.evidenceIds.push(other[0]);
-    answer.counterEvidence!.sourceWitness = [{ evidenceId: other[0], quote: other[1], occurrence: 1 }];
+    answer.counterEvidence!.sourceWitness = [{ evidenceId: other[0], quote: other[1] }];
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
@@ -420,8 +436,8 @@ describe("whole-unit review transport", () => {
       return { ...p, docId: c.candidateId, baseObservation: text(120), candidateObservation: text(120), common: text(200), differences: text(200), unconfirmed: text(120), baseEvidence: evidence, candidateEvidence: evidence };
     })));
     const make = (pattern: string) => makeWith(n => pattern.repeat(n).slice(0, n));
-    const size = (logical: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(reviewTransportInput(logical)), reviewTransportSchemaFor(logical));
-    const max = make("\ud800"), upper = size(max) + max.targets.reduce((sum, target) => sum + 32 + Math.floor(target.text.length / 4) * 2, 0);
+    const size = (logical: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(packedReviewTransportInput(logical)), reviewTransportSchemaFor(logical));
+    const max = make("\ud800"), upper = size(max) + max.targets.length * 16;
     expect(upper).toBeLessThanOrEqual(90000);
     for (const pattern of ["。\ud800", "。a", "、", "請求項一\ud800", "請求項1/2、", "𠮷。", "\ud842、\udc00"]) {
       const logical = make(pattern), input = reviewTransportInput(logical);
@@ -474,8 +490,8 @@ describe("whole-unit review transport", () => {
     const ids = fieldRows(wire).flatMap(wireIds);
     expect(fieldRows(wire)).toHaveLength(20); expect(ids).toHaveLength(1540);
     expect(ids[999]).toBe(999); expect(ids[1000]).toBe(1000); expect(ids.at(-1)).toBe(1539);
-    const size = (input: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(reviewTransportInput(input)), reviewTransportSchemaFor(input));
-    const allowance = maximum.targets.reduce((sum, target) => sum + 32 + Math.floor(target.text.length / 4) * 2, 0);
+    const size = (input: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(packedReviewTransportInput(input)), reviewTransportSchemaFor(input));
+    const allowance = maximum.targets.length * 16;
     expect(size(actual)).toBeLessThanOrEqual(size(maximum) + allowance);
     expect(fieldRows(wire).map(target => target.units.map(wireText).join(""))).toEqual(actual.targets.map(target => target.text));
   });

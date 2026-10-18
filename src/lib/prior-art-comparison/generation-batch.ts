@@ -4,6 +4,7 @@ import { assertGenerationEvidence, generationInput, generationSchema } from "./g
 import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
+import { sourceAnalysisInput, sourceAnalysisSchema, sourceAnalysisSchemaFor } from "./source-analysis";
 
 // Combine only identical source versions; claim text is never summarized.
 export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSet {
@@ -20,6 +21,7 @@ export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSe
 export function batchInput(chunks: readonly ManagedComparisonChunk[]) {
   const base = unionSource(chunks.map(c => c.base));
   return { task: "compare" as const,
+    sourceDigests: sourceAnalysisInput(chunks).sources.map(s => s.sourceDigest),
     base: { ...generationInput({ ...chunks[0], base }).base,
       referenceLogic: referenceLogicInput(base, [...new Set(chunks.flatMap(c => c.pairs.map(p => p.baseClaimNo)))]) },
     documents: chunks.map(chunk => {
@@ -29,7 +31,7 @@ export function batchInput(chunks: readonly ManagedComparisonChunk[]) {
   };
 }
 const resultSchema = generationSchema.shape.results.element.extend({ docId: z.number().int().positive() });
-export const batchSchema = z.object({ results: z.array(resultSchema).min(1).max(LIMITS.reviewPairs) }).strict();
+export const batchSchema = z.object({ sourceAnalysis: sourceAnalysisSchema, results: z.array(resultSchema).min(1).max(LIMITS.reviewPairs) }).strict();
 export type BatchAnswer = z.infer<typeof batchSchema>;
 
 export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
@@ -37,7 +39,7 @@ export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
   const ids = (sources: (typeof input.base)[]) => [...new Set(sources.flatMap(s => s.claims.flatMap(c => c.segments.filter(s => s.quotable).map(s => s.id))))];
   const base = ids([input.base]), candidate = ids(input.documents.map(d => d.candidate));
   if (base.length + candidate.length > 1000 || [base, candidate].some(v => v.length > 250 && v.join("").length > 15000)) throw new ComparisonError("plan_limit");
-  return batchSchema.extend({ results: z.array(resultSchema.extend({ baseEvidenceId: z.enum(base), candidateEvidenceId: z.enum(candidate) })).min(1).max(LIMITS.reviewPairs) });
+  return batchSchema.extend({ sourceAnalysis: sourceAnalysisSchemaFor(chunks), results: z.array(resultSchema.extend({ baseEvidenceId: z.enum(base), candidateEvidenceId: z.enum(candidate) })).min(1).max(LIMITS.reviewPairs) });
 }
 export function requestBytes(system: string, prompt: string, schema: z.ZodType): number {
   return Buffer.byteLength(JSON.stringify({ system, prompt, schema: z.toJSONSchema(schema) }), "utf8") + 8192;

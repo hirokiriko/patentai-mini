@@ -33,7 +33,18 @@ globalThis.fetch = async (url, init) => {
   if (target.protocol === "http:" && ["127.0.0.1", "localhost"].includes(target.hostname)) return originalFetch(url, init);
   if (target.origin !== "https://example.invalid" || !target.pathname.endsWith("/responses")) throw Error("external_transport_forbidden");
   const body = JSON.parse(init.body);
-  const chunk = JSON.parse(body.input[1].content[0].text);
+  const packed = JSON.parse(body.input[1].content[0].text);
+  // Fixture-side inverse, independent of the product's inspection helper.
+  // Assert the actual full originals/tails below, after recovering every part.
+  const expand = source => ({ ...source, claims: source.claims.map(([no, refs, first, end]) =>
+    [no, refs, packed.parts.slice(first, end).map((part, at) => {
+      if (Array.isArray(part) && part[0] !== first + at) throw Error("fixture_part_id");
+      return [first + at, Array.isArray(part) ? part[1] : part];
+    })]) });
+  const chunk = packed.task === "review" ? { ...packed, base: expand(packed.base),
+    documents: packed.documents.map(d => ({ ...d, source: expand(d.source) })),
+    units: packed.texts.length ? packed.texts.flatMap(text => text.split("\n").map(unit => unit.includes("\t") ? unit.split("\t") : unit)) : packed.units,
+  } : packed;
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
   const fullText = claim => Array.isArray(claim) ? claim[2].map(([, text]) => text).join("") :
@@ -56,11 +67,12 @@ globalThis.fetch = async (url, init) => {
         ...(field==="baseObservation"?[]:[lastEvidence(chunk.documents.find(d=>d.docId===Number(docId)).source,candidateNo)])];
       const witness=[chunk.base,...chunk.documents.map(d=>d.source)].flatMap(s=>s.claims).flatMap(c=>c[2]).find(([key])=>key===ids[0]);
       return chunk.units.slice(firstUnitId,endUnitId).map((unit,i)=>({unitId:firstUnitId+i,
-        sourceReading:"架空原文の条件。意味品質の実証ではない。",assertion:"fact",
-        counterEvidence:mode==="review-reject"?{targetQuote:typeof unit==="string"?unit:unit.join(""),sourceWitness:[{evidenceId:ids[0],quote:witness[1],occurrence:1}]}:null,
+        assertion:"fact",
+        counterEvidence:mode==="review-reject"?{targetQuote:typeof unit==="string"?unit:unit.join(""),sourceWitness:[{evidenceId:ids[0],quote:witness[1]}]}:null,
         kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
         sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));
-    }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
+    }) } : { sourceAnalysis: chunk.sourceDigests.map(sourceDigest => ({ sourceDigest, reading: "架空原文の索引。意味品質の実証ではない。" })),
+    results: chunk.documents.flatMap(document => document.pairs.map(pair => {
     const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
     const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
     const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;
