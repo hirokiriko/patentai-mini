@@ -6,7 +6,7 @@ const binding = { executionId: "11111111-1111-4111-8111-111111111111", head: "a"
   policyHash: "b".repeat(64), materialsHash: "c".repeat(64), measurementHash: "d".repeat(64),
   approvalHash: "e".repeat(64), publicReadbackHash: "f".repeat(64), endpoint: "https://example.invalid/responses", deployment: "patentai-gpt54" };
 const decision = { status: "OWNER_APPROVED" as const, planId: PLAN.id, maximumNewSends: 5,
-  maximumReservationYen: 734, maximumAi: 391100000, maximumTotal: 531100000, expiresAt: PLAN.approvedExpiresAt };
+  maximumReservationYen: 734, maximumAi: 395000000, maximumTotal: 535000000, expiresAt: PLAN.approvedExpiresAt };
 const packet = { system: "Fictional", prompt: JSON.stringify({ task: "read_sources" }), schema: { type: "object" } };
 const body = JSON.stringify({ model: binding.deployment, input: [{ role: "developer", content: packet.system },
   { role: "user", content: [{ type: "input_text", text: packet.prompt }] }], max_output_tokens: 8192,
@@ -29,8 +29,8 @@ afterEach(() => vi.restoreAllMocks());
 describe("protected-parent revalidation adapter", () => {
   it("records exact request before reservation ACK and exact response before reconciliation", async () => {
     const f = fixture(); await f.send();
-    expect(f.calls).toEqual(["admit", "claim", "request-40.json", "reserve", "transport", "provider-response-40.json", "reconcile", "validate", "answer-40.json"]);
-    expect(Buffer.from(f.records.get("request-40.json")!).toString()).toBe(body);
+    expect(f.calls).toEqual(["admit", "claim", "request-42.json", "reserve", "transport", "provider-response-42.json", "reconcile", "validate", "answer-42.json"]);
+    expect(Buffer.from(f.records.get("request-42.json")!).toString()).toBe(body);
     const event = f.parent.mock.calls.find(([command]) => command === "reconcile");
     expect(event).toBeDefined();
     expect(f.bridge.snapshot().completed).toBe(1);
@@ -39,7 +39,7 @@ describe("protected-parent revalidation adapter", () => {
     const f = fixture(); f.parent.mockImplementation(async command => { if (command === fault) throw Error("fictional"); });
     await expect(f.send()).rejects.toThrow("revalidation_stopped"); await expect(f.send()).rejects.toThrow();
     expect(f.transport).toHaveBeenCalledTimes(fault === "reconcile" ? 1 : 0);
-    expect(f.records.has("answer-40.json")).toBe(false); expect(f.bridge.snapshot().stopped).toBe(true);
+    expect(f.records.has("answer-42.json")).toBe(false); expect(f.bridge.snapshot().stopped).toBe(true);
   });
   it("does not dispatch if the durable request record fails", async () => {
     const f = fixture(); f.record.mockRejectedValue(Error("fictional"));
@@ -55,7 +55,7 @@ describe("protected-parent revalidation adapter", () => {
     const f = fixture(); f.validateAnswer.mockRejectedValue(Error("fictional"));
     await expect(f.send()).rejects.toThrow();
     expect(f.parent.mock.calls.map(([command]) => command)).toEqual(["admit", "claim", "reserve", "reconcile", "stop"]);
-    expect(f.records.has("answer-40.json")).toBe(false);
+    expect(f.records.has("answer-42.json")).toBe(false);
   });
   it("propagates abort and rejects another concurrent request", async () => {
     const f = fixture(); let entered!: () => void; const started = new Promise<void>(r => { entered = r; });
@@ -66,13 +66,13 @@ describe("protected-parent revalidation adapter", () => {
   it("keeps transport response bytes identical", async () => {
     const f = fixture(), raw = await response().text(); f.transport.mockResolvedValue(new Response(raw));
     const received = await f.send(); expect(await received.text()).toBe(raw);
-    expect(revalidationHash(f.records.get("provider-response-40.json")!)).toBe(revalidationHash(raw));
+    expect(revalidationHash(f.records.get("provider-response-42.json")!)).toBe(revalidationHash(raw));
   });
   it("cancels the upstream body for a rejected HTTP response", async () => {
     const f = fixture(), cancel = vi.fn();
     f.transport.mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 429 }));
     await expect(f.send()).rejects.toThrow(); expect(cancel).toHaveBeenCalledOnce();
-    expect(f.records.has("provider-response-40.json")).toBe(false);
+    expect(f.records.has("provider-response-42.json")).toBe(false);
   });
   it("cancels a stalled response stream when the product aborts", async () => {
     const f = fixture(), cancel = vi.fn(), ctrl = new AbortController();
