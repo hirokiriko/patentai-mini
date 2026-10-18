@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { managedClaimContext, type ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { makePlan, SYSTEM } from "./comparison";
 import { fictionalInputs } from "./fixtures.test-support";
-import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
+import { batchInput, batchTransportInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
 import { LIMITS } from "./limits";
 import { parseComparisonSource } from "./source";
 
@@ -26,7 +26,7 @@ function prefix(plan: ManagedComparisonChunk[], n: number) {
   }
   return selected;
 }
-const bytes = (b: ManagedComparisonChunk[], system = "") => requestBytes(system, JSON.stringify(batchInput(b)), batchSchemaFor(b));
+const bytes = (b: ManagedComparisonChunk[], system = "") => requestBytes(system, JSON.stringify(batchTransportInput(b)), batchSchemaFor(b));
 
 describe("complete-source generation packing", () => {
   it("packs two documents with two pairs each without changing their original text, ancestors or identities", () => {
@@ -43,12 +43,10 @@ describe("complete-source generation packing", () => {
     }
     expect(bytes(batches[0], SYSTEM)).toBeLessThanOrEqual(LIMITS.inputBytes);
   });
-  it("preserves the two-pair document decoder for three-plus-one and four same-document pairs", () => {
-    const f = compact([1, 2, 3], [1]);
-    expect(generationBatches(f.plan, SYSTEM).map(count)).toEqual([2, 2]);
-    const last = { ...f.plan[1], pairs: [{ baseClaimNo: 1, candidateClaimNo: 4 }],
-      candidate: managedClaimContext(f.inputs.documents[0].source, [4]) };
-    expect(generationBatches([...f.plan.slice(0, 2), last], SYSTEM).map(count)).toEqual([2, 2]);
+  it("packs three-plus-one without changing the original two-pair decoder chunks", () => {
+    const { plan } = compact([1, 2, 3], [1]);
+    expect(plan.map(c => c.pairs.length)).toEqual([2, 1, 1]);
+    expect(generationBatches(plan, SYSTEM).map(count)).toEqual([4]);
   });
   it.each([3, 2])("falls back from four to %i complete pairs at the actual framed byte boundary", n => {
     const { plan } = compact(), first = prefix(plan, n), padding = "x".repeat(LIMITS.inputBytes - bytes(first));
@@ -63,12 +61,22 @@ describe("complete-source generation packing", () => {
     expect(bytes(plan, padding)).toBeGreaterThan(LIMITS.inputBytes);
     expect(generationBatches(plan, padding).map(count)).toEqual([1, 1]);
   });
-  it("retains the long-source two-generation path and rejects an entire oversized or excess-call plan", () => {
+  it("packs full long sources in one generation and rejects an entire oversized or excess-call plan", () => {
     const { inputs, selection } = fictionalInputs(), plan = makePlan(inputs, selection);
-    expect(generationBatches(plan, SYSTEM).map(count)).toEqual([1, 1]);
+    expect(generationBatches(plan, SYSTEM).map(count)).toEqual([2]);
     expect(() => generationBatches(plan, "x".repeat(LIMITS.inputBytes))).toThrow("plan_limit");
     const c = compact(), padding = "x".repeat(LIMITS.inputBytes - bytes(prefix(c.plan, 1)));
     expect(() => generationBatches(c.plan, padding)).toThrow("plan_limit");
     expect(() => generationBatches([...c.plan, c.plan[0]], SYSTEM)).toThrow("plan_limit");
+  });
+  it("omits only nonquotable transport IDs while retaining every original character and all usable evidence IDs", () => {
+    const { inputs, selection } = fictionalInputs(), plan = makePlan(inputs, selection);
+    const original = batchInput(plan), transport = batchTransportInput(plan);
+    const sources = [original.base, ...original.documents.map(d => d.candidate)];
+    const sent = [transport.base, ...transport.documents.map(d => d.candidate)];
+    expect(sources.some(s => s.claims.some(c => c.segments.some(p => !p.quotable)))).toBe(true);
+    expect(sent).toEqual(sources.map(s => ({ ...s, claims: s.claims.map(c => ({ ...c,
+      segments: c.segments.map(p => p.quotable ? p : { text: p.text, quotable: false }) })) })));
+    expect(batchInput(plan)).toEqual(original);
   });
 });

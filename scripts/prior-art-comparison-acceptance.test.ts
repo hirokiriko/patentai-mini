@@ -30,7 +30,7 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
   const headers = { "x-ms-client-principal": identity, origin: "https://fictional.invalid", "Content-Type": "application/json" };
   const counts = async () => { try { return (await readFile(join(output,"fixture-sends.jsonl"),"utf8")).trim().split("\n").length; } catch { return 0; } };
   const fixture = fictionalInputs();
-  const completeSends = generationBatches(makePlan(fixture.inputs, fixture.selection), SYSTEM).length + 1;
+  const completeSends = generationBatches(makePlan(fixture.inputs, fixture.selection), SYSTEM).length + 2;
   const post = (caseId: number, selection: Selection) => fetch(`${appOrigin}/api/cases/${caseId}/analyze`, {method:"POST",headers,body:JSON.stringify(selection)});
   const mode = (value: string) => writeFile(join(output,"fixture-mode.txt"),value);
   async function freshCase() {
@@ -110,6 +110,9 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       await page.getByText("根拠付き比較を保存しました。下の保存結果からPDF/CSVを取得できます。",{exact:true}).waitFor({timeout:55_000});
       await page.getByRole("link",{name:"PDFを取得"}).waitFor();
       expect(await counts()).toBe(completeSends);
+      const sends = (await readFile(join(output,"fixture-sends.jsonl"),"utf8")).trim().split("\n").map(line => JSON.parse(line));
+      expect(sends.map(s => s.phase)).toEqual(["read_sources","compare","review"]);
+      expect(sends.every(s => s.baseTailPresent && s.candidateTailPresent)).toBe(true);
       const rows=await pg.sql("select matched_elements_json from comparison_results where case_id=7 order by result_id");expect(rows).toHaveLength(2);
       const saved=JSON.parse(rows[0].matched_elements_json).priorArtComparison;expect(saved.inputs.draft.id).toBe(11);expect(saved.pairs.every((p:{baseEvidence:{start:number}})=>p.baseEvidence.start>15000)).toBe(true);
       await writeFile(join(output,"saved-fictional-result.json"),JSON.stringify(saved,null,2));

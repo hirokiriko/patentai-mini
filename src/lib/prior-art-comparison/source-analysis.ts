@@ -34,6 +34,11 @@ export function sourceAnalysisSchemaFor(chunks: readonly ManagedComparisonChunk[
   return sourceAnalysisSchema.element.extend({ sourceDigest: z.enum(sources.map(s => s.sourceDigest)) }).array().length(sources.length);
 }
 
+/** Structured-output transports require an object at the root. */
+export function sourceReadingSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
+  return z.object({ sourceAnalysis: sourceAnalysisSchemaFor(chunks) }).strict();
+}
+
 export function validateSourceAnalysis(chunks: readonly ManagedComparisonChunk[], raw: unknown): SourceAnalysis {
   try {
     const answer = sourceAnalysisSchemaFor(chunks).parse(raw), sources = sourceAnalysisInput(chunks).sources;

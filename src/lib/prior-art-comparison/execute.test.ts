@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalBatch, fictionalInputs, fictionalTransportReview as fictionalReview } from "./fixtures.test-support";
+import { fictionalBatch, fictionalInputs, fictionalSourceAnalysis, fictionalTransportReview as fictionalReview } from "./fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
@@ -9,6 +9,11 @@ import * as semanticReview from "./semantic-review";
 import type { reviewTransportInput } from "./review-transport";
 import { expandReviewTransportInput } from "./review-transport";
 import { parseComparisonSource } from "./source";
+import type { sourceAnalysisInput } from "./source-analysis";
+
+function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof reviewTransportInput> | ReturnType<typeof sourceAnalysisInput>) {
+  return input.task === "read_sources" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
+}
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
 function response(value: unknown, usage: unknown = { input_tokens: 100, output_tokens: 30 }, tier: Record<string, unknown> = { service_tier: "default" }) {
@@ -38,9 +43,10 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(String(url)).toMatch(/^https:\/\/example\.invalid\/openai\//);
       payloads.push(String(init?.body));
       const body = JSON.parse(String(init?.body));
-      const chunk: ReturnType<typeof batchInput> | ReturnType<typeof reviewTransportInput> = JSON.parse(body.input[1].content[0].text);
+      const chunk: Parameters<typeof stageAnswer>[0] = JSON.parse(body.input[1].content[0].text);
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
+      if (chunk.task === "read_sources") return response(fictionalSourceAnalysis(chunk));
       if (chunk.task === "review") {
         const expanded = expandReviewTransportInput(chunk);
         expect(expanded.base.claims[0][2].map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
@@ -53,26 +59,25 @@ describe("real installed SDK, guarded fictional transport", () => {
       return response(fictionalBatch(chunk));
     }));
     const saved = await executeComparison(inputs, selection);
-    expect(payloads).toHaveLength(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
+    expect(payloads).toHaveLength(3);
     expect(payloads.at(-1)).toContain("下回ると青色弁を開く");
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
-  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "missing_analysis", "foreign_analysis", "blank_analysis", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
+  it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
     const { inputs, selection } = fictionalInputs(); const answer = fictionalBatch(batchInput(generationBatches(makePlan(inputs, selection), SYSTEM)[0]));
     if (mode === "quote") answer.results[0].baseEvidenceId = "unknown";
     if (mode === "missing_pair") answer.results = [];
-    if (mode === "missing_analysis") answer.sourceAnalysis.pop();
-    if (mode === "foreign_analysis") answer.sourceAnalysis[0].sourceDigest = "f".repeat(64);
-    if (mode === "blank_analysis") answer.sourceAnalysis[0].reading = "　 ";
     if (mode === "protocol_metadata") answer.results[0].unconfirmed = "quotable=falseのため比較できません。";
-    const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       if (mode === "secret_error") throw Error(SECRET);
       if (mode === "http") return new Response(SECRET, { status: 429 });
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input), mode === "unknown_usage" ? null : mode === "excess_usage" ? { input_tokens: 999999, output_tokens: 30 } : undefined);
       return response(answer, mode === "unknown_usage" ? null : mode === "excess_usage" ? { input_tokens: 999999, output_tokens: 30 } : undefined);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(["quote", "missing_pair", "protocol_metadata"].includes(mode) ? 2 : 1);
   });
   it("does not send oversized plans", async () => {
     const { inputs, selection } = fictionalInputs();
@@ -81,6 +86,44 @@ describe("real installed SDK, guarded fictional transport", () => {
     await expect(executeComparison(inputs, selection)).rejects.toThrow("plan_limit");
     expect(transport).not.toHaveBeenCalled();
   });
+  it.each(["missing", "reordered", "duplicate", "foreign", "blank", "overlong"])("stops malformed source reading before generation: %s", async mode => {
+    const { inputs, selection } = fictionalInputs();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      expect(input.task).toBe("read_sources");
+      const answer = fictionalSourceAnalysis(input), notes = answer.sourceAnalysis;
+      if (mode === "missing") notes.pop();
+      if (mode === "reordered") notes.reverse();
+      if (mode === "duplicate") notes[1] = { ...notes[0] };
+      if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
+      if (mode === "blank") notes[0].reading = "　 ";
+      if (mode === "overlong") notes[0].reading = "甲".repeat(91);
+      return response(answer);
+    });
+    vi.stubGlobal("fetch", transport);
+    await expect(executeComparison(inputs, selection)).rejects.toMatchObject({ message: "ai_incomplete", stage: "source_reading", kind: "protocol_invalid" });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it.each(["http", "length", "coverage", "rejected"])("classifies a %s review without exposing raw errors or claiming semantic truth", async mode => {
+    const { inputs, selection } = fictionalInputs();
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      if (input.task !== "review") return response(stageAnswer(input));
+      if (mode === "http") return new Response(SECRET, { status: 429 });
+      const value = fictionalReview(input);
+      if (mode === "coverage") value.checks.pop();
+      if (mode === "rejected") value.checks[0].verdict = "uncertain";
+      const outer = await response(value).json();
+      if (mode === "length") { outer.status = "incomplete"; outer.incomplete_details = { reason: "max_output_tokens" }; outer.output[0].content[0].text = '{"checks":'; }
+      return Response.json(outer);
+    });
+    vi.stubGlobal("fetch", transport);
+    const error = await executeComparison(inputs, selection).catch(error => error);
+    expect(error).toMatchObject({ message: "ai_incomplete", stage: "review",
+      kind: mode === "http" ? "transport_unknown" : mode === "length" ? "output_incomplete" : mode === "rejected" ? "review_rejected" : "protocol_invalid" });
+    expect(JSON.stringify(error)).not.toContain(SECRET);
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
   it("keeps cross-document generated results attached to their own source", async()=>{
     const {inputs,selection}=fictionalInputs();
     inputs.draft=parseComparisonSource("【請求項1】\n基準は熱を記録する装置。",11,"基準");
@@ -88,18 +131,19 @@ describe("real installed SDK, guarded fictional transport", () => {
     selection.documents=inputs.documents.map(d=>({docId:d.id,claimNos:[1],identity:{publication:d.label,edition:"架空"}}));
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
+      return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch",transport);
     const saved=await executeComparison(inputs,selection);
-    expect(transport).toHaveBeenCalledTimes(2);
+    expect(transport).toHaveBeenCalledTimes(3);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
   });
-  it("sends all four complete pairs through one guarded generation and one review", async () => {
+  it("sends all four complete pairs through source reading, one generation and one review", async () => {
     const { inputs, selection } = compactFour(), phases: string[] = [];
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
       if (input.task === "review") { expect(input.fields).toHaveLength(20); return response(fictionalReview(input)); }
+      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
       expect(body.max_output_tokens).toBe(8192); expect(body.text.format.schema.properties.results.maxItems).toBe(4);
       expect(input.documents.map((d: {pairs: unknown[]}) => d.pairs.length)).toEqual([2, 2]);
       for (const d of input.documents) for (const c of d.candidate.claims)
@@ -109,14 +153,16 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     const saved = await executeComparison(inputs, selection);
-    expect(phases).toEqual(["compare", "review"]); expect(saved.pairs).toHaveLength(4);
+    expect(phases).toEqual(["read_sources", "compare", "review"]); expect(saved.pairs).toHaveLength(4);
     expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 2], [21, 3], [22, 2], [22, 3]]);
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
   it.each(["missing", "duplicate", "foreign-document", "cross-document-evidence", "truncated"])("stops a malformed four-pair generation: %s", async mode => {
     const { inputs, selection } = compactFour();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
-      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text), answer = fictionalBatch(input);
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
+      const answer = fictionalBatch(input);
       if (mode === "missing") answer.results.pop();
       if (mode === "duplicate") answer.results[3] = { ...answer.results[0] };
       if (mode === "foreign-document") answer.results[0].docId = 999;
@@ -128,7 +174,30 @@ describe("real installed SDK, guarded fictional transport", () => {
       return response(answer);
     });
     vi.stubGlobal("fetch", transport);
-    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete"); expect(transport).toHaveBeenCalledTimes(1);
+    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete"); expect(transport).toHaveBeenCalledTimes(2);
+  });
+  it.each(["valid", "wrong-scope", "duplicate", "foreign-pair"])("preserves three-plus-one pairs through the existing decoder: %s", async mode => {
+    const { inputs, selection } = compactFour();
+    selection.documents[0].claimNos = [1, 2, 3]; selection.documents[1].claimNos = [1];
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      if (input.task !== "compare") return response(stageAnswer(input));
+      const answer = fictionalBatch(input);
+      if (mode === "wrong-scope") answer.results[0].candidateEvidenceId = answer.results[2].candidateEvidenceId;
+      if (mode === "duplicate") answer.results[1] = { ...answer.results[0] };
+      if (mode === "foreign-pair") answer.results[0].candidateClaimNo = 99;
+      return response(answer);
+    });
+    vi.stubGlobal("fetch", transport);
+    if (mode === "valid") {
+      const saved = await executeComparison(inputs, selection);
+      expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 1], [21, 2], [21, 3], [22, 1]]);
+      expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+      expect(transport).toHaveBeenCalledTimes(3);
+    } else {
+      await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
+      expect(transport).toHaveBeenCalledTimes(2);
+    }
   });
   it("completes a packed generation and 205-second review within one absolute deadline", async () => {
     vi.useFakeTimers();
@@ -137,10 +206,10 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       await new Promise(r => setTimeout(r, input.task === "review" ? 205_000 : 10_000));
-      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input));
+      return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch", transport); const pending = executeComparison(inputs, selection);
-    await vi.advanceTimersByTimeAsync(215_001); expect((await pending).status).toBe("complete"); expect(transport).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(225_001); expect((await pending).status).toBe("complete"); expect(transport).toHaveBeenCalledTimes(3);
   });
   it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
@@ -149,6 +218,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
+      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
       const value = fictionalReview(input);
       const expanded = expandReviewTransportInput(input);
       if (mode === "http") return new Response(SECRET, { status: 429 });
@@ -172,7 +242,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(generationBatches(makePlan(inputs, selection), SYSTEM).length + 1);
+    expect(transport).toHaveBeenCalledTimes(3);
     if (mode === "valid_negative") {
       const [logical, decoded] = reviewGate.mock.calls.at(-1)!;
       validNegativeProtocolPassed = inspectReviewCoverage(logical, decoded).checks[0].verdict === "inconsistent";
@@ -191,7 +261,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
-      return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
+      return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch",transport);
     expect((await executeComparison(inputs,selection)).status).toBe("complete");
@@ -204,7 +274,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
         const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
         expect(body.service_tier).toBe("default");
-        return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input), undefined,
+        return response(stageAnswer(input), undefined,
           (input.task === "review" ? phase === "review" : phase === "generation") ? { service_tier: tier } : { service_tier: "default" });
       });
       vi.stubGlobal("fetch", transport);
@@ -217,7 +287,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
       expect(body.service_tier).toBeUndefined();
-      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input), undefined, { service_tier: "priority" });
+      return response(stageAnswer(input), undefined, { service_tier: "priority" });
     });
     vi.stubGlobal("fetch", transport);
     expect((await executeComparison(inputs, selection)).status).toBe("complete");
@@ -227,7 +297,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = fictionalInputs();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      return response(input.task === "review" ? fictionalReview(input) : fictionalBatch(input),
+      return response(stageAnswer(input),
         { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 22529 : 8193) : 30 });
     });
     vi.stubGlobal("fetch", transport);
@@ -240,7 +310,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const {inputs,selection}=fictionalInputs();
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      await new Promise(r=>setTimeout(r,40000));return response(input.task==="review"?fictionalReview(input):fictionalBatch(input));
+      await new Promise(r=>setTimeout(r,40000));return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch",transport);
     const result=executeComparison(inputs,selection);
@@ -254,7 +324,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(() => new Promise(() => undefined));
     vi.stubGlobal("fetch", transport);
     const promise = executeComparison(inputs, selection);
-    const rejected = expect(promise).rejects.toThrow("ai_incomplete");
+    const rejected = expect(promise).rejects.toMatchObject({ message: "ai_incomplete", stage: "source_reading", kind: "timeout" });
     await vi.advanceTimersByTimeAsync(210001);
     await rejected;
     expect(transport).toHaveBeenCalledTimes(1);
@@ -266,10 +336,10 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if(input.task==="review") return new Promise(()=>undefined);
-      await new Promise(r=>setTimeout(r,80000));return response(fictionalBatch(input));
+      await new Promise(r=>setTimeout(r,80000));return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch",transport);
-    const rejected=expect(executeComparison(inputs,selection)).rejects.toThrow("ai_incomplete");
+    const rejected=expect(executeComparison(inputs,selection)).rejects.toMatchObject({ message: "ai_incomplete", stage: "review", kind: "timeout" });
     await vi.advanceTimersByTimeAsync(230001);await rejected;
     expect(transport).toHaveBeenCalledTimes(3);
   });

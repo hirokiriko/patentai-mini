@@ -5,6 +5,10 @@ import type { batchInput } from "./generation-batch";
 import { reviewTargetIdentity, reviewTargetUnits, type reviewInput } from "./semantic-review";
 import { reviewReferenceMentions, type ReferenceRelationCheck } from "./reference-mentions";
 import { expandReviewTransportInput, type reviewTransportInput } from "./review-transport";
+import type { sourceAnalysisInput } from "./source-analysis";
+export function fictionalSourceAnalysis(input: ReturnType<typeof sourceAnalysisInput>) {
+  return { sourceAnalysis: input.sources.map(s => ({ sourceDigest: s.sourceDigest, reading: "架空原文の索引。意味品質の証明ではない。" })) };
+}
 export function fictionalInputs() {
   // Keep the decisive tail beyond 15,000 while reserving the unchanged wire
   // budget for the source-analysis schema and maximum possible review draft.
@@ -41,8 +45,7 @@ export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
   })) };
 }
 export function fictionalBatch(input: ReturnType<typeof batchInput>) {
-  return { sourceAnalysis: input.sourceDigests.map(sourceDigest => ({ sourceDigest, reading: "架空原文の索引。意味品質の証明ではない。" })),
-    results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
+  return { results: input.documents.flatMap(d => fictionalGeneration({ ...d, base: input.base }).results.map(r => ({ ...r, docId: d.candidateId }))) };
 }
 export function fictionalReview(input: ReturnType<typeof reviewInput>) {
   return { draftDigest: input.draftDigest,
