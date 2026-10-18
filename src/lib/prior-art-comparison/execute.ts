@@ -76,7 +76,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         }
       }
       stage = "review";
-      const review = reviewInput(plan, drafts, analyses);
+      const review = reviewInput(plan, drafts);
       assertReviewSize(review);
       const rawReview = await generate(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(review)), reviewTransportSchemaFor(review), "review");
       const decoded = decodeReviewTransport(review, rawReview);

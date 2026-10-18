@@ -276,7 +276,7 @@ describe("inactive finite 734 JPY revalidation guard", () => {
         common: r.common, differences: r.differences, unconfirmed: r.unconfirmed, baseEvidenceId: r.baseEvidenceId, candidateEvidenceId: r.candidateEvidenceId }));
       return validateAnswer(chunk, decodeGeneration(chunk, { results })).map((p, i) => ({ ...p, baseObservation: results[i].baseObservation, candidateObservation: results[i].candidateObservation }));
     });
-    const review = reviewInput(plan, drafts, sourceAnswer.sourceAnalysis), reviewWire = reviewTransportInput(review), reviewed = fictionalTransportReview(reviewWire);
+    const review = reviewInput(plan, drafts), reviewWire = reviewTransportInput(review), reviewed = fictionalTransportReview(reviewWire);
     const sourcePacket = { system: SOURCE_ANALYSIS_SYSTEM, prompt: JSON.stringify(source), schema: await asSchema(sourceReadingSchemaFor(batch)).jsonSchema };
     const reviewPacket = { system: REVIEW_SYSTEM, prompt: JSON.stringify(reviewWire), schema: await asSchema(reviewTransportSchemaFor(review)).jsonSchema };
     const packets = [sourcePacket, reviewPacket, sourcePacket,

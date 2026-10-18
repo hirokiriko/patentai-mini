@@ -61,6 +61,21 @@ const fieldRows = (input: ReturnType<typeof reviewTransportInput>) => input.fiel
 const wireIds = (target: ReturnType<typeof fieldRows>[number]) => target.units.map((_, index) => target.firstUnitId + index);
 
 describe("whole-unit review transport", () => {
+  it.each(["base", "candidate", "draft"])("still binds %s changes after excluding the generation index", changed => {
+    const { plan, drafts } = example(2), original = reviewInput(plan, drafts);
+    const replaceOriginal = (source: typeof plan[number]["base"]) => ({ ...source,
+      claims: source.claims.map((c, i) => i === 0 ? { ...c, text: c.text.replace("光", "風") } : c) });
+    const nextPlan = plan.map((chunk, i) => ({ ...chunk,
+      base: changed === "base" ? replaceOriginal(chunk.base) : chunk.base,
+      candidate: changed === "candidate" && i === 0 ? replaceOriginal(chunk.candidate) : chunk.candidate }));
+    const nextDrafts = structuredClone(drafts);
+    if (changed === "draft") nextDrafts[0].common += "追加の架空記述。";
+    const next = reviewInput(nextPlan, nextDrafts);
+    expect(next.draftDigest).not.toBe(original.draftDigest);
+    expect(packedReviewTransportInput(next).draftDigest).not.toBe(packedReviewTransportInput(original).draftDigest);
+    expect(reviewTransportSchemaFor(next).safeParse(response(original)).success).toBe(false);
+  });
+
   it.each([false, true])("places each original beside its claim and references, once, with stable evidence IDs (long=%s)", long => {
     const { logical } = example(2);
     if (long) {
@@ -89,7 +104,7 @@ describe("whole-unit review transport", () => {
     }));
     expect(observed).toEqual(segments);
     expect(observed.map(([id]) => id)).toEqual(segments.map((_, id) => id));
-    expect(Object.keys(packed).indexOf("base")).toBeLessThan(Object.keys(packed).indexOf("sourceAnalysis"));
+    expect(packed).not.toHaveProperty("sourceAnalysis");
   });
 
   it("uses exact marker framing and retains literal LF/TAB through the array fallback", () => {
