@@ -61,6 +61,37 @@ const fieldRows = (input: ReturnType<typeof reviewTransportInput>) => input.fiel
 const wireIds = (target: ReturnType<typeof fieldRows>[number]) => target.units.map((_, index) => target.firstUnitId + index);
 
 describe("whole-unit review transport", () => {
+  it.each([false, true])("places each original beside its claim and references, once, with stable evidence IDs (long=%s)", long => {
+    const { logical } = example(2);
+    if (long) {
+      // Exercise the compact implicit-ID form without changing the source text.
+      let id = 0;
+      for (const source of [logical.base, ...logical.documents.map(d => d.source)]) {
+        for (const c of source.claims) c.segments = Array.from(c.segments.map(([, text]) => text).join(""), text => [id++, text]);
+      }
+    }
+    const packed = packedReviewTransportInput(logical);
+    expect(packed).not.toHaveProperty("parts");
+    const sources = [packed.base, ...packed.documents.map(d => d.source)];
+    const originals = [logical.base, ...logical.documents.map(d => d.source)];
+    const segments = originals.flatMap(s => s.claims.flatMap(c => c.segments));
+    expect(segments.length > 100).toBe(long);
+    const observed: (readonly [number, string])[] = [];
+    sources.forEach((source, si) => source.claims.forEach((claim, ci) => {
+      expect(claim).toHaveLength(5);
+      const [no, refs, first, end, parts] = claim;
+      expect([no, refs]).toEqual([originals[si].claims[ci].claimNo, originals[si].claims[ci].dependsOn]);
+      expect(parts).toHaveLength(end - first);
+      const actual = parts.map((part, at) => typeof part === "string" ? [first + at, part] as const : part);
+      expect(actual).toEqual(originals[si].claims[ci].segments);
+      expect(parts.every(part => typeof part === "string")).toBe(segments.length > 100);
+      observed.push(...actual);
+    }));
+    expect(observed).toEqual(segments);
+    expect(observed.map(([id]) => id)).toEqual(segments.map((_, id) => id));
+    expect(Object.keys(packed).indexOf("base")).toBeLessThan(Object.keys(packed).indexOf("sourceAnalysis"));
+  });
+
   it("uses exact marker framing and retains literal LF/TAB through the array fallback", () => {
     const { plan, drafts } = example();
     drafts[0].common = "請求項1の共通条件。後続条件。";
