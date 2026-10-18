@@ -75,7 +75,7 @@ export function fictionalTransportReview(raw: ReturnType<typeof reviewTransportI
       ...(identity.field === "candidateObservation" ? [] : [lastEvidence(input.base, identity.baseClaimNo)]),
       ...(identity.field === "baseObservation" ? [] : [lastEvidence(input.documents.find(d => d.docId === identity.docId)!.source, identity.candidateClaimNo)]),
     ];
-    return input.units.slice(firstUnitId, endUnitId).map((unit, index) => ({ unitId: firstUnitId + index,
+    return input.units.slice(firstUnitId, endUnitId).map(unit => ({ unitText: typeof unit === "string" ? unit : unit.join(""),
       assertion: "fact" as const, counterEvidence: null,
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
       evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",

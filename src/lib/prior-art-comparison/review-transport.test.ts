@@ -24,12 +24,11 @@ function example(candidateClaimNo = 1) {
 
 /** Fictional protocol responses only; these reasons are not semantic evidence. */
 function response(logical: ReturnType<typeof reviewInput>) {
-  let unitId = 0;
   const checks = logical.targets.flatMap(target => {
     const [doc, base, candidate, field] = target.id.split(":");
     const ids = [...(field === "candidateObservation" ? [] : [logical.base.claims.find(c => c.claimNo === Number(base))!.segments[0][0]]),
       ...(field === "baseObservation" ? [] : [logical.documents.find(d => d.docId === Number(doc))!.source.claims.find(c => c.claimNo === Number(candidate))!.segments[0][0]])];
-    return reviewTargetUnits(target.text).map(unit => ({ unitId: unitId++,
+    return reviewTargetUnits(target.text).map(unit => ({ unitText: unit.text,
       assertion: "fact" as "fact" | "reservation" | "mixed",
       counterEvidence: null as null | { targetQuote: string; sourceWitness: { evidenceId: number; quote: string }[] },
       referenceChecks: reviewReferenceMentions(target.text).filter(m => m.start >= unit.start && m.end <= unit.end)
@@ -46,7 +45,7 @@ function response(logical: ReturnType<typeof reviewInput>) {
 /** Deliberately fictional negative certificate: tests literal provenance only,
  * never use it as an assertion that the target is actually contradicted. */
 function negative(logical: ReturnType<typeof reviewInput>, answer: ReturnType<typeof response>["checks"][number]) {
-  const unit = logical.targets.flatMap(t => reviewTargetUnits(t.text))[answer.unitId];
+  const unit = logical.targets.flatMap(t => reviewTargetUnits(t.text)).find(unit => unit.text === answer.unitText)!;
   const id = answer.evidenceIds[0], source = [logical.base, ...logical.documents.map(d => d.source)]
     .flatMap(s => s.claims).flatMap(c => c.segments).find(([key]) => key === id)!;
   answer.verdict = "inconsistent";
@@ -67,7 +66,8 @@ describe("whole-unit review transport", () => {
     drafts[0].common = "請求項1の共通条件。後続条件。";
     let logical = reviewInput(plan, drafts), packed = packedReviewTransportInput(logical);
     expect(packed.units).toEqual([]);
-    expect(packed.texts[2]).toBe("\t請求項1\tの共通条件。\n後続条件。");
+    expect(packed.unitTexts.some(([, text]) => text === "\t請求項1\tの共通条件。")).toBe(true);
+    expect(packed.unitTexts.some(([, text]) => text === "後続条件。")).toBe(true);
     expect(expandReviewTransportInput(packed).units.map(wireText).join(""))
       .toBe(logical.targets.map(t => t.text).join(""));
     drafts[0].common = "原文の\t文字。後続\n文字。";
@@ -200,9 +200,9 @@ describe("whole-unit review transport", () => {
     const { logical } = example(), raw = response(logical);
     if (mode === "missing") raw.checks.pop();
     if (mode === "extra") raw.checks.push({ ...raw.checks[0] });
-    if (mode === "duplicate") raw.checks[1].unitId = raw.checks[0].unitId;
+    if (mode === "duplicate") raw.checks[1].unitText = raw.checks[0].unitText;
     if (mode === "reordered") [raw.checks[0], raw.checks[1]] = [raw.checks[1], raw.checks[0]];
-    if (mode === "foreign") raw.checks[0].unitId = raw.checks.length;
+    if (mode === "foreign") raw.checks[0].unitText = "別の対象文。";
     if (mode === "wrong_digest") raw.draftDigest = "f".repeat(64);
     if (mode === "logical_digest") raw.draftDigest = logical.draftDigest;
     if (mode === "legacy_root") Object.assign(raw, { sourceFacts: [] });
@@ -210,7 +210,7 @@ describe("whole-unit review transport", () => {
     if (mode === "missing_witness") delete (raw.checks[0] as Partial<typeof raw.checks[0]>).scopeWitness;
     if (mode === "blank_reason") raw.checks[0].sourceComparison = "　 ";
     if (mode === "control") raw.checks[0].sourceComparison = "前半\n後半";
-    if (mode === "fraction_id") raw.checks[0].unitId = 0.5;
+    if (mode === "fraction_id") Object.assign(raw.checks[0], { unitId: 0.5 });
     if (mode === "string_id") Object.assign(raw.checks[0], { unitId: "0" });
     if (mode === "unsafe_evidence") raw.checks[0].evidenceIds = [Number.MAX_SAFE_INTEGER + 1];
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
@@ -222,6 +222,16 @@ describe("whole-unit review transport", () => {
     const decoded = decodeReviewTransport(logical, response(logical));
     expect(() => decodeReviewTransport(logical, decoded)).toThrow("ai_incomplete");
     expect(() => decodeReviewTransport(logical, inspectReviewCoverage(logical, decoded))).toThrow("ai_incomplete");
+  });
+
+  it.each(["truncated", "paraphrased", "missing", "legacy_id"])("rejects %s sentence identity even when every row and verdict is present", mode => {
+    const { logical } = example(), raw = response(logical);
+    if (mode === "truncated") raw.checks[0].unitText = raw.checks[0].unitText.slice(1);
+    if (mode === "paraphrased") raw.checks[0].unitText += " ";
+    if (mode === "missing") delete (raw.checks[0] as Partial<typeof raw.checks[0]>).unitText;
+    if (mode === "legacy_id") Object.assign(raw.checks[0], { unitId: 0 });
+    expect(raw.checks.every(row => row.verdict === "consistent")).toBe(true);
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
   });
 
   it("derives every complete Unicode unit without offsets, split conclusions or generated quotes", () => {
@@ -439,6 +449,14 @@ describe("whole-unit review transport", () => {
     const size = (logical: ReturnType<typeof reviewInput>) => requestBytes(REVIEW_TRANSPORT_SYSTEM, JSON.stringify(packedReviewTransportInput(logical)), reviewTransportSchemaFor(logical));
     const max = make("\ud800"), upper = size(max) + max.targets.length * 16;
     expect(upper).toBeLessThanOrEqual(90000);
+    for (const sentences of [2, 3]) {
+      const prefix = sentences === 2 ? "。" : "。a。";
+      const logical = makeWith(n => prefix + "\ud800".repeat(n - prefix.length));
+      expect(size(logical)).toBeLessThanOrEqual(upper);
+      const packed = packedReviewTransportInput(logical);
+      expect(packed.unitTexts.length > 0).toBe(sentences === 2);
+      expect(fieldRows(expandReviewTransportInput(packed)).map(t => t.units.map(wireText).join(""))).toEqual(logical.targets.map(t => t.text));
+    }
     for (const pattern of ["。\ud800", "。a", "、", "請求項一\ud800", "請求項1/2、", "𠮷。", "\ud842、\udc00"]) {
       const logical = make(pattern), input = reviewTransportInput(logical);
       expect(size(logical)).toBeLessThanOrEqual(upper);

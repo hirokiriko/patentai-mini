@@ -43,7 +43,7 @@ globalThis.fetch = async (url, init) => {
     })]) });
   const chunk = packed.task === "review" ? { ...packed, base: expand(packed.base),
     documents: packed.documents.map(d => ({ ...d, source: expand(d.source) })),
-    units: packed.texts.length ? packed.texts.flatMap(text => text.split("\n").map(unit => unit.includes("\t") ? unit.split("\t") : unit)) : packed.units,
+    units: packed.unitTexts.length ? packed.unitTexts.map(([id,text],index)=>{if(id!==index)throw Error('fixture_unit_id');return text.includes('\t')?text.split('\t'):text;}) : packed.texts.length ? packed.texts.flatMap(text => text.split("\n").map(unit => unit.includes("\t") ? unit.split("\t") : unit)) : packed.units,
   } : packed;
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
@@ -66,7 +66,7 @@ globalThis.fetch = async (url, init) => {
       const ids=[...(field==="candidateObservation"?[]:[lastEvidence(chunk.base,baseNo)]),
         ...(field==="baseObservation"?[]:[lastEvidence(chunk.documents.find(d=>d.docId===Number(docId)).source,candidateNo)])];
       const witness=[chunk.base,...chunk.documents.map(d=>d.source)].flatMap(s=>s.claims).flatMap(c=>c[2]).find(([key])=>key===ids[0]);
-      return chunk.units.slice(firstUnitId,endUnitId).map((unit,i)=>({unitId:firstUnitId+i,
+      return chunk.units.slice(firstUnitId,endUnitId).map(unit=>({unitText:typeof unit==="string"?unit:unit.join(""),
         assertion:"fact",
         counterEvidence:mode==="review-reject"?{targetQuote:typeof unit==="string"?unit:unit.join(""),sourceWitness:[{evidenceId:ids[0],quote:witness[1]}]}:null,
         kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
