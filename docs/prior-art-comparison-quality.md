@@ -197,7 +197,7 @@ LEAD_NEXT_OFFLINE_IMPLEMENTATION_V1の候補を、原文読取→生成→査読
 
 ### 734円計画の有限guard（未承認・実送信無効）
 
-`scripts/prior-art-revalidation-guard.ts` はLocal補助工具の未接続libraryであり、製品route・環境変数・資格情報・native fetch・既存実行親へ接続しない。importやcallerの承認JSONだけでは開始権を作らない。現在の公開planは `PENDING_OWNER_DECISION`。架空テストだけが架空の承認・親ACK・transportを供給する。
+`scripts/prior-art-revalidation-guard.ts` はLocal補助工具のlibraryである。前工程では未接続だったが、後述の薄いbridgeでprivate実行親と架空transportへ接続した。製品route・環境変数から有料通信を有効化する入口は追加しない。importやcallerの承認JSONだけでは開始権を作らない。現在の公開planは `PENDING_OWNER_DECISION`。架空テストだけが架空の承認・親ACK・transportを供給する。
 
 |送信|段階|実SDK本文UTF-8 bytes＋8192およびinput usage上限|output上限|保持予約円|
 |---:|---|---:|---:|---:|
@@ -215,6 +215,18 @@ LEAD_NEXT_OFFLINE_IMPLEMENTATION_V1の候補を、原文読取→生成→査読
 
 診断後はexact headと新しい2応答hashに束縛したroot＋独立2名の24文/20欄/14参照全件QA、既知4誤り検出、見逃し0、誤拒否0、正対照維持を親が原本照合するまで40へ進めない。JSONの件数だけでは意味品質を証明しない。失敗後は永久停止し、ACK消失/partial writeの修復・再試行をしない。停止通知は最終STOPではなく、親がauthoritative journalと全所有process終了を確認するまでlockを保持し、reconcile ACK消失で既知usageを消したり二重terminalを書かない。
 
-既存実行親とACKは旧2送信専用であり、このlibraryへの実adapterは未接続。5段のdurable claim/10行ACK、強制終了、unknown保持、再起動拒否をその実親の架空通信で検証し、独立監査を通すことも将来の開始前条件である。現段階を実送信可能・意味品質改善・TECHNICAL_GOと呼ばない。
+前工程時点では既存実行親とACKは旧2送信専用で、このlibraryへのadapterは未接続だった。この不足は後述の接続検証で補った。ただし現在も有料通信は未有効化であり、接続合格を意味品質改善・TECHNICAL_GOと呼ばない。
 
 一括判断案は、現在の将来評価既知823.91210円＋unknown9件2313円＝3136.91210円を保持し、734円でAI上界3870.91210円、配備/rollback留保1400円込み5270.91210円とする。現行AI3600円/総5000円の不足はそれぞれ270.91210円。整数案はAI3871円/総5271円（各＋271円）であり、未承認の提案に留める。署名済み `release-start` のAI exposure3000円、通常profile/月次pool/9単位/回数/期限、同head TECHNICAL_GOと統合tree等は通常統合・配備の別条件として維持する。この3000円をAI診断の送信条件に混ぜず、予算案が承認されても統合を自動許可しない。
+
+### 実行親から製品・帳票への接続（架空通信限定、2026-10-18）
+
+`LEAD_DELIVER_COMPARISON_END_TO_END_V1` に基づき、同じbranch/PRの `scripts/prior-art-revalidation-bridge.ts` で既存guardをprivate親へ接続した。親の必須Windows排他handle、durable claim、予約/精算のfsync/readback、所有Jobによる子孫回収を再利用する。新しい台帳系列や認証方式は作らない。requestを予約前、raw responseを精算前、検証済みanswerを次送信前に排他的保存し、hashと新応答の対応を検査する。新原文読取を診断38と正常40でそれぞれ実行し、正常生成41と査読42が新40を使うことを確認する。
+
+実親の架空通信では、承認照合→排他claim→診断2段→架空と明示したQA証跡→製品の正常3段を、単一guardで通した。旧74行の専用コピーへ38〜42の予約/精算10行を書き、実台帳・9件2313円のunknown予約は変更しない。旧commit入口の混用、最終answer欠落、明示stop後の成功申告を拒否する。ACK不明・遅延・partial write・期限切れ・二重claim・再起動・子孫残留・精算後の応答改変でも、後続送信を許さず既知精算/unknown保持と所有process回収を確認する。fixture結果は `fictionalAIOnly: true` / `realAiSends: 0` として記録し、実AI成功と呼ばない。
+
+実Next、専用空PG16、専用ブラウザーで、新正常4組の保存・再読込・サーバー再起動後の同一結果・PDF/CSV取得と再取得AI0を確認した。今回の架空HTTPは200/約1.720秒。両PDF全6ページ・全76ブロックの順序一致、CSV77行154セルの完全一致、再取得CSVのbyte一致、全ページと画面の独立目視を確認した。4組8引用の文字位置と保存JSONの同一性も確認したが、架空説明の原文に対する意味は評価していない。この時間を実AI性能へ移さない。既存の製品src・原本・保存互換・境界検証は変更せず、有効な既存証拠を再利用する。
+
+無課金接続の判定は `PARENT_PRODUCT_CONNECTION_PASS_INACTIVE`。新しい承認原本に対応する有料admission、正規認証、期限・金額境界、診断後のroot＋独立2名の新応答に対する意味QA、正常比較の実AI全件QAは未成立である。fixture証跡や件数だけを真正な承認/意味QAとして代用しない。旧承認期限は失効済みであり、最新Leadの一括案（AI3871円/総5271円、2026-10-20 23:59 JST、#150限定release-start整合）は未承認のまま保持する。
+
+承認成立後は、5送信734円全体の予約が収まることを確認して診断から正常保存・再表示・再起動・全帳票・独立レビューまで継続する。TECHNICAL_GO、exact headのCI/レビュー、競合なし、#148非影響、既存通常枠・正規署名が全て成立した場合だけ通常統合/配備へ進む。コード/接続/診断だけではGoal達成にせず、実AI品質、統合/配備、本番実受入、専門家評価を別判定で記録する。
