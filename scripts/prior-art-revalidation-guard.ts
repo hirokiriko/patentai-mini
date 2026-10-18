@@ -3,13 +3,16 @@ import { createHash } from "node:crypto";
 /** Inactive Local tooling only. No environment switch, credentials, native
  * fetch, journal writer, or product route is installed by importing this file. */
 export const REVALIDATION_PLAN = Object.freeze({
-  id: "ISSUE150_REVALIDATION_734_V1", status: "PENDING_OWNER_DECISION",
+  id: "ISSUE150_REVALIDATION_734_V1", status: "OWNER_APPROVED_INACTIVE",
   priorSends: 37, priorRows: 74,
   priorLedgerSha256: "a6a423c2350bd67671fd05147689888953060d89e628a17801f258a57b21d34c",
   // Integer units of 0.00001 JPY. Old valuation is a separate history.
   currentExposure: 313691210, unknownHeld: 231300000,
   currentAiLimit: 360000000, currentTotalLimit: 500000000, deploymentReserve: 140000000,
   existingExpiresAt: "2026-10-18T15:41:40+09:00",
+  // The explicit three-condition OWNER decision preserves the old values above.
+  approvedAiLimit: 387100000, approvedTotalLimit: 527100000,
+  approvedExpiresAt: "2026-10-20T14:59:00Z",
   requestMs: 210000, operationMs: 230000, responseBytes: 1048576, framingBytes: 8192,
   stages: Object.freeze([
     { ordinal: 38, phase: "diagnostic_source", task: "read_sources", input: 40000, output: 8192, reserve: 99 },
@@ -86,7 +89,7 @@ async function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 /** One process, five finite sends. The existing protected parent owns durable
- * one-shot state/ACKs. Deliberately not attached to its old two-send adapter. */
+ * one-shot state/ACKs through the thin Local bridge; no authority on import. */
 export function createRevalidationGuard(deps: RevalidationDependencies) {
   const binding = Object.freeze({ ...deps.binding }), decision = deps.decision && Object.freeze({ ...deps.decision });
   const funding = revalidationFunding(), terminal = new AbortController();
@@ -97,9 +100,9 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
   const validDecision = () => {
     requireValue(decision?.status === "OWNER_APPROVED" && decision.planId === REVALIDATION_PLAN.id &&
       decision.maximumNewSends === 5 && decision.maximumReservationYen === funding.reservationYen &&
-      integer(decision.maximumAi, Number.MAX_SAFE_INTEGER) && decision.maximumAi >= funding.requiredAi &&
-      integer(decision.maximumTotal, Number.MAX_SAFE_INTEGER) && decision.maximumTotal >= funding.requiredTotal &&
-      decision.expiresAt === REVALIDATION_PLAN.existingExpiresAt && Date.now() < Date.parse(decision.expiresAt));
+      decision.maximumAi === REVALIDATION_PLAN.approvedAiLimit && decision.maximumAi >= funding.requiredAi &&
+      decision.maximumTotal === REVALIDATION_PLAN.approvedTotalLimit && decision.maximumTotal >= funding.requiredTotal &&
+      decision.expiresAt === REVALIDATION_PLAN.approvedExpiresAt && Date.now() < Date.parse(decision.expiresAt));
     requireValue(/^[a-f0-9]{40}$/.test(binding.head) && /^[a-f0-9-]{36}$/.test(binding.executionId) &&
       [binding.policyHash, binding.materialsHash, binding.measurementHash, binding.approvalHash, binding.publicReadbackHash].every(hash) &&
       binding.deployment.length > 0 && binding.deployment.length <= 100);

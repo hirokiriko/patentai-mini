@@ -6,7 +6,7 @@ const binding = { executionId: "11111111-1111-4111-8111-111111111111", head: "a"
   policyHash: "b".repeat(64), materialsHash: "c".repeat(64), measurementHash: "d".repeat(64),
   approvalHash: "e".repeat(64), publicReadbackHash: "f".repeat(64), endpoint: "https://example.invalid/responses", deployment: "patentai-gpt54" };
 const decision = { status: "OWNER_APPROVED" as const, planId: PLAN.id, maximumNewSends: 5,
-  maximumReservationYen: 734, maximumAi: 387100000, maximumTotal: 527100000, expiresAt: PLAN.existingExpiresAt };
+  maximumReservationYen: 734, maximumAi: 387100000, maximumTotal: 527100000, expiresAt: PLAN.approvedExpiresAt };
 const packet = { system: "Fictional", prompt: JSON.stringify({ task: "read_sources" }), schema: { type: "object" } };
 const body = JSON.stringify({ model: binding.deployment, input: [{ role: "developer", content: packet.system },
   { role: "user", content: [{ type: "input_text", text: packet.prompt }] }], max_output_tokens: 8192,

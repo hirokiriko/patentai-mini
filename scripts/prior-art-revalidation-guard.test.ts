@@ -24,7 +24,7 @@ const binding: RevalidationBinding = { executionId: "a0000000-0000-4000-8000-000
   approvalHash: "e".repeat(64), publicReadbackHash: "f".repeat(64),
   endpoint: "https://example.invalid/openai/v1/responses?api-version=v1", deployment: "patentai-gpt54" };
 const approved: RevalidationDecision = { status: "OWNER_APPROVED", planId: PLAN.id, maximumNewSends: 5,
-  maximumReservationYen: 734, maximumAi: 387100000, maximumTotal: 527100000, expiresAt: PLAN.existingExpiresAt };
+  maximumReservationYen: 734, maximumAi: 387100000, maximumTotal: 527100000, expiresAt: PLAN.approvedExpiresAt };
 const packet = (stage: RevalidationStage): RevalidationPacket => ({ system: "Fictional original-only packet",
   prompt: JSON.stringify({ task: stage.task, phase: stage.phase }), schema: { type: "object", properties: {}, additionalProperties: false } });
 function body(stage: RevalidationStage, p = packet(stage)) {
@@ -66,9 +66,10 @@ async function advance(h: ReturnType<typeof harness>, until: number) {
 describe("inactive finite 734 JPY revalidation guard", () => {
   beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-18T14:00:00+09:00")); });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
-  it("retains the old limits and unknown exposure; the whole plan needs additional approval", () => {
-    expect(PLAN.status).toBe("PENDING_OWNER_DECISION"); expect(PLAN.currentAiLimit).toBe(360000000);
+  it("retains old limits and unknown exposure while pinning the explicit new decision", () => {
+    expect(PLAN.status).toBe("OWNER_APPROVED_INACTIVE"); expect(PLAN.currentAiLimit).toBe(360000000);
     expect(PLAN.currentTotalLimit).toBe(500000000); expect(PLAN.unknownHeld).toBe(231300000);
+    expect([PLAN.approvedAiLimit, PLAN.approvedTotalLimit, PLAN.approvedExpiresAt]).toEqual([387100000, 527100000, "2026-10-20T14:59:00Z"]);
     expect(revalidationFunding()).toEqual({ reservationYen: 734, requiredAi: 387091210, requiredTotal: 527091210 });
     expect(PLAN.stages.map(s => Math.ceil((5 * s.input + 30 * s.output) * 220 / 1000000))).toEqual([99, 199, 99, 116, 221]);
     expect(Object.isFrozen(PLAN.stages[0])).toBe(true);
@@ -76,6 +77,8 @@ describe("inactive finite 734 JPY revalidation guard", () => {
   it.each([null, { ...approved, status: "PENDING_OWNER_DECISION" as const },
     { ...approved, maximumAi: PLAN.currentAiLimit }, { ...approved, maximumTotal: PLAN.currentTotalLimit },
     { ...approved, maximumAi: 387091209 }, { ...approved, maximumTotal: 527091209 },
+    { ...approved, maximumAi: 387100001 }, { ...approved, maximumTotal: 527100001 },
+    { ...approved, expiresAt: PLAN.existingExpiresAt }, { ...approved, expiresAt: "2026-10-20T14:59:01Z" },
     { ...approved, maximumNewSends: 6 }, { ...approved, maximumReservationYen: 958 },
     { ...approved, expiresAt: "2026-10-18T13:59:59+09:00" }, { ...approved, expiresAt: "2026-10-19T15:41:40+09:00" }])("rejects absent, stale or insufficient approval before reservation: %j", async decision => {
     const h = harness({ decision }); await expect(h.send(0)).rejects.toThrow("revalidation_stopped");
@@ -224,10 +227,15 @@ describe("inactive finite 734 JPY revalidation guard", () => {
     expect(h.guard.snapshot().completed).toBe(4);
   });
   it("the absolute approval expiry stops even a shorter request", async () => {
-    timers(); vi.setSystemTime(new Date(Date.parse(PLAN.existingExpiresAt) - 1000)); const h = harness();
+    timers(); vi.setSystemTime(new Date(Date.parse(PLAN.approvedExpiresAt) - 1000)); const h = harness();
     h.transport.mockImplementation(() => new Promise(() => undefined));
     const pending = expect(h.send(0)).rejects.toThrow(); await vi.advanceTimersByTimeAsync(1001); await pending;
     expect(h.guard.snapshot().stopped).toBe(true);
+  });
+  it.each([0, 1])("rejects at or after the newly approved expiry (%d ms)", async offset => {
+    vi.mocked(Date.now).mockReturnValue(Date.parse(PLAN.approvedExpiresAt) + offset);
+    const h = harness(); await expect(h.send(0)).rejects.toThrow();
+    expect(h.journal.claim).not.toHaveBeenCalled(); expect(h.transport).not.toHaveBeenCalled();
   });
   it("concurrent calls permanently stop the in-flight request and cannot reserve twice", async () => {
     const h = harness(); let admitted!: () => void;

@@ -197,6 +197,8 @@ LEAD_NEXT_OFFLINE_IMPLEMENTATION_V1の候補を、原文読取→生成→査読
 
 ### 734円計画の有限guard（未承認・実送信無効）
 
+この節の未承認状態は作成時点の履歴である。2026-10-18のOWNER明示一括承認は末尾の節に記録し、旧値を保存したまま新しい承認値を別定数へ固定した。
+
 `scripts/prior-art-revalidation-guard.ts` はLocal補助工具のlibraryである。前工程では未接続だったが、後述の薄いbridgeでprivate実行親と架空transportへ接続した。製品route・環境変数から有料通信を有効化する入口は追加しない。importやcallerの承認JSONだけでは開始権を作らない。現在の公開planは `PENDING_OWNER_DECISION`。架空テストだけが架空の承認・親ACK・transportを供給する。
 
 |送信|段階|実SDK本文UTF-8 bytes＋8192およびinput usage上限|output上限|保持予約円|
@@ -230,3 +232,15 @@ LEAD_NEXT_OFFLINE_IMPLEMENTATION_V1の候補を、原文読取→生成→査読
 無課金接続の判定は `PARENT_PRODUCT_CONNECTION_PASS_INACTIVE`。新しい承認原本に対応する有料admission、正規認証、期限・金額境界、診断後のroot＋独立2名の新応答に対する意味QA、正常比較の実AI全件QAは未成立である。fixture証跡や件数だけを真正な承認/意味QAとして代用しない。旧承認期限は失効済みであり、最新Leadの一括案（AI3871円/総5271円、2026-10-20 23:59 JST、#150限定release-start整合）は未承認のまま保持する。
 
 承認成立後は、5送信734円全体の予約が収まることを確認して診断から正常保存・再表示・再起動・全帳票・独立レビューまで継続する。TECHNICAL_GO、exact headのCI/レビュー、競合なし、#148非影響、既存通常枠・正規署名が全て成立した場合だけ通常統合/配備へ進む。コード/接続/診断だけではGoal達成にせず、実AI品質、統合/配備、本番実受入、専門家評価を別判定で記録する。
+
+### OWNER一括承認の反映（2026-10-18）
+
+OWNERがLocalの3条件質問へ「3条件を一括承認」と明示回答した。今回の累計税込AI3871円/総5271円（配備・rollback留保1400円込み）、期限2026-10-20 23:59 JST、#150限定release-start exposure3871円と期限/exact build・headの正規整合を承認済みとする。新規は38〜42の最大5送信/734円、通常配備1回・rollback最大1回だけで、旧unknown9件2313円、通常月額・月次pool・9単位・他Issue・認証/DB/秘密/共有ACLは変えない。
+
+guardは旧金額/期限を履歴として残し、新承認値を別定数へ固定する。旧期限や新期限の延長、承認額の増減、期限到達以後を拒否し、真正な承認原本・exact head・policy・原本・SDK上界・最新公開readback・独立レビューの親側照合を引き続き必須とする。承認メタデータやimportだけで送信権は生まれない。
+
+private親は既存正規認証を使い、読取専用で固定対象を照合してから既存keyを保護されたrunnerへ渡す。実transportは予約ACK後、承認endpoint完全一致時だけheaderを設定する。NextへのIPCにkeyを含めず、Next側の値はplaceholderとする。actor・原本・buildは起動前に全hashを照合し、既存台帳と同じWindows mandatory sharing方式の読取handleで実行中の書換え/削除を拒否する。各送信の短いACK内でbuild全体を再読する必要をなくし、ACK期限を延長しない。
+
+診断2段後は同じ親・排他claim・単一guardを保持し、正常40は未予約のままroot＋独立2名のQAを有限待機する。原本3件と集約をfsync後の排他的atomic公開で受け取り、head/新38・39応答hash/全24文20欄14参照/4誤り検出/誤拒否・誤理由・根拠不足0を親が照合し、受理時のQA hashを別の不変receiptへ固定する。未来のQA hashを開始承認へ捏造せず、開始approvalも書換えない。QA待機は最大900秒（単調時計でも拘束）、runner外側1740秒/親1800秒と承認期限の短い方で管理する。これらは人の独立照合を含む外側管理であり、AI request210秒/診断と正常それぞれoperation230秒/正常HTTP240秒は不変である。
+
+承認の成立は意味品質や統合条件の成立ではない。新実応答の診断と正常比較の全件原文QA・保存/再表示/再起動/全帳票が必要なまま。不合格時はその有限operationを停止し、既知usageを精算・unknownを保持して成果を保全する。別ID・別policyによる同じ不明送信の再実行や自動枠追加はしない。
