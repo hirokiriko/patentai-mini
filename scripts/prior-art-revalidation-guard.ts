@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 /** Inactive Local tooling only. No environment switch, credentials, native
  * fetch, journal writer, or product route is installed by importing this file. */
-export const REVALIDATION_PLAN = Object.freeze({
+export const REVALIDATION_734_V1 = Object.freeze({
   id: "ISSUE150_REVALIDATION_734_V1", status: "OWNER_APPROVED_INACTIVE",
   priorSends: 37, priorRows: 74,
   priorLedgerSha256: "a6a423c2350bd67671fd05147689888953060d89e628a17801f258a57b21d34c",
@@ -21,6 +21,17 @@ export const REVALIDATION_PLAN = Object.freeze({
     { ordinal: 41, phase: "normal_generation", task: "compare", input: 56000, output: 8192, reserve: 116 },
     { ordinal: 42, phase: "normal_review", task: "review", input: 65000, output: 22528, reserve: 221 },
   ].map(stage => Object.freeze(stage))),
+});
+// New explicit OWNER decision after the terminal 38/39 failure. The prior
+// plan, consumed claim and responses remain historical evidence, not rights.
+export const REVALIDATION_PLAN = Object.freeze({
+  ...REVALIDATION_734_V1, id: "ISSUE150_CLAIM_LOCAL_734_V1",
+  priorSends: 39, priorRows: 78,
+  priorLedgerSha256: "17237ca58c6937fbdcdce8ca209b64cdfa087e90d87d69a1024939c7e93818db",
+  currentExposure: 317619640,
+  currentAiLimit: 387100000, currentTotalLimit: 527100000,
+  approvedAiLimit: 391100000, approvedTotalLimit: 531100000,
+  stages: Object.freeze(REVALIDATION_734_V1.stages.map(stage => Object.freeze({ ...stage, ordinal: stage.ordinal + 2 }))),
 });
 export type RevalidationStage = typeof REVALIDATION_PLAN.stages[number];
 export type RevalidationBinding = Readonly<{
@@ -42,7 +53,7 @@ export type DiagnosticQa = Readonly<{
 export type RevalidationJournal = {
   /** Protected parent: atomic durable exclusive claim, rejecting every restart
    * or competing execution ID for this plan/ledger prefix. Verify the exact
-   * 74-row prefix before claiming; a new ID cannot reset the one-shot claim. */
+   * prior prefix before claiming; a new ID cannot reset the one-shot claim. */
   claim(binding: RevalidationBinding, prior: { sends: number; rows: number; sha256: string; reservationYen: number }): Promise<void>;
   /** Existing parent's durable write + readback ACK, not an in-memory callback. */
   reserve(event: { ordinal: number; requestHash: string; inputCeiling: number; outputCeiling: number; reservedJPY: number }): Promise<void>;
@@ -152,7 +163,7 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
       checkpoint();
       if (!claimed) {
         claimMayExist = true; // The claim may become durable even when its ACK is lost.
-        await bounded(deps.journal.claim(binding, { sends: 37, rows: 74, sha256: REVALIDATION_PLAN.priorLedgerSha256, reservationYen: funding.reservationYen }), signal);
+        await bounded(deps.journal.claim(binding, { sends: REVALIDATION_PLAN.priorSends, rows: REVALIDATION_PLAN.priorRows, sha256: REVALIDATION_PLAN.priorLedgerSha256, reservationYen: funding.reservationYen }), signal);
         claimed = true;
       }
       checkpoint();

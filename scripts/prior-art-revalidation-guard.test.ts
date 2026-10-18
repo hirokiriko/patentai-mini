@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
-import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, revalidationFunding, revalidationHash,
+import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, revalidationFunding, revalidationHash,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
@@ -24,7 +24,7 @@ const binding: RevalidationBinding = { executionId: "a0000000-0000-4000-8000-000
   approvalHash: "e".repeat(64), publicReadbackHash: "f".repeat(64),
   endpoint: "https://example.invalid/openai/v1/responses?api-version=v1", deployment: "patentai-gpt54" };
 const approved: RevalidationDecision = { status: "OWNER_APPROVED", planId: PLAN.id, maximumNewSends: 5,
-  maximumReservationYen: 734, maximumAi: 387100000, maximumTotal: 527100000, expiresAt: PLAN.approvedExpiresAt };
+  maximumReservationYen: 734, maximumAi: 391100000, maximumTotal: 531100000, expiresAt: PLAN.approvedExpiresAt };
 const packet = (stage: RevalidationStage): RevalidationPacket => ({ system: "Fictional original-only packet",
   prompt: JSON.stringify({ task: stage.task, phase: stage.phase }), schema: { type: "object", properties: {}, additionalProperties: false } });
 function body(stage: RevalidationStage, p = packet(stage)) {
@@ -67,17 +67,19 @@ describe("inactive finite 734 JPY revalidation guard", () => {
   beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-18T14:00:00+09:00")); });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
   it("retains old limits and unknown exposure while pinning the explicit new decision", () => {
-    expect(PLAN.status).toBe("OWNER_APPROVED_INACTIVE"); expect(PLAN.currentAiLimit).toBe(360000000);
-    expect(PLAN.currentTotalLimit).toBe(500000000); expect(PLAN.unknownHeld).toBe(231300000);
-    expect([PLAN.approvedAiLimit, PLAN.approvedTotalLimit, PLAN.approvedExpiresAt]).toEqual([387100000, 527100000, "2026-10-20T14:59:00Z"]);
-    expect(revalidationFunding()).toEqual({ reservationYen: 734, requiredAi: 387091210, requiredTotal: 527091210 });
+    expect([OLD_PLAN.priorSends, OLD_PLAN.priorRows, OLD_PLAN.approvedAiLimit, OLD_PLAN.approvedTotalLimit]).toEqual([37, 74, 387100000, 527100000]);
+    expect(PLAN.stages.map(s => s.ordinal)).toEqual([40, 41, 42, 43, 44]);
+    expect(PLAN.status).toBe("OWNER_APPROVED_INACTIVE"); expect(PLAN.currentAiLimit).toBe(387100000);
+    expect(PLAN.currentTotalLimit).toBe(527100000); expect(PLAN.unknownHeld).toBe(231300000);
+    expect([PLAN.approvedAiLimit, PLAN.approvedTotalLimit, PLAN.approvedExpiresAt]).toEqual([391100000, 531100000, "2026-10-20T14:59:00Z"]);
+    expect(revalidationFunding()).toEqual({ reservationYen: 734, requiredAi: 391019640, requiredTotal: 531019640 });
     expect(PLAN.stages.map(s => Math.ceil((5 * s.input + 30 * s.output) * 220 / 1000000))).toEqual([99, 199, 99, 116, 221]);
     expect(Object.isFrozen(PLAN.stages[0])).toBe(true);
   });
-  it.each([null, { ...approved, status: "PENDING_OWNER_DECISION" as const },
+  it.each([null, { ...approved, planId: OLD_PLAN.id }, { ...approved, maximumAi: OLD_PLAN.approvedAiLimit, maximumTotal: OLD_PLAN.approvedTotalLimit }, { ...approved, status: "PENDING_OWNER_DECISION" as const },
     { ...approved, maximumAi: PLAN.currentAiLimit }, { ...approved, maximumTotal: PLAN.currentTotalLimit },
-    { ...approved, maximumAi: 387091209 }, { ...approved, maximumTotal: 527091209 },
-    { ...approved, maximumAi: 387100001 }, { ...approved, maximumTotal: 527100001 },
+    { ...approved, maximumAi: 391019639 }, { ...approved, maximumTotal: 531019639 },
+    { ...approved, maximumAi: 391100001 }, { ...approved, maximumTotal: 531100001 },
     { ...approved, expiresAt: PLAN.existingExpiresAt }, { ...approved, expiresAt: "2026-10-20T14:59:01Z" },
     { ...approved, maximumNewSends: 6 }, { ...approved, maximumReservationYen: 958 },
     { ...approved, expiresAt: "2026-10-18T13:59:59+09:00" }, { ...approved, expiresAt: "2026-10-19T15:41:40+09:00" }])("rejects absent, stale or insufficient approval before reservation: %j", async decision => {
@@ -95,7 +97,7 @@ describe("inactive finite 734 JPY revalidation guard", () => {
   it("orders five bounded reservations/ACKs and refuses a sixth send or retry", async () => {
     const h = harness(); await advance(h, 5);
     expect(h.events).toEqual(["claim", ...PLAN.stages.flatMap(s => [`reserve:${s.ordinal}`, "transport", `reconcile:${s.ordinal}`])]);
-    expect(h.deps.journal.claim).toHaveBeenCalledWith(binding, { sends: 37, rows: 74, sha256: PLAN.priorLedgerSha256, reservationYen: 734 });
+    expect(h.deps.journal.claim).toHaveBeenCalledWith(binding, { sends: 39, rows: 78, sha256: PLAN.priorLedgerSha256, reservationYen: 734 });
     expect(h.deps.journal.reserve).toHaveBeenCalledTimes(5);
     for (const [i, [event]] of vi.mocked(h.deps.journal.reserve).mock.calls.entries()) expect(event).toMatchObject({ ordinal: PLAN.stages[i].ordinal,
       inputCeiling: PLAN.stages[i].input, outputCeiling: PLAN.stages[i].output, reservedJPY: PLAN.stages[i].reserve });
@@ -167,12 +169,12 @@ describe("inactive finite 734 JPY revalidation guard", () => {
     const h = harness(); vi.mocked(h.deps.journal[point]).mockRejectedValue(Error("FICTIONAL_SECRET"));
     await expect(h.send(0)).rejects.toThrow(/^revalidation_stopped$/); await expect(h.send(0)).rejects.toThrow();
     expect(h.transport).toHaveBeenCalledTimes(point === "reserve" ? 0 : 1);
-    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 38, claimMayExist: true, reservationMayExist: true, usageReconciled: false });
+    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 40, claimMayExist: true, reservationMayExist: true, usageReconciled: false });
   });
   it("notifies the parent about an ambiguous durable claim even before a reservation exists", async () => {
     const h = harness(); vi.mocked(h.deps.journal.claim).mockRejectedValue(Error("fictional ACK loss"));
     await expect(h.send(0)).rejects.toThrow(); expect(h.transport).not.toHaveBeenCalled(); expect(h.journal.reserve).not.toHaveBeenCalled();
-    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 38, claimMayExist: true, reservationMayExist: false, usageReconciled: false });
+    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 40, claimMayExist: true, reservationMayExist: false, usageReconciled: false });
     await expect(h.send(0)).rejects.toThrow(); expect(h.journal.claim).toHaveBeenCalledTimes(1);
   });
   it.each(["http", "json", "missing-usage", "input-usage", "output-usage", "total-usage", "cached-usage", "reasoning-usage", "model", "tier", "large"])("retains the reservation after %s without another send", async mode => {
@@ -193,14 +195,14 @@ describe("inactive finite 734 JPY revalidation guard", () => {
     });
     await expect(h.send(0)).rejects.toThrow(/^revalidation_stopped$/); await expect(h.send(1)).rejects.toThrow();
     expect(h.transport).toHaveBeenCalledTimes(1); expect(h.journal.reconcile).not.toHaveBeenCalled();
-    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 38, claimMayExist: true, reservationMayExist: true, usageReconciled: false });
+    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 40, claimMayExist: true, reservationMayExist: true, usageReconciled: false });
   });
   it.each(["incomplete", "answer-invalid"])("reconciles known usage before stopping for %s", async mode => {
     const h = harness();
     if (mode === "incomplete") h.transport.mockResolvedValue(Response.json({ ...responseBody(), status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }));
     else vi.mocked(h.deps.validateAnswer).mockRejectedValue(Error());
     await expect(h.send(0)).rejects.toThrow(); expect(h.journal.reconcile).toHaveBeenCalledTimes(1);
-    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 38, claimMayExist: true, reservationMayExist: true, usageReconciled: true });
+    expect(h.deps.journal.stop).toHaveBeenCalledWith({ ordinal: 40, claimMayExist: true, reservationMayExist: true, usageReconciled: true });
     expect(h.guard.snapshot().completed).toBe(0);
   });
   function timers() {
@@ -281,8 +283,8 @@ describe("inactive finite 734 JPY revalidation guard", () => {
       { system: SYSTEM, prompt: JSON.stringify(generation), schema: await asSchema(batchSchemaFor(batch)).jsonSchema },
       reviewPacket];
     const answers = [sourceAnswer, reviewed, sourceAnswer, generated, reviewed]; let sent = 0;
-    const h = harness({ packet: stage => packets[stage.ordinal - 38],
-      validateAnswer: vi.fn(async (stage, answer) => { expect(answer).toEqual(answers[stage.ordinal - 38]); }) });
+    const h = harness({ packet: stage => packets[stage.ordinal - 40],
+      validateAnswer: vi.fn(async (stage, answer) => { expect(answer).toEqual(answers[stage.ordinal - 40]); }) });
     h.transport.mockImplementation(async () => Response.json(responseBody(answers[sent++])));
     const captured: { url: string; body: unknown }[] = [];
     vi.stubGlobal("fetch", async (url: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
