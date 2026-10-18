@@ -194,3 +194,27 @@ LEAD_NEXT_OFFLINE_IMPLEMENTATION_V1の候補を、原文読取→生成→査読
 内部失敗は段階とtimeout／transport_unknown／output_incomplete／usage_invalid／protocol_invalid／review_rejectedに分ける。形式被覆を通過したnegative/uncertain査読だけをreview_rejectedにするが、それはAI判定を受理しなかった分類であり、AIの意味判断が真であるという認定ではない。生例外・応答・資格情報を分類へ保持せず、公開APIの固定ai_incompleteとunknown予約保持を維持する。自分のdeadlineでSDKがrejectした場合もtimeoutへ正規化する。
 
 今回の架空SDK・隔離実DB・画面・PDF/CSV検証は接続と境界の確認である。実AIの意味品質・正常完了時間は未検証で、TECHNICAL_GO／通常統合はHOLD。現行モデル・推論・各上限・旧台帳・使用量不明予約・期限に変更はない。新headの再実証には、新しい原文読取＋既知4誤り査読の診断2送信、合格後の正常3送信と原文全件QAが必要で、旧35の索引PASSを新経路へ流用しない。
+
+### 734円計画の有限guard（未承認・実送信無効）
+
+`scripts/prior-art-revalidation-guard.ts` はLocal補助工具の未接続libraryであり、製品route・環境変数・資格情報・native fetch・既存実行親へ接続しない。importやcallerの承認JSONだけでは開始権を作らない。現在の公開planは `PENDING_OWNER_DECISION`。架空テストだけが架空の承認・親ACK・transportを供給する。
+
+|送信|段階|実SDK本文UTF-8 bytes＋8192およびinput usage上限|output上限|保持予約円|
+|---:|---|---:|---:|---:|
+|38|診断・新原文読取|40000|8192|99|
+|39|診断・既知4誤り査読|45000|22528|199|
+|40|正常・新原文読取|40000|8192|99|
+|41|正常・生成|56000|8192|116|
+|42|正常・保存前査読|65000|22528|221|
+
+各予約は既存保守単価の `ceil((5×input+30×output)×220/1,000,000)` 円。全5段734円（診断298＋正常436）が最初から収まらなければ予約前に拒否する。入力は親が原本と検証済み回答から再構成したsystem/prompt/schemaへ完全一致させ、段階順・指定deployment・default/low・出力上限・余分なrequest fieldsを検査する。実SDK全量測定は最大索引と最大草稿を含み、この小さい架空fixtureで代替しない。
+
+保護された親が、真正なOWNER承認原本とhash、exact head、policy、原本群、SDK測定、具体的公開記録/readback、旧台帳37送信/74行のdigestを検証する。guardは承認の不存在・旧3600/5000円枠・不一致・期限切れを拒否し、期限は既存 **2026-10-18 15:41:40 JST** 以外を受け付けない。予算・期限を今回変更したものではない。再開する場合の新しい期限は、人による具体的判断とその有限policy/guardの別途更新・再検証を必要とし、ここから自動延長しない。
+
+親の排他的durable claimは同じ計画/旧台帳prefix全体で一回だけで、新IDやprocess再起動でも復活しない。各予約のfsync/readback ACK後だけtransportを呼ぶ。診断2段／正常3段それぞれ230秒共有、各request210秒、既存expiryの最短値を、共有abortと単調時計の境界検査で守る。時計の後退や遅延ACKでも延長せず、同時送信・6回目・retry・途中再開を拒否する。1MiB応答上限、default/model/status、input/output/total/cached/reasoning usageを検査し、不明時は全額保持する。既知usageは不完全回答や品質不合格でも精算してから後続停止し、usage不明と混同しない。
+
+診断後はexact headと新しい2応答hashに束縛したroot＋独立2名の24文/20欄/14参照全件QA、既知4誤り検出、見逃し0、誤拒否0、正対照維持を親が原本照合するまで40へ進めない。JSONの件数だけでは意味品質を証明しない。失敗後は永久停止し、ACK消失/partial writeの修復・再試行をしない。停止通知は最終STOPではなく、親がauthoritative journalと全所有process終了を確認するまでlockを保持し、reconcile ACK消失で既知usageを消したり二重terminalを書かない。
+
+既存実行親とACKは旧2送信専用であり、このlibraryへの実adapterは未接続。5段のdurable claim/10行ACK、強制終了、unknown保持、再起動拒否をその実親の架空通信で検証し、独立監査を通すことも将来の開始前条件である。現段階を実送信可能・意味品質改善・TECHNICAL_GOと呼ばない。
+
+一括判断案は、現在の将来評価既知823.91210円＋unknown9件2313円＝3136.91210円を保持し、734円でAI上界3870.91210円、配備/rollback留保1400円込み5270.91210円とする。現行AI3600円/総5000円の不足はそれぞれ270.91210円。整数案はAI3871円/総5271円（各＋271円）であり、未承認の提案に留める。署名済み `release-start` のAI exposure3000円、通常profile/月次pool/9単位/回数/期限、同head TECHNICAL_GOと統合tree等は通常統合・配備の別条件として維持する。この3000円をAI診断の送信条件に混ぜず、予算案が承認されても統合を自動許可しない。
