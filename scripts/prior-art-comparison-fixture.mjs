@@ -36,7 +36,8 @@ globalThis.fetch = async (url, init) => {
   const chunk = JSON.parse(body.input[1].content[0].text);
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
-  const fullText = claim => claim.text ?? claim.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
+  const fullText = claim => Array.isArray(claim) ? claim[2].map(([, text]) => text).join("") :
+    claim.text ?? claim.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
   const event = { phase: chunk.task, bytes: Buffer.byteLength(init.body), baseTailPresent: chunk.base.claims.some(c => fullText(c).includes("超えると青色弁を閉じる")),
     candidateTailPresent: chunk.documents.some(d => (d.candidate ?? d.source).claims.some(c => /青色弁を(?:開く|閉じる)/.test(fullText(c)))),
     pairs: chunk.task === "review" ? chunk.pairs.length : chunk.documents.reduce((n,d)=>n+d.pairs.length,0) };
@@ -50,10 +51,13 @@ globalThis.fetch = async (url, init) => {
     referenceChecks:chunk.units.flatMap(unit=>(typeof unit==="string"?[]:unit.filter((_,part)=>part%2===1))).map(()=>({relation:"unspecified",operatorBasis:null})),
     checks: chunk.fields.flatMap(([id,firstUnitId,endUnitId]) => {
       const [docId,baseNo,candidateNo,field]=id.split(":");
-      const lastEvidence=(source,no)=>source.claims.find(c=>c.claimNo===Number(no)).segments.at(-1)[0];
+      const lastEvidence=(source,no)=>source.claims.find(c=>c[0]===Number(no))[2].at(-1)[0];
       const ids=[...(field==="candidateObservation"?[]:[lastEvidence(chunk.base,baseNo)]),
         ...(field==="baseObservation"?[]:[lastEvidence(chunk.documents.find(d=>d.docId===Number(docId)).source,candidateNo)])];
+      const witness=[chunk.base,...chunk.documents.map(d=>d.source)].flatMap(s=>s.claims).flatMap(c=>c[2]).find(([key])=>key===ids[0]);
       return chunk.units.slice(firstUnitId,endUnitId).map((unit,i)=>({unitId:firstUnitId+i,
+        sourceReading:"架空原文の条件。意味品質の実証ではない。",assertion:"fact",
+        counterEvidence:mode==="review-reject"?{targetQuote:typeof unit==="string"?unit:unit.join(""),sourceWitness:[{evidenceId:ids[0],quote:witness[1],occurrence:1}]}:null,
         kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
         sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));
     }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {

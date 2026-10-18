@@ -28,6 +28,8 @@ function response(logical: ReturnType<typeof reviewInput>) {
     const ids = [...(field === "candidateObservation" ? [] : [logical.base.claims.find(c => c.claimNo === Number(base))!.segments[0][0]]),
       ...(field === "baseObservation" ? [] : [logical.documents.find(d => d.docId === Number(doc))!.source.claims.find(c => c.claimNo === Number(candidate))!.segments[0][0]])];
     return reviewTargetUnits(target.text).map(unit => ({ unitId: unitId++,
+      sourceReading: "架空原文の条件。意味品質の実証ではない。", assertion: "fact" as "fact" | "reservation" | "mixed",
+      counterEvidence: null as null | { targetQuote: string; sourceWitness: { evidenceId: number; quote: string; occurrence: number }[] },
       referenceChecks: reviewReferenceMentions(target.text).filter(m => m.start >= unit.start && m.end <= unit.end)
         .map(() => ({ relation: "unspecified" as "unspecified" | "all" | "any" | "unresolved", operatorBasis: null as { quote: "全て" | "又は"; occurrence: number } | null })),
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
@@ -37,6 +39,17 @@ function response(logical: ReturnType<typeof reviewInput>) {
   });
   return { draftDigest: reviewTransportInput(logical).draftDigest, referenceChecks: checks.flatMap(row => row.referenceChecks),
     checks: checks.map(({ referenceChecks, ...row }) => { void referenceChecks; return row; }) };
+}
+
+/** Deliberately fictional negative certificate: tests literal provenance only,
+ * never use it as an assertion that the target is actually contradicted. */
+function negative(logical: ReturnType<typeof reviewInput>, answer: ReturnType<typeof response>["checks"][number]) {
+  const unit = logical.targets.flatMap(t => reviewTargetUnits(t.text))[answer.unitId];
+  const id = answer.evidenceIds[0], source = [logical.base, ...logical.documents.map(d => d.source)]
+    .flatMap(s => s.claims).flatMap(c => c.segments).find(([key]) => key === id)!;
+  answer.verdict = "inconsistent";
+  answer.counterEvidence = { targetQuote: unit.text, sourceWitness: [{ evidenceId: id,
+    quote: source[1].includes("記録を保持する。") ? "記録を保持する。" : source[1], occurrence: 1 }] };
 }
 
 const wireText = (unit: ReturnType<typeof reviewTransportInput>["units"][number]) => typeof unit === "string" ? unit : unit.join("");
@@ -56,20 +69,23 @@ describe("whole-unit review transport", () => {
       const original = logicalSources[i];
       expect(source.publicationNumber).toBe(original.publicationNumber); expect(source.version).toBe(original.version);
       expect(source.referenceLogic.relations).toEqual(original.referenceLogic.relations);
-      expect(source.referenceLogic.scopes).toEqual(original.referenceLogic.scopes.map(scope => ({ claimNo: scope.claimNo,
-        closureClaimNos: [...scope.guaranteedClaimNos, ...scope.conditionalClaimNos].sort((a, b) => a - b) })));
-      source.claims.forEach((claim, at) => {
-        expect(claim.claimNo).toBe(original.claims[at].claimNo); expect(claim.dependsOn).toEqual(original.claims[at].dependsOn);
-        expect(claim.segments).toEqual(original.claims[at].segments);
-        const text = claim.segments.map(([, part]) => part).join("");
+      expect(source.referenceLogic.scopes).toEqual(original.referenceLogic.scopes.map(scope => [scope.claimNo,
+        [...scope.guaranteedClaimNos, ...scope.conditionalClaimNos].sort((a, b) => a - b)]));
+      source.claims.forEach(([claimNo, dependsOn, segments], at) => {
+        expect(claimNo).toBe(original.claims[at].claimNo); expect(dependsOn).toEqual(original.claims[at].dependsOn);
+        expect(segments).toEqual(original.claims[at].segments);
+        const text = segments.map(([, part]) => part).join("");
         expect(text).toBe(original.claims[at].segments.map(([, part]) => part).join(""));
         let start = 0;
-        expect(claim.segments.map(([id, part]) => { const entry = [id, text.slice(start, start + part.length)]; start += part.length; return entry; }))
+        expect(segments.map(([id, part]) => { const entry = [id, text.slice(start, start + part.length)]; start += part.length; return entry; }))
           .toEqual(original.claims[at].segments);
         expect(start).toBe(text.length);
       });
     });
-    expect(input.scopes).toBe(logical.scopes); expect(input.pairs).toBe(logical.pairs);
+    expect(input.scopes.map(([id, side, docId, selectedClaimNo, contextClaimNos]) => ({ id, side, docId, selectedClaimNo, contextClaimNos }))).toEqual(logical.scopes);
+    expect(input.pairs.map(([docId, baseClaimNo, candidateClaimNo, baseContextClaimNos, candidateContextClaimNos, b, c]) => ({
+      docId, baseClaimNo, candidateClaimNo, baseContextClaimNos, candidateContextClaimNos,
+      baseEvidence: { claimNo: b[0], start: b[1], end: b[2] }, candidateEvidence: { claimNo: c[0], start: c[1], end: c[2] } }))).toEqual(logical.pairs);
     expect(input.fields.at(-1)![2]).toBe(input.units.length);
     expect(input.fields.map(([id]) => id)).toEqual(logical.targets.map(t => t.id));
     const ids = fieldRows(input).flatMap(wireIds);
@@ -120,17 +136,17 @@ describe("whole-unit review transport", () => {
     const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(pair => ({ ...pair,
       baseObservation: "基準の確認値を翌朝に消去する。", candidateObservation: "候補の末尾条件を保持する。" })));
     const logical = reviewInput(plan, drafts), source = reviewTransportInput(logical).base;
-    const claim = source.claims.find(c => c.claimNo === 1)!, text = claim.segments.map(([, part]) => part).join("");
+    const claim = source.claims.find(c => c[0] === 1)!, text = claim[2].map(([, part]) => part).join("");
     expect(text.length).toBeGreaterThan(15000);
     expect(text).toContain("𠮷😀e\u0301の末尾条件は温度が七度を超えると青色弁を閉じる");
     let start = 0;
-    const reconstructed = claim.segments.map(([id, part]) => {
+    const reconstructed = claim[2].map(([id, part]) => {
       const segment = [id, text.slice(start, start + part.length)]; start += part.length; return segment;
     });
     expect(reconstructed).toEqual(logical.base.claims.find(c => c.claimNo === 1)!.segments);
     expect(start).toBe(text.length);
     expect(source.referenceLogic.relations).toEqual(logical.base.referenceLogic.relations);
-    expect(source.referenceLogic.scopes.find(s => s.claimNo === 2)?.closureClaimNos).toEqual([1, 2]);
+    expect(source.referenceLogic.scopes.find(s => s[0] === 2)?.[1]).toEqual([1, 2]);
     expect(logical.base.referenceLogic.scopes.find(s => s.claimNo === 2)).toHaveProperty("guaranteedClaimNos");
   });
 
@@ -141,7 +157,7 @@ describe("whole-unit review transport", () => {
     const logical = reviewInput(plan, drafts), input = reviewTransportInput(logical), raw = response(logical);
     const candidateUnit = input.fields[1][1];
     expect(input.fields[1][0]).toContain("candidateObservation");
-    expect(input.base.claims.flatMap(c => c.segments).some(([id]) => id === candidateUnit)).toBe(true);
+    expect(input.base.claims.flatMap(c => c[2]).some(([id]) => id === candidateUnit)).toBe(true);
     raw.checks[candidateUnit].evidenceIds = [candidateUnit];
     const before = JSON.stringify(raw), decoded = decodeReviewTransport(logical, raw);
     expect(() => inspectReviewCoverage(logical, decoded)).toThrow("ai_incomplete");
@@ -196,7 +212,7 @@ describe("whole-unit review transport", () => {
     drafts[0].differences = "𠮷の温度が上限を超えた場合、制御を実行しない。　次の条件。。末尾。　";
     const logical = reviewInput(plan, drafts), raw = response(logical), target = logical.targets[3], units = reviewTargetUnits(target.text);
     const ids = wireIds(fieldRows(reviewTransportInput(logical))[3]);
-    for (const id of ids) raw.checks[id].verdict = "inconsistent";
+    for (const id of ids) negative(logical, raw.checks[id]);
     const decoded = decodeReviewTransport(logical, raw), checks = decoded.checks[3].unitChecks;
     expect(checks.map(c => target.text.slice(...c.contrasts[0].rejectedTargetSpan!)).join("")).toBe(target.text);
     checks.forEach((check, i) => {
@@ -214,7 +230,7 @@ describe("whole-unit review transport", () => {
     const { plan, drafts } = example(), evidence = structuredClone(drafts[0].baseEvidence);
     drafts[0].differences = "甲".repeat(198) + "乙。";
     const logical = reviewInput(plan, drafts), raw = response(logical), id = fieldRows(reviewTransportInput(logical))[3].firstUnitId;
-    raw.checks[id].verdict = "inconsistent";
+    negative(logical, raw.checks[id]);
     const decoded = decodeReviewTransport(logical, raw);
     expect(decoded.checks[3].unitChecks[0].contrasts[0].rejectedTargetSpan).toEqual([0, 200]);
     expect(inspectReviewCoverage(logical, decoded).checks[3].rejectedTargetAnchor?.quote).toBe(drafts[0].differences);
@@ -278,6 +294,7 @@ describe("whole-unit review transport", () => {
   it.each(["consistent", "inconsistent", "uncertain"] as const)("does not promote an unspecified combination to %s", verdict => {
     const { logical, raw, first } = referenceExample("請求項1-2の装置は、温度上限で停止する。");
     first.kind = "reference_combination"; first.reference = 1; first.verdict = verdict;
+    if (verdict === "inconsistent") negative(logical, first);
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
     first.kind = "technical"; first.reference = null;
     expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe(verdict);
@@ -287,6 +304,7 @@ describe("whole-unit review transport", () => {
     const { plan, drafts } = example(2); drafts[0].candidateObservation = "候補側は請求項3の装置を継承する。";
     const logical = reviewInput(plan, drafts), raw = response(logical), id = fieldRows(reviewTransportInput(logical))[1].firstUnitId, answer = raw.checks[id];
     answer.kind = "reference_scope"; answer.reference = 1; answer.verdict = "inconsistent";
+    negative(logical, answer);
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
     answer.scopeWitness = { scopeId: "candidate:21:2", invalidMember: 3, mode: "ancestor", subjectReference: null, directnessBasis: null };
     expect(decodeReviewTransport(logical, raw).checks[1].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
@@ -296,6 +314,101 @@ describe("whole-unit review transport", () => {
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
     answer.kind = "technical"; answer.reference = null; answer.verdict = "inconsistent";
     expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+  });
+
+  it.each(["missing", "blank_source", "target_absent", "target_repeated", "witness_absent", "wrong_side", "wrong_start", "wrong_occurrence", "empty_witness", "duplicate_witness", "control", "counter_for_c", "counter_for_u"])("refuses %s counter evidence without repairing the verdict", mode => {
+    const { plan, drafts } = example(); drafts[0].baseObservation = "光を備える。光光を備える。";
+    const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[mode === "target_repeated" ? 1 : 0];
+    negative(logical, answer);
+    const counter = answer.counterEvidence!;
+    if (mode === "missing") answer.counterEvidence = null;
+    if (mode === "blank_source") answer.sourceReading = "　 ";
+    if (mode === "target_absent") counter.targetQuote = "温度上限を超える";
+    if (mode === "target_repeated") counter.targetQuote = "光";
+    if (mode === "witness_absent") counter.sourceWitness[0].quote = "原文に存在しない結論";
+    if (mode === "wrong_side") counter.sourceWitness[0].evidenceId = logical.documents[0].source.claims[0].segments[0][0];
+    if (mode === "wrong_start") counter.sourceWitness[0].evidenceId = 99999;
+    if (mode === "wrong_occurrence") counter.sourceWitness[0].occurrence = 2;
+    if (mode === "empty_witness") counter.sourceWitness = [];
+    if (mode === "duplicate_witness") counter.sourceWitness.push({ ...counter.sourceWitness[0] });
+    if (mode === "control") counter.sourceWitness[0].quote += "\n";
+    if (mode === "counter_for_c") answer.verdict = "consistent";
+    if (mode === "counter_for_u") answer.verdict = "uncertain";
+    const original = JSON.stringify(raw);
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    expect(JSON.stringify(raw)).toBe(original);
+  });
+
+  it("requires all touched source segments without adding missing evidence or imposing a120-character witness limit", () => {
+    const { inputs, selection } = fictionalInputs();
+    const text = "甲".repeat(118) + "𠮷の部材を備え、温度上限を超えた場合は弁を閉じる。末尾条件を保持する。";
+    const body = `【請求項1】\n${text}`;
+    inputs.draft = parseComparisonSource(body, 11, "draft");
+    inputs.documents = [21, 22, 23].map(id => parseComparisonSource(body, id, "candidate"));
+    const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(p => ({ ...p,
+      baseObservation: "𠮷の部材は弁を開く。", candidateObservation: "候補の部材。" })));
+    const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[0];
+    negative(logical, answer);
+    const segments = logical.base.claims[0].segments;
+    expect(segments.length).toBeGreaterThan(1);
+    answer.evidenceIds = segments.map(([id]) => id);
+    answer.counterEvidence!.sourceWitness = [{ evidenceId: segments[0][0], quote: text, occurrence: 1 }];
+    expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
+    answer.evidenceIds.pop();
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    answer.evidenceIds = segments.map(([id]) => id);
+    answer.counterEvidence!.sourceWitness[0].evidenceId = segments[1][0];
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    answer.counterEvidence!.sourceWitness[0].evidenceId = segments[0][0];
+    answer.counterEvidence!.sourceWitness[0].quote = "\ud842";
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    answer.counterEvidence!.sourceWitness[0].quote = text;
+    answer.counterEvidence!.targetQuote = "\ud842";
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+  });
+
+  it("binds repeated source quotes to the requested occurrence without changing their text", () => {
+    const { inputs, selection } = fictionalInputs(), body = "【請求項1】\n同条件で弁を閉じる。同条件で弁を閉じる。温度の記録を保持する。";
+    inputs.draft = parseComparisonSource(body, 11, "draft");
+    inputs.documents = [21, 22].map(id => parseComparisonSource(body, id, "candidate"));
+    const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(p => ({ ...p,
+      baseObservation: "弁を開く。", candidateObservation: "弁を開く。" })));
+    const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[0];
+    negative(logical, answer);
+    answer.counterEvidence!.sourceWitness[0].quote = "同条件で弁を閉じる。";
+    answer.counterEvidence!.sourceWitness[0].occurrence = 2;
+    expect(decodeReviewTransport(logical, raw).checks[0].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
+    answer.counterEvidence!.sourceWitness[0].occurrence = 3;
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+  });
+
+  it.each(["document", "closure"])("rejects a counter witness from another %s even when its ID is included", mode => {
+    const { inputs, selection } = fictionalInputs(), body = "【請求項1】\n光を備える。\n【請求項2】\n請求項1に記載の装置であって、記録を保持する。";
+    inputs.draft = parseComparisonSource(body, 11, "draft");
+    inputs.documents = [21, 22].map(id => parseComparisonSource(body, id, "candidate"));
+    selection.documents.forEach(d => { d.claimNos = [1, 2]; });
+    const plan = makePlan(inputs, selection), drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(p => ({ ...p,
+      baseObservation: "光を備える。", candidateObservation: "光を備える。" })));
+    const logical = reviewInput(plan, drafts), raw = response(logical), answer = raw.checks[1];
+    negative(logical, answer);
+    const other = logical.documents[mode === "document" ? 1 : 0].source.claims.find(c => c.claimNo === (mode === "document" ? 1 : 2))!.segments[0];
+    answer.evidenceIds.push(other[0]);
+    answer.counterEvidence!.sourceWitness = [{ evidenceId: other[0], quote: other[1], occurrence: 1 }];
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+  });
+
+  it("does not let a source reference clause alone certify a technical rejection", () => {
+    const { logical } = example(2), raw = response(logical), answer = raw.checks[2];
+    negative(logical, answer);
+    const clause = logical.documents[0].source.referenceLogic.relations[0].referenceClauses[0];
+    answer.counterEvidence!.sourceWitness[0].quote = clause.text;
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    answer.counterEvidence!.sourceWitness[0].quote = clause.text + "に記載の装置";
+    expect(() => decodeReviewTransport(logical, raw)).toThrow("ai_incomplete");
+    // A literal technical quote can pass provenance even if its meaning is
+    // wrong. Independent semantic QA remains required; no I is promoted to C.
+    negative(logical, answer); answer.assertion = "reservation";
+    expect(decodeReviewTransport(logical, raw).checks[1].unitChecks[0].contrasts[0].verdict).toBe("inconsistent");
   });
 
   it("preflights full-length dense punctuation, reference and Unicode vectors without clipping", () => {

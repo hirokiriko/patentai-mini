@@ -62,7 +62,7 @@ export function fictionalReview(input: ReturnType<typeof reviewInput>) {
 /** Fictional raw transport only; never evidence of semantic quality. */
 export function fictionalTransportReview(input: ReturnType<typeof reviewTransportInput>) {
   const lastEvidence = (source: typeof input.base, claimNo: number) => {
-    return source.claims.find(c => c.claimNo === claimNo)!.segments.at(-1)![0];
+    return source.claims.find(c => c[0] === claimNo)![2].at(-1)![0];
   };
   return { draftDigest: input.draftDigest,
     referenceChecks: input.units.flatMap(unit => (typeof unit === "string" ? [] : unit.filter((_, part) => part % 2 === 1)))
@@ -74,6 +74,7 @@ export function fictionalTransportReview(input: ReturnType<typeof reviewTranspor
       ...(identity.field === "baseObservation" ? [] : [lastEvidence(input.documents.find(d => d.docId === identity.docId)!.source, identity.candidateClaimNo)]),
     ];
     return input.units.slice(firstUnitId, endUnitId).map((unit, index) => ({ unitId: firstUnitId + index,
+      sourceReading: "架空原文の条件。意味品質の実証ではない。", assertion: "fact" as const, counterEvidence: null,
       kind: "technical" as "technical" | "reference_scope" | "reference_combination", reference: null as number | null,
       evidenceIds: [...ids], sourceComparison: "架空原文との対応。意味品質の実証ではない。",
       verdict: "consistent" as "consistent" | "inconsistent" | "uncertain", scopeWitness: null,
