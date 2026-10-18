@@ -7,6 +7,7 @@ import { assertGenerationEvidence, generationInput, generationSchemaFor } from "
 import { assertReviewPlan } from "./semantic-review";
 import { separatedGenerationPlan } from "./source-separation";
 import { LIMITS } from "./limits";
+import { LITERAL_STRUCTURE_GUIDE } from "./literal-structure";
 export { LIMITS } from "./limits";
 
 const number = z.number().int().positive();
@@ -58,7 +59,8 @@ quotableは同一請求項内で引用位置を一意に復元できるかだけ
 根拠は主な共通点・差分の限定とその対象が分かる箇所を優先します。短い代表引用だけで全条件を証明済みと扱いません。未確認には、参照範囲の全文を読んでも確定できない具体的な対応だけを記します。
 末尾の制約も必ず考慮します。引用にない記載不存在、明細書全体の不存在、法的判断、リスク段階は述べません。
 共通点が確認できない場合はそう明記し、対比した箇所を引用します。比較結果は指定請求項と従属参照の範囲に限られ、文献全体の不存在を示しません。
-各側の観察は120文字以内、共通点と差分各200文字以内、未確認120文字以内。短文化のために条件の対象や必須・択一の区別を省かず、正確に収まらない論点は未確認と明記します。`;
+各側の観察は120文字以内、共通点と差分各200文字以内、未確認120文字以内。短文化のために条件の対象や必須・択一の区別を省かず、正確に収まらない論点は未確認と明記します。
+${LITERAL_STRUCTURE_GUIDE}`;
 export function comparisonPrompt(chunk: ManagedComparisonChunk): string { return JSON.stringify(generationInput(chunk)); }
 
 export function makePlan(inputs: ComparisonInputs, selection: Selection): ManagedComparisonChunk[] {

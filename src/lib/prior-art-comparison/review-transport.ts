@@ -3,6 +3,7 @@ import type { reviewInput } from "./semantic-review";
 import { ComparisonError, digest } from "./source";
 import { REFERENCE_ALL_WORDS, REFERENCE_ANY_WORDS, reviewReferenceMentions, validateReferenceRelations } from "./reference-mentions";
 import { reviewScopeWitnessSchema, validateReviewScopeWitness } from "./review-scope-witness";
+import { LITERAL_STRUCTURE_GUIDE } from "./literal-structure";
 
 type LogicalReview = ReturnType<typeof reviewInput>;
 type Unit = { start: number; end: number; text: string };
@@ -119,7 +120,8 @@ referenceChecks: unit/slot order. Bare range/slash/inheritance:unspecified/null,
 I: targetQuote=unique exact false assertion; sourceWitness=[{evidenceId:START part,quote:exact original, unique start in part}]. Keep subject/guard/negation; cross-part/multiple/full quotes allowed; technical needs nonreference quote.
 scopeWitness only I/reference_scope: affirm invalidMember outside closure/directRefs; direct needs 直接. Negation/ambiguity/AND-OR≠scope.
 evidenceIds:definitions/guards/conclusions+ALL witness parts. all/only/absence:all branches. baseObservation:base only; candidateObservation:its candidate only; others:both.
-C=all assertions supported at stated scope, justified reservations included. I=contradiction; U=necessary branch/interpretation unresolved ([] if ungrounded).`;
+C=all assertions supported at stated scope, justified reservations included. I=contradiction; U=necessary branch/interpretation unresolved ([] if ungrounded).
+${LITERAL_STRUCTURE_GUIDE}`;
 
 const integer = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const relation = z.enum(["unspecified", "all", "any", "unresolved"]);

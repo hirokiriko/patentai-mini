@@ -4,6 +4,7 @@ import type { PairResult } from "./comparison";
 import { requestBytes, unionSource } from "./generation-batch";
 import { LIMITS } from "./limits";
 import { ComparisonError, digest } from "./source";
+import { compareAttributedStructure, literalStructureInput } from "./literal-structure";
 import { referenceLogicInput } from "./reference-logic";
 import { sourceSegments } from "./generation";
 import { reviewReferenceMentions, validateReferenceRelations, REFERENCE_ALL_WORDS, REFERENCE_ANY_WORDS } from "./reference-mentions";
@@ -69,7 +70,7 @@ export function reviewInput(plan: readonly ManagedComparisonChunk[], drafts: rea
   let evidenceOrdinal = 0;
   const catalog = (source: typeof base, prefix: string) => {
     const partitioned = sourceSegments(source, prefix);
-    return { ...partitioned, claims: partitioned.claims.map(({ segments, ...claim }) => ({ ...claim,
+    return { ...partitioned, ...literalStructureInput(source), claims: partitioned.claims.map(({ segments, ...claim }) => ({ ...claim,
       segments: segments.map(segment => [evidenceOrdinal++, segment.text] as const) })) };
   };
   // Review the immutable draft against the originals without directly sharing
@@ -256,5 +257,20 @@ export function inspectReviewCoverage(input: ReturnType<typeof reviewInput>, val
 /** Complete source review remains mandatory. Valid negative/uncertain verdicts
  * are still rejected; a literal span is not a semantic quality certificate. */
 export function validateReview(input: ReturnType<typeof reviewInput>, value: unknown): void {
-  if (inspectReviewCoverage(input, value).checks.some(check => check.verdict !== "consistent")) throw new ComparisonError("ai_incomplete");
+  const review = inspectReviewCoverage(input, value);
+  if (review.checks.some(check => check.verdict !== "consistent")) throw new ComparisonError("ai_incomplete");
+  for (const target of input.targets) {
+    const identity = reviewTargetIdentity(target.id);
+    const pair = input.pairs.find(p => p.docId === identity.docId && p.baseClaimNo === identity.baseClaimNo && p.candidateClaimNo === identity.candidateClaimNo)!;
+    const check = review.checks.find(c => c.id === target.id)!;
+    for (const side of ["base", "candidate"] as const) {
+      if (identity.field === (side === "base" ? "candidateObservation" : "baseObservation")) continue;
+      const original = side === "base" ? input.base : input.documents.find(d => d.docId === identity.docId)!.source;
+      const source = { claims: original.claims.filter(c => pair[`${side}ContextClaimNos`].includes(c.claimNo))
+        .map(({ segments, ...c }) => ({ ...c, text: segments.map(s => s[1]).join("") })) };
+      for (const text of [target.text, ...check.unitChecks.map(u => u.sourceComparison)]) {
+        if (compareAttributedStructure(source, text, side, identity.field === `${side}Observation`).length) throw new ComparisonError("ai_incomplete");
+      }
+    }
+  }
 }

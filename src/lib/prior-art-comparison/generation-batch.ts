@@ -5,6 +5,7 @@ import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
 import { sourceAnalysisInput, type SourceAnalysis } from "./source-analysis";
+import { literalStructureInput } from "./literal-structure";
 
 // Combine only identical source versions; claim text is never summarized.
 export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSet {
@@ -24,6 +25,7 @@ export function batchInput(chunks: readonly ManagedComparisonChunk[], sourceAnal
     sourceDigests: sourceAnalysisInput(chunks).sources.map(s => s.sourceDigest),
     sourceAnalysis,
     base: { ...generationInput({ ...chunks[0], base }).base,
+      ...literalStructureInput(base),
       referenceLogic: referenceLogicInput(base, [...new Set(chunks.flatMap(c => c.pairs.map(p => p.baseClaimNo)))]) },
     documents: chunks.map(chunk => {
       const d = generationInput(chunk);

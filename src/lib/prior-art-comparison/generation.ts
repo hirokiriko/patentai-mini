@@ -2,6 +2,7 @@ import { z } from "zod";
 import { managedClaimContext, type ManagedClaimSet, type ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
+import { compareAttributedStructure, literalStructureInput } from "./literal-structure";
 
 const claimNo = z.number().int().positive();
 const text = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f-\x9f]*$/);
@@ -46,8 +47,10 @@ export function generationInput(chunk: ManagedComparisonChunk) {
       candidateContextClaimNos: managedClaimContext(chunk.candidate, [pair.candidateClaimNo]).claims.map(c => c.claimNo),
     })),
     base: { ...sourceSegments(chunk.base, `b${chunk.baseDigest}:0`),
+      ...literalStructureInput(chunk.base),
       referenceLogic: referenceLogicInput(chunk.base, [...new Set(chunk.pairs.map(p => p.baseClaimNo))]) },
     candidate: { ...sourceSegments(chunk.candidate, `c${chunk.candidateDigest}:${chunk.candidateId}`),
+      ...literalStructureInput(chunk.candidate),
       referenceLogic: referenceLogicInput(chunk.candidate, [...new Set(chunk.pairs.map(p => p.candidateClaimNo))]) },
   };
 }
@@ -83,9 +86,16 @@ export function generationSchemaFor(chunk: ManagedComparisonChunk) {
 export function decodeGeneration(chunk: ManagedComparisonChunk, answer: unknown) {
   try {
     const parsed = generationSchema.parse(answer);
+    for (const result of parsed.results) for (const side of ["base", "candidate"] as const) {
+      const source = managedClaimContext(chunk[side], [result[`${side}ClaimNo`]]);
+      for (const field of ["baseObservation", "candidateObservation", "common", "differences", "unconfirmed"] as const) {
+        if (field === (side === "base" ? "candidateObservation" : "baseObservation")) continue;
+        if (compareAttributedStructure(source, result[field], side, field === `${side}Observation`).length) throw Error();
+      }
+    }
     // Protocol metadata is not a patent condition or a reason that source text
     // cannot be compared. Apply this only to new generations, not saved readers.
-    if (parsed.results.some(r => /quotable|referenceLogic|referenceClauses|guaranteedClaimNos|conditionalClaimNos|unknownClaimNos|rejectedTargetSpan|rejectedTargetAnchor|unitStarts|unitChecks|targetReading|sourceComparison|inspectedKinds|basisQuote|assertionStatus|evidenceIds|sourceFacts|factIds|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
+    if (parsed.results.some(r => /quotable|literalStructure|referenceLogic|referenceClauses|guaranteedClaimNos|conditionalClaimNos|unknownClaimNos|rejectedTargetSpan|rejectedTargetAnchor|unitStarts|unitChecks|targetReading|sourceComparison|inspectedKinds|basisQuote|assertionStatus|evidenceIds|sourceFacts|factIds|(?:base|candidate)(?:EvidenceId|ContextClaimNos)/i.test(
       [r.baseObservation, r.candidateObservation, r.common, r.differences, r.unconfirmed].join("\n"),
     ))) throw Error();
     const input = generationInput(chunk);
