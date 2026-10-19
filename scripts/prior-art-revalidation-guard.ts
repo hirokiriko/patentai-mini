@@ -55,6 +55,30 @@ export const REVALIDATION_PLAN = Object.freeze({
   approvedAiLimit: 398300000, approvedTotalLimit: 538300000,
   stages: Object.freeze(INDEPENDENT_734_V1.stages.map(stage => Object.freeze({ ...stage, ordinal: stage.ordinal + 2 }))),
 });
+/** Two explicitly approved slots, still inactive without protected-parent
+ * admission. Both retain the initial prefix and reserve the entire program.
+ * The parent additionally binds each slot to its current ledger prefix and
+ * refuses a second slot after unknown transport, timeout, or ambiguous ACK. */
+export const PROPOSITION_REVALIDATION_PLANS = Object.freeze(([1, 2] as const).map(slot => Object.freeze({
+  ...REVALIDATION_PLAN, id: "ISSUE150_PROPOSITION_1560_V1", slot,
+  priorSends: 45, priorRows: 90,
+  priorLedgerSha256: "3b4e68042ba6157b79194f79a0ce2ca3b543ec8c2e15f343d68b30667a6023d5",
+  currentExposure: 328286010, currentAiLimit: 398300000, currentTotalLimit: 538300000,
+  approvedAiLimit: 484300000, approvedTotalLimit: 624300000,
+  programMaximumNewSends: 10, programReservationYen: 1560,
+  stages: Object.freeze([
+    { phase: "diagnostic_source", task: "extract_source_propositions", input: 40000, output: 8192, reserve: 99 },
+    { phase: "diagnostic_review", task: "review", input: 68000, output: 22528, reserve: 224 },
+    { phase: "normal_source", task: "extract_source_propositions", input: 40000, output: 8192, reserve: 99 },
+    { phase: "normal_generation", task: "compare", input: 55000, output: 8192, reserve: 115 },
+    { phase: "normal_review", task: "review", input: 85000, output: 22528, reserve: 243 },
+  ].map((stage, index) => Object.freeze({ ...stage, ordinal: 49 + (slot - 1) * 5 + index }))),
+})));
+export function revalidationPlan(slot?: 1 | 2) {
+  if (slot === undefined) return REVALIDATION_PLAN;
+  if (slot !== 1 && slot !== 2) throw Error("revalidation_stopped");
+  return PROPOSITION_REVALIDATION_PLANS[slot - 1];
+}
 export type RevalidationStage = typeof REVALIDATION_PLAN.stages[number];
 export type RevalidationBinding = Readonly<{
   executionId: string; head: string; policyHash: string; materialsHash: string; measurementHash: string;
@@ -87,6 +111,8 @@ export type RevalidationJournal = {
   stop(event: { ordinal: number; claimMayExist: boolean; reservationMayExist: boolean; usageReconciled: boolean }): Promise<void>;
 };
 export type RevalidationDependencies = {
+  /** Select only a registered fixed slot; never accept caller-defined limits. */
+  propositionSlot?: 1 | 2;
   binding: RevalidationBinding; decision: RevalidationDecision | null; journal: RevalidationJournal;
   /** Protected parent verifies authentic OWNER evidence, exact head/materials,
    * policy, fresh public readback, deadline and unchanged prior ledger. This
@@ -106,10 +132,11 @@ const integer = (n: unknown, max: number): n is number => Number.isSafeInteger(n
 const keys = (value: unknown, expected: string[]) => !!value && typeof value === "object" && !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === expected.sort().join(",");
 
-export function revalidationFunding() {
-  const reservationYen = REVALIDATION_PLAN.stages.reduce((sum, s) => sum + s.reserve, 0);
-  const requiredAi = REVALIDATION_PLAN.currentExposure + reservationYen * 100000;
-  return { reservationYen, requiredAi, requiredTotal: requiredAi + REVALIDATION_PLAN.deploymentReserve };
+export function revalidationFunding(slot?: 1 | 2) {
+  const plan = revalidationPlan(slot);
+  const reservationYen = "programReservationYen" in plan ? plan.programReservationYen : plan.stages.reduce((sum, s) => sum + s.reserve, 0);
+  const requiredAi = plan.currentExposure + reservationYen * 100000;
+  return { reservationYen, requiredAi, requiredTotal: requiredAi + plan.deploymentReserve };
 }
 async function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   let abort: (() => void) | undefined;
@@ -124,18 +151,19 @@ async function bounded<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 /** One process, five finite sends. The existing protected parent owns durable
  * one-shot state/ACKs through the thin Local bridge; no authority on import. */
 export function createRevalidationGuard(deps: RevalidationDependencies) {
+  const plan = revalidationPlan(deps.propositionSlot);
   const binding = Object.freeze({ ...deps.binding }), decision = deps.decision && Object.freeze({ ...deps.decision });
-  const funding = revalidationFunding(), terminal = new AbortController();
+  const funding = revalidationFunding(deps.propositionSlot), terminal = new AbortController();
   let index = 0, busy = false, stopped = false, claimed = false, qaPassed = false;
   let operationEnds = 0, expiryEnds = 0;
   let operationSignal: AbortSignal;
   const responses: string[] = [];
   const validDecision = () => {
-    requireValue(decision?.status === "OWNER_APPROVED" && decision.planId === REVALIDATION_PLAN.id &&
-      decision.maximumNewSends === 5 && decision.maximumReservationYen === funding.reservationYen &&
-      decision.maximumAi === REVALIDATION_PLAN.approvedAiLimit && decision.maximumAi >= funding.requiredAi &&
-      decision.maximumTotal === REVALIDATION_PLAN.approvedTotalLimit && decision.maximumTotal >= funding.requiredTotal &&
-      decision.expiresAt === REVALIDATION_PLAN.approvedExpiresAt && Date.now() < Date.parse(decision.expiresAt));
+    requireValue(decision?.status === "OWNER_APPROVED" && decision.planId === plan.id &&
+      decision.maximumNewSends === ("programMaximumNewSends" in plan ? plan.programMaximumNewSends : 5) && decision.maximumReservationYen === funding.reservationYen &&
+      decision.maximumAi === plan.approvedAiLimit && decision.maximumAi >= funding.requiredAi &&
+      decision.maximumTotal === plan.approvedTotalLimit && decision.maximumTotal >= funding.requiredTotal &&
+      decision.expiresAt === plan.approvedExpiresAt && Date.now() < Date.parse(decision.expiresAt));
     requireValue(/^[a-f0-9]{40}$/.test(binding.head) && /^[a-f0-9-]{36}$/.test(binding.executionId) &&
       [binding.policyHash, binding.materialsHash, binding.measurementHash, binding.approvalHash, binding.publicReadbackHash].every(hash) &&
       binding.deployment.length > 0 && binding.deployment.length <= 100);
@@ -145,7 +173,7 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
   };
   const fail = () => { stopped = true; terminal.abort(); };
   const fetch: typeof globalThis.fetch = async (url, init) => {
-    const stage = REVALIDATION_PLAN.stages[index];
+    const stage = plan.stages[index];
     let claimMayExist = claimed, reservationMayExist = false, usageReconciled = false, reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       requireValue(!stopped && !busy && stage && (index !== 2 || qaPassed));
@@ -154,7 +182,7 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
       // Copy precisely what is checked so callers cannot mutate across ACK awaits.
       const request = { ...init, headers: new Headers(init?.headers) }, target = String(url);
       requireValue(request.method === "POST" && typeof request.body === "string" && target === binding.endpoint &&
-        request.signal && !request.signal.aborted && Buffer.byteLength(request.body, "utf8") + REVALIDATION_PLAN.framingBytes <= stage.input);
+        request.signal && !request.signal.aborted && Buffer.byteLength(request.body, "utf8") + plan.framingBytes <= stage.input);
       const body = JSON.parse(request.body), expected = deps.packet(stage);
       requireValue(keys(body, ["model", "input", "max_output_tokens", "text", "reasoning", "service_tier"]) &&
         body.model === binding.deployment && body.max_output_tokens === stage.output && body.service_tier === "default" &&
@@ -168,11 +196,11 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
       requireValue(keys(body.text, ["format"]) && keys(body.text.format, ["type", "name", "strict", "schema"]) &&
         body.text.format.type === "json_schema" && body.text.format.name === "response" && body.text.format.strict === true &&
         body.text.format.schema?.type === "object" && JSON.stringify(body.text.format.schema) === JSON.stringify(expected.schema));
-      const started = performance.now(), requestEnds = started + REVALIDATION_PLAN.requestMs;
+      const started = performance.now(), requestEnds = started + plan.requestMs;
       if (index === 0) expiryEnds = started + Date.parse(approval.expiresAt) - Date.now();
       if (index === 0 || index === 2) {
-        operationEnds = started + REVALIDATION_PLAN.operationMs;
-        operationSignal = AbortSignal.timeout(REVALIDATION_PLAN.operationMs);
+        operationEnds = started + plan.operationMs;
+        operationSignal = AbortSignal.timeout(plan.operationMs);
       }
       const remaining = Math.min(operationEnds, expiryEnds, requestEnds) - started; requireValue(remaining > 0);
       const signal = AbortSignal.any([request.signal, terminal.signal, operationSignal!, AbortSignal.timeout(Math.ceil(remaining))]);
@@ -185,7 +213,7 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
       checkpoint();
       if (!claimed) {
         claimMayExist = true; // The claim may become durable even when its ACK is lost.
-        await bounded(deps.journal.claim(binding, { sends: REVALIDATION_PLAN.priorSends, rows: REVALIDATION_PLAN.priorRows, sha256: REVALIDATION_PLAN.priorLedgerSha256, reservationYen: funding.reservationYen }), signal);
+        await bounded(deps.journal.claim(binding, { sends: plan.priorSends, rows: plan.priorRows, sha256: plan.priorLedgerSha256, reservationYen: funding.reservationYen }), signal);
         claimed = true;
       }
       checkpoint();
@@ -199,7 +227,7 @@ export function createRevalidationGuard(deps: RevalidationDependencies) {
       reader = response.body.getReader(); const parts: Uint8Array[] = []; let bytes = 0;
       for (;;) {
         const next = await bounded(reader.read(), signal); checkpoint(); if (next.done) break;
-        bytes += next.value.length; requireValue(bytes <= REVALIDATION_PLAN.responseBytes); parts.push(next.value);
+        bytes += next.value.length; requireValue(bytes <= plan.responseBytes); parts.push(next.value);
       }
       const raw = Buffer.concat(parts), responseHash = revalidationHash(raw);
       const result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)), usage = result.usage;

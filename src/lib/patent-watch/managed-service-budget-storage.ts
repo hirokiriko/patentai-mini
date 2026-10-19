@@ -5,7 +5,7 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage, markManagedBudgetUnknown,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
-  managedBudgetForecast, checkManagedCompletionBudget, checkManagedStandardBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
+  managedBudgetForecast, checkManagedCompletionBudget, checkManagedStandardBudget, checkManagedExecutionBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, verifyManagedAdministrationHistory,
   managedIssue150PreflightSchema, managedIssue150ForwardResultSchema, managedSettlementProof, managedReleaseBudgetRequest,
   type ManagedBudgetEvidencePins, type ManagedAdministrationReview } from "./managed-budget-evidence";
@@ -262,10 +262,9 @@ export class ManagedServiceBudgetStorage {
       const input = kohoUploadIntentSchema.parse(value), saved = await this.read(), c = await this.uploadRequest(input, saved, true);
       const fresh = await this.read(); check(fresh.etag === saved.etag);
       const op = fresh.state.operations.find(o => o.operationId === c.request.operationId);
-      const completion = fresh.state.plans.find(p => p.month === op?.processingMonth)?.completionAllowance;
+      const completion = checkManagedExecutionBudget(fresh.state, c.profile, this.clock(fresh, 65));
       const expiry = Math.min(Date.parse(op?.expiresAt ?? ""), Date.parse(c.executionExpiresAt),
         completion ? Date.parse(completion.validUntil) : Infinity);
-      if (completion) checkManagedCompletionBudget(fresh.state, completion, this.clock(fresh, 65));
       check(op?.intentDigest === managedDigest(c.request) && op.stage === "claimed" && op.start === "ready" &&
         !op.unknown && op.actualYen === null && fresh.date.getTime() + 6 * IO_MS + 1000 < expiry &&
         op.processingMonth === new Date(fresh.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
@@ -335,8 +334,7 @@ export class ManagedServiceBudgetStorage {
       const o = saved.state.operations.find(o => o.operationId === c.operationId);
       check(o?.intentDigest === managedDigest(context.request) && (o.stage === "claimed" || o.stage === "done") && o.start === "ready" && o.actualYen === null && !o.unknown);
       const maximum = this.clock(saved, 65).maximumActionMs;
-      const completion = saved.state.plans.find(p => p.month === o!.processingMonth)?.completionAllowance;
-      if (completion) checkManagedCompletionBudget(saved.state, completion, this.clock(saved, 65));
+      checkManagedExecutionBudget(saved.state, context.profile, this.clock(saved, 65));
       const permit=renewal?await this.readArchiveRenewal(saved,c,m,job,context,renewal,65):null;
       check(saved.date.getTime() + maximum < (permit?Date.parse(permit.expiresAt):Math.min(Date.parse(o!.expiresAt), Date.parse(context.executionExpiresAt))) &&
         o!.processingMonth === new Date(saved.date.getTime() + 9 * 60 * 60_000).toISOString().slice(0, 7));
@@ -358,8 +356,7 @@ export class ManagedServiceBudgetStorage {
         Date.parse(o.expiresAt)<=at&&Date.parse(m.expiresAt)<=at);
       const month=new Date(at+9*60*60_000).toISOString().slice(0,7);check(o!.processingMonth===month);
       const [year,monthNumber]=month.split("-").map(Number),monthEnd=Date.UTC(year,monthNumber,1)-9*60*60_000;
-      const completion=saved.state.plans.find(p=>p.month===month)?.completionAllowance;
-      if(completion)checkManagedCompletionBudget(saved.state,completion,this.clock(saved,65));
+      const completion=checkManagedExecutionBudget(saved.state,context.profile,this.clock(saved,65));
       const expiry=Math.min(at+input.windowMs,monthEnd,Date.parse(context.policy.validUntil)-1,completion?Date.parse(completion.validUntil)-1:Infinity);
       check(at+this.clock(saved,65).maximumActionMs<expiry);
       for(const name of [archiveRenewalName(c.operationId),cloudSourceName(m.packages[0].sha256),cloudManifestName(c),...['start-requested.json','staged.json','archive-verified.json',
@@ -395,8 +392,7 @@ export class ManagedServiceBudgetStorage {
       raw.createdAt instanceof Date&&raw.createdAt.getTime()>=issued&&raw.createdAt.getTime()<=issued+6*IO_MS+1000&&recordedExpiry<=raw.createdAt.getTime()+r.windowMs&&
       o!.processingMonth===new Date(at+9*60*60_000).toISOString().slice(0,7)&&new Date(expires-1+9*60*60_000).toISOString().slice(0,7)===o!.processingMonth);
     validateManagedBudgetPolicy(context.policy,this.binding,saved.date,expires-at);
-    const completion=saved.state.plans.find(p=>p.month===o!.processingMonth)?.completionAllowance;
-    if(completion)checkManagedCompletionBudget(saved.state,completion,{...this.clock(saved,minutes),maximumActionMs:expires-at-1});
+    checkManagedExecutionBudget(saved.state,context.profile,{...this.clock(saved,minutes),maximumActionMs:expires-at-1});
     return{expiresAt:new Date(expires).toISOString(),sha256:raw.sha256};
   }
   async confirmImport(value: unknown, manifest: unknown, job: ManagedImportJob,renewal?:z.infer<typeof archiveRenewalReferenceSchema>) {
@@ -434,8 +430,7 @@ export class ManagedServiceBudgetStorage {
       o.start === "claimed" && o.actualYen === null && (o.kind === "watch" ? o.stage === "unused" : o.stage === "done"));
     const now = saved.date.getTime(), month = new Date(now + 9 * 60 * 60_000).toISOString().slice(0,7);
     const maximumActionMs = this.clock(saved, o!.kind === "watch" ? 95 : 120).maximumActionMs;
-    const completion = saved.state.plans.find(p => p.month === month)?.completionAllowance;
-    if (completion) checkManagedCompletionBudget(saved.state, completion, { blobDate: saved.date, maximumActionMs });
+    const completion = checkManagedExecutionBudget(saved.state, context.profile, { blobDate: saved.date, maximumActionMs });
     const policy = validateManagedBudgetPolicy(context.policy, this.binding, saved.date, maximumActionMs);
     const expiry = Math.min(Date.parse(o!.expiresAt), Date.parse(executionExpiresAt), Date.parse(policy.validUntil),
       completion ? Date.parse(completion.validUntil) : Infinity);
@@ -506,6 +501,7 @@ export class ManagedServiceBudgetStorage {
     };
     await source(approval!.ownerApprovalDigest);
     const preflight = managedIssue150PreflightSchema.parse(await source(step.preflightDigest));
+    check((approval!.scope === "ISSUE150_INTEGRATION_V2") === (preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V2"));
     check(preflight.ownerApprovalDigest === approval!.ownerApprovalDigest &&
       Date.parse(review.issuedAt) >= Date.parse(approval!.approvedAt) &&
       Date.parse(review.validUntil) <= Date.parse(approval!.validUntil));
@@ -527,9 +523,9 @@ export class ManagedServiceBudgetStorage {
       const envelope = verifyManagedAdministrationHistory(source.value, entry.digest, pins, saved.date), r = envelope.review;
       check(r.sequence === entry.sequence && r.previousReviewDigest === saved.state.administration[i - 1].digest);
       if (r.action.kind !== "release-start" || r.action.step.issue !== 150) continue;
-      verifyManagedAdministrationReview(envelope, entry.digest, pins, saved.date, false);
+      const activeReview = verifyManagedAdministrationReview(envelope, entry.digest, pins, saved.date, false).review;
       await this.verifySources(r.sources);
-      const record = await this.issue150Preflight(r), request = managedReleaseBudgetRequest(record.step, pins.targetBindingHash, pins.ownerBindingHash);
+      const record = await this.issue150Preflight(activeReview), request = managedReleaseBudgetRequest(record.step, pins.targetBindingHash, pins.ownerBindingHash);
       const o = saved.state.operations.find(o => o.operationId === request.operationId);
       check(o && o.start === "claimed" && o.requestDigest === request.requestDigest && o.intentDigest === managedDigest(request));
       check(Date.parse(o!.reservedAt) >= Date.parse(r.issuedAt) && Date.parse(o!.reservedAt) < Date.parse(r.validUntil));
@@ -552,8 +548,9 @@ export class ManagedServiceBudgetStorage {
     // Missing/unknown costs keep the original reservation. New signatures or a
     // zero-unit settlement never reset the permanent operation counts above.
     const forecast = exposure + preflight.rollbackReserveYen;
-    check(Number.isSafeInteger(forecast) && exposure <= 2000 && forecast <= 1600 &&
-      forecast + preflight.aiExposureYen <= 5000 && history.every(r => preflight.aiExposureYen >= r.preflight.aiExposureYen));
+    const v2 = approval.scope === "ISSUE150_INTEGRATION_V2";
+    check(Number.isSafeInteger(forecast) && exposure <= (v2 ? 1400 : 2000) && forecast <= (v2 ? 1400 : 1600) &&
+      forecast + preflight.aiExposureYen <= (v2 ? 6243 : 5000) && history.every(r => preflight.aiExposureYen >= r.preflight.aiExposureYen));
     const month = new Date(at + 9 * 60 * 60_000).toISOString().slice(0, 7), plan = state.plans.find(p => p.month === month); check(plan);
     const recoveryUsed = state.operations.filter(o => o.processingMonth === month && (o.kind === "recovery" || o.units.rollback > 0))
       .reduce((n, o) => n + Math.max(o.actualYen ?? o.reservationYen, o.observedYen ?? 0), 0);

@@ -1,4 +1,4 @@
-import { createRevalidationGuard, REVALIDATION_PLAN, revalidationHash,
+import { createRevalidationGuard, revalidationPlan, revalidationHash,
   type RevalidationDependencies } from "./prior-art-revalidation-guard";
 
 /** Local harness adapter. The protected parent owns approval, the exclusive
@@ -9,6 +9,7 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
   record(name: string, bytes: Uint8Array): Promise<void>;
   transport: typeof fetch;
 }) {
+  const plan = revalidationPlan(deps.propositionSlot);
   let body = "", response: Uint8Array | undefined, busy = false;
   const guard = createRevalidationGuard({ ...deps,
     assertAdmission: (binding, decision) => deps.parent("admit", { binding, decision }),
@@ -27,7 +28,7 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
       stop: event => deps.parent("stop", event),
     },
     transport: async (url, init) => {
-      const stage = REVALIDATION_PLAN.stages[guard.snapshot().completed];
+      const stage = plan.stages[guard.snapshot().completed];
       const received = await deps.transport(url, init);
       if (!received.ok) {
         void received.body?.cancel().catch(() => undefined);
@@ -52,7 +53,7 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
               controller.close(); return;
             }
             bytes += next.value.length;
-            if (bytes > REVALIDATION_PLAN.responseBytes) throw Error("bridge_response_limit");
+            if (bytes > plan.responseBytes) throw Error("bridge_response_limit");
             chunks.push(next.value); controller.enqueue(next.value);
           } catch (error) { init?.signal?.removeEventListener("abort", abort); controller.error(error); void reader.cancel().catch(() => undefined); }
         },

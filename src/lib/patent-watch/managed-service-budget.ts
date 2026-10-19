@@ -31,6 +31,14 @@ export const managedCompletionAllowanceSchema = z.object({
   Date.parse(a.validUntil) <= Date.parse("2026-10-31T15:00:00Z") &&
   unitKeys.every(k => ["jobs", "minutes", "forward"].includes(k) || a.cumulativeUnits[k] <= managedReleaseCaps[k]));
 export type ManagedCompletionAllowance = z.infer<typeof managedCompletionAllowanceSchema>;
+// A signed, profile-bound supplement for this processing month only. It does
+// not change the base profile, historical release caps, or Issue140 authority.
+export const managedStandardMonthAdjustmentSchema = z.object({
+  scope: z.literal("ISSUE150_STANDARD_MONTH_V1"), month: z.literal("2026-10"),
+  ownerApprovalDigest: hash, profileDigest: hash, monthlyCapYen: z.literal(38331),
+  jobs: z.literal(25), minutes: z.literal(3000), forward: z.literal(9),
+}).strict();
+export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
   fast: 0, packages: 0, bytes: 0, forward: 0, rollback: 0 });
 const pools = z.object({ remaining: yen, storage: yen, recovery: yen }).strict();
@@ -59,8 +67,10 @@ type Operation = z.infer<typeof operationSchema>;
 // spend it: the exact OWNER allowance is in the signed private month review.
 export const managedReleaseMonthlyCapSchema = z.number().int().min(30_000).max(50_000);
 const planSchema = z.object({ month, baseYen: yen, pools, pricingDigest: hash, evidenceDigests: z.array(hash).min(1).max(128),
+  standardMonthAdjustment: managedStandardMonthAdjustmentSchema.optional(),
   releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional(), completionAllowance: managedCompletionAllowanceSchema.optional() }).strict()
-  .refine(p => (p.releaseMonthlyCapYen === undefined || p.month === "2026-09") &&
+  .refine(p => (!p.standardMonthAdjustment || p.standardMonthAdjustment.month === p.month) &&
+    (p.releaseMonthlyCapYen === undefined || p.month === "2026-09") &&
     (!p.completionAllowance || (p.month === p.completionAllowance.month && p.releaseMonthlyCapYen === undefined)));
 export const managedBudgetStateSchema = z.object({ schema: z.literal(1), serviceKey: z.literal(MANAGED_SERVICE_KEY),
   targetBindingHash: hash, activeProfileDigest: hash.nullable(), cases: historicalCases, lastTrustedAt: z.iso.datetime(),
@@ -155,29 +165,56 @@ function active(s: ManagedBudgetState, value: unknown) {
   for (const k of unitKeys) check(p.monthlyUnits[k] <= managedReleaseCaps[k]);
   return p;
 }
+function standardMonthLimits(s: ManagedBudgetState, m: string, profile: ManagedBudgetProfile) {
+  const adjustment = s.plans.find(p => p.month === m)?.standardMonthAdjustment;
+  if (adjustment) check(adjustment.month === m && adjustment.profileDigest === managedDigest(profile));
+  return { adjustment, monthlyCapYen: adjustment?.monthlyCapYen ?? profile.monthlyCapYen,
+    units: { ...profile.monthlyUnits, ...(adjustment ? {
+      jobs: adjustment.jobs, minutes: adjustment.minutes, forward: adjustment.forward } : {}) } };
+}
+function executionCompletion(s: ManagedBudgetState, m: string, hasAdjustment: boolean) {
+  const completion = s.plans.find(p => p.month === m)?.completionAllowance;
+  return hasAdjustment && completion?.profileDigest !== s.activeProfileDigest ? undefined : completion;
+}
 function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile, maximumActionMs = 1) {
   check(!s.operations.some(o => o.reviewRequired));
   const plan = s.plans.find(p => p.month === m);
-  const completion = plan?.completionAllowance;
+  const limits = profile && standardMonthLimits(s, m, profile);
+  // A prior profile's completion allowance remains immutable history. A new
+  // profile may start only under its own signed ordinary month supplement.
+  const completion = executionCompletion(s, m, !!limits?.adjustment);
   if (completion) checkManagedCompletionBudget(s, completion, { blobDate: new Date(s.lastTrustedAt), maximumActionMs });
   const releaseCap = plan?.releaseMonthlyCapYen ?? 30_000;
-  check(managedBudgetForecast(s, m) <= (profile && completion ? completion.monthlyCapYen : profile?.monthlyCapYen ?? releaseCap));
+  check(managedBudgetForecast(s, m) <= (limits?.adjustment ? limits.monthlyCapYen :
+    profile && completion ? completion.monthlyCapYen : profile?.monthlyCapYen ?? releaseCap));
   check(sum([s.releaseTailYen, ...s.operations.filter(o => o.scope === "release").map(cost)]) <= 50_000);
   const release = totals(s, "release", m);
   for (const k of unitKeys) check(release[k] <= managedReleaseCaps[k]);
   if (profile) { check(profile.pricingDigest === s.plans.find(p => p.month === m)?.pricingDigest);
     const total = totals(s, "month", m); for (const k of unitKeys)
-      if (!completion || !["jobs", "minutes", "forward"].includes(k)) check(total[k] <= profile.monthlyUnits[k]); }
+      if (limits?.adjustment || !completion || !["jobs", "minutes", "forward"].includes(k)) check(total[k] <= limits!.units[k]); }
 }
 /** Issue150 must fit the ordinary active profile, even when Issue140's signed
  * completion exception is installed. This grants no new allowance/state. */
 export function checkManagedStandardBudget(value: unknown, profile: unknown, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), p = active(s, profile);
   admit(s, m, p, clock.maximumActionMs);
+  const limits = standardMonthLimits(s, m, p);
   check(p.pricingDigest === s.plans.find(plan => plan.month === m)?.pricingDigest &&
-    managedBudgetForecast(s, m) <= p.monthlyCapYen);
+    managedBudgetForecast(s, m) <= limits.monthlyCapYen);
   const total = totals(s, "month", m);
-  for (const k of unitKeys) check(total[k] <= p.monthlyUnits[k]);
+  for (const k of unitKeys) check(total[k] <= limits.units[k]);
+}
+/** Recheck the same authority at reservation and execution. An old profile's
+ * completion allowance becomes history only under a valid ordinary supplement;
+ * its expiry still bounds executions for the profile it actually authorizes. */
+export function checkManagedExecutionBudget(value: unknown, profile: ManagedBudgetProfile | null | undefined, clock: ManagedBudgetClock) {
+  const { s, month: m } = current(value, clock);
+  const hasAdjustment = !!profile && !!s.plans.find(p => p.month === m)?.standardMonthAdjustment;
+  if (hasAdjustment) checkManagedStandardBudget(s, profile, clock);
+  const completion = executionCompletion(s, m, hasAdjustment);
+  if (completion) checkManagedCompletionBudget(s, completion, clock);
+  return completion;
 }
 function find(s: ManagedBudgetState, id: string) { const o = s.operations.find(o => o.operationId === id); check(o); return o; }
 function evidence(o: Operation, digest: string) {
@@ -191,11 +228,13 @@ function evidence(o: Operation, digest: string) {
 /** Administrative evidence must be checked by the adapter before these transitions. */
 export function setManagedMonthPlan(value: unknown, input: { baseYen: number; pools: z.infer<typeof pools>;
   pricingDigest: string; evidenceDigest: string; releaseTailYen: number; reviewedOperationIds?: string[];
-  releaseMonthlyCapYen?: number; completionAllowance?: ManagedCompletionAllowance }, clock: ManagedBudgetClock) {
+  releaseMonthlyCapYen?: number; completionAllowance?: ManagedCompletionAllowance;
+  standardMonthAdjustment?: ManagedStandardMonthAdjustment }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
   const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
     ...(input.releaseMonthlyCapYen === undefined ? {} : { releaseMonthlyCapYen: input.releaseMonthlyCapYen }),
     ...(input.completionAllowance === undefined ? {} : { completionAllowance: input.completionAllowance }),
+    ...(input.standardMonthAdjustment === undefined ? {} : { standardMonthAdjustment: input.standardMonthAdjustment }),
     evidenceDigests: [...new Set([...(old?.evidenceDigests ?? []), hash.parse(input.evidenceDigest)])] });
   if (old) s.plans[s.plans.indexOf(old)] = plan; else s.plans.push(plan);
   s.releaseTailYen = yen.parse(input.releaseTailYen);

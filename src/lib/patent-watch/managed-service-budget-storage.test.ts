@@ -10,7 +10,7 @@ import { managedCloudFixture } from "./managed-cloud.test-support";
 import type { ManagedBudgetBinding } from "./managed-budget-contract";
 import { managedCloudImportFixture } from "../../../scripts/managed-koho-cloud.test-support";
 import { archivePackageIdentity, archiveReceiptName } from "../koho-import/managed-archive";
-import { cloudManifestName, cloudSourceName, sha256 } from "../koho-import/cloud-config";
+import { cloudManifestName, cloudSourceName, sha256, type CloudConfiguration, type CloudManifest } from "../koho-import/cloud-config";
 import { uploadFixture as uploadStorageFixture } from "../koho-import/upload.test-support";
 import { kohoUploadIntentSchema } from "../koho-import/upload-contract";
 import { managedBudgetForecast } from "./managed-service-budget";
@@ -136,6 +136,42 @@ function uploadBudgetFixture(includePrices = true) {
     expiresAt: "2026-09-23T06:00:00.000Z" });
   return { ...f, intent, pricingDigest };
 }
+function installOctoberSupplement(f: ReturnType<typeof fixture>, policy: { measurementDigest: string }, pricingDigest: string) {
+  const oldProfile = managedBudgetProfileSchema.parse({ schema: 1, serviceKey: MANAGED_SERVICE_KEY,
+    targetBindingHash: f.binding.targetBindingHash, ownerBindingHash: f.binding.ownerBindingHash,
+    companyKey: "FICTIONAL_COMPANY", cases: [1], monthlyCapYen: 30000, monthlyUnits: { ...managedReleaseCaps },
+    pricingDigest, measurementDigest: policy.measurementDigest, goEvidenceDigest: hash(840) });
+  const profile = { ...oldProfile, goEvidenceDigest: hash(841) }, profileDigest = managedDigest(profile);
+  const completion = managedCompletionAllowanceSchema.parse({ scope: "ISSUE140_COMPLETION_V2", issue: 140, month: "2026-10",
+    ownerApprovalDigest: hash(842), profileDigest: managedDigest(oldProfile), monthlyCapYen: 32000,
+    cumulativeUnits: { ...managedReleaseCaps, jobs: 26, minutes: 3120, forward: 10 }, validUntil: "2026-10-01T00:30:00Z" });
+  const before = f.current(), s = setManagedMonthPlan(before, { baseYen: 19000,
+    pools: { remaining: 8000, storage: 1000, recovery: 1000 }, pricingDigest, evidenceDigest: hash(843),
+    releaseTailYen: before.releaseTailYen, completionAllowance: completion,
+    standardMonthAdjustment: { scope: "ISSUE150_STANDARD_MONTH_V1", month: "2026-10", ownerApprovalDigest: hash(844),
+      profileDigest, monthlyCapYen: 38331, jobs: 25, minutes: 3000, forward: 9 } },
+  { blobDate: new Date("2026-10-01T00:00:00Z"), maximumActionMs: 60000 });
+  s.activeProfileDigest = profileDigest;
+  f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+  f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${profileDigest}.json`, { bytes: Buffer.from(JSON.stringify(profile)), etag: '"october-supplement-profile"' });
+  return completion;
+}
+it("verifies upload staging under the new profile without clipping to an old completion deadline", async () => {
+  const f = uploadBudgetFixture(), at = new Date("2026-10-01T00:00:00Z");
+  vi.setSystemTime(at); f.setDate(at.toUTCString());
+  const policy = { ...JSON.parse(f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${f.pricingDigest}.json`)!.bytes.toString()),
+    validFrom: "2026-10-01T00:00:00Z", validUntil: "2026-10-31T15:00:00Z" };
+  const bytes = Buffer.from(JSON.stringify(policy)), pricingDigest = sha256(bytes);
+  f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${pricingDigest}.json`, { bytes, etag: '"october-upload-policy"' });
+  const completion = installOctoberSupplement(f, policy, pricingDigest);
+  const c = await f.store.prepareUpload({ ...f.intent, settings: { ...f.intent.settings, approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" },
+    receivedAt: at.toISOString(), expiresAt: "2026-10-01T06:00:00.000Z" });
+  await f.store.reserveUpload(c); await f.store.beginUploadStaging(c);
+  const writes = f.calls.filter(c => c.startsWith("PUT:"));
+  expect(await f.store.verifyUploadStaging(c)).toMatchObject({ expiresAt: c.expiresAt });
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual(writes);
+  expect(f.current().plans[1].completionAllowance).toEqual(completion);
+});
 it("shares one upload reservation across staging, sealing, start and worker admission", async () => {
   const f = uploadBudgetFixture(), c = await f.store.prepareUpload(f.intent), before = managedBudgetForecast(f.current(), "2026-09");
   expect(await f.store.reserveUpload(c)).toEqual({ created: true });
@@ -331,19 +367,35 @@ it.each([true, false])("does not use a larger import manifest forecast as its re
     expect(f.calls.filter(c=>c.startsWith("PUT:"))).toEqual([]);
   }
 });
-async function archivedExecutionFixture(){
-  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(new Date("2026-09-23T00:00:00Z"));
-  const b=await managedCloudImportFixture(),f=fixture(b.binding);
+async function archivedExecutionFixture(octoberStandard = false){
+  const at = new Date(octoberStandard ? "2026-10-01T00:00:00Z" : "2026-09-23T00:00:00Z");
+  vi.useFakeTimers({toFake:["Date"]});vi.setSystemTime(at);
+  const original=await managedCloudImportFixture();
+  type Approval = "STANDARD_MANAGED_WATCH_RELEASE_V1" | "STANDARD_MANAGED_WATCH_STANDARD_V1";
+  const b: Omit<typeof original, "manifest" | "config"> & {
+    manifest: Extract<CloudManifest, { approval: Approval }>;
+    config: Extract<CloudConfiguration, { approval: Approval }>;
+  } = original;
+  const f=fixture(b.binding);
+  f.setDate(at.toUTCString());
+  if (octoberStandard) {
+    b.policy.validFrom = "2026-10-01T00:00:00Z"; b.policy.validUntil = "2026-10-31T15:00:00Z";
+    b.config = { ...b.config, approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" };
+    if (b.manifest.approval !== "STANDARD_MANAGED_WATCH_RELEASE_V1") throw Error();
+    const { releaseReservation, ...body } = b.manifest; void releaseReservation;
+    b.manifest = { ...body, approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" };
+  }
   b.policy.reservations.archivePackageYen=5;b.policy.reservations.archiveGiBYen=10;
   const policyBytes=Buffer.from(JSON.stringify(b.policy)),pricingDigest=sha256(policyBytes),state=f.current();state.plans[0].pricingDigest=pricingDigest;
   f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${pricingDigest}.json`,{bytes:policyBytes,etag:'"archivepolicy"'});
-  b.manifest.archiveOnly=true;b.manifest.packages[0].acquiredAt="2026-09-22T23:59:00.000Z";delete b.config.serviceBudget;
+  if (octoberStandard) installOctoberSupplement(f, b.policy, pricingDigest);
+  b.manifest.archiveOnly=true;b.manifest.packages[0].acquiredAt=new Date(at.getTime()-60000).toISOString();delete b.config.serviceBudget;
   const config=await f.store.prepareImport(b.config,b.manifest,b.job);
   await f.store.reserveImport(config,b.manifest,b.job);await f.store.claimImport(config,b.manifest,b.job,"stage");
   const bytes=Buffer.from(JSON.stringify(b.manifest)),sealed={...config,manifest:{byteLength:bytes.length,sha256:sha256(bytes),etag:'"archivemanifest"'}};
   const pkg=b.manifest.packages[0],identity=archivePackageIdentity(pkg),receipt=Buffer.from(JSON.stringify({schema:1,operationId:sealed.operationId,
     requestDigest:sealed.serviceBudget.requestDigest,identityDigest:managedDigest(identity),identity,blobName:cloudSourceName(pkg.sha256),etag:pkg.etag,
-    verifiedAt:"2026-09-23T00:00:00.000Z"}));
+    verifiedAt:at.toISOString()}));
   f.files.set(cloudManifestName(sealed),{bytes,etag:sealed.manifest.etag});f.files.set(archiveReceiptName(sealed.operationId),{bytes:receipt,etag:'"archivereceipt"'});
   f.files.set(cloudSourceName(pkg.sha256),{bytes:Buffer.from(b.data),etag:pkg.etag});
   const receiptSha256=sha256(receipt),archive={operationId:sealed.operationId,manifestSha256:sealed.manifest.sha256,receiptSha256};
@@ -370,13 +422,25 @@ it("requires confirmed original archive accounting before cleanup or a zero-pack
   await expect(f.store.reserveImport(duplicate,{...f.b.manifest,operationId:id},f.b.job)).rejects.toThrow();
   expect(f.current().operations).toHaveLength(2);
 });
-async function expiredArchiveFixture(){
-  const f=await archivedExecutionFixture(),names=[cloudSourceName(f.b.manifest.packages[0].sha256),cloudManifestName(f.sealed),archiveReceiptName(f.sealed.operationId)];
+async function expiredArchiveFixture(octoberStandard = false){
+  const f=await archivedExecutionFixture(octoberStandard),names=[cloudSourceName(f.b.manifest.packages[0].sha256),cloudManifestName(f.sealed),archiveReceiptName(f.sealed.operationId)];
   const archiveFiles=names.map(n=>[n,f.files.get(n)!] as const);for(const n of names)f.files.delete(n);
-  f.setDate("Wed, 23 Sep 2026 07:00:00 GMT");vi.setSystemTime(new Date("2026-09-23T07:00:00Z"));
+  const expiredAt = new Date(octoberStandard ? "2026-10-01T07:00:00Z" : "2026-09-23T07:00:00Z");
+  f.setDate(expiredAt.toUTCString());vi.setSystemTime(expiredAt);
   const authorization={localCodeSha:"a".repeat(40),ownerApprovalSha256:hash(401),priorEvidenceSha256:hash(402),originalOperationDigest:managedDigest(f.current().operations[0]),windowMs:6*60*60_000};
   return{...f,authorization,archiveFiles};
 }
+it("issues and rereads an archive renewal using the new ordinary profile's month authority", async () => {
+  const f = await expiredArchiveFixture(true), before = f.current();
+  const renewal = await f.store.renewArchiveStaging(f.sealed, f.b.manifest, f.b.job, f.authorization);
+  expect(renewal.record.expiresAt).toBe("2026-10-01T13:00:00.000Z");
+  expect(f.current()).toEqual(before);
+  const writes = f.calls.filter(c => c.startsWith("PUT:"));
+  expect(await f.store.verifyImportStaging(f.sealed, f.b.manifest, f.b.job, renewal.reference))
+    .toMatchObject({ expiresAt: renewal.record.expiresAt });
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toEqual(writes);
+  expect(f.current()).toEqual(before);
+});
 it("renews an expired archive without changing the old ledger, then seals for historical readers and a new Job",async()=>{
   const f=await expiredArchiveFixture(),before=f.current(),manifest=structuredClone(f.b.manifest);
   await expect(f.store.verifyImportStaging(f.sealed,manifest,f.b.job)).rejects.toThrow();
@@ -498,6 +562,7 @@ it("uses historical release archives in a current Standard Job without renewing 
   const state=f.current(),prior=structuredClone(state.operations[0]),profileDigest=managedDigest(profile);state.activeProfileDigest=profileDigest;
   f.files.get(key)!.bytes=Buffer.from(JSON.stringify(state));f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${profileDigest}.json`,{bytes:Buffer.from(JSON.stringify(profile)),etag:'"profile"'});
   f.setDate("Thu, 24 Sep 2026 00:00:00 GMT");vi.setSystemTime(new Date("2026-09-24T00:00:00Z"));
+  if (f.manifest.approval !== "STANDARD_MANAGED_WATCH_RELEASE_V1") throw Error();
   const {releaseReservation,...body}=f.manifest;void releaseReservation;
   const manifest={...body,approval:"STANDARD_MANAGED_WATCH_STANDARD_V1" as const,expiresAt:"2026-09-24T03:00:00.000Z"};
   const config=await f.store.prepareImport({...f.batchConfig,approval:manifest.approval},manifest,f.b.job);
@@ -561,9 +626,9 @@ function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseSt
     remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
     ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
 }
-function issue150Fixture() {
-  const f = executionFixture(), now = "2026-10-17T12:00:00Z";
-  vi.setSystemTime(new Date(now)); f.setDate("Sat, 17 Oct 2026 12:00:00 GMT");
+function issue150Fixture(version: 1 | 2 = 1) {
+  const f = executionFixture(), now = version === 2 ? "2026-10-19T12:00:00Z" : "2026-10-17T12:00:00Z";
+  vi.setSystemTime(new Date(now)); f.setDate(new Date(now).toUTCString());
   const put = (value: unknown) => {
     const bytes = Buffer.from(JSON.stringify(value)), digest = sha256(bytes);
     f.files.set(`${MANAGED_BUDGET_PREFIX}evidence/${digest}.json`, { bytes, etag: `"${digest}"` });
@@ -584,19 +649,23 @@ function issue150Fixture() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519"), der = publicKey.export({ format: "der", type: "spki" });
   const pins = { publicKeySpkiBase64: der.toString("base64"), publicKeySha256: sha256(der),
     ownerBindingHash: f.binding.ownerBindingHash, targetBindingHash: f.binding.targetBindingHash, productionGoDigest: hash(1599) };
-  const approval = { scope: "ISSUE150_INTEGRATION_V1" as const, ownerApprovalDigest: owner.digest, profileDigest,
-    approvedAt: "2026-10-17T06:41:40Z" as const, validUntil: "2026-10-18T06:41:40Z" as const, forwardOperationId: null as string | null };
+  const approval: NonNullable<ManagedReleaseStep["issue150Integration"]> = version === 2 ? {
+    scope: "ISSUE150_INTEGRATION_V2", ownerApprovalDigest: owner.digest, profileDigest,
+    approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", forwardOperationId: null } : {
+    scope: "ISSUE150_INTEGRATION_V1", ownerApprovalDigest: owner.digest, profileDigest,
+    approvedAt: "2026-10-17T06:41:40Z", validUntil: "2026-10-18T06:41:40Z", forwardOperationId: null };
   const forward: ManagedReleaseStep = { ...releaseStep(f, "forward"), issue: 150, prNumber: 151, pricingDigest: pricing.digest,
     issue150Integration: approval };
-  const preflight = { scope: "ISSUE150_INTEGRATION_PREFLIGHT_V1", ownerApprovalDigest: owner.digest,
+  const preflight = { scope: version === 2 ? "ISSUE150_INTEGRATION_PREFLIGHT_V2" : "ISSUE150_INTEGRATION_PREFLIGHT_V1", ownerApprovalDigest: owner.digest,
     technicalGoHeadSha: forward.headSha, technicalGoTreeSha: forward.treeSha, baseTreeSha: "d".repeat(40),
-    aiExposureYen: 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null };
+    aiExposureYen: version === 2 ? 4843 : 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null };
   forward.preflightDigest = put(preflight).digest;
   const signReview = (action: ManagedAdministrationReview["action"], sources: ManagedAdministrationReview["sources"], changes: Partial<ManagedAdministrationReview> = {}) => {
     const current = f.current(), review = managedAdministrationReviewSchema.parse({ schema: 1,
       purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1", targetBindingHash: pins.targetBindingHash, ownerBindingHash: pins.ownerBindingHash,
       sequence: current.administration.length + 1, previousReviewDigest: current.administration.at(-1)!.digest,
-      expectedStateDigest: managedDigest(current), issuedAt: now, validUntil: "2026-10-17T12:15:00Z", action, sources, ...changes });
+      expectedStateDigest: managedDigest(current), issuedAt: now,
+      validUntil: version === 2 ? "2026-10-19T12:15:00Z" : "2026-10-17T12:15:00Z", action, sources, ...changes });
     const envelope = { review, signature: sign(null, Buffer.from(managedDigest(review), "hex"), privateKey).toString("base64") };
     const digest = managedDigest(envelope), name = `${MANAGED_BUDGET_PREFIX}administration-reviews/${digest}.json`;
     f.files.set(name, { bytes: Buffer.from(JSON.stringify(envelope)), etag: '"signed150"' });
@@ -632,8 +701,8 @@ function issue150Fixture() {
   };
   return { ...f, put, profile, pins, approval, forward, preflight, reviewed, admit, rollbackStep, rollbackFacts, result, resultSource, signReview };
 }
-it("admits only the ordinary signed Issue150 forward and exact revert push/open/merge lineage", async () => {
-  const f = issue150Fixture(), before = f.current(); await f.admit();
+it.each([1, 2] as const)("admits only the signed Issue150 V%s forward and exact revert push/open/merge lineage", async version => {
+  const f = issue150Fixture(version), before = f.current(); await f.admit();
   const push = f.rollbackStep(); await f.admit(push, f.rollbackFacts);
   await f.admit(f.rollbackStep("pr-open"), f.rollbackFacts);
   await f.admit(f.rollbackStep("squash-merge"), { ...f.rollbackFacts, rollbackReserveYen: 0 });
@@ -644,6 +713,28 @@ it("admits only the ordinary signed Issue150 forward and exact revert push/open/
   const rollback = f.rollbackStep("squash-merge"), facts = { ...f.rollbackFacts, rollbackReserveYen: 0 };
   await expect(f.store.applyReviewedAdministration(f.reviewed(rollback, facts).digest, f.pins)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(4);
+});
+it("admits the exact V2 AI and combined release ceilings", async () => {
+  const f = issue150Fixture(2);
+  await f.admit({ ...f.forward, reservationYen: 900 });
+  expect(f.current().operations.at(-1)?.reservationYen).toBe(900);
+});
+it.each(["ai", "release", "rollback", "expiry", "preflight-v1"])("rejects V2 %s overflow or mismatch before CAS", async reason => {
+  const f = issue150Fixture(2), step = { ...f.forward, reservationYen: 900 }, facts = { ...f.preflight };
+  if (reason === "ai") facts.aiExposureYen = 4844;
+  if (reason === "release") step.reservationYen = 901;
+  if (reason === "rollback") facts.rollbackReserveYen = 1401;
+  if (reason === "preflight-v1") { facts.scope = "ISSUE150_INTEGRATION_PREFLIGHT_V1"; facts.aiExposureYen = 2000; }
+  const changes = reason === "expiry" ? { issuedAt: "2026-10-20T14:17:39Z", validUntil: "2026-10-20T14:32:39Z" } : {};
+  if (reason === "expiry") { vi.setSystemTime(new Date(changes.issuedAt!)); f.setDate(new Date(changes.issuedAt!).toUTCString()); }
+  const review = f.reviewed(step, facts, changes);
+  await expect(f.store.applyReviewedAdministration(review.digest, f.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);
+});
+it("rejects a V2 preflight paired with V1 authority", async () => {
+  const f = issue150Fixture(), review = f.reviewed(f.forward, { ...f.preflight, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V2" });
+  await expect(f.store.applyReviewedAdministration(review.digest, f.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);
 });
 it.each(["ordinary-cost", "ordinary-forward", "ordinary-jobs", "ordinary-minutes", "ordinary-normal", "profile", "recovery-hold", "cost", "tech-head", "tech-tree", "owner-source", "source-bytes", "deadline"])(
   "rejects an invalid Issue150 %s before CAS", async reason => {
@@ -868,6 +959,35 @@ it("narrows the worker permit to the completion deadline and rejects delayed sta
   await expect(f.store.verifyWatch(c)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
 });
+it.each(["valid", "missing", "wrong-profile", "over-cost"])(
+  "rechecks the new profile's ordinary month authority at watch execution: %s", async reason => {
+    const f = await completionExecutionFixture(), s = f.current();
+    const profile = { ...f.profile, goEvidenceDigest: hash(830) }, profileDigest = managedDigest(profile);
+    const completion = { ...f.completionAllowance, validUntil: "2026-10-01T00:30:00Z" };
+    s.activeProfileDigest = profileDigest; s.plans[1].baseYen = 19_000;
+    s.plans[1].completionAllowance = completion;
+    s.plans[1].standardMonthAdjustment = { scope: "ISSUE150_STANDARD_MONTH_V1", month: "2026-10",
+      ownerApprovalDigest: hash(831), profileDigest, monthlyCapYen: 38331, jobs: 25, minutes: 3000, forward: 9 };
+    f.files.set(`${MANAGED_BUDGET_PREFIX}profiles/${profileDigest}.json`, { bytes: Buffer.from(JSON.stringify(profile)), etag: '"new-profile"' });
+    f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s));
+    const { budgetProof: _proof, ...web } = { ...managedCloudFixture(1), approval: "STANDARD_MANAGED_WATCH_STANDARD_V1" };
+    void _proof;
+    const c = await f.store.prepareWebWatch(web);
+    await f.store.reserveWatch(c); await f.store.claimWatch(c);
+    const claimed = f.current();
+    if (reason === "missing") delete claimed.plans[1].standardMonthAdjustment;
+    if (reason === "wrong-profile") claimed.plans[1].standardMonthAdjustment!.profileDigest = managedDigest(f.profile);
+    if (reason === "over-cost") claimed.plans[1].baseYen = 38331;
+    f.files.get(key)!.bytes = Buffer.from(JSON.stringify(claimed));
+    const writes = f.calls.filter(c => c.startsWith("PUT:")).length;
+    if (reason === "valid") {
+      const permit = await f.store.verifyWatch(c);
+      expect(permit.processingMonth).toBe("2026-10");
+      expect(Date.parse(permit.expiresAt)).toBeGreaterThan(Date.parse(completion.validUntil));
+    } else await expect(f.store.verifyWatch(c)).rejects.toThrow();
+    expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(writes);
+    expect(f.current().plans[1].completionAllowance).toEqual(completion);
+  });
 it("binds a month allowance to the signed review and rejects tampering before any write", async () => {
   const f = fixture();
   const action = { kind: "month" as const, processingMonth: "2026-09", baseYen: 26_000,

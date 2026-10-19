@@ -1,8 +1,10 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { expect, it } from "vitest";
 import { managedDigest } from "./managed-claims";
-import { emptyManagedBudgetUnits } from "./managed-service-budget";
+import { emptyManagedBudgetUnits, managedCompletionAllowanceSchema } from "./managed-service-budget";
 import { managedBudgetEvidencePins, managedSettlementReviewSchema, managedSettlementProof, verifyManagedSettlementReview,
+  managedReleaseStepSchema, managedReleaseBudgetRequest, managedIssue150IntegrationSchema,
+  verifyManagedAdministrationReview, verifyManagedAdministrationHistory,
   type ManagedSettlementReview } from "./managed-budget-evidence";
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), now = new Date("2026-09-24T00:00:00Z");
@@ -18,8 +20,65 @@ function fixture() {
     unitEvidence: [{ unit: "jobs", sourceDigest: hash(5) }], cost: null };
   const signed = (value = review) => { const canonical = managedSettlementReviewSchema.parse(value);
     return { review: canonical, signature: sign(null, Buffer.from(managedDigest(canonical), "hex"), privateKey).toString("base64") }; };
-  return { pins, review, signed };
+  const signedReview = <T>(review: T) => ({ review,
+    signature: sign(null, Buffer.from(managedDigest(review), "hex"), privateKey).toString("base64") });
+  return { pins, review, signed, signedReview };
 }
+function history139Fixture() {
+  const f = fixture(), review = { schema: 1, purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1",
+    targetBindingHash: f.pins.targetBindingHash, ownerBindingHash: f.pins.ownerBindingHash,
+    sequence: 2, previousReviewDigest: hash(6), expectedStateDigest: hash(7),
+    issuedAt: "2026-09-24T00:00:00Z", validUntil: "2026-09-24T00:10:00Z",
+    sources: [{ digest: hash(8), bytes: 80 }, { digest: hash(9), bytes: 80 }],
+    action: { kind: "release-start", step: { issue: 139, repository: "hirokiriko/patentai-mini",
+      operationId: "00000000-0000-4000-8000-000000000139", kind: "forward", trigger: "squash-merge",
+      prNumber: 139, targetRef: "refs/heads/main", remoteBeforeSha: "b".repeat(40), headSha: "a".repeat(40),
+      baseSha: "b".repeat(40), treeSha: "c".repeat(40), ciWorkflowSha256: hash(10), deployWorkflowSha256: hash(11),
+      preflightDigest: hash(8), pricingDigest: hash(9), reservationYen: 115 } } };
+  return { ...f, review };
+}
+it("authenticates signed Issue139 history without adding active release authority", () => {
+  const f = history139Fixture(), envelope = f.signedReview(f.review), digest = managedDigest(envelope);
+  for (const at of [now, new Date("2026-10-19T00:00:00Z")])
+    expect(JSON.stringify(verifyManagedAdministrationHistory(envelope, digest, f.pins, at))).toBe(JSON.stringify(envelope));
+  for (const requireFresh of [true, false])
+    expect(() => verifyManagedAdministrationReview(envelope, digest, f.pins, now, requireFresh)).toThrow();
+  expect(() => managedReleaseStepSchema.parse(f.review.action.step)).toThrow();
+  expect(() => managedReleaseBudgetRequest(f.review.action.step, f.pins.targetBindingHash, f.pins.ownerBindingHash)).toThrow();
+});
+it.each(["content", "signature", "key", "owner", "target", "digest", "future"])(
+  "rejects invalid historical Issue139 authentication: %s", reason => {
+    const f = history139Fixture(), envelope = f.signedReview(f.review);
+    if (reason === "content") envelope.review.action.step.headSha = "e".repeat(40);
+    if (reason === "signature") envelope.signature = history139Fixture().signedReview(f.review).signature;
+    if (reason === "key") Object.assign(f.pins, history139Fixture().pins);
+    if (reason === "owner") f.pins.ownerBindingHash = hash(90);
+    if (reason === "target") f.pins.targetBindingHash = hash(90);
+    expect(() => verifyManagedAdministrationHistory(envelope, reason === "digest" ? hash(90) : managedDigest(envelope), f.pins,
+      reason === "future" ? new Date("2026-09-23T23:59:59Z") : now)).toThrow();
+  });
+it.each(["completion140", "integration150-v1", "integration150-v2"])(
+  "rejects foreign authority on signed Issue139 history: %s", reason => {
+    const f = history139Fixture();
+    const patch = reason === "completion140" ? { completionAllowance: managedCompletionAllowanceSchema.parse({
+      scope: "ISSUE140_COMPLETION_V2", issue: 140, month: "2026-10", ownerApprovalDigest: hash(12), profileDigest: hash(13),
+      monthlyCapYen: 30000, cumulativeUnits: emptyManagedBudgetUnits(), validUntil: "2026-10-20T14:59:00Z" }) } : {
+      issue150Integration: managedIssue150IntegrationSchema.parse({
+        scope: reason === "integration150-v1" ? "ISSUE150_INTEGRATION_V1" : "ISSUE150_INTEGRATION_V2",
+        ownerApprovalDigest: hash(12), profileDigest: hash(13), forwardOperationId: null,
+        approvedAt: reason === "integration150-v1" ? "2026-10-17T06:41:40Z" : "2026-10-19T00:00:00Z",
+        validUntil: reason === "integration150-v1" ? "2026-10-18T06:41:40Z" : "2026-10-20T14:59:00Z" }) };
+    const envelope = f.signedReview({ ...f.review, action: { ...f.review.action, step: { ...f.review.action.step, ...patch } } });
+    expect(() => verifyManagedAdministrationHistory(envelope, managedDigest(envelope), f.pins, now)).toThrow();
+  });
+it.each([{ targetRef: "refs/tags/issue-139" }, { targetRef: "refs/heads/codex//issue-139" },
+  { targetRef: "refs/heads/codex/issue-139/" }, { remoteBeforeSha: null }, { remoteBeforeSha: "d".repeat(40) },
+  { headSha: "a".repeat(39) }, { baseSha: "b".repeat(64) }, { treeSha: "G".repeat(40) },
+  { trigger: "workflow-dispatch", prNumber: null }])("rejects malformed signed Issue139 refs/SHA %#", patch => {
+  const f = history139Fixture();
+  const envelope = f.signedReview({ ...f.review, action: { ...f.review.action, step: { ...f.review.action.step, ...patch } } });
+  expect(() => verifyManagedAdministrationHistory(envelope, managedDigest(envelope), f.pins, now)).toThrow();
+});
 it("verifies the independently pinned Ed25519 key and keeps partial evidence monetary-unknown", () => {
   const f = fixture(), envelope = f.signed(), digest = managedDigest(envelope);
   expect(verifyManagedSettlementReview(envelope, digest, f.pins, now)).toEqual(envelope);

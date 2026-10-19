@@ -1,7 +1,7 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { z } from "zod";
 import { managedDigest } from "./managed-claims";
-import { ManagedBudgetError, managedBudgetStateSchema, managedBudgetUnitsSchema, emptyManagedBudgetUnits, managedBudgetRequestSchema, managedReleaseMonthlyCapSchema, managedCompletionAllowanceSchema } from "./managed-service-budget";
+import { ManagedBudgetError, managedBudgetStateSchema, managedBudgetUnitsSchema, emptyManagedBudgetUnits, managedBudgetRequestSchema, managedReleaseMonthlyCapSchema, managedCompletionAllowanceSchema, managedStandardMonthAdjustmentSchema } from "./managed-service-budget";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/), quantity = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const yen = z.number().int().nonnegative().max(1_000_000_000);
@@ -11,16 +11,24 @@ const signature = z.string().regex(/^[A-Za-z0-9+/]{86}==$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
 // A bounded ordinary release, not Issue140's completion allowance. Keeping the
 // field absent on old steps preserves their canonical serialization/digests.
-export const managedIssue150IntegrationSchema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_V1"),
+const managedIssue150IntegrationV1Schema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_V1"),
   ownerApprovalDigest: hash, profileDigest: hash,
   approvedAt: z.literal("2026-10-17T06:41:40Z"), validUntil: z.literal("2026-10-18T06:41:40Z"),
   forwardOperationId: z.uuidv4().nullable(),
 }).strict();
-export const managedIssue150PreflightSchema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V1"),
+const managedIssue150PreflightV1Schema = z.object({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V1"),
   ownerApprovalDigest: hash, technicalGoHeadSha: commit, technicalGoTreeSha: commit, baseTreeSha: commit,
   aiExposureYen: yen.max(3000), rollbackReserveYen: yen.max(1600),
   forwardResultDigest: hash.nullable(),
 }).strict();
+const managedIssue150IntegrationV2Schema = managedIssue150IntegrationV1Schema.extend({
+  scope: z.literal("ISSUE150_INTEGRATION_V2"), approvedAt: z.iso.datetime(),
+  validUntil: z.literal("2026-10-20T14:59:00Z"),
+}).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
+export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema]);
+export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [managedIssue150PreflightV1Schema,
+  managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V2"),
+    aiExposureYen: yen.max(4843), rollbackReserveYen: yen.max(1400) })]);
 export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
   forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
   prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,
@@ -30,7 +38,7 @@ export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("I
 }).strict();
 /** One reviewed Local operation, including every automated trigger it causes.
  * No GitHub/Azure credentials or private records are sent to public CI. */
-export const managedReleaseStepSchema = z.object({ issue: z.union([z.literal(129), z.literal(140), z.literal(150)]), repository: z.literal("hirokiriko/patentai-mini"),
+const releaseStepSchemaBase = z.object({ issue: z.union([z.literal(129), z.literal(139), z.literal(140), z.literal(150)]), repository: z.literal("hirokiriko/patentai-mini"),
   completionAllowance: managedCompletionAllowanceSchema.optional(),
   issue150Integration: managedIssue150IntegrationSchema.optional(),
   operationId: z.uuidv4(), kind: z.enum(["validation", "forward", "rollback"]),
@@ -58,6 +66,8 @@ export const managedReleaseStepSchema = z.object({ issue: z.union([z.literal(129
   return s.targetRef === "refs/heads/main" && s.remoteBeforeSha === s.baseSha &&
     (s.trigger === "squash-merge" ? s.prNumber !== null : s.trigger === "workflow-dispatch" && s.prNumber === null && s.headSha === s.baseSha);
 });
+export const managedReleaseStepSchema = releaseStepSchemaBase.safeExtend({ issue: z.union([z.literal(129), z.literal(140), z.literal(150)]) });
+const historicalIssue139ReleaseStepSchema = releaseStepSchemaBase.safeExtend({ issue: z.literal(139) });
 export type ManagedReleaseStep = z.infer<typeof managedReleaseStepSchema>;
 export function managedReleaseBudgetRequest(value: unknown, targetBindingHash: string, ownerBindingHash: string) {
   const step = managedReleaseStepSchema.parse(value);
@@ -93,16 +103,24 @@ export const managedAdministrationReviewSchema = z.object({ schema: z.literal(1)
   action: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("open"), state: managedBudgetStateSchema }).strict(),
     z.object({ kind: z.literal("month"), processingMonth: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+      standardMonthAdjustment: managedStandardMonthAdjustmentSchema.optional(),
       baseYen: yen, pools: z.object({ remaining: yen, storage: yen, recovery: yen }).strict(), pricingDigest: hash, releaseTailYen: yen,
       reviewedOperationIds: z.array(z.uuidv4()).max(768).refine(ids => new Set(ids).size === ids.length),
       releaseMonthlyCapYen: managedReleaseMonthlyCapSchema.optional(), completionAllowance: managedCompletionAllowanceSchema.optional() }).strict()
-      .refine(a => (a.releaseMonthlyCapYen === undefined || a.processingMonth === "2026-09") &&
+      .refine(a => (!a.standardMonthAdjustment || a.standardMonthAdjustment.month === a.processingMonth) &&
+        (a.releaseMonthlyCapYen === undefined || a.processingMonth === "2026-09") &&
         (!a.completionAllowance || (a.processingMonth === a.completionAllowance.month && a.releaseMonthlyCapYen === undefined))),
     z.object({ kind: z.literal("activate"), profileDigest: hash, goEvidenceDigest: hash, measurementDigest: hash, pricingDigest: hash }).strict(),
     z.object({ kind: z.literal("release-start"), step: managedReleaseStepSchema }).strict(),
   ]),
 }).strict();
 export const managedSignedAdministrationSchema = z.object({ review: managedAdministrationReviewSchema, signature }).strict();
+const historicalSignedAdministrationSchema = managedSignedAdministrationSchema.extend({
+  review: managedAdministrationReviewSchema.extend({ action: z.union([
+    managedAdministrationReviewSchema.shape.action,
+    z.object({ kind: z.literal("release-start"), step: historicalIssue139ReleaseStepSchema }).strict(),
+  ]) }),
+});
 export type ManagedAdministrationReview = z.infer<typeof managedAdministrationReviewSchema>;
 export type ManagedSettlementReview = z.infer<typeof managedSettlementReviewSchema>;
 export type ManagedBudgetEvidencePins = Readonly<{ publicKeySpkiBase64: string; publicKeySha256: string;
@@ -145,6 +163,11 @@ export function verifyManagedAdministrationReview(value: unknown, expectedDigest
       r.action.state.plans.every(p => sources.has(p.pricingDigest)));
     else check(r.expectedStateDigest !== null);
     if (r.action.kind === "month") check(sources.has(r.action.pricingDigest));
+    if (r.action.kind === "month" && r.action.standardMonthAdjustment) {
+      const a = r.action.standardMonthAdjustment;
+      check(sources.has(a.ownerApprovalDigest) &&
+        new Date(Date.parse(r.issuedAt) + 9 * 60 * 60_000).toISOString().slice(0, 7) === a.month);
+    }
     const completion = r.action.kind === "month" ? r.action.completionAllowance :
       r.action.kind === "release-start" ? r.action.step.completionAllowance : undefined;
     if (completion) check(sources.has(completion.ownerApprovalDigest) &&
@@ -164,7 +187,7 @@ export function verifyManagedAdministrationReview(value: unknown, expectedDigest
  * binding; it is not reapplied against today's production GO pin. */
 export function verifyManagedAdministrationHistory(value: unknown, expectedDigest: string, pins: ManagedBudgetEvidencePins, at: Date) {
   try {
-    const envelope = managedSignedAdministrationSchema.parse(value);
+    const envelope = historicalSignedAdministrationSchema.parse(value);
     verifyReview(envelope, expectedDigest, pins, at, false);
     return envelope;
   } catch { throw new ManagedBudgetError(); }

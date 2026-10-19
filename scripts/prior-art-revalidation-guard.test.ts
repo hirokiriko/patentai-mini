@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
 import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding,
+  PROPOSITION_REVALIDATION_PLANS,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
@@ -63,6 +64,36 @@ async function advance(h: ReturnType<typeof harness>, until: number) {
   for (let i = 0; i < until; i++) { if (i === 2) await h.guard.acceptDiagnosticQa(qa(h)); await h.send(i); }
   if (until === 2) await h.guard.acceptDiagnosticQa(qa(h));
 }
+describe("inactive fixed proposition program slots", () => {
+  beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-19T07:00:00Z")); });
+  afterEach(() => { vi.restoreAllMocks(); });
+  it.each([1, 2] as const)("reserves the full program before slot %i and preserves stage IDs independently of send count", async slot => {
+    const plan=PROPOSITION_REVALIDATION_PLANS[slot-1];
+    const decision={...approved,planId:plan.id,maximumNewSends:10,maximumReservationYen:1560,
+      maximumAi:484300000,maximumTotal:624300000};
+    expect(revalidationFunding(slot)).toEqual({reservationYen:1560,requiredAi:484286010,requiredTotal:624286010});
+    expect(plan.stages.reduce((n,s)=>n+s.reserve,0)).toBe(780);
+    expect(plan.stages.map(s=>Math.ceil((5*s.input+30*s.output)*220/1000000))).toEqual([99,224,99,115,243]);
+    const h=harness({propositionSlot:slot,decision});
+    for(const [i,stage] of plan.stages.entries()){
+      if(i===2)await h.guard.acceptDiagnosticQa(qa(h));
+      await h.send(i,body(stage));
+    }
+    expect(h.journal.claim).toHaveBeenCalledWith(binding,{sends:45,rows:90,sha256:plan.priorLedgerSha256,reservationYen:1560});
+    expect(vi.mocked(h.journal.reserve).mock.calls.map(([e])=>e.ordinal)).toEqual(slot===1?[49,50,51,52,53]:[54,55,56,57,58]);
+    await expect(h.send(5,body(plan.stages[0]))).rejects.toThrow("revalidation_stopped");
+    expect(h.transport).toHaveBeenCalledTimes(5);
+  });
+  it.each([1,2] as const)("refuses old approval and a half-funded program at slot %i",async slot=>{
+    const plan=PROPOSITION_REVALIDATION_PLANS[slot-1];
+    for(const decision of [approved,{...approved,planId:plan.id,maximumNewSends:5,maximumReservationYen:780,maximumAi:484300000,maximumTotal:624300000}]){
+      const h=harness({propositionSlot:slot,decision});
+      await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow("revalidation_stopped");
+      expect(h.events).toEqual([]);
+    }
+  });
+});
+
 describe("inactive finite 734 JPY revalidation guard", () => {
   beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-18T14:00:00+09:00")); });
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
