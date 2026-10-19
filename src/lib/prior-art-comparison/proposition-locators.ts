@@ -109,4 +109,3 @@ export function targetPropositionModelSchemaFor(input:PropositionTargetInput) {
     })});
   });
 }
-
