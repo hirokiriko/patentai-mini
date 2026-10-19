@@ -46,7 +46,6 @@ describe("literal structure on the product path, with fictional SDK transport", 
         expect(input.sources[0].source.literalStructure).toEqual(expected);
         expect(input.sources[0].source.claims[0].parts.map((id:number)=>input.textParts[id]).join("")).toBe(inputs.draft.source.claims[0].text);
         answer = fictionalPropositionSource(input);
-        if (failure === "reading") answer.sources[0].facts[0].bindings[0].spans=[[0,1]];
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);
         answer = fictionalPropositionGeneration(input);
@@ -57,9 +56,11 @@ describe("literal structure on the product path, with fictional SDK transport", 
         answer = fictionalPropositionTarget(input);
         if (failure === "reason") Object.assign(answer.targets[0].parts[0].atoms[0],{verdict:"consistent",reason:wrong});
       }
+      const wire=fixturePropositionWire(answer);
+      if(failure==="reading"&&input.task==="extract_source_propositions")wire.sources[0].locators[0].quote="原文に存在しない語";
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
-          content: [{ type: "output_text", text: JSON.stringify(fixturePropositionWire(answer)), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
+          content: [{ type: "output_text", text: JSON.stringify(wire), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
       }catch(error){transportErrors.push(error);throw error;}
     }));
     const execution=executeComparison(inputs, selection).catch(error=>{throw transportErrors[0]??error;});

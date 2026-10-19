@@ -113,10 +113,29 @@ export const LOCATOR_REVALIDATION_PLANS = Object.freeze(([1,2] as const).map(slo
     {phase:"normal_review",task:"review",input:88000,output:22528,reserve:246},
   ].map((stage,index)=>Object.freeze({...stage,ordinal:64+(slot-1)*5+index}))),
 })));
-export type RevalidationSlot = 1 | 2 | "schema" | "locator1" | "locator2";
+/** New inactive proposal after terminal incomplete64. No old program rights
+ * are carried forward. Source terms and source output have separate bounds. */
+export const BOUND_TERMS_REVALIDATION_PLANS = Object.freeze(([1,2] as const).map(slot=>Object.freeze({
+  ...REVALIDATION_PLAN,id:"ISSUE150_BOUND_TERMS_1295_V1",status:"PENDING_OWNER_DECISION",slot,
+  priorSends:48,priorRows:96,
+  priorLedgerSha256:"1212219833cd77011c19f6b2a534f6810e6823454d069ca15e1f5756dfc93d51",
+  currentExposure:343739415,unknownHeld:241200000,
+  currentAiLimit:484300000,currentTotalLimit:624300000,
+  approvedAiLimit:484300000,approvedTotalLimit:624300000,
+  programMaximumNewSends:7,programReservationYen:1295,normalMaximumOperations:1,retryOnlyBeforeNormal:true,
+  stages:Object.freeze([
+    {phase:"diagnostic_source",task:"extract_source_propositions",input:47000,output:16384,reserve:160},
+    {phase:"diagnostic_review",task:"review",input:71000,output:22528,reserve:227},
+    {phase:"normal_source",task:"extract_source_propositions",input:47000,output:16384,reserve:160},
+    {phase:"normal_generation",task:"compare",input:55000,output:8192,reserve:115},
+    {phase:"normal_review",task:"review",input:88000,output:22528,reserve:246},
+  ].map((stage,index)=>Object.freeze({...stage,ordinal:74+(slot-1)*5+index}))),
+})));
+export type RevalidationSlot = 1 | 2 | "schema" | "locator1" | "locator2" | "bound1" | "bound2";
 export function revalidationPlan(slot?: RevalidationSlot) {
   if (slot === undefined) return REVALIDATION_PLAN;
   if (slot === "schema") return SCHEMA_REVALIDATION_PLAN;
+  if (slot === "bound1" || slot === "bound2") return BOUND_TERMS_REVALIDATION_PLANS[slot === "bound1" ? 0 : 1];
   if (slot === "locator1" || slot === "locator2") return LOCATOR_REVALIDATION_PLANS[slot === "locator1" ? 0 : 1];
   if (slot !== 1 && slot !== 2) throw Error("revalidation_stopped");
   return PROPOSITION_REVALIDATION_PLANS[slot - 1];

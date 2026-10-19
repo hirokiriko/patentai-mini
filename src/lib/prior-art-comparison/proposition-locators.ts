@@ -3,7 +3,7 @@ import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { comparisonModelSchema } from "./model-schema";
 import { extractionSchema, targetAtomSchema, targetPartSchema, propositionSourceInput,
   sourcePropositionSchemaFor, targetPropositionSchemaFor, type PropositionTargetInput } from "./proposition-extraction";
-import type { Span } from "./propositions";
+import { guardSchema, meaningSchema, type Meaning, type Span } from "./propositions";
 
 // Quotes live at a shallow level. Nested propositions refer to this table;
 // adding a locator object at every span would exceed Azure's five levels.
@@ -19,6 +19,20 @@ const spans = {
     exclusions:z.array(index).max(6), controls:z.array(index).max(6) }).strict().nullable(),
 };
 const wireExtraction = extractionSchema.extend(spans);
+// Source terms are quoted once. The model selects their locators for semantic
+// roles instead of independently repeating a term and a purported binding.
+const termRefs=z.array(index).min(1).max(4),termLists=z.array(termRefs).max(12);
+const boundCommon={
+  subject:termRefs.nullable(),context:meaningSchema.options[0].shape.context,
+  guard:z.object({relation:guardSchema.shape.relation,conditions:termLists}).strict().meta({id:"PriorArtGuard"}),
+  polarity:meaningSchema.options[0].shape.polarity,
+};
+const boundMeaning=z.discriminatedUnion("kind",[
+  meaningSchema.options[0].extend({...boundCommon,members:termLists.min(1)}),
+  meaningSchema.options[1].extend({...boundCommon,origin:termRefs.nullable(),destination:termRefs.nullable(),via:termLists,bypass:termLists}),
+  meaningSchema.options[2].extend({...boundCommon,objects:termLists.min(1)}),
+]);
+const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning});
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
   reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
@@ -66,14 +80,34 @@ function tableReader<T extends z.infer<typeof locator>>(table:T[], text:(entry:T
   }, complete:()=>{if(used.size!==table.length)throw invalid();}};
 }
 
+function expandSource(raw:z.infer<typeof boundSourceExtraction>,get:(at:number)=>Span,text:string) {
+  const basis=raw.basis.map(get),bindings:z.infer<typeof extractionSchema>["bindings"]=[];
+  const term=(refs:number[]):string=>{
+    const positions=refs.map(get);
+    // Check every role before coalescing identical terms. A second occurrence
+    // outside the basis must not disappear behind an earlier valid binding.
+    if(positions.some(s=>!basis.some(([a,b])=>s[0]>=a&&s[1]<=b)))throw invalid();
+    const value=positions.map(([a,b])=>text.slice(a,b)).join("");
+    if(!bindings.some(b=>b.term===value))bindings.push({term:value,spans:positions});
+    return value;
+  };
+  const m=raw.meaning,common={subject:m.subject===null?null:term(m.subject),context:m.context,
+    guard:{relation:m.guard.relation,conditions:m.guard.conditions.map(term)},polarity:m.polarity};
+  const meaning:Meaning=m.kind==="set"?{...common,kind:m.kind,selection:m.selection,extent:m.extent,members:m.members.map(term)}:
+    m.kind==="path"?{...common,kind:m.kind,origin:m.origin===null?null:term(m.origin),
+      destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term),extent:m.extent,relation:m.relation}:
+    {...common,kind:m.kind,predicate:m.predicate,objects:m.objects.map(term)};
+  return {...expandExtraction({...raw,meaning,bindings:[]},get),bindings};
+}
+
 /** The wire result is converted once to the unchanged internal span schema.
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const schema=z.object({locatorVersion:z.literal(1),sources:z.array(z.object({
+  const schema=z.object({locatorVersion:z.literal(2),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
     locators:z.array(locator.extend({claimNo:z.number().int().positive()})).max(512),
-    facts:z.array(wireExtraction.extend({claimNo:z.number().int().positive()})).max(48),
+    facts:z.array(boundSourceExtraction.extend({claimNo:z.number().int().positive()})).max(48),
   }).strict()).length(input.sources.length)}).strict();
   const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,c.segments.map(p=>p.text).join("")])));
   return comparisonModelSchema(schema,raw=>{
@@ -81,9 +115,9 @@ export function sourcePropositionModelSchemaFor(chunks:readonly ManagedCompariso
     return local.parse({sources:raw.sources.map((s,i)=>{
       if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
       const table=tableReader(s.locators,l=>{const text=originals[i].get(l.claimNo);if(text===undefined)throw invalid();return text;});
-      const facts=s.facts.map(f=>({...expandExtraction(f,at=>{
+      const facts=s.facts.map(f=>({...expandSource(f,at=>{
         if(s.locators[at]?.claimNo!==f.claimNo)throw invalid();return table.get(at);
-      }),claimNo:f.claimNo}));
+      },originals[i].get(f.claimNo)??""),claimNo:f.claimNo}));
       table.complete();return {sourceDigest:s.sourceDigest,facts};
     })});
   });

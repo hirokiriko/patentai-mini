@@ -94,9 +94,10 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "reordered") notes.reverse();
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
-      if (mode === "blank") notes[0].facts[0].bindings[0].term = "　 ";
-      if (mode === "overlong") notes[0].facts[0].bindings[0].term = "甲".repeat(81);
-      return response(answer);
+      const wire=wireGuards(answer);
+      if (mode === "blank") wire.sources[0].locators[0].quote = "";
+      if (mode === "overlong") wire.sources[0].locators[0].quote = "甲".repeat(12001);
+      return response(wire);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toMatchObject({ message: "ai_incomplete", stage: "source_reading", kind: "protocol_invalid" });
@@ -248,7 +249,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
       expect(body.reasoning).toEqual({effort:"low"});
-      expect(body.max_output_tokens).toBe(phase === "review" ? 22528 : 8192);
+      expect(body.max_output_tokens).toBe(phase === "review" ? 22528 : phase === "extract_source_propositions" ? 16384 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
@@ -283,17 +284,18 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch", transport);
     expect((await executeComparison(inputs, selection)).status).toBe("complete");
   });
-  it.each(["generation", "review"])("stops on %s usage above its own cap without another send", async phase => {
+  it.each(["source", "generation", "review"] as const)("stops on %s usage above its own cap without another send", async phase => {
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
     const { inputs, selection } = fictionalInputs();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      const current=input.task==="extract_source_propositions"?"source":input.task==="review"?"review":"generation";
       return response(stageAnswer(input),
-        { input_tokens: 100, output_tokens: (input.task === "review" ? phase === "review" : phase === "generation") ? (phase === "review" ? 22529 : 8193) : 30 });
+        { input_tokens: 100, output_tokens: current===phase ? ({source:16385,generation:8193,review:22529})[phase] : 30 });
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(phase === "generation" ? 1 : 3);
+    expect(transport).toHaveBeenCalledTimes(({source:1,generation:2,review:3})[phase]);
   });
   it("can complete all SDK calls beyond 35 seconds without omitting review",async()=>{
     vi.useFakeTimers();

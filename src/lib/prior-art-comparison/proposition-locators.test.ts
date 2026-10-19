@@ -8,6 +8,7 @@ import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceIn
   propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { resolvePropositionQuote, sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
+import { parseComparisonSource } from "./source";
 
 function setup(){
   const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceTransport(propositionSourceInput(plan));
@@ -95,4 +96,63 @@ it.each([[0,1.5],[0,-1],[0,1,2]])("does not silently repair invalid numeric coor
   const f=setup();
   Object.assign(f.source.sources[0].facts[0],{basis:[range]});
   expect(()=>fixturePropositionWire(f.source)).toThrow("fictional_locator_invalid");
+});
+
+function boundExample(text:string) {
+  const f=fictionalInputs();f.inputs.draft=parseComparisonSource("【請求項1】\n"+text,11,"draft-11");
+  const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
+  const wire={locatorVersion:2,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,locators:[] as {quote:string;occurrence:number;claimNo:number}[],facts:[] as unknown[]}))};
+  return {schema:sourcePropositionModelSchemaFor(plan),wire,row:wire.sources[0]};
+}
+const neutralBound={selection:null,extent:null,polarity:null,guard:null,context:null};
+it("derives source terms only from exact quoted fragments, with nullable implicit subject",async()=>{
+  const f=boundExample("第１、第２運転モードを備える。");
+  f.row.locators=[{quote:"第１、第２運転モードを備える。",occurrence:0,claimNo:1},
+    {quote:"第１",occurrence:0,claimNo:1},{quote:"運転モード",occurrence:0,claimNo:1}];
+  f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"relation",subject:null,context:"capability",
+    guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[1,2]]},
+    operators:neutralBound,routeFrame:null}];
+  const result=await f.schema.validate!(f.wire);
+  expect(result.success).toBe(true);
+  if(result.success){const fact=result.value.sources[0].facts[0];
+    expect(fact.meaning).toMatchObject({subject:null,objects:["第１運転モード"]});
+    expect(fact.bindings).toEqual([{term:"第１運転モード",spans:[[0,2],[5,10]]}]);
+  }
+});
+it.each([false,true])("checks both loop endpoint terms before sharing a binding (outside=%s)",async outside=>{
+  const text="循環器から青色弁を経て循環器に戻る。別の循環器。",f=boundExample(text);
+  f.row.locators=[
+    {quote:outside?"循環器から青色弁を経て":"循環器から青色弁を経て循環器に戻る。",occurrence:0,claimNo:1},
+    {quote:"循環器",occurrence:0,claimNo:1},{quote:"循環器",occurrence:outside?2:1,claimNo:1},
+    {quote:"青色弁",occurrence:0,claimNo:1}];
+  f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"path",subject:null,context:"operation",
+    guardRelation:"unconditional",guardConditions:[],polarity:"positive",origin:[1],destination:[2],via:[[3]],bypass:[],extent:"whole",relation:"route"},
+    operators:neutralBound,routeFrame:{entry:1,exit:2,route:0,exclusions:[],controls:[]}}];
+  const before=JSON.stringify(f.wire),result=await f.schema.validate!(f.wire);
+  expect(result.success).toBe(!outside);expect(JSON.stringify(f.wire)).toBe(before);
+  if(result.success){const fact=result.value.sources[0].facts[0];
+    expect(fact.bindings.filter(b=>b.term==="循環器")).toHaveLength(1);
+    expect(fact.routeFrame?.entry).toEqual([0,3]);expect(fact.routeFrame?.exit).toEqual([11,14]);
+  }
+});
+it.each(["string_term","legacy_version","extra_binding","absent_term","oversize_term"])("rejects source bound terms: %s",async mode=>{
+  if(mode==="oversize_term"){
+    const f=boundExample("甲".repeat(81)+"。");
+    f.row.locators=[{quote:"甲".repeat(81),occurrence:0,claimNo:1}];
+    f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"relation",subject:null,context:"capability",
+      guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[0]]},
+      operators:neutralBound,routeFrame:null}];
+    expect((await f.schema.validate!(f.wire)).success).toBe(false);return;
+  }
+  const f=setup(),wire=fixturePropositionWire(f.source),fact=wire.sources[0].facts[0];
+  if(mode==="string_term")fact.meaning.subject="装置";
+  if(mode==="legacy_version")wire.locatorVersion=1;
+  if(mode==="extra_binding")fact.bindings=[];
+  if(mode==="absent_term")fact.meaning.objects=[[999]];
+  expect((await f.sourceSchema.validate!(wire)).success).toBe(false);
+});
+it("does not change a fictional semantic term to repair its invalid source binding",()=>{
+  const f=setup(),fact=f.source.sources[0].facts[0];
+  fact.bindings.find(b=>b.term===fact.meaning.subject)!.spans=fact.bindings.find(b=>b.term==="青色弁")!.spans;
+  expect(()=>fixturePropositionWire(f.source)).toThrow("fictional_binding_changed");
 });

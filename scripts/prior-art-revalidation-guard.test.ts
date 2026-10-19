@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
 import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding,
-  PROPOSITION_REVALIDATION_PLANS, SCHEMA_REVALIDATION_PLAN, LOCATOR_REVALIDATION_PLANS,
+  PROPOSITION_REVALIDATION_PLANS, SCHEMA_REVALIDATION_PLAN, LOCATOR_REVALIDATION_PLANS, BOUND_TERMS_REVALIDATION_PLANS,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
@@ -67,6 +67,23 @@ async function advance(h: ReturnType<typeof harness>, until: number) {
 describe("inactive fixed proposition program slots", () => {
   beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-19T07:00:00Z")); });
   afterEach(() => { vi.restoreAllMocks(); });
+  it.each(["bound1","bound2"] as const)("requires a new full decision before %s and preserves all stopped plans",async slot=>{
+    const plan=BOUND_TERMS_REVALIDATION_PLANS[slot==="bound1"?0:1];
+    expect(plan.status).toBe("PENDING_OWNER_DECISION");expect(plan.normalMaximumOperations).toBe(1);
+    expect(plan.programMaximumNewSends).toBe(7);expect(plan.priorRows).toBe(96);expect(plan.priorSends).toBe(48);
+    expect(plan.stages.map(s=>s.output)).toEqual([16384,22528,16384,8192,22528]);
+    expect(plan.stages.map(s=>s.reserve)).toEqual([160,227,160,115,246]);
+    expect(revalidationFunding(slot)).toEqual({reservationYen:1295,requiredAi:473239415,requiredTotal:613239415});
+    for(const decision of [undefined,{...approved,status:"PENDING_OWNER_DECISION" as const,planId:plan.id},
+      {...approved,planId:LOCATOR_REVALIDATION_PLANS[0].id},
+      {...approved,planId:plan.id,maximumNewSends:7,maximumReservationYen:1294}]){
+      const h=harness({propositionSlot:slot,decision});
+      await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+      expect(h.journal.claim).not.toHaveBeenCalled();expect(h.transport).not.toHaveBeenCalled();
+    }
+    expect(LOCATOR_REVALIDATION_PLANS[0].stages[0].ordinal).toBe(64);
+    expect(LOCATOR_REVALIDATION_PLANS[0].programReservationYen).toBe(1124);
+  });
   it.each(["locator1","locator2"] as const)("keeps pending %s inside the unchanged total while funding two diagnoses and one normal run",async slot=>{
     const plan=LOCATOR_REVALIDATION_PLANS[slot==="locator1"?0:1];
     expect(plan.status).toBe("PENDING_OWNER_DECISION");expect(plan.retryOnlyBeforeNormal).toBe(true);

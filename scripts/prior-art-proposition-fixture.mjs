@@ -15,7 +15,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(!input||value.locatorVersion===1)return flattenGuards(value);
+  if(!input||value.locatorVersion===1||value.locatorVersion===2)return flattenGuards(value);
   const table = textFor => {
     const locators=[];
     const add=(range,claimNo)=>{
@@ -36,12 +36,30 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:1,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:2,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
     const t=table(no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(i=>input.textParts[i]).join(""):textOf(c);});
-    const facts=s.facts.map(f=>fact(f,r=>t.add(r,f.claimNo)));return {...s,locators:t.locators,facts};
+    const facts=s.facts.map(f=>{
+      const add=r=>t.add(r,f.claimNo),encoded=fact({...f,bindings:[]},add),m=f.meaning;
+      const usedTerms=new Set();
+      if(new Set(f.bindings.map(b=>b.term)).size!==f.bindings.length)throw Error("fictional_binding_duplicate");
+      const term=value=>{
+        const binding=f.bindings.find(b=>b.term===value);
+        if(!binding)throw Error("fictional_binding_missing");
+        const refs=binding.spans.map(add);
+        if(refs.map(i=>t.locators[i].quote).join("")!==value)throw Error("fictional_binding_changed");
+        usedTerms.add(value);return refs;
+      };
+      const common={...m,subject:m.subject===null?null:term(m.subject),
+        guard:{...m.guard,conditions:m.guard.conditions.map(term)}};
+      const meaning=m.kind==="set"?{...common,members:m.members.map(term)}:m.kind==="path"?
+        {...common,origin:m.origin===null?null:term(m.origin),destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term)}:
+        {...common,objects:m.objects.map(term)};
+      if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
+      delete encoded.bindings;return {...encoded,meaning};
+    });return {...s,locators:t.locators,facts};
   })});
   if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
     const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);

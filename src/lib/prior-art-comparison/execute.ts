@@ -55,7 +55,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       };
       const readingSchema = sourcePropositionModelSchemaFor(batch);
       const reading = await generate(PROPOSITION_SOURCE_SYSTEM,
-        JSON.stringify(propositionSourceTransport(propositionSourceInput(batch))), readingSchema, "generation");
+        JSON.stringify(propositionSourceTransport(propositionSourceInput(batch))), readingSchema, "source");
       const analyses = decodeSourcePropositions(batch, reading);
       stage = "generation";
       const prompt = JSON.stringify(batchTransportInput(batch));
