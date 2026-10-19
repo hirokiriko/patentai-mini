@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
-import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding, revalidationHash,
+import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
-import { makePlan, SYSTEM, validateAnswer, validateSaved } from "../src/lib/prior-art-comparison/comparison";
+import { makePlan, SYSTEM, validateAnswer } from "../src/lib/prior-art-comparison/comparison";
 import { fictionalBatch, fictionalInputs, fictionalSourceAnalysis, fictionalTransportReview } from "../src/lib/prior-art-comparison/fixtures.test-support";
 import { parseComparisonSource } from "../src/lib/prior-art-comparison/source";
 import { sourceAnalysisInput, sourceReadingSchemaFor, SOURCE_ANALYSIS_SYSTEM } from "../src/lib/prior-art-comparison/source-analysis";
@@ -260,7 +260,7 @@ describe("inactive finite 734 JPY revalidation guard", () => {
     vi.mocked(Date.now).mockReturnValue(Date.parse("2026-10-18T13:00:00+09:00"));
     await expect(h.send(1)).rejects.toThrow(); expect(h.transport).toHaveBeenCalledTimes(1);
   });
-  it("the installed SDK passes all five sends, including the product's normal three-stage pipeline, with fictional transport", async () => {
+  it("preserves historical SDK diagnostics but refuses the new product under the old five-stage approval", async () => {
     for (const [key, value] of Object.entries({ AI_PROVIDER: "azure", AZURE_OPENAI_BASE_URL: "https://example.invalid/openai",
       AZURE_API_KEY: "fictional", AZURE_OPENAI_DEPLOYMENT_NAME: binding.deployment, AZURE_OPENAI_API_VERSION: "v1" })) vi.stubEnv(key, value);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
@@ -305,12 +305,13 @@ describe("inactive finite 734 JPY revalidation guard", () => {
     const result = await executeComparison(fixture.inputs, fixture.selection).catch(error => error);
     expect(captured[0]?.url).toBe(binding.endpoint);
     expect(captured[0]?.body).toEqual({ ...body(PLAN.stages[2], packets[2]), input: [{ role: "developer", content: packets[2].system }, { role: "user", content: [{ type: "input_text", text: packets[2].prompt }] }] });
-    expect(result).not.toBeInstanceOf(Error); const saved = result;
-    expect(saved.pairs).toHaveLength(4); expect(saved.review).toBe("human_review_required"); expect(validateSaved(saved)).toEqual(saved);
-    expect(h.guard.snapshot()).toEqual({ completed: 5, stopped: false, claimed: true, diagnosticQaPassed: true });
-    expect(h.transport).toHaveBeenCalledTimes(5);
-    expect(h.transport.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).max_output_tokens)).toEqual([8192, 22528, 8192, 8192, 22528]);
-    expect(h.journal.reconcile).toHaveBeenCalledTimes(5);
-    expect(revalidationHash(String(h.transport.mock.calls[2][1]?.body))).toBe(vi.mocked(h.deps.journal.reserve).mock.calls[2][0].requestHash);
+    // The new source extraction task/schema is not the old read_sources
+    // packet. Historical approval must not silently authorize the new flow.
+    expect(result).toBeInstanceOf(Error);
+    expect(h.guard.snapshot()).toEqual({ completed: 2, stopped: true, claimed: true, diagnosticQaPassed: true });
+    expect(h.transport).toHaveBeenCalledTimes(2);
+    expect(h.transport.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).max_output_tokens)).toEqual([8192,22528]);
+    expect(h.journal.reconcile).toHaveBeenCalledTimes(2);
+    expect(h.journal.reserve).toHaveBeenCalledTimes(2);
   });
 });

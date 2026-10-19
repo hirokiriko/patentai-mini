@@ -1,18 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalBatch, fictionalInputs, fictionalSourceAnalysis, fictionalTransportReview as fictionalReview } from "./fixtures.test-support";
+import { fictionalInputs } from "./fixtures.test-support";
+import { fictionalPropositionSource as fictionalSourceAnalysis, fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview } from "./proposition-fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
-import { inspectReviewCoverage } from "./semantic-review";
-import * as semanticReview from "./semantic-review";
-import type { reviewTransportInput } from "./review-transport";
-import { expandReviewTransportInput } from "./review-transport";
+import type { propositionTargetTransport, propositionSourceTransport } from "./proposition-extraction";
 import { parseComparisonSource } from "./source";
-import type { sourceAnalysisInput } from "./source-analysis";
 
-function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof reviewTransportInput> | ReturnType<typeof sourceAnalysisInput>) {
-  return input.task === "read_sources" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
+function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | ReturnType<typeof propositionSourceTransport>) {
+  return input.task === "extract_source_propositions" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
 }
 
 const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
@@ -46,12 +43,13 @@ describe("real installed SDK, guarded fictional transport", () => {
       const chunk: Parameters<typeof stageAnswer>[0] = JSON.parse(body.input[1].content[0].text);
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
-      if (chunk.task === "read_sources") return response(fictionalSourceAnalysis(chunk));
+      if (chunk.task === "extract_source_propositions") return response(fictionalSourceAnalysis(chunk));
       if (chunk.task === "review") {
-        const expanded = expandReviewTransportInput(chunk);
-        expect(expanded.base.claims[0][2].map(([, text]) => text).join("")).toBe(inputs.draft.source.claims[0].text);
-        expect(chunk.fields).toHaveLength(10);
-        expect(expanded.documents.map(d => d.source.claims[0][2].map(([, text]) => text).join(""))).toEqual(inputs.documents.map(d => d.source.claims[0].text));
+        const expanded=chunk.originals;
+        const full=(claim:typeof expanded.base.claims[number])=>claim.segments.map(([,index])=>chunk.textParts[index]).join("");
+        expect(full(expanded.base.claims[0])).toBe(inputs.draft.source.claims[0].text);
+        expect(expanded.targets).toHaveLength(10);
+        expect(expanded.documents.map(d=>full(d.source.claims[0]))).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
         return response(fictionalReview(chunk));
       }
       expect(chunk.base.claims[0].segments.map(s => s.text).join("")).toBe(inputs.draft.source.claims[0].text);
@@ -72,7 +70,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "secret_error") throw Error(SECRET);
       if (mode === "http") return new Response(SECRET, { status: 429 });
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input), mode === "unknown_usage" ? null : mode === "excess_usage" ? { input_tokens: 999999, output_tokens: 30 } : undefined);
+      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input), mode === "unknown_usage" ? null : mode === "excess_usage" ? { input_tokens: 999999, output_tokens: 30 } : undefined);
       return response(answer, mode === "unknown_usage" ? null : mode === "excess_usage" ? { input_tokens: 999999, output_tokens: 30 } : undefined);
     });
     vi.stubGlobal("fetch", transport);
@@ -90,14 +88,14 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = fictionalInputs();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      expect(input.task).toBe("read_sources");
-      const answer = fictionalSourceAnalysis(input), notes = answer.sourceAnalysis;
+      expect(input.task).toBe("extract_source_propositions");
+      const answer = fictionalSourceAnalysis(input), notes = answer.sources;
       if (mode === "missing") notes.pop();
       if (mode === "reordered") notes.reverse();
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
-      if (mode === "blank") notes[0].reading = "　 ";
-      if (mode === "overlong") notes[0].reading = "甲".repeat(91);
+      if (mode === "blank") notes[0].facts[0].bindings[0].term = "　 ";
+      if (mode === "overlong") notes[0].facts[0].bindings[0].term = "甲".repeat(81);
       return response(answer);
     });
     vi.stubGlobal("fetch", transport);
@@ -111,8 +109,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (input.task !== "review") return response(stageAnswer(input));
       if (mode === "http") return new Response(SECRET, { status: 429 });
       const value = fictionalReview(input);
-      if (mode === "coverage") value.checks.pop();
-      if (mode === "rejected") value.checks[0].verdict = "uncertain";
+      if (mode === "coverage") value.targets.pop();
+      if (mode === "rejected") Object.assign(value.targets[0].parts[0],{form:"unresolved",atoms:[]});
       const outer = await response(value).json();
       if (mode === "length") { outer.status = "incomplete"; outer.incomplete_details = { reason: "max_output_tokens" }; outer.output[0].content[0].text = '{"checks":'; }
       return Response.json(outer);
@@ -142,8 +140,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = compactFour(), phases: string[] = [];
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
-      if (input.task === "review") { expect(input.fields).toHaveLength(20); return response(fictionalReview(input)); }
-      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
+      if (input.task === "review") { expect(input.originals.targets).toHaveLength(20); return response(fictionalReview(input)); }
+      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
       expect(body.max_output_tokens).toBe(8192); expect(body.text.format.schema.properties.results.maxItems).toBe(4);
       expect(input.documents.map((d: {pairs: unknown[]}) => d.pairs.length)).toEqual([2, 2]);
       for (const d of input.documents) for (const c of d.candidate.claims)
@@ -153,7 +151,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     const saved = await executeComparison(inputs, selection);
-    expect(phases).toEqual(["read_sources", "compare", "review"]); expect(saved.pairs).toHaveLength(4);
+    expect(phases).toEqual(["extract_source_propositions", "compare", "review"]); expect(saved.pairs).toHaveLength(4);
     expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 2], [21, 3], [22, 2], [22, 3]]);
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
@@ -161,7 +159,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = compactFour();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
+      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
       const answer = fictionalBatch(input);
       if (mode === "missing") answer.results.pop();
       if (mode === "duplicate") answer.results[3] = { ...answer.results[0] };
@@ -213,41 +211,32 @@ describe("real installed SDK, guarded fictional transport", () => {
   });
   it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
-    let validNegativeProtocolPassed = false;
-    const reviewGate = vi.spyOn(semanticReview, "validateReview");
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
-      if (input.task === "read_sources") return response(fictionalSourceAnalysis(input));
+      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
       const value = fictionalReview(input);
-      const expanded = expandReviewTransportInput(input);
+      const first=value.targets[0].parts[0],atom=first.atoms[0];
       if (mode === "http") return new Response(SECRET, { status: 429 });
-      if (mode === "inconsistent" || mode === "uncertain") Object.assign(value.checks[0], { verdict: mode });
-      if (mode === "missing") value.checks.pop();
-      if (mode === "duplicate") value.checks[1] = value.checks[0];
-      if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
-      if (mode === "missing_support") value.checks[2].evidenceIds = [];
-      if (mode === "wrong_side") value.checks[0].evidenceIds = [expanded.documents[0].source.claims[0][2][0][0]];
-      if (mode === "legacy_wire") Object.assign(value, { sourceFacts: [] });
-      if (mode === "evidence_id") value.checks[0].evidenceIds = [999999];
-      if (mode === "anchor") Object.assign(value.checks[0], { verdict: "inconsistent", rejectedTargetSpan: [0, 999] });
-      if (mode === "valid_negative") {
-        value.checks[0].verdict = "inconsistent";
-        const id = value.checks[0].evidenceIds[0], segment = expanded.base.claims.flatMap(c => c[2])
-          .find(([key]) => key === id)!;
-        Object.assign(value.checks[0], { counterEvidence: { targetQuote: typeof expanded.units[0] === "string" ? expanded.units[0] : expanded.units[0].join(""),
-          sourceWitness: [{ evidenceId: id, quote: segment[1] }] } });
+      if (mode === "inconsistent" || mode === "valid_negative") {
+        if(atom.meaning.kind!=="relation")throw Error("fixture_relation");
+        atom.meaning.predicate="opens";
       }
+      if (mode === "uncertain") Object.assign(first,{form:"unresolved",atoms:[]});
+      if (mode === "missing") value.targets.pop();
+      if (mode === "duplicate") value.targets[1] = value.targets[0];
+      if (mode === "wrong_digest") value.draftDigest = "0".repeat(64);
+      if (mode === "missing_support") atom.sourceIds=[];
+      if (mode === "wrong_side") atom.scope="candidate:21:1";
+      if (mode === "legacy_wire") Object.assign(value, { checks: [] });
+      if (mode === "evidence_id") atom.sourceIds=["absent"];
+      if (mode === "anchor") atom.basis=[[0,999]];
       return response(value, mode === "unknown_usage" ? null : undefined);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(3);
-    if (mode === "valid_negative") {
-      const [logical, decoded] = reviewGate.mock.calls.at(-1)!;
-      validNegativeProtocolPassed = inspectReviewCoverage(logical, decoded).checks[0].verdict === "inconsistent";
-      expect(validNegativeProtocolPassed).toBe(true);
-    }
+
   });
   it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends phase-specific reasoning and output through the actual guarded SDK on %s",async model=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);

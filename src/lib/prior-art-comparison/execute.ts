@@ -6,21 +6,25 @@ import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
 import { ComparisonError } from "./source";
 import { decodeGeneration } from "./generation";
 import { batchTransportInput, batchSchema, batchSchemaFor, requestBytes } from "./generation-batch";
-import { assertReviewSize, inspectReviewCoverage, reviewInput, REVIEW_SYSTEM, validateReview, type ReviewDraft } from "./semantic-review";
-import { decodeReviewTransport, reviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
+import { type ReviewDraft } from "./semantic-review";
 import type { z } from "zod";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
-import { sourceAnalysisInput, sourceReadingSchemaFor, SOURCE_ANALYSIS_SYSTEM, validateSourceAnalysis } from "./source-analysis";
+import { decodeSourcePropositions, PROPOSITION_SOURCE_SYSTEM, PROPOSITION_TARGET_SYSTEM, propositionSourceInput,
+  propositionSourceTransport, propositionTargetInput, propositionTargetTransport, sourcePropositionSchemaFor, targetPropositionSchemaFor } from "./proposition-extraction";
+import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
+import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
+
+export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+"\n各断定では基準側・候補側・両側の帰属を明示し、側が変わる断定を分ける。事実を含む文を未確認の一語で留保扱いにしない。純粋な未確認事項は対象となる名詞句と未確認状態を分けて述べる。これは条件の省略や断定の弱化を許可しない。";
 
 /** One finite synchronous operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
   const plan = makePlan(inputs, selection); // Entire scope must fit before any send.
-  const batch = separatedGenerationPlan(plan, SYSTEM);
+  const batch = separatedGenerationPlan(plan, PROPOSITION_GENERATION_SYSTEM);
+  assertPropositionPlan(batch);
   return withPriorArtComparisonBudget(async absolute => {
-    const pairs: SavedComparison["pairs"] = [];
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     try {
@@ -48,15 +52,15 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           throw new ComparisonError("ai_incomplete");
         return answer.object;
       };
-      const readingSchema = sourceReadingSchemaFor(batch);
-      const reading = readingSchema.parse(await generate(SOURCE_ANALYSIS_SYSTEM,
-        JSON.stringify(sourceAnalysisInput(batch)), readingSchema, "generation"));
-      const analyses = validateSourceAnalysis(batch, reading.sourceAnalysis);
+      const readingSchema = sourcePropositionSchemaFor(batch);
+      const reading = await generate(PROPOSITION_SOURCE_SYSTEM,
+        JSON.stringify(propositionSourceTransport(propositionSourceInput(batch))), readingSchema, "generation");
+      const analyses = decodeSourcePropositions(batch, reading);
       stage = "generation";
-      const prompt = JSON.stringify(batchTransportInput(batch, analyses));
-      if (requestBytes(SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
+      const prompt = JSON.stringify(batchTransportInput(batch));
+      if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
-        const answer = batchSchema.parse(await generate(SYSTEM, prompt, batchSchemaFor(batch), "generation"));
+        const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch), "generation"));
         const key = (docId: number, p: { baseClaimNo: number; candidateClaimNo: number }) => `${docId}:${p.baseClaimNo}:${p.candidateClaimNo}`;
         const expected = new Set(plan.flatMap(c => c.pairs.map(p => key(c.candidateId, p))));
         const received = answer.results.map(r => key(r.docId, r));
@@ -68,7 +72,6 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
             baseClaimNo: r.baseClaimNo, candidateClaimNo: r.candidateClaimNo, baseObservation: r.baseObservation, candidateObservation: r.candidateObservation,
             common: r.common, differences: r.differences, unconfirmed: r.unconfirmed, baseEvidenceId: r.baseEvidenceId, candidateEvidenceId: r.candidateEvidenceId }));
           const verified = validateAnswer(chunk, decodeGeneration(chunk, { results }));
-          pairs.push(...verified);
           for (const p of verified) {
             const r = results.find(r => r.baseClaimNo === p.baseClaimNo && r.candidateClaimNo === p.candidateClaimNo)!;
             drafts.push({ ...p, baseObservation: r.baseObservation, candidateObservation: r.candidateObservation });
@@ -76,16 +79,24 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         }
       }
       stage = "review";
-      const review = reviewInput(plan, drafts);
-      assertReviewSize(review);
-      const rawReview = await generate(REVIEW_SYSTEM, JSON.stringify(reviewTransportInput(review)), reviewTransportSchemaFor(review), "review");
-      const decoded = decodeReviewTransport(review, rawReview);
-      inspectReviewCoverage(review, decoded);
-      try { validateReview(review, decoded); }
+      const review = propositionTargetInput(plan, drafts, analyses);
+      const schema = targetPropositionSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
+      if(requestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
+      const rawReview = await generate(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema,"review");
+      const assessed = assessPropositions(review,rawReview);
+      let rendered:ReviewDraft[];
+      try { assertPropositionTargetCoverage(review,assessed);rendered=renderPropositionDrafts(review,assessed,drafts); }
       catch { throw new ComparisonExecutionError(stage, "review_rejected"); }
+      // Re-validate the generated sentences and original literal quotes through
+      // the unchanged save-v1 adapter. No old free-form verdict reaches save.
+      const finalPairs=plan.flatMap(chunk=>validateAnswer(chunk,{results:rendered.filter(d=>d.docId===chunk.candidateId&&
+        chunk.pairs.some(p=>p.baseClaimNo===d.baseClaimNo&&p.candidateClaimNo===d.candidateClaimNo)).map(d=>({
+          baseClaimNo:d.baseClaimNo,candidateClaimNo:d.candidateClaimNo,common:d.common,differences:d.differences,unconfirmed:d.unconfirmed,
+          baseEvidence:{claimNo:d.baseEvidence.claimNo,quote:d.baseEvidence.quote},candidateEvidence:{claimNo:d.candidateEvidence.claimNo,quote:d.candidateEvidence.quote},
+        }))}));
       if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),
-        inputs, selection, pairs, status: "complete" as const, review: "human_review_required" as const };
+        inputs, selection, pairs:finalPairs, status: "complete" as const, review: "human_review_required" as const };
       return validateSaved({ ...saved, snapshotDigest: savedDigest(saved) });
     } catch (error) { throw comparisonExecutionFailure(error, stage); }
   });

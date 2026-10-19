@@ -111,7 +111,7 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       await page.getByRole("link",{name:"PDFを取得"}).waitFor();
       expect(await counts()).toBe(completeSends);
       const sends = (await readFile(join(output,"fixture-sends.jsonl"),"utf8")).trim().split("\n").map(line => JSON.parse(line));
-      expect(sends.map(s => s.phase)).toEqual(["read_sources","compare","review"]);
+      expect(sends.map(s => s.phase)).toEqual(["extract_source_propositions","compare","review"]);
       expect(sends.every(s => s.baseTailPresent && s.candidateTailPresent)).toBe(true);
       const rows=await pg.sql("select matched_elements_json from comparison_results where case_id=7 order by result_id");expect(rows).toHaveLength(2);
       const saved=JSON.parse(rows[0].matched_elements_json).priorArtComparison;expect(saved.inputs.draft.id).toBe(11);expect(saved.pairs.every((p:{baseEvidence:{start:number}})=>p.baseEvidence.start>15000)).toBe(true);
@@ -126,7 +126,14 @@ describe.skipIf(process.env.PRIOR_ART_COMPARISON_ACCEPTANCE !== "1")("Issue150 i
       const blocks=comparisonBlocks(saved,false);
       expect(parse(csv,{bom:true})).toEqual([["区分","内容"],...blocks.map(b=>[b.heading?"見出し":"本文",neutralizeFormula(b.text)])]);
       await writeFile(join(output,"report-blocks.json"),JSON.stringify(blocks));
-      for(const format of ["pdf","csv"]) expect((await fetch(`${appOrigin}/api/cases/7/analyze/${saved.operationId}/${format}`,{headers})).status).toBe(200);
+      for(const format of ["pdf","csv"]) {
+        const repeated=await fetch(`${appOrigin}/api/cases/7/analyze/${saved.operationId}/${format}`,{headers});
+        expect(repeated.status).toBe(200);
+        const bytes=Buffer.from(await repeated.arrayBuffer());
+        await writeFile(join(output,`comparison-reget.${format}`),bytes);
+        if(format==="csv")expect(bytes).toEqual(await readFile(join(output,"comparison.csv")));
+        else expect(bytes.subarray(0,5).toString()).toBe("%PDF-");
+      }
       expect(await counts()).toBe(completeSends);
       await page.getByRole("heading",{name:"保存済み比較結果",exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:join(output,"saved-result.png")});
       await writeFile(join(output,"browser-evidence.json"),JSON.stringify({caseId:7,operationId:saved.operationId,aiSends:completeSends,serverRestart:true,reload:true,pdfBytes:pdf.length,csvCharacters:csv.length,csvAllRows:true},null,2));

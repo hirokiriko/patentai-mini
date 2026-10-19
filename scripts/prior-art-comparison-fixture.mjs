@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
+import { fixturePropositionSource, fixturePropositionGeneration, fixturePropositionTarget } from "./prior-art-proposition-fixture.mjs";
 const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
 const mode = () => { try { return fs.readFileSync(path.join(directory, "fixture-mode.txt"), "utf8").trim(); } catch { return "ok"; } };
 // Real PostgreSQL COMMIT executes first; inject loss of its acknowledgement only.
@@ -34,56 +35,32 @@ globalThis.fetch = async (url, init) => {
   if (target.origin !== "https://example.invalid" || !target.pathname.endsWith("/responses")) throw Error("external_transport_forbidden");
   const body = JSON.parse(init.body);
   const packed = JSON.parse(body.input[1].content[0].text);
-  // Fixture-side inverse, independent of the product's inspection helper.
-  // Assert the actual full originals/tails below, after recovering every part.
-  const expand = source => ({ ...source, claims: source.claims.map(([no, refs, first, end]) =>
-    [no, refs, packed.parts.slice(first, end).map((part, at) => {
-      if (Array.isArray(part) && part[0] !== first + at) throw Error("fixture_part_id");
-      return [first + at, Array.isArray(part) ? part[1] : part];
-    })]) });
-  const chunk = packed.task === "review" ? { ...packed, base: expand(packed.base),
-    documents: packed.documents.map(d => ({ ...d, source: expand(d.source) })),
-    units: packed.unitTexts.length ? packed.unitTexts.map(([id,text],index)=>{if(id!==index)throw Error('fixture_unit_id');return text.includes('\t')?text.split('\t'):text;}) : packed.texts.length ? packed.texts.flatMap(text => text.split("\n").map(unit => unit.includes("\t") ? unit.split("\t") : unit)) : packed.units,
-  } : packed;
+  // Independent lossless inverse. Never import the product's text-table helper.
+  const expand = source => ({...source,claims:source.claims.map(c=>({...c,text:c.parts
+    ? c.parts.map(index=>packed.textParts[index]).join("")
+    : c.segments.map(([,index])=>packed.textParts[index]).join("")}))});
+  const chunk=packed.task==="extract_source_propositions"?{...packed,sources:packed.sources.map(s=>({...s,source:expand(s.source)}))}:
+    packed.task==="review"?{...packed.originals,task:"review",base:expand(packed.originals.base),documents:packed.originals.documents.map(d=>({...d,source:expand(d.source)}))}:packed;
   const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
   if (!directory || !path.isAbsolute(directory)) throw Error("fixture_output_required");
   const fullText = claim => Array.isArray(claim) ? claim[2].map(([, text]) => text).join("") :
     claim.text ?? claim.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
-  const sources = chunk.task === "read_sources" ? chunk.sources.map(s => s.source) : [chunk.base, ...chunk.documents.map(d => d.candidate ?? d.source)];
+  const sources = chunk.task === "extract_source_propositions" ? chunk.sources.map(s => s.source) : [chunk.base, ...chunk.documents.map(d => d.candidate ?? d.source)];
   const event = { phase: chunk.task, bytes: Buffer.byteLength(init.body), baseTailPresent: sources[0].claims.some(c => fullText(c).includes("超えると青色弁を閉じる")),
     candidateTailPresent: sources.slice(1).some(s => s.claims.some(c => /青色弁を(?:開く|閉じる)/.test(fullText(c)))),
-    pairs: chunk.task === "read_sources" ? 0 : chunk.task === "review" ? chunk.pairs.length : chunk.documents.reduce((n,d)=>n+d.pairs.length,0) };
+    pairs: chunk.task === "extract_source_propositions" ? 0 : chunk.task === "review" ? chunk.pairs.length : chunk.documents.reduce((n,d)=>n+d.pairs.length,0) };
   fs.appendFileSync(path.join(directory, "fixture-sends.jsonl"), JSON.stringify(event) + "\n");
   let mode = "ok";
   try { mode = fs.readFileSync(path.join(directory, "fixture-mode.txt"), "utf8").trim(); } catch { /* default */ }
   if (mode === "fail") return new Response("FICTIONAL_PRIVATE_ERROR_SENTINEL", { status: 429 });
   if (mode === "unknown") return Response.json({ usage: null });
   if (mode === "delay") await new Promise(resolve => setTimeout(resolve, 800));
-  const value = chunk.task === "read_sources" ? ({ sourceAnalysis: chunk.sources.map(s => ({ sourceDigest: s.sourceDigest, reading: "架空原文の索引。意味品質の実証ではない。" })) }) : chunk.task === "review" ? { draftDigest: chunk.draftDigest,
-    referenceChecks:chunk.units.flatMap(unit=>(typeof unit==="string"?[]:unit.filter((_,part)=>part%2===1))).map(()=>({relation:"unspecified",operatorBasis:null})),
-    checks: chunk.fields.flatMap(([id,firstUnitId,endUnitId]) => {
-      const [docId,baseNo,candidateNo,field]=id.split(":");
-      const lastEvidence=(source,no)=>source.claims.find(c=>c[0]===Number(no))[2].at(-1)[0];
-      const ids=[...(field==="candidateObservation"?[]:[lastEvidence(chunk.base,baseNo)]),
-        ...(field==="baseObservation"?[]:[lastEvidence(chunk.documents.find(d=>d.docId===Number(docId)).source,candidateNo)])];
-      const witness=[chunk.base,...chunk.documents.map(d=>d.source)].flatMap(s=>s.claims).flatMap(c=>c[2]).find(([key])=>key===ids[0]);
-      return chunk.units.slice(firstUnitId,endUnitId).map(unit=>({unitText:typeof unit==="string"?unit:unit.join(""),
-        assertion:"fact",
-        counterEvidence:mode==="review-reject"?{targetQuote:typeof unit==="string"?unit:unit.join(""),sourceWitness:[{evidenceId:ids[0],quote:witness[1]}]}:null,
-        kind:"technical",reference:null,evidenceIds:[...ids],scopeWitness:null,
-        sourceComparison:"架空原文との対応。意味品質の実証ではない。",verdict:mode==="review-reject"?"inconsistent":"consistent"}));
-    }) } : { results: chunk.documents.flatMap(document => document.pairs.map(pair => {
-    const base = chunk.base.claims.find(c => c.claimNo === pair.baseClaimNo);
-    const candidate = document.candidate.claims.find(c => c.claimNo === pair.candidateClaimNo);
-    const lastId = claim => claim.segments.filter(s => s.quotable).at(-1).id;
-    return { docId:document.candidateId, baseClaimNo: pair.baseClaimNo, candidateClaimNo: pair.candidateClaimNo, baseEvidenceId: lastId(base), candidateEvidenceId: lastId(candidate),
-      baseObservation: "基準の末尾条件は七度を超えると青色弁を閉じる。",
-      candidateObservation: fullText(candidate).includes("下回ると") ? "候補の末尾条件は七度を下回ると青色弁を開く。" : "候補の末尾条件は七度を超えると青色弁を閉じる。",
-      common: "引用箇所は温度条件に応じて青色弁を動作させる。",
-      differences: fullText(candidate).includes("下回ると") ? "基準の超過・閉動作に対し、文献の引用箇所は低下・開動作である。" : "引用した末尾条件に差は確認できない。",
-      unconfirmed: "図面、明細書の全体、作用の意味は人による確認が必要。",
-    };
-  })) };
+  const value=packed.task==="extract_source_propositions"?fixturePropositionSource(packed):packed.task==="review"?fixturePropositionTarget(packed):fixturePropositionGeneration(packed);
+  if(mode==="review-reject"&&packed.task==="review"){
+    const atom=value.targets[0].parts[0].atoms[0];
+    if(atom.meaning.kind!=="relation"||atom.meaning.predicate!=="closes")throw Error("fixture_expected_close");
+    atom.meaning.predicate="opens";
+  }
   return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
     output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed", content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }],
     usage: { input_tokens: 100, output_tokens: 100 } });

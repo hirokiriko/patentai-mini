@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fictionalBatch, fictionalInputs, fictionalReview, fictionalSourceAnalysis, fictionalTransportReview } from "./fixtures.test-support";
+import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
+import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
 import { executeComparison } from "./execute";
 import { makePlan, validateAnswer } from "./comparison";
 import { parseComparisonSource } from "./source";
@@ -30,35 +31,41 @@ describe("literal structure on the product path, with fictional SDK transport", 
     for (const [k, v] of Object.entries({ AI_PROVIDER: "azure", AZURE_OPENAI_BASE_URL: "https://example.invalid/openai",
       AZURE_API_KEY: "fictional", AZURE_OPENAI_DEPLOYMENT_NAME: "fictional", AZURE_OPENAI_API_VERSION: "v1" })) vi.stubEnv(k, v);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
-    const { inputs, selection } = fixture(), tasks: string[] = [];
+    const { inputs, selection } = fictionalInputs(), tasks: string[] = [];
+    const append=(s:typeof inputs.draft)=>parseComparisonSource(`【請求項1】\n装置は温度を保持する。${text}`,s.id,s.label);
+    inputs.draft=append(inputs.draft);inputs.documents=inputs.documents.map(append);
     const expected = compileLiteralStructure(inputs.draft.source);
+    const transportErrors:unknown[]=[];
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      try {
       expect(String(url)).toMatch(/^https:\/\/example\.invalid\//);
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
       tasks.push(input.task);
       let answer;
-      if (input.task === "read_sources") {
+      if (input.task === "extract_source_propositions") {
         expect(input.sources[0].source.literalStructure).toEqual(expected);
-        expect(input.sources[0].source.claims[0].segments.map((s: { text: string }) => s.text).join("")).toBe(text);
-        answer = fictionalSourceAnalysis(input);
-        if (failure === "reading") answer.sourceAnalysis[0].reading = wrong;
+        expect(input.sources[0].source.claims[0].parts.map((id:number)=>input.textParts[id]).join("")).toBe(inputs.draft.source.claims[0].text);
+        answer = fictionalPropositionSource(input);
+        if (failure === "reading") answer.sources[0].facts[0].bindings[0].spans=[[0,1]];
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);
-        answer = generation(input);
+        answer = fictionalPropositionGeneration(input);
         if (failure === "generation") answer.results[0].differences = wrong;
       } else {
-        expect(input.base.literalStructure).toEqual(expected);
+        expect(input.originals.base.literalStructure).toEqual(expected);
         expect(input).not.toHaveProperty("sourceAnalysis");
-        answer = fictionalTransportReview(input);
-        if (failure === "reason") answer.checks[0].sourceComparison = wrong;
+        answer = fictionalPropositionTarget(input);
+        if (failure === "reason") Object.assign(answer.targets[0].parts[0].atoms[0],{verdict:"consistent",reason:wrong});
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
           content: [{ type: "output_text", text: JSON.stringify(answer), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
+      }catch(error){transportErrors.push(error);throw error;}
     }));
-    if (failure === "valid") expect((await executeComparison(inputs, selection)).review).toBe("human_review_required");
-    else await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(tasks).toEqual(failure === "reading" ? ["read_sources"] : failure === "generation" ? ["read_sources", "compare"] : ["read_sources", "compare", "review"]);
+    const execution=executeComparison(inputs, selection).catch(error=>{throw transportErrors[0]??error;});
+    if (failure === "valid") expect((await execution).review).toBe("human_review_required");
+    else await expect(execution).rejects.toThrow("ai_incomplete");
+    expect(tasks).toEqual(failure === "reading" ? ["extract_source_propositions"] : failure === "generation" ? ["extract_source_propositions", "compare"] : ["extract_source_propositions", "compare", "review"]);
   });
   it("does not promote a fictional C verdict over an original-derived counterexample or rewrite the response", () => {
     const { inputs, selection } = fixture(), plan = makePlan(inputs, selection), batch = generation(batchInput(plan));
