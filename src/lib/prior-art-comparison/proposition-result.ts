@@ -37,21 +37,25 @@ export function renderMeaning(m:Meaning):string {
   const subject=m.subject??"装置";
   const condition=m.guard.relation==="unconditional"?"":`条件「${list(m.guard.conditions)}」${m.guard.relation==="only_when"?"を満たす場合に限り":"のとき"}、`;
   if(m.polarity!=="positive"||m.context==="unresolved"||m.guard.relation==="unresolved")throw new ComparisonError("ai_incomplete");
+  // A verified capability must not become an assertion that the device is
+  // operating that way. Keep the distinction in every rendered kind.
+  const context=m.context==="capability"?"機能・構成として、":"運転状態として、";
   if(m.kind==="set"){
     const select={required:"を必須とする",one:"のいずれか一つである",nonempty:"のいずれか・組合せ・全てである",all:"を全て必要とする",unspecified:""}[m.selection];
     if(!select)throw new ComparisonError("ai_incomplete");
-    return `${condition}${subject}${m.extent==="partial"?`の選択肢には${list(m.members)}が含まれる`:`は${list(m.members)}${select}`}`;
+    return `${context}${condition}${subject}${m.extent==="partial"?`の選択肢には${list(m.members)}が含まれる`:`は${list(m.members)}${select}`}`;
   }
   if(m.kind==="path"){
-    if(m.relation==="precedes")return `${condition}${subject}では${list(m.via)}の後に${m.destination}へ流れる`;
+    if(m.relation==="precedes")return `${context}${condition}${subject}では${list(m.via)}の後に${m.destination}へ流れる`;
     if(!m.origin||!m.destination)throw new ComparisonError("ai_incomplete");
-    return `${condition}${subject}では${m.origin}から${m.via.length?`${list(m.via)}をこの順に経て` : ""}${m.bypass.length?`${list(m.bypass)}を経ず` : ""}${m.destination}へ流れる`;
+    return `${context}${condition}${subject}では${m.origin}から${m.via.length?`${list(m.via)}をこの順に経て` : ""}${m.bypass.length?`${list(m.bypass)}を経ず` : ""}${m.destination}へ流れる`;
   }
   const objects=list(m.objects);
   const action={has:`${objects}を備える`,upstream:`${objects}の上流にある`,downstream:`${objects}の下流にある`,inside:`${objects}内にある`,
     opens:`${objects}を開く`,closes:`${objects}を閉じる`,maintains:`${objects}を維持する`,at_least:`${objects}以上である`,
     at_most:`${objects}以下である`,greater_than:`${objects}を超える`,less_than:`${objects}を下回る`}[m.predicate];
-  return `${condition}${subject}は${action}`;
+  const capability=m.context==="capability"&&["opens","closes","maintains"].includes(m.predicate)?"機能を備える":"";
+  return `${context}${condition}${subject}は${action}${capability}`;
 }
 
 function renderPart(part:z.infer<typeof targetPropositionSchema>["targets"][number]["parts"][number],records:PropositionComparison[],originalText:string):string[] {

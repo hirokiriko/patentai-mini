@@ -4,7 +4,8 @@ import { makePlan, validateAnswer } from "./comparison";
 import { batchInput } from "./generation-batch";
 import { decodeGeneration } from "./generation";
 import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceInput, propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
-import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
+import { assessPropositions, assertPropositionTargetCoverage, renderMeaning, renderPropositionDrafts } from "./proposition-result";
+import type { Meaning } from "./propositions";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
 
 function setup(){
@@ -27,6 +28,22 @@ it("decodes both anchored extractions and renders the computed records",()=>{
   const rendered=renderPropositionDrafts(f.input,assessment,f.drafts);
   expect(rendered).toHaveLength(2);
   expect(rendered[1].differences).toContain("下回る");
+  expect(rendered[1].differences).toContain("開く機能を備える");
+  expect(rendered[1].differences).toContain("閉じる機能を備える");
+});
+it.each<Meaning>([
+  {kind:"relation",subject:"制御器",context:"capability",guard:{relation:"only_when",conditions:["高温"]},polarity:"positive",predicate:"opens",objects:["青色弁"]},
+  {kind:"relation",subject:"入口",context:"capability",guard:{relation:"unconditional",conditions:[]},polarity:"positive",predicate:"upstream",objects:["青色弁"]},
+  {kind:"set",subject:"装置",context:"capability",guard:{relation:"unconditional",conditions:[]},polarity:"positive",selection:"one",extent:"closed",members:["青","緑"]},
+  {kind:"path",subject:"青モード",context:"capability",guard:{relation:"when",conditions:["高温"]},polarity:"positive",origin:"入口",destination:"出口",via:["青色弁"],bypass:[],extent:"segment",relation:"route"},
+])("retains capability versus actual operation in rendered $kind/$subject",meaning=>{
+  const capability=renderMeaning(meaning),operation=renderMeaning({...meaning,context:"operation"});
+  expect(capability).toContain("機能・構成として、");expect(operation).toContain("運転状態として、");
+  expect(capability).not.toBe(operation);
+  if(meaning.kind==="relation"&&meaning.predicate==="opens"){
+    expect(capability).toContain("開く機能を備える");expect(operation).not.toContain("機能を備える");
+    expect(capability).toContain("場合に限り");expect(operation).toContain("場合に限り");
+  }
 });
 it("matches corresponding assertions before considering their presentation order",()=>{
   const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":common"))!;
