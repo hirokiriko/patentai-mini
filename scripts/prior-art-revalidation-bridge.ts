@@ -29,7 +29,24 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
     },
     transport: async (url, init) => {
       const stage = plan.stages[guard.snapshot().completed];
-      const received = await deps.transport(url, init);
+      let received: Response;
+      try { received = await deps.transport(url, init); }
+      catch {
+        await deps.record(`provider-transport-${stage.ordinal}.json`, Buffer.from(JSON.stringify({
+          outcome: "transport_rejected", signalAborted: init?.signal?.aborted === true,
+        })));
+        throw Error("revalidation_transport_rejected");
+      }
+      // Headers are recorded before reading or discarding the body. Never save
+      // arbitrary error text/headers: upstream errors can contain input/secrets.
+      const requestId = [received.headers.get("x-request-id"), received.headers.get("apim-request-id")]
+        .find(id => id && /^(?:[a-f0-9]{32}|[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})$/i.test(id)) ?? null;
+      try {
+        await deps.record(`provider-metadata-${stage.ordinal}.json`, Buffer.from(JSON.stringify({
+          status: received.status,
+          requestId,
+        })));
+      } catch (error) { void received.body?.cancel().catch(() => undefined); throw error; }
       if (!received.ok) {
         void received.body?.cancel().catch(() => undefined);
         return new Response(null, { status: received.status, headers: received.headers });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
 import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding,
-  PROPOSITION_REVALIDATION_PLANS,
+  PROPOSITION_REVALIDATION_PLANS, SCHEMA_REVALIDATION_PLAN,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
@@ -91,6 +91,48 @@ describe("inactive fixed proposition program slots", () => {
       await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow("revalidation_stopped");
       expect(h.events).toEqual([]);
     }
+  });
+});
+
+describe("pending independent schema repair operation", () => {
+  beforeEach(() => vi.spyOn(Date,"now").mockReturnValue(Date.parse("2026-10-19T08:00:00Z")));
+  afterEach(() => vi.restoreAllMocks());
+  const plan = SCHEMA_REVALIDATION_PLAN;
+  const decision: RevalidationDecision = {status:"OWNER_APPROVED",planId:plan.id,maximumNewSends:5,
+    maximumReservationYen:784,maximumAi:484300000,maximumTotal:624300000,expiresAt:plan.approvedExpiresAt};
+  it("retains unknown49 and estimates one new operation without changing old programs", () => {
+    expect(plan.status).toBe("PENDING_OWNER_DECISION");
+    expect(plan.unknownHeld).toBe(241200000);
+    expect(revalidationFunding("schema")).toEqual({reservationYen:784,requiredAi:416586010,requiredTotal:556586010});
+    expect(plan.stages.map(s=>Math.ceil((5*s.input+30*s.output)*220/1e6))).toEqual([100,225,100,115,244]);
+    expect(PROPOSITION_REVALIDATION_PLANS[0].programReservationYen).toBe(1560);
+    expect(PROPOSITION_REVALIDATION_PLANS[1].stages[0].ordinal).toBe(54);
+  });
+  it.each([null,{...decision,status:"PENDING_OWNER_DECISION" as const},approved,
+    {...decision,planId:PROPOSITION_REVALIDATION_PLANS[0].id}, {...decision,maximumReservationYen:780}])("refuses absent, pending, old or underfunded decisions", async decision => {
+    const h=harness({propositionSlot:"schema",decision});
+    await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+    expect(h.events).toEqual([]);
+  });
+  it("requires protected-parent approval even with a matching decision", async () => {
+    const h=harness({propositionSlot:"schema",decision,assertAdmission:vi.fn(async()=>{throw Error("no authentic owner record");})});
+    await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+    expect(h.transport).not.toHaveBeenCalled(); expect(h.journal.claim).not.toHaveBeenCalled();
+  });
+  it("uses exactly five new IDs after full diagnostic QA in a fictional authorized harness", async () => {
+    const h=harness({propositionSlot:"schema",decision});
+    for(const[i,stage]of plan.stages.entries()) {if(i===2)await h.guard.acceptDiagnosticQa(qa(h));await h.send(i,body(stage));}
+    expect(h.journal.claim).toHaveBeenCalledWith(binding,{sends:46,rows:92,sha256:plan.priorLedgerSha256,reservationYen:784});
+    expect(h.journal.reserve.mock.calls.map(([r])=>r.ordinal)).toEqual([59,60,61,62,63]);
+    await expect(h.send(5,body(plan.stages[0]))).rejects.toThrow(); expect(h.transport).toHaveBeenCalledTimes(5);
+  });
+  it("never continues after a new unknown transport", async () => {
+    const transport=vi.fn<typeof fetch>(async()=>{throw Error("fictional transport unknown");});
+    const h=harness({propositionSlot:"schema",decision,transport});
+    await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+    await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+    expect(transport).toHaveBeenCalledOnce(); expect(h.journal.reconcile).not.toHaveBeenCalled();
+    expect(h.journal.stop).toHaveBeenCalledWith({ordinal:59,claimMayExist:true,reservationMayExist:true,usageReconciled:false});
   });
 });
 

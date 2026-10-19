@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
-import { fixturePropositionSource, fixturePropositionGeneration, fixturePropositionTarget } from "./prior-art-proposition-fixture.mjs";
+import { fixturePropositionSource, fixturePropositionGeneration, fixturePropositionTarget, fixturePropositionWire } from "./prior-art-proposition-fixture.mjs";
 const directory = process.env.PRIOR_ART_FIXTURE_OUTPUT;
 const mode = () => { try { return fs.readFileSync(path.join(directory, "fixture-mode.txt"), "utf8").trim(); } catch { return "ok"; } };
 // Real PostgreSQL COMMIT executes first; inject loss of its acknowledgement only.
@@ -62,6 +62,6 @@ globalThis.fetch = async (url, init) => {
     atom.meaning.predicate="opens";
   }
   return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
-    output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed", content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }],
+    output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed", content: [{ type: "output_text", text: JSON.stringify(fixturePropositionWire(value)), annotations: [] }] }],
     usage: { input_tokens: 100, output_tokens: 100 } });
 };

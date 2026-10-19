@@ -74,8 +74,27 @@ export const PROPOSITION_REVALIDATION_PLANS = Object.freeze(([1, 2] as const).ma
     { phase: "normal_review", task: "review", input: 85000, output: 22528, reserve: 243 },
   ].map((stage, index) => Object.freeze({ ...stage, ordinal: 49 + (slot - 1) * 5 + index }))),
 })));
-export function revalidationPlan(slot?: 1 | 2) {
+/** Proposed independent operation after unknown49. This is not another slot
+ * of the stopped program. No credentials/launcher or OWNER decision here. */
+export const SCHEMA_REVALIDATION_PLAN = Object.freeze({
+  ...REVALIDATION_PLAN, id: "ISSUE150_SCHEMA_784_V1", status: "PENDING_OWNER_DECISION",
+  priorSends: 46, priorRows: 92,
+  priorLedgerSha256: "847e5068300c7b67630467fa4577f4add2e9a517d84c1f2c31e897633455d4b0",
+  currentExposure: 338186010, unknownHeld: 241200000,
+  currentAiLimit: 484300000, currentTotalLimit: 624300000,
+  approvedAiLimit: 484300000, approvedTotalLimit: 624300000,
+  programMaximumNewSends: 5, programReservationYen: 784,
+  stages: Object.freeze([
+    { phase: "diagnostic_source", task: "extract_source_propositions", input: 41000, output: 8192, reserve: 100 },
+    { phase: "diagnostic_review", task: "review", input: 69000, output: 22528, reserve: 225 },
+    { phase: "normal_source", task: "extract_source_propositions", input: 41000, output: 8192, reserve: 100 },
+    { phase: "normal_generation", task: "compare", input: 55000, output: 8192, reserve: 115 },
+    { phase: "normal_review", task: "review", input: 86000, output: 22528, reserve: 244 },
+  ].map((stage, index) => Object.freeze({ ...stage, ordinal: 59 + index }))),
+});
+export function revalidationPlan(slot?: 1 | 2 | "schema") {
   if (slot === undefined) return REVALIDATION_PLAN;
+  if (slot === "schema") return SCHEMA_REVALIDATION_PLAN;
   if (slot !== 1 && slot !== 2) throw Error("revalidation_stopped");
   return PROPOSITION_REVALIDATION_PLANS[slot - 1];
 }
@@ -112,7 +131,7 @@ export type RevalidationJournal = {
 };
 export type RevalidationDependencies = {
   /** Select only a registered fixed slot; never accept caller-defined limits. */
-  propositionSlot?: 1 | 2;
+  propositionSlot?: 1 | 2 | "schema";
   binding: RevalidationBinding; decision: RevalidationDecision | null; journal: RevalidationJournal;
   /** Protected parent verifies authentic OWNER evidence, exact head/materials,
    * policy, fresh public readback, deadline and unchanged prior ledger. This
@@ -132,7 +151,7 @@ const integer = (n: unknown, max: number): n is number => Number.isSafeInteger(n
 const keys = (value: unknown, expected: string[]) => !!value && typeof value === "object" && !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === expected.sort().join(",");
 
-export function revalidationFunding(slot?: 1 | 2) {
+export function revalidationFunding(slot?: 1 | 2 | "schema") {
   const plan = revalidationPlan(slot);
   const reservationYen = "programReservationYen" in plan ? plan.programReservationYen : plan.stages.reduce((sum, s) => sum + s.reserve, 0);
   const requiredAi = plan.currentExposure + reservationYen * 100000;

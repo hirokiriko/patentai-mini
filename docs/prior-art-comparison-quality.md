@@ -436,7 +436,7 @@ rootと独立Local reviewerが全11頁および選択/保存結果画面を目�
 「機能を備える」を付ける。条件の日本語接続も修正し、限定条件を維持した。
 修正後の関連44件（追加4対照を含む）は成功し、120/200字を超える保存文は短縮せず拒否する。
 
-### 最大2操作の有限プログラム（OWNER一括承認済み・開始前検証中）
+### 最大2操作の有限プログラム（OWNER一括承認済み・初回UNKNOWNで停止）
 
 新schemaと実際のインストール済SDKで、通信しないrequest captureを行った。
 同じmodel/provider/deployment、default/low、retry0、同時1、各210秒・正常全体230秒・
@@ -493,3 +493,51 @@ forward9で、他の単位は維持する。配備/rollback1400円をforecastへ
 
 Draft/no-auto-merge、TECHNICAL_GO未達、通常統合/配備HOLDを維持する。
 実装/架空接続、実AI品質、通常配備、Production実受入、専門家評価は別判定とする。
+
+### 初回49のUNKNOWNとschema互換修正
+
+2026-10-19、head a1ddfd5の必須CI・独立レビュー後に原文抽出49を1送信した。
+応答・usageを取得できず全programが停止し、診断の品質判定にも到達していない。
+旧90行prefixを保持した正本は92行/46 reservedで、49の99円をunknownとして保持する。
+AI exposureは3381.86010円（既知969.86010＋unknown2412）、配備留保込み4781.86010円。
+所有process残数0・専用DB削除・最終DB結果空を確認した。50以降とslot2は未実行。
+既存Monitorの該当時間帯にHTTP400が1件あり、token集計は0だったが、個別request IDも
+診断ログもないため49の精算・0円判定・直接原因の証明には使用しない。
+
+送信済schemaにはSDKがそのまま転送するoneOfとtupleのitems配列があった。
+[Azureのstructured output仕様](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/structured-outputs#json-schema-support-and-limitations)
+に基づき、比較専用model-schema adapterでanyOf・同型integer配列へ変換する。
+型固有の文字数/配列長等はschemaの説明に残し、受信時は元Zodの全制約で検証する。
+meaningのguardだけをguardRelation/guardConditionsへ平坦化し、受信後は元guardへ
+損失なく復元する。旧nested-only・flat/nested混在・欠落を拒否し、operators.guardの
+位置配列を変えない。原文命題・比較規則・保存v1・旧reader・API/DBは不変更。
+製品の実行と入力上界計算は同じadapterを使用する。失敗時はHTTP statusと形式検証済み
+request IDだけをLocalへ保存し、任意のエラー本文/ヘッダ/例外を記録しない。
+この修正は49の直接原因や次の実AI成功を保証しない。
+
+### 停止後の独立1操作案（未承認・送信禁止）
+
+同じ公開原文と不変更20欄/24文/14参照を用いた、診断2＋正常3の1操作だけを提案する。
+旧50–58・旧slot2・claim・STOP・未知費用は保持し、旧権利を復活させない。
+新固定program `ISSUE150_SCHEMA_784_V1` / stage59–63へ、真正承認・最終head・原本・測定・現台帳を改めて束縛する。
+
+| 段階 | SDK本文＋8192 B | 全予約用の保守上界 B | 提案入力上限 | 出力上限 | 予約円 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 診断・原文 | 39925 | 40692 | 41000 | 8192 | 100 |
+| 診断・対象 | 51608 | 68534 | 69000 | 22528 | 225 |
+| 正常・原文 | 39925 | 40692 | 41000 | 8192 | 100 |
+| 正常・生成 | 54061 | 54828 | 55000 | 8192 | 115 |
+| 正常・対象 | 68569 | 85495 | 86000 | 22528 | 244 |
+
+対象抽出の追加descriptor/metadata分も従前同様に上界へ含めた。送信上限は計5、
+全予約784円で、停止programの未実行将来枠1461円から再配分する未承認案である。
+既発生のunknown2412円は減額しない。新AI上界4165.86010円、配備留保込み5565.86010円で、
+承認済み上限4843/6243円と期限2026-10-20 23:59 JSTは据置。不要な残額を送信権にしない。
+model/provider/default-low、同時1、retry0、正常最大3call、全時間上限を保持し、
+新たな品質不合格/unknown/timeout/ACK不明も全停止とする。診断と正常の全件原文QA、
+保存・再表示・再起動・全PDF/CSV・再取得AI0と統合条件の充足は引き続き必要である。
+
+修正後の実Next/専用空PG16/ブラウザー/架空AIでは、保存・再表示・再起動・帳票再取得を
+含む9項目が通過した。両PDFの全11頁の順序付き本文、全頁の目視、再取得画像の一致、
+両CSVの33行66セルと保存内容の一致をrootと独立担当が確認し、専用資源のcleanup記録も確認した。
+これはLOCAL_INTEGRATION_PASS（架空AI）であり、実AI品質・TECHNICAL_GOは未達である。

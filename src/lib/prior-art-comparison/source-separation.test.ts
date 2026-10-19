@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
 import { fictionalInputs } from "./fixtures.test-support";
-import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
+import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { LIMITS } from "./limits";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
@@ -39,7 +39,7 @@ it("keeps generation and target extraction independent of the first extractor's 
     }
     return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
       output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
-        content: [{ type: "output_text", text: JSON.stringify(answer), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
+        content: [{ type: "output_text", text: JSON.stringify(fixturePropositionWire(answer)), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
     }catch(error){transportErrors.push(error);throw error;}
   }));
   expect((await executeComparison(fixture.inputs, fixture.selection).catch(error=>{throw transportErrors[0]??error;})).review).toBe("human_review_required");

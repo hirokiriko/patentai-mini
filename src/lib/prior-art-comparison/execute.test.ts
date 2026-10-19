@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
 import { fictionalInputs } from "./fixtures.test-support";
-import { fictionalPropositionSource as fictionalSourceAnalysis, fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview } from "./proposition-fixtures.test-support";
+import { fictionalPropositionSource as fictionalSourceAnalysis, fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
@@ -16,7 +16,7 @@ const SECRET = "FICTIONAL_PRIVATE_ERROR_SENTINEL";
 function response(value: unknown, usage: unknown = { input_tokens: 100, output_tokens: 30 }, tier: Record<string, unknown> = { service_tier: "default" }) {
   return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed", ...tier,
     output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
-      content: [{ type: "output_text", text: JSON.stringify(value), annotations: [] }] }], usage });
+      content: [{ type: "output_text", text: JSON.stringify(wireGuards(value)), annotations: [] }] }], usage });
 }
 function compactFour() {
   const f = fictionalInputs();
@@ -142,7 +142,9 @@ describe("real installed SDK, guarded fictional transport", () => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
       if (input.task === "review") { expect(input.originals.targets).toHaveLength(20); return response(fictionalReview(input)); }
       if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
-      expect(body.max_output_tokens).toBe(8192); expect(body.text.format.schema.properties.results.maxItems).toBe(4);
+      expect(body.max_output_tokens).toBe(8192);
+      expect(body.text.format.schema.properties.results.maxItems).toBeUndefined();
+      expect(body.text.format.schema.properties.results.description).toContain('"maxItems":4');
       expect(input.documents.map((d: {pairs: unknown[]}) => d.pairs.length)).toEqual([2, 2]);
       for (const d of input.documents) for (const c of d.candidate.claims)
         expect(c.segments.map((s: {text:string}) => s.text).join(""))

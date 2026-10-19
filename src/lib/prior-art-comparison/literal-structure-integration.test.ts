@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
-import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
+import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { executeComparison } from "./execute";
 import { makePlan, validateAnswer } from "./comparison";
 import { parseComparisonSource } from "./source";
@@ -59,7 +59,7 @@ describe("literal structure on the product path, with fictional SDK transport", 
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
-          content: [{ type: "output_text", text: JSON.stringify(answer), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
+          content: [{ type: "output_text", text: JSON.stringify(fixturePropositionWire(answer)), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
       }catch(error){transportErrors.push(error);throw error;}
     }));
     const execution=executeComparison(inputs, selection).catch(error=>{throw transportErrors[0]??error;});

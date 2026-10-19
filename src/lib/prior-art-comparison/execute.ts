@@ -16,6 +16,7 @@ import { assessPropositions, assertPropositionTargetCoverage, renderPropositionD
 import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
+import { comparisonModelSchema } from "./model-schema";
 
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+"\n各断定では基準側・候補側・両側の帰属を明示し、側が変わる断定を分ける。事実を含む文を未確認の一語で留保扱いにしない。純粋な未確認事項は対象となる名詞句と未確認状態を分けて述べる。これは条件の省略や断定の弱化を許可しない。";
 
@@ -34,7 +35,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         const options = comparisonProviderOptions(model, phase);
         const outputTokens = comparisonOutputTokens(model, phase);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(LIMITS.requestMilliseconds)]);
-        const answer = await generateObject({ model, schema,
+        const answer = await generateObject({ model, schema: comparisonModelSchema(schema),
           system, prompt, maxRetries: 0,
           maxOutputTokens: outputTokens, abortSignal: signal,
           ...(options ? { providerOptions: options } : {}),

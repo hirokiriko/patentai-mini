@@ -3,7 +3,7 @@ import { executeComparison } from "./execute";
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { propositionPlanSizes } from "./proposition-plan";
-import { fictionalPropositionGeneration, fictionalPropositionSource, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
+import { fictionalPropositionGeneration, fictionalPropositionSource, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { propositionSourceInput, propositionSourceTransport } from "./proposition-extraction";
 
@@ -33,7 +33,7 @@ it.each([false,true])("connects source extraction, full generation, computed tar
     if(input.task==="review")expect(bytes+8192).toBeLessThanOrEqual(sizes.targetBytes);
     const value=input.task==="extract_source_propositions"?fictionalPropositionSource(input):input.task==="compare"?fictionalPropositionGeneration(input):fictionalPropositionTarget(input);
     return Response.json({id:"resp_fixture",created_at:0,model:"fictional",status:"completed",service_tier:"default",
-      output:[{type:"message",id:"msg_fixture",role:"assistant",status:"completed",content:[{type:"output_text",text:JSON.stringify(value),annotations:[]}]}],
+      output:[{type:"message",id:"msg_fixture",role:"assistant",status:"completed",content:[{type:"output_text",text:JSON.stringify(fixturePropositionWire(value)),annotations:[]}]}],
       usage:{input_tokens:100,output_tokens:100}});
   }));
   expect(propositionPlanSizes(makePlan(inputs,selection))).toMatchObject({targetBytes:expect.any(Number)});

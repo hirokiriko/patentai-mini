@@ -29,7 +29,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("protected-parent revalidation adapter", () => {
   it("records exact request before reservation ACK and exact response before reconciliation", async () => {
     const f = fixture(); await f.send();
-    expect(f.calls).toEqual(["admit", "claim", "request-44.json", "reserve", "transport", "provider-response-44.json", "reconcile", "validate", "answer-44.json"]);
+    expect(f.calls).toEqual(["admit", "claim", "request-44.json", "reserve", "transport", "provider-metadata-44.json", "provider-response-44.json", "reconcile", "validate", "answer-44.json"]);
     expect(Buffer.from(f.records.get("request-44.json")!).toString()).toBe(body);
     const event = f.parent.mock.calls.find(([command]) => command === "reconcile");
     expect(event).toBeDefined();
@@ -47,7 +47,7 @@ describe("protected-parent revalidation adapter", () => {
     expect(f.parent.mock.calls.map(([command]) => command)).toEqual(["admit", "claim", "stop"]);
   });
   it("does not reconcile if response recording fails after transport", async () => {
-    const f = fixture(); f.record.mockImplementation(async name => { if (name.startsWith("provider")) throw Error("fictional"); });
+    const f = fixture(); f.record.mockImplementation(async name => { if (name.startsWith("provider-response-")) throw Error("fictional"); });
     await expect(f.send()).rejects.toThrow(); expect(f.transport).toHaveBeenCalledOnce();
     expect(f.parent.mock.calls.some(([command]) => command === "reconcile")).toBe(false);
   });
@@ -56,6 +56,15 @@ describe("protected-parent revalidation adapter", () => {
     await expect(f.send()).rejects.toThrow();
     expect(f.parent.mock.calls.map(([command]) => command)).toEqual(["admit", "claim", "reserve", "reconcile", "stop"]);
     expect(f.records.has("answer-44.json")).toBe(false);
+  });
+  it("cancels and stops without reconciliation if header metadata cannot be saved", async () => {
+    const f = fixture(), cancel = vi.fn();
+    f.transport.mockResolvedValue(new Response(new ReadableStream({cancel}),{status:400}));
+    f.record.mockImplementation(async name => { if(name.startsWith("provider-metadata-")) throw Error("fictional"); });
+    await expect(f.send()).rejects.toThrow();
+    expect(cancel).toHaveBeenCalledOnce(); expect(f.bridge.snapshot().stopped).toBe(true);
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+    await expect(f.send()).rejects.toThrow(); expect(f.transport).toHaveBeenCalledOnce();
   });
   it("propagates abort and rejects another concurrent request", async () => {
     const f = fixture(); let entered!: () => void; const started = new Promise<void>(r => { entered = r; });
@@ -73,6 +82,28 @@ describe("protected-parent revalidation adapter", () => {
     f.transport.mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 429 }));
     await expect(f.send()).rejects.toThrow(); expect(cancel).toHaveBeenCalledOnce();
     expect(f.records.has("provider-response-44.json")).toBe(false);
+    expect(JSON.parse(Buffer.from(f.records.get("provider-metadata-44.json")!).toString())).toEqual({ status: 429, requestId: null });
+  });
+  it("records only safe HTTP status and validated request ID; keeps unknown stopped", async () => {
+    const f = fixture();
+    f.transport.mockResolvedValue(new Response("FICTIONAL_SECRET_BODY", { status: 400, headers: {
+      "apim-request-id": "11111111-1111-4111-8111-111111111111", "x-request-id": "FICTIONAL_SECRET_ID", "authorization": "FICTIONAL_SECRET_HEADER",
+    } }));
+    await expect(f.send()).rejects.toThrow();
+    expect(JSON.parse(Buffer.from(f.records.get("provider-metadata-44.json")!).toString())).toEqual({status:400,requestId:"11111111-1111-4111-8111-111111111111"});
+    expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_SECRET");
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+    await expect(f.send()).rejects.toThrow(); expect(f.transport).toHaveBeenCalledOnce();
+  });
+  it("drops malformed request IDs and never serializes transport exceptions", async () => {
+    const f = fixture();
+    f.transport.mockResolvedValue(new Response(null,{status:400,headers:{"x-request-id":"FICTIONAL_SECRET"}}));
+    await expect(f.send()).rejects.toThrow();
+    expect(Buffer.from(f.records.get("provider-metadata-44.json")!).toString()).not.toContain("FICTIONAL_SECRET");
+    const g = fixture(); g.transport.mockRejectedValue(Error("FICTIONAL_SECRET"));
+    await expect(g.send()).rejects.toThrow();
+    expect(JSON.parse(Buffer.from(g.records.get("provider-transport-44.json")!).toString())).toEqual({outcome:"transport_rejected",signalAborted:false});
+    expect(g.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
   });
   it("cancels a stalled response stream when the product aborts", async () => {
     const f = fixture(), cancel = vi.fn(), ctrl = new AbortController();

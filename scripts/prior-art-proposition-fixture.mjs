@@ -1,5 +1,15 @@
 // Fully fictional SDK responses. Hand-authored semantic extraction is test
 // plumbing only and must never be reported as real-model extraction quality.
+export function fixturePropositionWire(value) {
+  if (Array.isArray(value)) return value.map(fixturePropositionWire);
+  if (!value || typeof value !== "object") return value;
+  const row = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, fixturePropositionWire(child)]));
+  if (row.guard && ["set", "path", "relation"].includes(String(row.kind))) {
+    const guard = row.guard;
+    delete row.guard; row.guardRelation = guard.relation; row.guardConditions = guard.conditions;
+  }
+  return row;
+}
 const textOf = c => c.text ?? c.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
 const span = (text, term) => { const at=text.indexOf(term);if(at<0)throw Error("fictional_term_missing");return [at,at+term.length]; };
 const neutral = {selection:null,extent:null,polarity:null,guard:null,context:null};

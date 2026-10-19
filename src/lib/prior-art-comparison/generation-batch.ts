@@ -6,6 +6,7 @@ import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
 import { sourceAnalysisInput, type SourceAnalysis } from "./source-analysis";
 import { literalStructureInput } from "./literal-structure";
+import { comparisonModelSchema } from "./model-schema";
 
 // Combine only identical source versions; claim text is never summarized.
 export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSet {
@@ -53,7 +54,7 @@ export function batchTransportInput(chunks: readonly ManagedComparisonChunk[], s
   return { ...input, base: compact(input.base), documents: input.documents.map(d => ({ ...d, candidate: compact(d.candidate) })) };
 }
 export function requestBytes(system: string, prompt: string, schema: z.ZodType): number {
-  return Buffer.byteLength(JSON.stringify({ system, prompt, schema: z.toJSONSchema(schema) }), "utf8") + 8192;
+  return Buffer.byteLength(JSON.stringify({ system, prompt, schema: comparisonModelSchema(schema).jsonSchema }), "utf8") + 8192;
 }
 
 /** Pack up to four planned pairs. Execution distributes the complete answer
