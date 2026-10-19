@@ -1,11 +1,13 @@
 import { expect, it } from "vitest";
 import { recognizedLoopRoutes, assertRecognizedLoopCoverage } from "./recognized-loop-routes";
-import { canonicalPropositionSources, decodeSourcePropositions, propositionSourceInput, type SourceExtraction } from "./proposition-extraction";
+import { canonicalPropositionSources, decodeSourcePropositions, propositionSourceInput, propositionSourceTransport, type SourceExtraction } from "./proposition-extraction";
 import { makePlan } from "./comparison";
 import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { propositionPlanSizes } from "./proposition-plan";
 import type { Span } from "./propositions";
+import { sourcePropositionModelSchemaFor } from "./proposition-locators";
+import { fixturePropositionWire } from "./proposition-fixtures.test-support";
 
 const loop=(name="送出器")=>`前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記${name}から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記${name}に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。`;
 function setup(text=loop()){
@@ -83,4 +85,44 @@ it.each(["has_mode","changed_selection","ordinary_has"])("preserves a literal mo
     operators:{selection:null,extent:null,polarity:null,guard:null,context:null},routeFrame:null}];
   if(mode==="ordinary_has")expect(()=>decodeSourcePropositions(f.plan,f.raw)).not.toThrow();
   else expect(()=>decodeSourcePropositions(f.plan,f.raw)).toThrow("ai_incomplete");
+});
+
+function indexedWire(f:ReturnType<typeof setup>){
+  const wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input)),row=wire.sources[0];
+  // Re-encode only the selected roles. Catalog frames no longer consume the
+  // old fixture's explicit frame locators, so do not retain unused entries.
+  const locators:unknown[]=[],ids=new Map<number,number>();
+  const ref=(id:number)=>{if(!ids.has(id)){ids.set(id,locators.length);locators.push(row.locators[id]);}return ids.get(id)!;};
+  const refs=(v:unknown):unknown=>Array.isArray(v)?v.map(refs):typeof v==="number"?ref(v):
+    v&&typeof v==="object"?Object.fromEntries(Object.entries(v).map(([k,v])=>[k,refs(v)])):v;
+  row.facts=row.facts.map((fact:Record<string,unknown>,i:number)=>({...fact,basis:refs(fact.basis),meaning:refs(fact.meaning),operators:refs(fact.operators),routeFrame:i}));
+  row.locators=locators;return wire;
+}
+it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
+  const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
+  expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
+  if(result.success){
+    expect(result.value).toEqual(f.raw);
+    expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
+    expect(result.value.sources[0].facts[0].routeFrame!.entry).not.toEqual(result.value.sources[0].facts[0].routeFrame!.exit);
+  }
+});
+it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destination","partial","precedes","non_path","basis_missing"])("rejects each incorrectly assigned catalog frame: %s",async mode=>{
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0],fact=row.facts[0];
+  if(mode==="other_claim")fact.routeFrame=1;
+  if(mode==="out_of_range")fact.routeFrame=2;
+  if(mode==="wrong_mode")fact.meaning.subject=fact.meaning.origin;
+  if(mode==="wrong_origin")fact.meaning.origin=fact.meaning.via[0];
+  if(mode==="wrong_destination")fact.meaning.destination=fact.meaning.via[0];
+  if(mode==="partial")fact.meaning.extent="segment";
+  if(mode==="precedes")fact.meaning.relation="precedes";
+  if(mode==="non_path"){const m=fact.meaning;fact.meaning={kind:"relation",subject:m.subject,context:m.context,guardRelation:m.guardRelation,guardConditions:m.guardConditions,polarity:m.polarity,predicate:"has",objects:[m.origin]};}
+  if(mode==="basis_missing")fact.basis=[fact.meaning.origin[0]];
+  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
+});
+it("keeps original claim parts and gives each required loop its own source-scoped evidence index",()=>{
+  const f=setup(),transport=propositionSourceTransport(f.input),source=transport.sources[0];
+  for(const c of source.source.claims)expect(c.parts.map(id=>transport.textParts[id]).join("")).toBe(f.source.claims.find(x=>x.claimNo===c.claimNo)!.text);
+  expect(source.recognizedLoopRoutes.map(r=>r.claimNo)).toEqual([1,2]);
+  expect(source.recognizedLoopRoutes[0].mode).toBe("第１の運転モード");
 });

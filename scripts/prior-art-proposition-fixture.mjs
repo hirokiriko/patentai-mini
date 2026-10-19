@@ -15,18 +15,25 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(!input||value.locatorVersion===1||value.locatorVersion===2)return flattenGuards(value);
-  const table = textFor => {
+  if(!input||[1,2,3].includes(value.locatorVersion))return flattenGuards(value);
+  const table = (textFor,partsFor) => {
     const locators=[];
     const add=(range,claimNo)=>{
       const text=textFor(claimNo);
       if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||
         range[0]<0||range[1]<=range[0]||range[1]>text.length)throw Error("fictional_locator_invalid");
       const [start,end]=range,quote=text.slice(start,end);
-      let occurrence=0,at=text.indexOf(quote);
-      while(at>=0&&at<start){occurrence++;at=text.indexOf(quote,at+1);}
-      if(at!==start)throw Error("fictional_locator_invalid");
-      const entry={quote,occurrence,...(claimNo===undefined?{}:{claimNo})};
+      let anchor=text,offset=0,partIds={};
+      if(partsFor){
+        let cursor=0;const parts=partsFor(claimNo).map(t=>{const a=cursor;cursor+=t.length;return[a,cursor];});
+        const firstPart=parts.findIndex(([a,b])=>start>=a&&start<b),lastPart=parts.findIndex(([a,b])=>end>a&&end<=b);
+        if(firstPart<0||lastPart<firstPart)throw Error("fictional_locator_invalid");
+        offset=parts[firstPart][0];anchor=text.slice(offset,parts[lastPart][1]);partIds={firstPart,lastPart};
+      }
+      let occurrence=0,at=anchor.indexOf(quote);
+      while(at>=0&&at<start-offset){occurrence++;at=anchor.indexOf(quote,at+1);}
+      if(at!==start-offset)throw Error("fictional_locator_invalid");
+      const entry={quote,occurrence,...(claimNo===undefined?{}:{claimNo}),...partIds};
       let id=locators.findIndex(l=>JSON.stringify(l)===JSON.stringify(entry));
       if(id<0){id=locators.length;locators.push(entry);}return id;
     };
@@ -36,11 +43,12 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:2,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:3,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
-    const t=table(no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(i=>input.textParts[i]).join(""):textOf(c);});
+    const parts=no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(i=>input.textParts[i]):c.segments?c.segments.map(s=>Array.isArray(s)?s[1]:s.text):[c.text];};
+    const t=table(no=>parts(no).join(""),parts);
     const facts=s.facts.map(f=>{
       const add=r=>t.add(r,f.claimNo),encoded=fact({...f,bindings:[]},add),m=f.meaning;
       const usedTerms=new Set();

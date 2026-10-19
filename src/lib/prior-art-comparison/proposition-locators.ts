@@ -3,7 +3,8 @@ import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { comparisonModelSchema } from "./model-schema";
 import { extractionSchema, targetAtomSchema, targetPartSchema, propositionSourceInput,
   sourcePropositionSchemaFor, targetPropositionSchemaFor, type PropositionTargetInput } from "./proposition-extraction";
-import { guardSchema, meaningSchema, type Meaning, type Span } from "./propositions";
+import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
+import { sourceCitationParts, sourceCitationRange } from "./source-citation-parts";
 
 // Quotes live at a shallow level. Nested propositions refer to this table;
 // adding a locator object at every span would exceed Azure's five levels.
@@ -32,7 +33,10 @@ const boundMeaning=z.discriminatedUnion("kind",[
   meaningSchema.options[1].extend({...boundCommon,origin:termRefs.nullable(),destination:termRefs.nullable(),via:termLists,bypass:termLists}),
   meaningSchema.options[2].extend({...boundCommon,objects:termLists.min(1)}),
 ]);
-const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning});
+const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning,
+  routeFrame:z.union([index,spans.routeFrame.unwrap()]).nullable()});
+const sourceLocator=z.object({claimNo:z.number().int().positive(),firstPart:index,lastPart:index,
+  quote:locator.shape.quote.nullable(),occurrence:index}).strict();
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
   reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
@@ -80,7 +84,7 @@ function tableReader<T extends z.infer<typeof locator>>(table:T[], text:(entry:T
   }, complete:()=>{if(used.size!==table.length)throw invalid();}};
 }
 
-function expandSource(raw:z.infer<typeof boundSourceExtraction>,get:(at:number)=>Span,text:string) {
+function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame">&{routeFrame:z.infer<typeof spans.routeFrame>},get:(at:number)=>Span,text:string) {
   const basis=raw.basis.map(get),bindings:z.infer<typeof extractionSchema>["bindings"]=[];
   const term=(refs:number[]):string=>{
     const positions=refs.map(get);
@@ -104,21 +108,43 @@ function expandSource(raw:z.infer<typeof boundSourceExtraction>,get:(at:number)=
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const schema=z.object({locatorVersion:z.literal(2),sources:z.array(z.object({
+  const schema=z.object({locatorVersion:z.literal(3),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
-    locators:z.array(locator.extend({claimNo:z.number().int().positive()})).max(512),
+    locators:z.array(sourceLocator).max(512),
     facts:z.array(boundSourceExtraction.extend({claimNo:z.number().int().positive()})).max(48),
   }).strict()).length(input.sources.length)}).strict();
-  const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,c.segments.map(p=>p.text).join("")])));
+  const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,{text:c.segments.map(p=>p.text).join(""),parts:sourceCitationParts(c.segments.map(p=>p.text))}])));
   return comparisonModelSchema(schema,raw=>{
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_LOCATOR_MAX_BYTES)throw invalid();
     return local.parse({sources:raw.sources.map((s,i)=>{
       if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
-      const table=tableReader(s.locators,l=>{const text=originals[i].get(l.claimNo);if(text===undefined)throw invalid();return text;});
-      const facts=s.facts.map(f=>({...expandSource(f,at=>{
-        if(s.locators[at]?.claimNo!==f.claimNo)throw invalid();return table.get(at);
-      },originals[i].get(f.claimNo)??""),claimNo:f.claimNo}));
-      table.complete();return {sourceDigest:s.sourceDigest,facts};
+      const seen=new Set<string>(),used=new Set<number>();
+      const resolved=s.locators.map(l=>{
+        const claim=originals[i].get(l.claimNo);if(!claim)throw invalid();
+        const [a,b]=sourceCitationRange(claim.parts,l.firstPart,l.lastPart);
+        if(l.quote===null&&l.occurrence!==0)throw invalid();
+        const position:Span=l.quote===null?[a,b]:resolvePropositionQuote(claim.text.slice(a,b),l.quote,l.occurrence).map(n=>n+a) as Span;
+        // Different anchors must not disguise duplicate positions.
+        const key=JSON.stringify([l.claimNo,position]);if(seen.has(key))throw invalid();seen.add(key);return position;
+      });
+      const facts=s.facts.map(f=>{
+        const claim=originals[i].get(f.claimNo);if(!claim)throw invalid();
+        const get=(at:number):Span=>{
+          if(!Number.isSafeInteger(at)||s.locators[at]?.claimNo!==f.claimNo)throw invalid();used.add(at);return [...resolved[at]];
+        };
+        const indexed=typeof f.routeFrame==="number",r=indexed?input.sources[i].recognizedLoopRoutes[f.routeFrame as number]:undefined;
+        const expanded=expandSource({...f,routeFrame:indexed?null:f.routeFrame as z.infer<typeof spans.routeFrame>},get,claim.text);
+        if(indexed){
+          const m=expanded.meaning,same=(t:string|null,span:Span)=>t!==null&&propositionKey(t)===propositionKey(claim.text.slice(...span));
+          if(!r||r.claimNo!==f.claimNo||m.kind!=="path"||m.extent!=="whole"||m.relation!=="route"||
+            !same(m.subject,r.mode)||!same(m.origin,r.entry)||!same(m.destination,r.exit))throw invalid();
+          const frame={entry:r.entry,exit:r.exit,route:r.route,exclusions:[r.definition],controls:[r.control]};
+          if([r.mode,r.entry,r.exit,r.route,r.definition,r.control].some(span=>!expanded.basis.some(([a,b])=>span[0]>=a&&span[1]<=b)))throw invalid();
+          expanded.routeFrame=structuredClone(frame);
+        }
+        return {...expanded,claimNo:f.claimNo};
+      });
+      if(used.size!==s.locators.length)throw invalid();return {sourceDigest:s.sourceDigest,facts};
     })});
   });
 }
