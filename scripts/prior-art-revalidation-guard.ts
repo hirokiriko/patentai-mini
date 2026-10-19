@@ -35,7 +35,7 @@ export const CLAIM_LOCAL_734_V1 = Object.freeze({
 });
 // Separate, explicitly approved operation after the terminal 40/41 failure.
 // Neither the old claim nor its unused normal stages grants another send.
-export const REVALIDATION_PLAN = Object.freeze({
+export const INDEPENDENT_734_V1 = Object.freeze({
   ...CLAIM_LOCAL_734_V1, id: "ISSUE150_INDEPENDENT_734_V1",
   priorSends: 41, priorRows: 82,
   priorLedgerSha256: "35c104512be0c8e786190a58c50731eb29f41885baa11adad280885e1e62b851",
@@ -43,6 +43,17 @@ export const REVALIDATION_PLAN = Object.freeze({
   currentAiLimit: 391100000, currentTotalLimit: 531100000,
   approvedAiLimit: 395000000, approvedTotalLimit: 535000000,
   stages: Object.freeze(CLAIM_LOCAL_734_V1.stages.map(stage => Object.freeze({ ...stage, ordinal: stage.ordinal + 2 }))),
+});
+// New four-condition OWNER approval after the terminal 42/43 failure.
+// Preserve the failed operation and its unused normal stages as history.
+export const REVALIDATION_PLAN = Object.freeze({
+  ...INDEPENDENT_734_V1, id: "ISSUE150_STRUCTURE_734_V1",
+  priorSends: 43, priorRows: 86,
+  priorLedgerSha256: "9e6d35d473ccb7b81c39e83d8230188caf4a2c28ec2592423b1edec7207230a7",
+  currentExposure: 324871720,
+  currentAiLimit: 395000000, currentTotalLimit: 535000000,
+  approvedAiLimit: 398300000, approvedTotalLimit: 538300000,
+  stages: Object.freeze(INDEPENDENT_734_V1.stages.map(stage => Object.freeze({ ...stage, ordinal: stage.ordinal + 2 }))),
 });
 export type RevalidationStage = typeof REVALIDATION_PLAN.stages[number];
 export type RevalidationBinding = Readonly<{
