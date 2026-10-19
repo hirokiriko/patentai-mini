@@ -47,7 +47,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
-    const parts=no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(i=>input.textParts[i]):c.segments?c.segments.map(s=>Array.isArray(s)?s[1]:s.text):[c.text];};
+    const parts=no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(p=>p.text):c.segments?c.segments.map(s=>Array.isArray(s)?s[1]:s.text):[c.text];};
     const t=table(no=>parts(no).join(""),parts);
     const facts=s.facts.map(f=>{
       const add=r=>t.add(r,f.claimNo),encoded=fact({...f,bindings:[]},add),m=f.meaning;
@@ -97,7 +97,7 @@ function extraction(text,m,basis=[0,text.length]){
 }
 const sentence = m => `${m.guard.conditions.length?`${m.guard.conditions.join("・")}場合、`:""}${m.subject??"装置"}は${m.objects.join("・")}${m.predicate==="has"?"を備える":m.predicate==="opens"?"を開く":"を閉じる"}`;
 export function fixturePropositionSource(input){
-  if(input.textParts)input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>({...c,text:c.parts.map(i=>input.textParts[i]).join("")}))}}))};
+  input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>c.parts?{...c,text:c.parts.map(p=>p.text).join("")}:c)}}))};
   return withInput({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>{
     const text=textOf(c),f=extraction(text,m);
     // Keep exact small supporting spans, rather than repeating a long claim in

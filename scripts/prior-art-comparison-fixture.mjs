@@ -37,7 +37,7 @@ globalThis.fetch = async (url, init) => {
   const packed = JSON.parse(body.input[1].content[0].text);
   // Independent lossless inverse. Never import the product's text-table helper.
   const expand = source => ({...source,claims:source.claims.map(c=>({...c,text:c.parts
-    ? c.parts.map(index=>packed.textParts[index]).join("")
+    ? c.parts.map(part=>part.text).join("")
     : c.segments.map(([,index])=>packed.textParts[index]).join("")}))});
   const chunk=packed.task==="extract_source_propositions"?{...packed,sources:packed.sources.map(s=>({...s,source:expand(s.source)}))}:
     packed.task==="review"?{...packed.originals,task:"review",base:expand(packed.originals.base),documents:packed.originals.documents.map(d=>({...d,source:expand(d.source)}))}:packed;

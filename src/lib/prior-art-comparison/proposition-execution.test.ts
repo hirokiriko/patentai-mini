@@ -20,9 +20,9 @@ it.each([false,true])("connects source extraction, full generation, computed tar
     inputs.draft=parseComparisonSource(body(0),inputs.draft.id,inputs.draft.label);
     inputs.documents=inputs.documents.map((s,i)=>parseComparisonSource(body(i+1),s.id,s.label));
     const source=propositionSourceInput(makePlan(inputs,selection)),wire=propositionSourceTransport(source);
-    expect(wire.textParts.length).toBe(wire.sources.flatMap(s=>s.source.claims.flatMap(c=>c.parts)).length);
+    expect(wire).not.toHaveProperty("textParts");
     for(const [i,s] of wire.sources.entries())for(const [j,c] of s.source.claims.entries())
-      expect(c.parts.map(k=>wire.textParts[k]).join("")).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
+      expect(c.parts.map(p=>p.text).join("")).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
   }
   const sizes=propositionPlanSizes(makePlan(inputs,selection));
   vi.stubGlobal("fetch",vi.fn<typeof fetch>().mockImplementation(async(url,init)=>{

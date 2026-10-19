@@ -57,14 +57,14 @@ it.each(["content", "signature", "key", "owner", "target", "digest", "future"])(
     expect(() => verifyManagedAdministrationHistory(envelope, reason === "digest" ? hash(90) : managedDigest(envelope), f.pins,
       reason === "future" ? new Date("2026-09-23T23:59:59Z") : now)).toThrow();
   });
-it.each(["completion140", "integration150-v1", "integration150-v2"])(
+it.each(["completion140", "integration150-v1", "integration150-v2", "integration150-v3"])(
   "rejects foreign authority on signed Issue139 history: %s", reason => {
     const f = history139Fixture();
     const patch = reason === "completion140" ? { completionAllowance: managedCompletionAllowanceSchema.parse({
       scope: "ISSUE140_COMPLETION_V2", issue: 140, month: "2026-10", ownerApprovalDigest: hash(12), profileDigest: hash(13),
       monthlyCapYen: 30000, cumulativeUnits: emptyManagedBudgetUnits(), validUntil: "2026-10-20T14:59:00Z" }) } : {
       issue150Integration: managedIssue150IntegrationSchema.parse({
-        scope: reason === "integration150-v1" ? "ISSUE150_INTEGRATION_V1" : "ISSUE150_INTEGRATION_V2",
+        scope: reason === "integration150-v1" ? "ISSUE150_INTEGRATION_V1" : reason === "integration150-v2" ? "ISSUE150_INTEGRATION_V2" : "ISSUE150_INTEGRATION_V3",
         ownerApprovalDigest: hash(12), profileDigest: hash(13), forwardOperationId: null,
         approvedAt: reason === "integration150-v1" ? "2026-10-17T06:41:40Z" : "2026-10-19T00:00:00Z",
         validUntil: reason === "integration150-v1" ? "2026-10-18T06:41:40Z" : "2026-10-20T14:59:00Z" }) };

@@ -44,7 +44,7 @@ describe("literal structure on the product path, with fictional SDK transport", 
       let answer;
       if (input.task === "extract_source_propositions") {
         expect(input.sources[0].source.literalStructure).toEqual(expected);
-        expect(input.sources[0].source.claims[0].parts.map((id:number)=>input.textParts[id]).join("")).toBe(inputs.draft.source.claims[0].text);
+        expect(input.sources[0].source.claims[0].parts.map((part:{text:string})=>part.text).join("")).toBe(inputs.draft.source.claims[0].text);
         answer = fictionalPropositionSource(input);
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);

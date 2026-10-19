@@ -122,7 +122,8 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
 });
 it("keeps original claim parts and gives each required loop its own source-scoped evidence index",()=>{
   const f=setup(),transport=propositionSourceTransport(f.input),source=transport.sources[0];
-  for(const c of source.source.claims)expect(c.parts.map(id=>transport.textParts[id]).join("")).toBe(f.source.claims.find(x=>x.claimNo===c.claimNo)!.text);
+  for(const c of source.source.claims)expect(c.parts.map(p=>p.text).join("")).toBe(f.source.claims.find(x=>x.claimNo===c.claimNo)!.text);
+  expect(source.recognizedLoopRoutes.map(r=>r.id)).toEqual([0,1]);
   expect(source.recognizedLoopRoutes.map(r=>r.claimNo)).toEqual([1,2]);
   expect(source.recognizedLoopRoutes[0].mode).toBe("第１の運転モード");
 });
