@@ -35,7 +35,7 @@ const boundMeaning=z.discriminatedUnion("kind",[
 ]);
 const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning,
   routeFrame:z.union([index,spans.routeFrame.unwrap()]).nullable()});
-const sourceLocator=z.object({claimNo:z.number().int().positive(),firstPart:index,lastPart:index,
+const sourceLocator=z.object({id:index.max(511),claimNo:z.number().int().positive(),firstPart:index,lastPart:index,
   quote:locator.shape.quote.nullable(),occurrence:index}).strict();
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
@@ -108,7 +108,7 @@ function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const schema=z.object({locatorVersion:z.literal(3),sources:z.array(z.object({
+  const schema=z.object({locatorVersion:z.literal(4),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
     locators:z.array(sourceLocator).max(512),
     facts:z.array(boundSourceExtraction.extend({claimNo:z.number().int().positive()})).max(48),
@@ -118,19 +118,22 @@ export function sourcePropositionModelSchemaFor(chunks:readonly ManagedCompariso
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_LOCATOR_MAX_BYTES)throw invalid();
     return local.parse({sources:raw.sources.map((s,i)=>{
       if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
-      const seen=new Set<string>(),used=new Set<number>();
-      const resolved=s.locators.map(l=>{
+      const seen=new Set<string>(),used=new Set<number>(),resolved=new Map<number,{claimNo:number;position:Span}>();
+      for(const l of s.locators){
+        if(resolved.has(l.id))throw invalid();
         const claim=originals[i].get(l.claimNo);if(!claim)throw invalid();
         const [a,b]=sourceCitationRange(claim.parts,l.firstPart,l.lastPart);
         if(l.quote===null&&l.occurrence!==0)throw invalid();
         const position:Span=l.quote===null?[a,b]:resolvePropositionQuote(claim.text.slice(a,b),l.quote,l.occurrence).map(n=>n+a) as Span;
         // Different anchors must not disguise duplicate positions.
-        const key=JSON.stringify([l.claimNo,position]);if(seen.has(key))throw invalid();seen.add(key);return position;
-      });
+        const key=JSON.stringify([l.claimNo,position]);if(seen.has(key))throw invalid();seen.add(key);
+        resolved.set(l.id,{claimNo:l.claimNo,position});
+      }
       const facts=s.facts.map(f=>{
         const claim=originals[i].get(f.claimNo);if(!claim)throw invalid();
         const get=(at:number):Span=>{
-          if(!Number.isSafeInteger(at)||s.locators[at]?.claimNo!==f.claimNo)throw invalid();used.add(at);return [...resolved[at]];
+          const entry=resolved.get(at);
+          if(!Number.isSafeInteger(at)||entry?.claimNo!==f.claimNo)throw invalid();used.add(at);return [...entry.position];
         };
         const indexed=typeof f.routeFrame==="number",r=indexed?input.sources[i].recognizedLoopRoutes[f.routeFrame as number]:undefined;
         const expanded=expandSource({...f,routeFrame:indexed?null:f.routeFrame as z.infer<typeof spans.routeFrame>},get,claim.text);

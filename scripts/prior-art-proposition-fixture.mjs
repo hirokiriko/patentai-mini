@@ -43,7 +43,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:3,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:4,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
@@ -67,7 +67,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         {...common,objects:m.objects.map(term)};
       if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
       delete encoded.bindings;return {...encoded,meaning};
-    });return {...s,locators:t.locators,facts};
+    });return {...s,locators:t.locators.map((l,id)=>({id,...l})),facts};
   })});
   if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
     const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);

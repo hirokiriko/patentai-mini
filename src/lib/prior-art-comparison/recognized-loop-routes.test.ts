@@ -92,15 +92,17 @@ function indexedWire(f:ReturnType<typeof setup>){
   // Re-encode only the selected roles. Catalog frames no longer consume the
   // old fixture's explicit frame locators, so do not retain unused entries.
   const locators:unknown[]=[],ids=new Map<number,number>();
-  const ref=(id:number)=>{if(!ids.has(id)){ids.set(id,locators.length);locators.push(row.locators[id]);}return ids.get(id)!;};
+  const ref=(id:number)=>{if(!ids.has(id)){const key=41+ids.size*3;ids.set(id,key);locators.push({...row.locators.find((l:{id:number})=>l.id===id),id:key});}return ids.get(id)!;};
   const refs=(v:unknown):unknown=>Array.isArray(v)?v.map(refs):typeof v==="number"?ref(v):
     v&&typeof v==="object"?Object.fromEntries(Object.entries(v).map(([k,v])=>[k,refs(v)])):v;
   row.facts=row.facts.map((fact:Record<string,unknown>,i:number)=>({...fact,basis:refs(fact.basis),meaning:refs(fact.meaning),operators:refs(fact.operators),routeFrame:i}));
-  row.locators=locators;return wire;
+  row.locators=locators.reverse();return wire;
 }
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
   const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
+  expect(wire.sources[0].facts.map((f:{routeFrame:number})=>f.routeFrame)).toEqual([0,1]);
+  expect(wire.sources[0].locators.every((l:{id:number})=>l.id>=41)).toBe(true);
   if(result.success){
     expect(result.value).toEqual(f.raw);
     expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();

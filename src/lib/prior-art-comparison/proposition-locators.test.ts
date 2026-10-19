@@ -55,7 +55,7 @@ it.each(["legacy","mixed","absent_quote","unused","duplicate_locator","negative_
   if(mode==="legacy"){expect((await f.sourceSchema.validate!(f.source)).success).toBe(false);return;}
   if(mode==="mixed")fact.basis[0]=[0,1];
   if(mode==="absent_quote")s.locators[0].quote="原文にない引用";
-  if(mode==="unused")s.locators.push({...s.locators[0],quote:"架空"});
+  if(mode==="unused")s.locators.push({...s.locators[0],id:s.locators.length,quote:"架空"});
   if(mode==="duplicate_locator")s.locators.push({...s.locators[0]});
   if(mode==="negative_index")fact.basis[0]=-1;
   if(mode==="outside_index")fact.basis[0]=s.locators.length;
@@ -101,14 +101,41 @@ it.each([[0,1.5],[0,-1],[0,1,2]])("does not silently repair invalid numeric coor
 function boundExample(text:string) {
   const f=fictionalInputs();f.inputs.draft=parseComparisonSource("【請求項1】\n"+text,11,"draft-11");
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const wire={locatorVersion:3,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,locators:[] as {quote:string|null;occurrence:number;claimNo:number;firstPart:number;lastPart:number}[],facts:[] as unknown[]}))};
+  const wire={locatorVersion:4,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,locators:[] as {id:number;quote:string|null;occurrence:number;claimNo:number;firstPart:number;lastPart:number}[],facts:[] as unknown[]}))};
   return {schema:sourcePropositionModelSchemaFor(plan),wire,row:wire.sources[0],plan,input};
 }
 const citation=(quote:string|null,occurrence=0,firstPart=0,lastPart=firstPart,claimNo=1)=>({quote,occurrence,claimNo,firstPart,lastPart});
+const citations=(...entries:ReturnType<typeof citation>[])=>entries.map((l,id)=>({id,...l}));
 const neutralBound={selection:null,extent:null,polarity:null,guard:null,context:null};
+function keyedExample(){
+  const f=boundExample("装置は青色弁を備える。");
+  f.row.locators=[{id:41,...citation(null)},{id:7,...citation("装置")},{id:304,...citation("青色弁")}];
+  const fact={claimNo:1,basis:[41],meaning:{kind:"relation",subject:[7],context:"capability",
+    guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[304]]},
+    operators:{...neutralBound},routeFrame:null};
+  f.row.facts=[fact];return {...f,fact};
+}
+it("resolves sparse source IDs independently of locator order without changing the answer",async()=>{
+  const f=keyedExample(),first=await f.schema.validate!(f.wire);
+  expect(first.success).toBe(true);f.row.locators.reverse();const before=JSON.stringify(f.wire);
+  expect(await f.schema.validate!(f.wire)).toEqual(first);expect(JSON.stringify(f.wire)).toBe(before);
+  if(first.success)expect(first.value.sources[0].facts[0].meaning).toMatchObject({subject:"装置",objects:["青色弁"]});
+});
+it.each(["array_position","duplicate_id","duplicate_position","unused_id","wrong_claim","missing_id","outside_id","legacy_v3"])("rejects invalid explicit source ID %s",async mode=>{
+  const f=keyedExample();
+  if(mode==="array_position")f.fact.basis=[0]; // array[0] exists, but ID 0 does not.
+  if(mode==="duplicate_id")f.row.locators[2].id=7;
+  if(mode==="duplicate_position"){f.row.locators.push({...f.row.locators[0],id:305});f.fact.basis.push(305);}
+  if(mode==="unused_id")f.row.locators.push({id:305,...citation("備える")});
+  if(mode==="wrong_claim")f.fact.claimNo=2;
+  if(mode==="missing_id")Reflect.deleteProperty(f.row.locators[0],"id");
+  if(mode==="outside_id")f.row.locators[0].id=512;
+  if(mode==="legacy_v3")f.wire.locatorVersion=3;
+  expect((await f.schema.validate!(f.wire)).success).toBe(false);
+});
 it("derives source terms only from exact quoted fragments, with nullable implicit subject",async()=>{
   const f=boundExample("第１、第２運転モードを備える。");
-  f.row.locators=[citation("第１、第２運転モードを備える。"),citation("第１"),citation("運転モード")];
+  f.row.locators=citations(citation("第１、第２運転モードを備える。"),citation("第１"),citation("運転モード"));
   f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"relation",subject:null,context:"capability",
     guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[1,2]]},
     operators:neutralBound,routeFrame:null}];
@@ -121,9 +148,9 @@ it("derives source terms only from exact quoted fragments, with nullable implici
 });
 it.each([false,true])("checks both loop endpoint terms before sharing a binding (outside=%s)",async outside=>{
   const text="循環器から青色弁を経て循環器に戻る。別の循環器。",f=boundExample(text);
-  f.row.locators=[
+  f.row.locators=citations(
     citation(outside?"循環器から青色弁を経て":"循環器から青色弁を経て循環器に戻る。"),
-    citation("循環器"),citation("循環器",outside?2:1),citation("青色弁")];
+    citation("循環器"),citation("循環器",outside?2:1),citation("青色弁"));
   f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"path",subject:null,context:"operation",
     guardRelation:"unconditional",guardConditions:[],polarity:"positive",origin:[1],destination:[2],via:[[3]],bypass:[],extent:"whole",relation:"route"},
     operators:neutralBound,routeFrame:{entry:1,exit:2,route:0,exclusions:[],controls:[]}}];
@@ -137,7 +164,7 @@ it.each([false,true])("checks both loop endpoint terms before sharing a binding 
 it.each(["string_term","legacy_version","extra_binding","absent_term","oversize_term"])("rejects source bound terms: %s",async mode=>{
   if(mode==="oversize_term"){
     const f=boundExample("甲".repeat(81)+"。");
-    f.row.locators=[citation("甲".repeat(81))];
+    f.row.locators=citations(citation("甲".repeat(81)));
     f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"relation",subject:null,context:"capability",
       guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[0]]},
       operators:neutralBound,routeFrame:null}];
@@ -171,7 +198,7 @@ it("counts repeated words inside the explicitly selected part, retaining conditi
   const text="甲".repeat(125)+"、装置は甲を備える。",f=boundExample(text),parts=f.input.sources[0].source.claims[0].segments;
   expect(parts.length).toBeGreaterThan(1);
   const last=parts.length-1,offset=parts.slice(0,last).reduce((n,p)=>n+p.text.length,0);
-  f.row.locators=[citation(null,0,0,last),citation("装置",0,last),citation("甲",0,last)];
+  f.row.locators=citations(citation(null,0,0,last),citation("装置",0,last),citation("甲",0,last));
   f.row.facts=[{claimNo:1,basis:[0],meaning:{kind:"relation",subject:[1],context:"capability",guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"has",objects:[[2]]},operators:neutralBound,routeFrame:null}];
   const result=await f.schema.validate!(f.wire);expect(result.success).toBe(true);
   if(result.success){const fact=result.value.sources[0].facts[0];expect(fact.basis).toEqual([[0,text.length]]);
