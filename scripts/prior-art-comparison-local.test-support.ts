@@ -37,7 +37,9 @@ export async function isolatedCommand(file: string, args: string[], input = "", 
     child.stdin.on("error", () => undefined); child.stdin.end(input);
   });
 }
-export async function isolatedComparisonPg16(deadline?: AbortSignal) {
+export async function isolatedComparisonPg16(deadline?: AbortSignal, recordSetup?: (owned: {
+  directory: string; database: string; container: string;
+}) => Promise<void>) {
   const issue = 150 as number;
   deadline?.throwIfAborted();
   if (process.env.PRIOR_ART_COMPARISON_DB_TEST !== "1" || process.env.DATABASE_URL || process.env.PGHOST || process.env.PGSERVICE) {
@@ -75,6 +77,9 @@ export async function isolatedComparisonPg16(deadline?: AbortSignal) {
   };
   let phase = "container_create";
   try {
+    // Preserve only scoped ownership, never credentials, before Docker can
+    // create anything. The protected parent can reconcile a setup failure.
+    await recordSetup?.({ directory, database, container });
     await mkdir(join(directory, "docker-config"));
     if (issue === 123 || issue === 125) {
       phase = "existing_runtime_preflight";

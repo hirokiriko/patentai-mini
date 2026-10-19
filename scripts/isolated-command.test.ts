@@ -7,6 +7,7 @@ vi.mock("node:child_process",()=>({spawn:mock.spawn}));
 vi.mock("node:fs/promises",async original=>({...await original<typeof import("node:fs/promises")>(),
   mkdtemp:mock.mkdtemp,mkdir:mock.mkdir,rm:mock.rm}));
 import { isolatedCommand, isolatedPg16, hasUnconfirmedIsolatedProcess } from "./watch-report-local.test-support";
+import { isolatedComparisonPg16 } from "./prior-art-comparison-local.test-support";
 function child(){return Object.assign(new EventEmitter(),{stdout:new EventEmitter(),stderr:new EventEmitter(),
   stdin:Object.assign(new EventEmitter(),{end:vi.fn()}),kill:vi.fn(()=>true)});}
 afterEach(()=>{vi.resetAllMocks();vi.unstubAllEnvs();vi.useRealTimers();});
@@ -42,4 +43,27 @@ it("records a missing close so the operator retains its hard watchdog",async()=>
   controller.abort();await vi.advanceTimersByTimeAsync(5000);await rejected;
   expect(hasUnconfirmedIsolatedProcess()).toBe(true);
   process.emit("close",1);expect(hasUnconfirmedIsolatedProcess()).toBe(false);
+});
+it("records comparison setup ownership before an unacknowledged create",async()=>{
+  for(const name of ["DATABASE_URL","PGHOST","PGSERVICE"])vi.stubEnv(name,undefined);
+  vi.stubEnv("PRIOR_ART_COMPARISON_DB_TEST","1");
+  const directory=join(tmpdir(),"prior-art-comparison-test-fictional"),record=vi.fn(async(owned:{directory:string;database:string;container:string})=>{void owned;});
+  mock.mkdtemp.mockResolvedValue(directory);mock.mkdir.mockResolvedValue(undefined);
+  mock.spawn.mockImplementation((_file:string,args:string[])=>{
+    expect(record).toHaveBeenCalledTimes(1);const process=child();
+    queueMicrotask(()=>{if(args.includes("inspect"))process.stderr.emit("data","Error: No such object: fictional");process.emit("close",1);});
+    return process;
+  });
+  await expect(isolatedComparisonPg16(undefined,record)).rejects.toThrow("isolated_cleanup_unconfirmed");
+  const owned=record.mock.calls[0][0];
+  expect(owned).toEqual({directory,database:expect.stringMatching(/^prior_art_comparison_test_[a-f0-9]{16}$/),container:expect.stringMatching(/^prior-art-comparison-test-[a-f0-9]{16}$/)});
+  expect(owned.database.split("_").at(-1)).toBe(owned.container.split("-").at(-1));
+  expect(mock.rm).not.toHaveBeenCalled();
+});
+it("never starts Docker when the ownership record cannot be preserved",async()=>{
+  for(const name of ["DATABASE_URL","PGHOST","PGSERVICE"])vi.stubEnv(name,undefined);
+  vi.stubEnv("PRIOR_ART_COMPARISON_DB_TEST","1");
+  const directory=join(tmpdir(),"prior-art-comparison-test-fictional");mock.mkdtemp.mockResolvedValue(directory);
+  await expect(isolatedComparisonPg16(undefined,async()=>{throw Error("fictional_record_failure");})).rejects.toThrow("isolated_pg16_setup_failed_container_create");
+  expect(mock.spawn).not.toHaveBeenCalled();expect(mock.rm).toHaveBeenCalledWith(directory,{recursive:true,force:true});
 });

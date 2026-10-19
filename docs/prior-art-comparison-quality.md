@@ -541,3 +541,20 @@ model/provider/default-low、同時1、retry0、正常最大3call、全時間上
 含む9項目が通過した。両PDFの全11頁の順序付き本文、全頁の目視、再取得画像の一致、
 両CSVの33行66セルと保存内容の一致をrootと独立担当が確認し、専用資源のcleanup記録も確認した。
 これはLOCAL_INTEGRATION_PASS（架空AI）であり、実AI品質・TECHNICAL_GOは未達である。
+
+### 784円承認と未送信の準備障害
+
+2026-10-19、OWNERが上記784円の独立1操作を明示承認した
+（ISSUE150_SCHEMA_784_APPROVED_V1）。費用・期限・5送信の境界は不変更。
+その最初の準備はDocker engine停止により隔離DB準備で停止し、AI送信・予約・
+program/claimの取得はいずれも0、既存92行の台帳は不変だった。
+DB helperが返る前の例外でcleanup成功を記録した不備は成功証拠に使わず、
+Docker復旧後に対象container 0・専用temp不存在・所有process 0を別途確認した。
+helperはDocker create前に無秘密の所有情報を呼出元へ保存可能にし、
+記録に失敗した場合はcreateしない。呼出元は未確認のsetupをcleanup成功にしない。
+
+Issue §4Aの初回環境障害の解消として、同一program・同一executionId・同一stageの
+未使用操作に限り、旧停止記録・台帳・確定清掃を束縛する限定復旧を準備する。
+旧marker/承認/失敗は保持し、新UUIDや旧権利の復活で回数制限を回避しない。
+送信・予約・claim・ACK/write不明を伴う停止にはこの復旧を適用しない。
+実AI全件QA・保存/帳票・TECHNICAL_GOは引き続き未達。
