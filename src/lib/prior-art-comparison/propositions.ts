@@ -18,7 +18,7 @@ const common = {
 };
 export const meaningSchema = z.discriminatedUnion("kind", [
   z.object({ ...common, kind: z.literal("set"),
-    selection: z.enum(["required", "one", "nonempty", "all", "unspecified"]),
+    selection: z.enum(["required", "one", "nonempty", "all", "unspecified"]).describe("required/all: every member mandatory; one: exactly one alternative; nonempty: one, any combination or all alternatives; unspecified: quantification not established, never omit an explicit selection. Capability does not mean simultaneous operation."),
     extent: z.enum(["closed", "partial"]), members: terms.min(1),
   }).strict(),
   z.object({ ...common, kind: z.literal("path"),

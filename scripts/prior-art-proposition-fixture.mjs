@@ -1,14 +1,55 @@
 // Fully fictional SDK responses. Hand-authored semantic extraction is test
 // plumbing only and must never be reported as real-model extraction quality.
-export function fixturePropositionWire(value) {
-  if (Array.isArray(value)) return value.map(fixturePropositionWire);
+const fixtureInputs = new WeakMap();
+const withInput = (value,input) => { fixtureInputs.set(value,input);return value; };
+function flattenGuards(value) {
+  if (Array.isArray(value)) return value.map(flattenGuards);
   if (!value || typeof value !== "object") return value;
-  const row = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, fixturePropositionWire(child)]));
+  const row = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, flattenGuards(child)]));
   if (row.guard && ["set", "path", "relation"].includes(String(row.kind))) {
     const guard = row.guard;
     delete row.guard; row.guardRelation = guard.relation; row.guardConditions = guard.conditions;
   }
   return row;
+}
+// Independent inverse used only for fictional responses. A WeakMap retains
+// the originating fictional input across tests that mutate an answer in place.
+export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
+  if(!input||value.locatorVersion===1)return flattenGuards(value);
+  const table = textFor => {
+    const locators=[];
+    const add=(range,claimNo)=>{
+      const text=textFor(claimNo);
+      if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||
+        range[0]<0||range[1]<=range[0]||range[1]>text.length)throw Error("fictional_locator_invalid");
+      const [start,end]=range,quote=text.slice(start,end);
+      let occurrence=0,at=text.indexOf(quote);
+      while(at>=0&&at<start){occurrence++;at=text.indexOf(quote,at+1);}
+      if(at!==start)throw Error("fictional_locator_invalid");
+      const entry={quote,occurrence,...(claimNo===undefined?{}:{claimNo})};
+      let id=locators.findIndex(l=>JSON.stringify(l)===JSON.stringify(entry));
+      if(id<0){id=locators.length;locators.push(entry);}return id;
+    };
+    return {locators,add};
+  };
+  const fact=(f,add)=>({...f,basis:f.basis.map(add),bindings:f.bindings.map(b=>({...b,spans:b.spans.map(add)})),
+    operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
+    routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
+      exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:1,sources:value.sources.map(s=>{
+    // Preserve deliberately invalid digests in negative tests; use the fixture
+    // row's original source only to encode its unchanged quote positions.
+    const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
+    const t=table(no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(i=>input.textParts[i]).join(""):textOf(c);});
+    const facts=s.facts.map(f=>fact(f,r=>t.add(r,f.claimNo)));return {...s,locators:t.locators,facts};
+  })});
+  if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
+    const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);
+    const parts=target.parts.map(p=>({...p,span:add(p.span),atoms:p.atoms.map(a=>({...fact(a,add),attribution:a.attribution===null?null:add(a.attribution)})),
+      reservation:p.reservation?{...p.reservation,basis:add(p.reservation.basis)}:null}));
+    return {...target,locators:t.locators,parts};
+  })});
+  return flattenGuards(value);
 }
 const textOf = c => c.text ?? c.segments.map(s => Array.isArray(s) ? s[1] : s.text).join("");
 const span = (text, term) => { const at=text.indexOf(term);if(at<0)throw Error("fictional_term_missing");return [at,at+term.length]; };
@@ -31,7 +72,12 @@ function extraction(text,m,basis=[0,text.length]){
 const sentence = m => `${m.guard.conditions.length?`${m.guard.conditions.join("・")}場合、`:""}${m.subject??"装置"}は${m.objects.join("・")}${m.predicate==="has"?"を備える":m.predicate==="opens"?"を開く":"を閉じる"}`;
 export function fixturePropositionSource(input){
   if(input.textParts)input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>({...c,text:c.parts.map(i=>input.textParts[i]).join("")}))}}))};
-  return {sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>({claimNo:c.claimNo,...extraction(textOf(c),m)})))}))};
+  return withInput({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>{
+    const text=textOf(c),f=extraction(text,m);
+    // Keep exact small supporting spans, rather than repeating a long claim in
+    // each locator. This fixture remains hand-authored, not model QA evidence.
+    f.basis=terms(m).map(term=>span(text,term));return {claimNo:c.claimNo,...f};
+  }))}))},input);
 }
 export function fixturePropositionGeneration(input){
   const result=(d,p)=>{
@@ -60,7 +106,7 @@ export function fixturePropositionTarget(input){
     const sameClaim=input.facts.filter(x=>x.id.startsWith(id.split(".")[0]+".")&&x.claimNo===f.claimNo);
     return ms[sameClaim.findIndex(x=>x.id===id)];
   };
-  return {draftDigest:input.draftDigest,targets:original.targets.map(t=>{
+  return withInput({draftDigest:input.draftDigest,targets:original.targets.map(t=>{
     const [docId,bno,cno,field]=t.id.split(":"),parts=[];let cursor=0;
     for(const unit of t.text.match(/[^。]*。|[^。]+$/gu)??[]){
       const end=cursor+unit.length;
@@ -82,5 +128,5 @@ export function fixturePropositionTarget(input){
       cursor=end;
     }
     return {id:t.id,parts};
-  })};
+  })},input);
 }

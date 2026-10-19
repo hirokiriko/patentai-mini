@@ -92,9 +92,32 @@ export const SCHEMA_REVALIDATION_PLAN = Object.freeze({
     { phase: "normal_review", task: "review", input: 86000, output: 22528, reserve: 244 },
   ].map((stage, index) => Object.freeze({ ...stage, ordinal: 59 + index }))),
 });
-export function revalidationPlan(slot?: 1 | 2 | "schema") {
+/** Pending finite proposal after reconciled source59 quality failure. At most
+ * two diagnostic attempts and ONE normal comparison. The protected parent
+ * must prove a known diagnostic quality failure, concrete repair and cleanup
+ * before slot 2; no slot 2 after any normal reservation or ambiguous outcome.
+ * Declaring this plan creates no OWNER evidence or dispatch authority. */
+export const LOCATOR_REVALIDATION_PLANS = Object.freeze(([1,2] as const).map(slot=>Object.freeze({
+  ...REVALIDATION_PLAN,id:"ISSUE150_LOCATOR_1124_V1",status:"PENDING_OWNER_DECISION",slot,
+  priorSends:47,priorRows:94,
+  priorLedgerSha256:"ab3bfb17ead6eabeba665d058a04480a548bde75c1d0c7dad882f40eb42ceac4",
+  currentExposure:340481820,unknownHeld:241200000,
+  currentAiLimit:484300000,currentTotalLimit:624300000,
+  approvedAiLimit:484300000,approvedTotalLimit:624300000,
+  programMaximumNewSends:7,programReservationYen:1124,normalMaximumOperations:1,retryOnlyBeforeNormal:true,
+  stages:Object.freeze([
+    {phase:"diagnostic_source",task:"extract_source_propositions",input:44000,output:8192,reserve:103},
+    {phase:"diagnostic_review",task:"review",input:71000,output:22528,reserve:227},
+    {phase:"normal_source",task:"extract_source_propositions",input:44000,output:8192,reserve:103},
+    {phase:"normal_generation",task:"compare",input:55000,output:8192,reserve:115},
+    {phase:"normal_review",task:"review",input:88000,output:22528,reserve:246},
+  ].map((stage,index)=>Object.freeze({...stage,ordinal:64+(slot-1)*5+index}))),
+})));
+export type RevalidationSlot = 1 | 2 | "schema" | "locator1" | "locator2";
+export function revalidationPlan(slot?: RevalidationSlot) {
   if (slot === undefined) return REVALIDATION_PLAN;
   if (slot === "schema") return SCHEMA_REVALIDATION_PLAN;
+  if (slot === "locator1" || slot === "locator2") return LOCATOR_REVALIDATION_PLANS[slot === "locator1" ? 0 : 1];
   if (slot !== 1 && slot !== 2) throw Error("revalidation_stopped");
   return PROPOSITION_REVALIDATION_PLANS[slot - 1];
 }
@@ -131,7 +154,7 @@ export type RevalidationJournal = {
 };
 export type RevalidationDependencies = {
   /** Select only a registered fixed slot; never accept caller-defined limits. */
-  propositionSlot?: 1 | 2 | "schema";
+  propositionSlot?: RevalidationSlot;
   binding: RevalidationBinding; decision: RevalidationDecision | null; journal: RevalidationJournal;
   /** Protected parent verifies authentic OWNER evidence, exact head/materials,
    * policy, fresh public readback, deadline and unchanged prior ledger. This
@@ -151,7 +174,7 @@ const integer = (n: unknown, max: number): n is number => Number.isSafeInteger(n
 const keys = (value: unknown, expected: string[]) => !!value && typeof value === "object" && !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === expected.sort().join(",");
 
-export function revalidationFunding(slot?: 1 | 2 | "schema") {
+export function revalidationFunding(slot?: RevalidationSlot) {
   const plan = revalidationPlan(slot);
   const reservationYen = "programReservationYen" in plan ? plan.programReservationYen : plan.stages.reduce((sum, s) => sum + s.reserve, 0);
   const requiredAi = plan.currentExposure + reservationYen * 100000;

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { asSchema, generateObject } from "ai";
 import { createRevalidationGuard, REVALIDATION_PLAN as PLAN, REVALIDATION_734_V1 as OLD_PLAN, CLAIM_LOCAL_734_V1 as PREVIOUS_PLAN, INDEPENDENT_734_V1 as LAST_PLAN, revalidationFunding,
-  PROPOSITION_REVALIDATION_PLANS, SCHEMA_REVALIDATION_PLAN,
+  PROPOSITION_REVALIDATION_PLANS, SCHEMA_REVALIDATION_PLAN, LOCATOR_REVALIDATION_PLANS,
   type DiagnosticQa, type RevalidationBinding, type RevalidationDecision, type RevalidationDependencies,
   type RevalidationPacket, type RevalidationStage } from "./prior-art-revalidation-guard";
 import { executeComparison } from "../src/lib/prior-art-comparison/execute";
@@ -67,6 +67,18 @@ async function advance(h: ReturnType<typeof harness>, until: number) {
 describe("inactive fixed proposition program slots", () => {
   beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-19T07:00:00Z")); });
   afterEach(() => { vi.restoreAllMocks(); });
+  it.each(["locator1","locator2"] as const)("keeps pending %s inside the unchanged total while funding two diagnoses and one normal run",async slot=>{
+    const plan=LOCATOR_REVALIDATION_PLANS[slot==="locator1"?0:1];
+    expect(plan.status).toBe("PENDING_OWNER_DECISION");expect(plan.retryOnlyBeforeNormal).toBe(true);
+    expect(plan.normalMaximumOperations).toBe(1);expect(plan.programMaximumNewSends).toBe(7);
+    expect(plan.stages.reduce((n,s)=>n+s.reserve,0)).toBe(794);
+    expect(plan.programReservationYen).toBe(2*(103+227)+103+115+246);
+    expect(revalidationFunding(slot)).toEqual({reservationYen:1124,requiredAi:452881820,requiredTotal:592881820});
+    const h=harness({propositionSlot:slot,decision:{...approved,status:"PENDING_OWNER_DECISION",planId:plan.id,
+      maximumNewSends:7,maximumReservationYen:1124,maximumAi:484300000,maximumTotal:624300000}});
+    await expect(h.send(0,body(plan.stages[0]))).rejects.toThrow();
+    expect(h.journal.claim).not.toHaveBeenCalled();expect(h.transport).not.toHaveBeenCalled();
+  });
   it.each([1, 2] as const)("reserves the full program before slot %i and preserves stage IDs independently of send count", async slot => {
     const plan=PROPOSITION_REVALIDATION_PLANS[slot-1];
     const decision={...approved,planId:plan.id,maximumNewSends:10,maximumReservationYen:1560,

@@ -87,7 +87,7 @@ function restoreGuards(value: unknown): unknown {
   return restored;
 }
 
-export function comparisonModelSchema<T>(schema: z.ZodType<T>): Schema<T> {
+export function comparisonModelSchema<T, Result = T>(schema: z.ZodType<T>, decode?: (value: T) => Result): Schema<Result> {
   const converted = zodSchema(schema).jsonSchema;
   // The installed Zod conversion is synchronous. Reject an asynchronous
   // schema before estimating or sending rather than serializing a Promise.
@@ -97,11 +97,11 @@ export function comparisonModelSchema<T>(schema: z.ZodType<T>): Schema<T> {
   // Guard fields are now in each meaning. Do not send its unused definition.
   if (!JSON.stringify(wire).includes('"$ref":"#/definitions/PriorArtGuard"')) delete wire.definitions?.PriorArtGuard;
   if (wire.type !== "object" || wire.anyOf) throw invalid();
-  return jsonSchema<T>(wire, {
+  return jsonSchema<Result>(wire, {
     validate: value => {
       try {
         const parsed = schema.safeParse(restoreGuards(value));
-        if (parsed.success) return { success: true, value: parsed.data };
+        if (parsed.success) return { success: true, value: decode ? decode(parsed.data) : parsed.data as unknown as Result };
       } catch { /* Never expose invalid model output through the error. */ }
       return { success: false, error: new Error("comparison_answer_schema_invalid") };
     },

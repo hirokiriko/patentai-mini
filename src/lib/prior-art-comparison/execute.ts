@@ -1,17 +1,17 @@
-import { generateObject } from "ai";
+import { generateObject, type Schema } from "ai";
 import { getModel } from "../ai-model";
 import { aiOperationDeadline, withPriorArtComparisonBudget } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
 import { decodeGeneration } from "./generation";
-import { batchTransportInput, batchSchema, batchSchemaFor, requestBytes } from "./generation-batch";
+import { batchTransportInput, batchSchema, batchSchemaFor, requestBytes, modelRequestBytes } from "./generation-batch";
 import { type ReviewDraft } from "./semantic-review";
-import type { z } from "zod";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
 import { decodeSourcePropositions, PROPOSITION_SOURCE_SYSTEM, PROPOSITION_TARGET_SYSTEM, propositionSourceInput,
-  propositionSourceTransport, propositionTargetInput, propositionTargetTransport, sourcePropositionSchemaFor, targetPropositionSchemaFor } from "./proposition-extraction";
+  propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
+import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
 import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
 import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
@@ -29,13 +29,13 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     try {
-      const generate = async (system: string, prompt: string, schema: z.ZodType, phase: ComparisonPhase) => {
+      const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
         const model = getModel();
         const options = comparisonProviderOptions(model, phase);
         const outputTokens = comparisonOutputTokens(model, phase);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(LIMITS.requestMilliseconds)]);
-        const answer = await generateObject({ model, schema: comparisonModelSchema(schema),
+        const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
           maxOutputTokens: outputTokens, abortSignal: signal,
           ...(options ? { providerOptions: options } : {}),
@@ -53,7 +53,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           throw new ComparisonError("ai_incomplete");
         return answer.object;
       };
-      const readingSchema = sourcePropositionSchemaFor(batch);
+      const readingSchema = sourcePropositionModelSchemaFor(batch);
       const reading = await generate(PROPOSITION_SOURCE_SYSTEM,
         JSON.stringify(propositionSourceTransport(propositionSourceInput(batch))), readingSchema, "generation");
       const analyses = decodeSourcePropositions(batch, reading);
@@ -61,7 +61,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const prompt = JSON.stringify(batchTransportInput(batch));
       if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
-        const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch), "generation"));
+        const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch)), "generation"));
         const key = (docId: number, p: { baseClaimNo: number; candidateClaimNo: number }) => `${docId}:${p.baseClaimNo}:${p.candidateClaimNo}`;
         const expected = new Set(plan.flatMap(c => c.pairs.map(p => key(c.candidateId, p))));
         const received = answer.results.map(r => key(r.docId, r));
@@ -81,8 +81,8 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       }
       stage = "review";
       const review = propositionTargetInput(plan, drafts, analyses);
-      const schema = targetPropositionSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
-      if(requestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
+      const schema = targetPropositionModelSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
+      if(modelRequestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
       const rawReview = await generate(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema,"review");
       const assessed = assessPropositions(review,rawReview);
       let rendered:ReviewDraft[];

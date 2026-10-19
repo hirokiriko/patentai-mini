@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Schema } from "ai";
 import { managedClaimContext, type ManagedClaimSet, type ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { assertGenerationEvidence, generationInput, generationSchema } from "./generation";
 import { LIMITS } from "./limits";
@@ -54,7 +55,10 @@ export function batchTransportInput(chunks: readonly ManagedComparisonChunk[], s
   return { ...input, base: compact(input.base), documents: input.documents.map(d => ({ ...d, candidate: compact(d.candidate) })) };
 }
 export function requestBytes(system: string, prompt: string, schema: z.ZodType): number {
-  return Buffer.byteLength(JSON.stringify({ system, prompt, schema: comparisonModelSchema(schema).jsonSchema }), "utf8") + 8192;
+  return modelRequestBytes(system,prompt,comparisonModelSchema(schema));
+}
+export function modelRequestBytes(system: string, prompt: string, schema: Schema<unknown>): number {
+  return Buffer.byteLength(JSON.stringify({ system, prompt, schema: schema.jsonSchema }), "utf8") + 8192;
 }
 
 /** Pack up to four planned pairs. Execution distributes the complete answer
