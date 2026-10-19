@@ -6,7 +6,8 @@ import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { propositionPlanSizes } from "./proposition-plan";
 import type { Span } from "./propositions";
-import { sourcePropositionModelSchemaFor } from "./proposition-locators";
+import { sourcePropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
+import { sourceCitationParts,sourceCitationRange } from "./source-citation-parts";
 import { fixturePropositionWire } from "./proposition-fixtures.test-support";
 
 const loop=(name="送出器")=>`前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記${name}から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記${name}に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。`;
@@ -128,4 +129,14 @@ it("keeps original claim parts and gives each required loop its own source-scope
   expect(source.recognizedLoopRoutes.map(r=>r.id)).toEqual([0,1]);
   expect(source.recognizedLoopRoutes.map(r=>r.claimNo)).toEqual([1,2]);
   expect(source.recognizedLoopRoutes[0].mode).toBe("第１の運転モード");
+  for(const [index,r]of source.recognizedLoopRoutes.entries()){
+    const c=source.source.claims.find(c=>c.claimNo===r.claimNo)!,text=c.parts.map(p=>p.text).join("");
+    const parts=sourceCitationParts(c.parts.map(p=>p.text)),original=f.input.sources[0].recognizedLoopRoutes[index];
+    const resolve=(l:typeof r.entryLocator)=>{const[a,b]=sourceCitationRange(parts,l.firstPart,l.lastPart);
+      return resolvePropositionQuote(text.slice(a,b),l.quote,l.occurrence).map(n=>n+a);};
+    expect(resolve(r.entryLocator)).toEqual(original.entry);
+    expect(resolve(r.exitLocator)).toEqual(original.exit);
+    expect(r.entryLocator.quote).toBe(r.exitLocator.quote);
+    expect(resolve(r.entryLocator)).not.toEqual(resolve(r.exitLocator));
+  }
 });

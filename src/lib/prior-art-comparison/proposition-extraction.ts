@@ -10,7 +10,7 @@ import { reviewReferenceMentions } from "./reference-mentions";
 import { managedClaimReferences } from "../koho-import/managed-claim-source";
 import { propositionTextTable, PROPOSITION_TEXT_GUIDE, PROPOSITION_SOURCE_TEXT_GUIDE, PROPOSITION_LOCATOR_GUIDE, PROPOSITION_SOURCE_TERM_GUIDE } from "./proposition-text";
 import { recognizedLoopRoutes, assertRecognizedLoopCoverage } from "./recognized-loop-routes";
-import { sourceCitationParts, sourceCitationPartIds } from "./source-citation-parts";
+import { sourceCitationParts, sourceCitationPartIds, sourceCitationLocator } from "./source-citation-parts";
 
 const bindingSchema = z.object({ term: z.string().min(1).max(80), spans: z.array(spanSchema).min(1).max(4) }).strict();
 const operatorsSchema = z.object({ selection: spanSchema.nullable(), extent: spanSchema.nullable(),
@@ -47,7 +47,8 @@ export function propositionSourceTransport(input:ReturnType<typeof propositionSo
     recognizedLoopRoutes:s.recognizedLoopRoutes.map((r,id)=>{
       const claim=s.source.claims.find(c=>c.claimNo===r.claimNo)!,text=claim.segments.map(p=>p.text).join("");
       const parts=sourceCitationParts(claim.segments.map(p=>p.text)),ids=(span:Span)=>sourceCitationPartIds(parts,span);
-      return {id,claimNo:r.claimNo,mode:text.slice(...r.mode),basisParts:ids([Math.min(r.definition[0],r.control[0],r.route[0],r.mode[0]),Math.max(r.definition[1],r.control[1],r.route[1],r.mode[1])]),
+      return {id,claimNo:r.claimNo,mode:text.slice(...r.mode),entryLocator:sourceCitationLocator(text,parts,r.entry),exitLocator:sourceCitationLocator(text,parts,r.exit),
+        basisParts:ids([Math.min(r.definition[0],r.control[0],r.route[0],r.mode[0]),Math.max(r.definition[1],r.control[1],r.route[1],r.mode[1])]),
         routeParts:ids(r.route),exclusionParts:ids(r.definition),controlParts:ids(r.control)};
     }),source:{...s.source,claims:s.source.claims.map(({segments,...c})=>
     // Keep citation IDs beside their exact text. Source extraction must not
