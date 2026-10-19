@@ -26,8 +26,8 @@ describe("comparison-only reasoning",()=>{
     for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"]) {
       expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(8192);
       expect(comparisonOutputTokens({provider:"azure.responses",modelId},"review")).toBe(22528);
-      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"source")).toBe(16384);
-      expect(comparisonProviderOptions({provider:"azure.responses",modelId},"source")?.azure?.reasoningEffort).toBe("low");
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"source")).toBe(22528);
+      expect(comparisonProviderOptions({provider:"azure.responses",modelId},"source")?.azure?.reasoningEffort).toBe("medium");
     }
     for(const provider of ["openai.responses","google.generative-ai","unknown"])
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"})).toBe(8192);
@@ -35,6 +35,7 @@ describe("comparison-only reasoning",()=>{
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"review")).toBe(8192);
     for(const provider of ["openai.responses","google.generative-ai","unknown"])
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"source")).toBe(8192);
+    expect(comparisonProviderOptions({provider:"openai.responses",modelId:"gpt-5.4"},"source")).toEqual({openai:{reasoningEffort:"low"}});
     for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini","patentai-gpt54-mini"])
       for(const phase of ["generation","source","review"] as const)
         expect(comparisonOutputTokens({provider:"azure.responses",modelId},phase)).toBe(8192);

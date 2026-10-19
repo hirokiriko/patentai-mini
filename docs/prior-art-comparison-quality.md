@@ -797,3 +797,36 @@ DB自動拡張なし、Blob Hot/LRSは見積内だが、実行直前の再確認
 [PostgreSQL backup](https://learn.microsoft.com/en-us/azure/postgresql/backup-restore/concepts-backup-restore)、
 [Monitor料金](https://azure.microsoft.com/en-us/pricing/details/monitor/)、
 [転送料金](https://azure.microsoft.com/en-us/pricing/details/bandwidth/)。
+
+## 原文抽出の推論量と次の単発実証案（2026-10-20、未承認）
+
+前記1316円programは第2診断の確定品質不合格で終了した。応答・usageは確定し、
+追加実費33.17050円、新UNKNOWNは0。明示IDの参照ずれは解消した一方、
+不成立引用4件、必須循環経路の終点不一致、参照請求項の条件付き制御の欠落が残る。
+未使用枠は再利用しない。全原文と77引用・22命題をroot＋独立Local2名で確認した。
+
+限定修正は既知Azure GPT-5.4の比較専用normal・正確な原文抽出taskだけを
+medium/22528へ変更する。legacy lowの16384制限、生成low/8192、査読low/22528、
+他provider/managed/fast、入力90000 B、正常3call、210/230/240秒は維持する。
+全claimを順に読み、祖先自身の引用、条件付き作用、経路の最後の帰還まで確認する指示を整理した。
+wire4の完全一致・同claim・ID・未使用引用・全loop検証を緩和せず、意味や引用を補完しない。
+前回は出力上限到達ではない。増枠はmedium推論と回答の共有容量を確保するもので、
+意味改善を証明しない。全条件の自動網羅検査は未実装で、実AI全件の原文QAを引き続き必須にする。
+
+新案は独立した1操作、診断2call＋全件QA合格時だけ正常3call、最大5送信・再試行0。
+入力上限55000/71000/55000/55000/88000、出力22528/22528/22528/8192/22528、
+effortはmedium/low/medium/low/low。無通信SDK測定の保守上界は
+52487/70589/52487/54828/87550 B。段階予約210/227/210/115/246円、合計1008円を全確保する。
+確定品質FAILを含むすべての失敗、incomplete/UNKNOWN/timeout/ACK・write不明で後続停止。
+新UUIDや再起動による再発行は許可しない。旧programの診断・正常枠は復活させない。
+
+配備後の1案件・公開3TXT4組・正常1回・最大3call・再送0と、全件QA・保存/再表示・
+全PDF/CSV・再取得AI0・対象限定cleanupは前記案を維持する。原文medium/22528への変更で
+全段階入力90000 Bによる予約は248/154/248円＝650円。非AI150円と合わせ800円（旧案比40円増）。
+usageの帰属が不明ならAI650円を全額保持する。非AI数量・30日残存分・停止条件は変更しない。
+
+既知1154.82565円＋旧UNKNOWN2412円＝3566.82565円を保持し、Local1008円＋本番AI650円で
+AI上界5224.82565円、配備/rollback1400円＋本番非AI150円込み総6774.82565円。
+承認済み上限5421/6971円、期限2026-10-20 23:59 JST、通常枠とJob0は据置。
+必要な追加判断は新単発Local操作、source設定変更、本番予約40円増と最終headへの正規整合。
+本記録は実行許可ではなく、真正な新承認と現head/CI/独立レビュー・保護policyの照合を要する。

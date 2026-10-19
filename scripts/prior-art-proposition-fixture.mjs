@@ -15,7 +15,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(!input||[1,2,3].includes(value.locatorVersion))return flattenGuards(value);
+  if(!input||[1,2,3,4].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
     const locators=[];
     const add=(range,claimNo)=>{

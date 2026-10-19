@@ -181,21 +181,40 @@ describe("comparison-only time capability", () => {
     await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).resolves.toHaveProperty("status",200);
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it.each(["ordinary","managed","fast","unknown","mini","medium","missing","generation","excess","malformed","ambiguous"])("keeps the source allowance unavailable for %s",async mode=>{
+  it.each(["ordinary","managed","fast","unknown","mini","high","missing","generation","excess","malformed","ambiguous"])("keeps the source allowance unavailable for %s",async mode=>{
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
     const user={role:"user",content:JSON.stringify({task:mode==="generation"?"compare":"extract_source_propositions"})};
     const body={...JSON.parse(init().body),model:mode==="unknown"?"custom-alias":mode==="mini"?"patentai-gpt54-mini":"patentai-gpt54",
-      reasoning:mode==="missing"?undefined:{effort:mode==="medium"?"medium":"low"},max_output_tokens:mode==="excess"?16385:8193,
+      reasoning:mode==="missing"?undefined:{effort:mode==="high"?"high":"low"},max_output_tokens:mode==="excess"?16385:8193,
       input:mode==="malformed"?[{role:"user",content:"not json"}]:mode==="ambiguous"?[user,user]:[user]};
     const send=()=>boundedAzureFetch(mode==="fast"?"fast":"normal")(url,{...init(),body:JSON.stringify(body)});
     const run=()=>mode==="ordinary"?withAiOperationBudget({normal:1,fast:0},send):mode==="managed"?
       withManagedWatchBudget({consumed:0,deadlineAt:Date.now()+100000,journal:{reserve:vi.fn(async()=>undefined),reconcile:vi.fn(async()=>undefined)}},send):withPriorArtComparisonBudget(send);
     await expect(run()).rejects.toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
   });
-  it("stops and never retries excess source usage",async()=>{
-    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:16385}));vi.stubGlobal("fetch",transport);
-    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),model:"patentai-gpt54",reasoning:{effort:"low"},
-      input:[{role:"user",content:JSON.stringify({task:"extract_source_propositions"})}],max_output_tokens:16384})};
+  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("allows medium source reasoning within its dedicated allowance: %s",async model=>{
+    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:22528}));vi.stubGlobal("fetch",transport);
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),model,reasoning:{effort:"medium"},
+      input:[{role:"user",content:JSON.stringify({task:"extract_source_propositions"})}],max_output_tokens:22528})};
+    await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).resolves.toHaveProperty("status",200);
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it.each(["ordinary","managed","fast","unknown","mini","low","high","missing","generation","excess","malformed","ambiguous"])("does not broaden medium source allowance to %s",async mode=>{
+    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
+    const user={role:"user",content:JSON.stringify({task:mode==="generation"?"compare":"extract_source_propositions"})};
+    const body={...JSON.parse(init().body),model:mode==="unknown"?"custom-alias":mode==="mini"?"patentai-gpt54-mini":"patentai-gpt54",
+      reasoning:mode==="missing"?undefined:{effort:["low","high"].includes(mode)?mode:"medium"},max_output_tokens:mode==="excess"?22529:22528,
+      input:mode==="malformed"?[{role:"user",content:"not json"}]:mode==="ambiguous"?[user,user]:[user]};
+    const send=()=>boundedAzureFetch(mode==="fast"?"fast":"normal")(url,{...init(),body:JSON.stringify(body)});
+    const run=()=>mode==="ordinary"?withAiOperationBudget({normal:1,fast:0},send):mode==="managed"?
+      withManagedWatchBudget({consumed:0,deadlineAt:Date.now()+100000,journal:{reserve:vi.fn(async()=>undefined),reconcile:vi.fn(async()=>undefined)}},send):withPriorArtComparisonBudget(send);
+    await expect(run()).rejects.toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
+  });
+  it.each(["low","medium"])("stops and never retries excess source usage with %s reasoning",async effort=>{
+    const cap=effort==="medium"?22528:16384;
+    const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:cap+1}));vi.stubGlobal("fetch",transport);
+    const request={...init(),body:JSON.stringify({...JSON.parse(init().body),model:"patentai-gpt54",reasoning:{effort},
+      input:[{role:"user",content:JSON.stringify({task:"extract_source_propositions"})}],max_output_tokens:cap})};
     await withPriorArtComparisonBudget(async()=>{
       const send=boundedAzureFetch("normal");await expect(send(url,request)).rejects.toThrow("ai_operation_stopped");
       await expect(send(url,request)).rejects.toThrow("ai_operation_stopped");
