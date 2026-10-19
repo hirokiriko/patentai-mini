@@ -757,11 +757,13 @@ it("never restores a used V2 forward by obtaining new V3 authority", async () =>
 });
 it("cannot remove a V3 non-AI hold through later V2 rollback authority", async () => {
   const f = issue150Fixture(3); await f.admit(f.forward, { ...f.preflight, aiExposureYen: 4000 });
+  const result = f.put({ ...f.result, forwardRequestDigest: f.current().operations.find(o => o.operationId === f.forward.operationId)!.requestDigest });
   const owner = f.put({ scope: "FICTIONAL_DOWNGRADED_APPROVAL" }), rollback = f.rollbackStep();
   const step: ManagedReleaseStep = { ...rollback, issue150Integration: { ...f.approval,
     scope: "ISSUE150_INTEGRATION_V2", approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z",
     forwardOperationId: f.forward.operationId, ownerApprovalDigest: owner.digest } };
-  const facts = { ...f.rollbackFacts, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V2", ownerApprovalDigest: owner.digest, aiExposureYen: 4000 };
+  const facts = { ...f.rollbackFacts, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V2", ownerApprovalDigest: owner.digest,
+    aiExposureYen: 4000, forwardResultDigest: result.digest };
   delete facts.productionNonAiReserveYen;
   await expect(f.store.applyReviewedAdministration(f.reviewed(step, facts).digest, f.pins)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(1);
