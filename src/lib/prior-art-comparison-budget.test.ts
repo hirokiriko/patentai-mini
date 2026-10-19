@@ -192,12 +192,12 @@ describe("comparison-only time capability", () => {
       withManagedWatchBudget({consumed:0,deadlineAt:Date.now()+100000,journal:{reserve:vi.fn(async()=>undefined),reconcile:vi.fn(async()=>undefined)}},send):withPriorArtComparisonBudget(send);
     await expect(run()).rejects.toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
   });
-  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("allows medium source reasoning within its dedicated allowance: %s",async model=>{
+  it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("rejects the retired larger medium source request before transport: %s",async model=>{
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:22528}));vi.stubGlobal("fetch",transport);
     const request={...init(),body:JSON.stringify({...JSON.parse(init().body),model,reasoning:{effort:"medium"},
       input:[{role:"user",content:JSON.stringify({task:"extract_source_propositions"})}],max_output_tokens:22528})};
-    await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).resolves.toHaveProperty("status",200);
-    expect(transport).toHaveBeenCalledTimes(1);
+    await expect(withPriorArtComparisonBudget(()=>boundedAzureFetch("normal")(url,request))).rejects.toThrow("ai_operation_stopped");
+    expect(transport).not.toHaveBeenCalled();
   });
   it.each(["ordinary","managed","fast","unknown","mini","low","high","missing","generation","excess","malformed","ambiguous"])("does not broaden medium source allowance to %s",async mode=>{
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
@@ -211,7 +211,7 @@ describe("comparison-only time capability", () => {
     await expect(run()).rejects.toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
   });
   it.each(["low","medium"])("stops and never retries excess source usage with %s reasoning",async effort=>{
-    const cap=effort==="medium"?22528:16384;
+    const cap=16384;
     const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response({input_tokens:100,output_tokens:cap+1}));vi.stubGlobal("fetch",transport);
     const request={...init(),body:JSON.stringify({...JSON.parse(init().body),model:"patentai-gpt54",reasoning:{effort},
       input:[{role:"user",content:JSON.stringify({task:"extract_source_propositions"})}],max_output_tokens:cap})};

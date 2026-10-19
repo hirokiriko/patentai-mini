@@ -248,8 +248,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
-      expect(body.reasoning).toEqual({effort:phase === "extract_source_propositions" ? "medium" : "low"});
-      expect(body.max_output_tokens).toBe(phase === "review" || phase === "extract_source_propositions" ? 22528 : 8192);
+      expect(body.reasoning).toEqual({effort:"low"});
+      expect(body.max_output_tokens).toBe(phase === "extract_source_propositions" ? 16384 : phase === "review" ? 22528 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
@@ -291,7 +291,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       const current=input.task==="extract_source_propositions"?"source":input.task==="review"?"review":"generation";
       return response(stageAnswer(input),
-        { input_tokens: 100, output_tokens: current===phase ? ({source:22529,generation:8193,review:22529})[phase] : 30 });
+        { input_tokens: 100, output_tokens: current===phase ? ({source:16385,generation:8193,review:22529})[phase] : 30 });
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");

@@ -4,6 +4,6 @@ export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4,
 export type ComparisonPhase = "source" | "generation" | "review";
 export function comparisonOutputTokens(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation"): number {
   const knownAzure=model.provider === "azure.responses" && (model.modelId === "patentai-gpt54" || /^gpt-5\.4(?:-\d{4}-\d{2}-\d{2})?$/.test(model.modelId));
-  return knownAzure&&phase==="source"?LIMITS.azureSourceOutputTokens:
+  return knownAzure&&phase==="source"?LIMITS.azureSourceLowOutputTokens:
     knownAzure&&phase==="review"?LIMITS.azureReasoningOutputTokens:LIMITS.outputTokens;
 }
