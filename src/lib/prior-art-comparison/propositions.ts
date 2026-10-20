@@ -26,7 +26,7 @@ export const meaningSchema = z.discriminatedUnion("kind", [
     extent: z.enum(["segment", "whole", "unresolved"]), relation: z.enum(["route", "precedes"]),
   }).strict(),
   z.object({ ...common, kind: z.literal("relation"),
-    predicate: z.enum(["has", "upstream", "downstream", "inside", "opens", "closes", "maintains", "at_least", "at_most", "greater_than", "less_than"]),
+    predicate: z.enum(["has", "upstream", "downstream", "inside", "opens", "closes", "fully_closes", "generates_heat", "absorbs_heat", "releases_heat", "maintains", "at_least", "at_most", "greater_than", "less_than"]),
     objects: terms.min(1),
   }).strict(),
 ]);

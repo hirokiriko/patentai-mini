@@ -22,7 +22,7 @@ const spans = {
 const wireExtraction = extractionSchema.extend(spans);
 // Source terms are quoted once. The model selects their locators for semantic
 // roles instead of independently repeating a term and a purported binding.
-const termRefs=z.array(index).min(1).max(4),termLists=z.array(termRefs).max(12);
+const termRefs=z.array(index).min(1).max(4).meta({id:"PriorArtSourceTerm"}),termLists=z.array(termRefs).max(12);
 const boundCommon={
   subject:termRefs.nullable(),context:meaningSchema.options[0].shape.context,
   guard:z.object({relation:guardSchema.shape.relation,conditions:termLists}).strict().meta({id:"PriorArtGuard"}),
@@ -108,16 +108,23 @@ function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const schema=z.object({locatorVersion:z.literal(4),sources:z.array(z.object({
+  const fact=boundSourceExtraction.extend({claimNo:z.number().int().positive()}).meta({id:"PriorArtSourceFact"});
+  const schema=z.object({locatorVersion:z.literal(5),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
     locators:z.array(sourceLocator).max(512),
-    facts:z.array(boundSourceExtraction.extend({claimNo:z.number().int().positive()})).max(48),
+    requiredLoops:z.array(fact).max(48).describe("Exactly one independently extracted whole path per recognizedLoopRoutes entry, in its id order; numeric routeFrame is that id. Empty only when that source's inventory is empty."),
+    facts:z.array(fact).max(48).describe("Additional propositions from all reference claims. Do not duplicate requiredLoops or canonical mode sets. Explicit frame or null, never a numeric routeFrame."),
   }).strict()).length(input.sources.length)}).strict();
   const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,{text:c.segments.map(p=>p.text).join(""),parts:sourceCitationParts(c.segments.map(p=>p.text))}])));
   return comparisonModelSchema(schema,raw=>{
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_LOCATOR_MAX_BYTES)throw invalid();
     return local.parse({sources:raw.sources.map((s,i)=>{
       if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
+      // Expose the existing coverage obligation in the generation shape. No
+      // missing path or semantic role is filled from the evidence inventory.
+      if(s.requiredLoops.length!==input.sources[i].recognizedLoopRoutes.length||
+        s.requiredLoops.some((f,id)=>f.routeFrame!==id)||
+        s.facts.some(f=>typeof f.routeFrame==="number")||s.requiredLoops.length+s.facts.length>48)throw invalid();
       const seen=new Set<string>(),used=new Set<number>(),resolved=new Map<number,{claimNo:number;position:Span}>();
       for(const l of s.locators){
         if(resolved.has(l.id))throw invalid();
@@ -129,7 +136,7 @@ export function sourcePropositionModelSchemaFor(chunks:readonly ManagedCompariso
         const key=JSON.stringify([l.claimNo,position]);if(seen.has(key))throw invalid();seen.add(key);
         resolved.set(l.id,{claimNo:l.claimNo,position});
       }
-      const facts=s.facts.map(f=>{
+      const facts=[...s.requiredLoops,...s.facts].map(f=>{
         const claim=originals[i].get(f.claimNo);if(!claim)throw invalid();
         const get=(at:number):Span=>{
           const entry=resolved.get(at);

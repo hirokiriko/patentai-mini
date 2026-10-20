@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compareProposition, explainProposition, meaningSchema, type Meaning, type SourceProposition, type TargetProposition } from "./propositions";
+import { renderMeaning } from "./proposition-result";
 
 const guard = { relation: "unconditional" as const, conditions: [] };
 const set = (subject: string | null, members: string[], selection: "required" | "nonempty" | "one" = "nonempty"): Meaning =>
@@ -12,6 +13,22 @@ const path = (via: string[], bypass: string[]): Meaning => ({kind:"path",subject
   origin:"出口",destination:"入口",via,bypass,extent:"segment",relation:"route"});
 
 describe("position-bound proposition comparison (fictional extraction, not AI quality)",()=>{
+  it.each([
+    ["generates_heat","発熱させる"], ["absorbs_heat","吸熱させる"],
+    ["releases_heat","放熱させる"], ["fully_closes","全閉にする"],
+  ] as const)("retains the exact action and guarded component for %s",(predicate,label)=>{
+    const m:Meaning={kind:"relation",subject:"紫色モード",context:"operation",guard:{relation:"when",conditions:["始動時"]},polarity:"positive",predicate,objects:["試験器"]};
+    expect(meaningSchema.parse(m)).toEqual(m);
+    expect(compareProposition(target(m),[source("s1",m)])).toMatchObject({relation:"entailed",rule:"relation_matches"});
+    expect(renderMeaning(m)).toContain(`試験器${predicate==="absorbs_heat"||predicate==="releases_heat"?"で":"を"}${label}`);
+    expect(renderMeaning({...m,context:"capability"})).toContain("機能を備える");
+    for(const other of ["has","opens","closes","generates_heat","absorbs_heat","releases_heat","fully_closes"] as const){
+      if(other!==predicate)expect(compareProposition(target(m),[source("s1",{...m,predicate:other})]).relation).toBe("unresolved");
+    }
+    expect(compareProposition(target(m),[source("s1",{...m,guard})]).relation).toBe("unresolved");
+    expect(compareProposition(target(m),[source("s1",{...m,objects:["別の試験器"]})]).relation).toBe("unresolved");
+    expect(compareProposition(target(m),[source("s1",{...m,subject:"別モード"})]).relation).toBe("unresolved");
+  });
   it("finds a closed-set omission and derives its reason from the same counterexample",()=>{
     const r=compareProposition(target(set("補助系",["青","黄"])),[source("s1",set("補助系",["青","黄","紫","緑"]))]);
     expect(r).toMatchObject({relation:"contradicted",rule:"closed_set_changed",delta:{missing:["紫","緑"],added:[],counterexample:["紫"]}});

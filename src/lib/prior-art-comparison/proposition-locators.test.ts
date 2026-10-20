@@ -101,7 +101,7 @@ it.each([[0,1.5],[0,-1],[0,1,2]])("does not silently repair invalid numeric coor
 function boundExample(text:string) {
   const f=fictionalInputs();f.inputs.draft=parseComparisonSource("【請求項1】\n"+text,11,"draft-11");
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const wire={locatorVersion:4,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,locators:[] as {id:number;quote:string|null;occurrence:number;claimNo:number;firstPart:number;lastPart:number}[],facts:[] as unknown[]}))};
+  const wire={locatorVersion:5,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,locators:[] as {id:number;quote:string|null;occurrence:number;claimNo:number;firstPart:number;lastPart:number}[],requiredLoops:[],facts:[] as unknown[]}))};
   return {schema:sourcePropositionModelSchemaFor(plan),wire,row:wire.sources[0],plan,input};
 }
 const citation=(quote:string|null,occurrence=0,firstPart=0,lastPart=firstPart,claimNo=1)=>({quote,occurrence,claimNo,firstPart,lastPart});

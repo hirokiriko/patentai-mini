@@ -52,9 +52,11 @@ export function renderMeaning(m:Meaning):string {
   }
   const objects=list(m.objects);
   const action={has:`${objects}を備える`,upstream:`${objects}の上流にある`,downstream:`${objects}の下流にある`,inside:`${objects}内にある`,
-    opens:`${objects}を開く`,closes:`${objects}を閉じる`,maintains:`${objects}を維持する`,at_least:`${objects}以上である`,
+    opens:`${objects}を開く`,closes:`${objects}を閉じる`,fully_closes:`${objects}を全閉にする`,
+    generates_heat:`${objects}を発熱させる`,absorbs_heat:`${objects}で吸熱させる`,releases_heat:`${objects}で放熱させる`,
+    maintains:`${objects}を維持する`,at_least:`${objects}以上である`,
     at_most:`${objects}以下である`,greater_than:`${objects}を超える`,less_than:`${objects}を下回る`}[m.predicate];
-  const capability=m.context==="capability"&&["opens","closes","maintains"].includes(m.predicate)?"機能を備える":"";
+  const capability=m.context==="capability"&&["opens","closes","fully_closes","generates_heat","absorbs_heat","releases_heat","maintains"].includes(m.predicate)?"機能を備える":"";
   return `${context}${condition}${subject}は${action}${capability}`;
 }
 
