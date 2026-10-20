@@ -25,19 +25,28 @@ const wireExtraction = extractionSchema.extend(spans);
 // roles instead of independently repeating a term and a purported binding.
 const termRefs=z.array(index).min(1).max(4).meta({id:"PriorArtSourceTerm"}),termLists=z.array(termRefs).max(12);
 const boundCommon={
-  subject:termRefs.nullable(),context:meaningSchema.options[0].shape.context,
+  subject:termRefs.nullable().describe("Catalog rr uses its MODE, not its inlet. Other paths/actions use their printed subject, else null."),
+  context:meaningSchema.options[0].shape.context,
   guard:z.object({relation:guardSchema.shape.relation,conditions:termLists}).strict().meta({id:"PriorArtGuard"}),
   polarity:meaningSchema.options[0].shape.polarity,
 };
 const boundMeaning=z.discriminatedUnion("kind",[
   meaningSchema.options[0].extend({...boundCommon,members:termLists.min(1)}),
-  meaningSchema.options[1].extend({...boundCommon,origin:termRefs.nullable(),destination:termRefs.nullable(),via:termLists,bypass:termLists}),
-  meaningSchema.options[2].extend({...boundCommon,objects:termLists.min(1)}),
+  meaningSchema.options[1].extend({...boundCommon,origin:termRefs.nullable(),destination:termRefs.nullable(),
+    via:termLists.describe("Ordered traversed components, including a bypass PIPE when traversed."),
+    bypass:termLists.describe("Excluded components, not the traversed bypass pipe. A node visited elsewhere is not excluded from the whole route.")}),
+  meaningSchema.options[2].extend({...boundCommon,objects:termLists.min(1).describe("Component nouns for valve/thermal actions; not action clauses. Other relations retain their actual operands.")}),
 ]);
 const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning,
-  routeFrame:z.union([index,spans.routeFrame.unwrap()]).nullable()});
-const sourceLocator=z.object({quote:locator.shape.quote.nullable(),occurrence:index}).strict();
-const sourceBasis=z.object({firstPart:index,lastPart:index}).strict();
+  routeFrame:z.union([index,spans.routeFrame.unwrap().extend({
+    route:index.describe("Complete route clause through the final explicit endpoint (return only if printed), not a mode name."),
+  })]).nullable()});
+const sourceLocator=z.object({
+  quote:locator.shape.quote.nullable(),
+  occurrence:index.describe("Zero-based exact-match count within THIS fact's bb, not the full claim. null quote requires 0."),
+}).strict();
+const sourceBasis=z.object({firstPart:index,lastPart:index}).strict()
+  .describe("One inclusive part range containing ALL evidence, including the named mode and complete guard/control.");
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
   reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
@@ -110,16 +119,17 @@ function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
   const fact=z.object({basis:sourceBasis,
-    locators:z.array(sourceLocator).max(512),meaning:boundSourceExtraction.shape.meaning,
+    locators:z.array(sourceLocator).max(512).describe("Referenced locations only; bb holds prose, numeric rf supplies its frame."),
+    meaning:boundSourceExtraction.shape.meaning,
     operators:boundSourceExtraction.shape.operators,routeFrame:boundSourceExtraction.shape.routeFrame,
   }).strict().meta({id:"PriorArtSourceFact"});
   const reading=z.object({claimNo:z.number().int().positive(),
-    requiredLoops:z.array(fact).max(48).describe("One independently extracted whole path for each recognizedLoopRoutes entry in THIS claim, in source inventory order. numeric routeFrame is the original inventory id."),
-    facts:z.array(fact).max(48).describe("Additional literal propositions in THIS claim. Read all its routes, actions, capabilities and conditions. canonicalModeSets omits only identical set propositions, not other content in their declaration. Explicit frame or null, never numeric routeFrame. Never invent a predicate for unrepresentable content."),
+    requiredLoops:z.array(fact).max(48).describe("One independent whole path per this claim's catalog entry, in order. rf=id, subject=MODE, bb covers all basisParts."),
+    facts:z.array(fact).max(48).describe("Other literal routes/actions/conditions beyond identical canonical sets. rf explicit or null, never numeric. No substitute predicates."),
   }).strict();
   const schema=z.object({locatorVersion:z.literal(8),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
-    claims:z.array(reading).describe("Every input claim exactly once in input order, including ancestors. Each fact owns its basis and locator array; never borrow an index from another fact."),
+    claims:z.array(reading).describe("Every input claim once in order, ancestors included. Fact indexes never cross facts."),
   }).strict()).length(input.sources.length)}).strict();
   const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,{text:c.segments.map(p=>p.text).join(""),parts:sourceCitationParts(c.segments.map(p=>p.text))}])));
   return sourceWireSchema(comparisonModelSchema(schema,raw=>{
