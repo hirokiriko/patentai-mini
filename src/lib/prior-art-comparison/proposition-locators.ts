@@ -36,8 +36,7 @@ const boundMeaning=z.discriminatedUnion("kind",[
 ]);
 const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning,
   routeFrame:z.union([index,spans.routeFrame.unwrap()]).nullable()});
-const sourceLocator=z.object({basisIndex:index.max(11),
-  quote:locator.shape.quote.nullable(),occurrence:index}).strict();
+const sourceLocator=z.object({quote:locator.shape.quote.nullable(),occurrence:index}).strict();
 const sourceBasis=z.object({firstPart:index,lastPart:index}).strict();
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
@@ -110,15 +109,15 @@ function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const fact=z.object({basis:z.array(sourceBasis).min(1).max(12),
+  const fact=z.object({basis:sourceBasis,
     locators:z.array(sourceLocator).max(512),meaning:boundSourceExtraction.shape.meaning,
     operators:boundSourceExtraction.shape.operators,routeFrame:boundSourceExtraction.shape.routeFrame,
   }).strict().meta({id:"PriorArtSourceFact"});
   const reading=z.object({claimNo:z.number().int().positive(),
     requiredLoops:z.array(fact).max(48).describe("One independently extracted whole path for each recognizedLoopRoutes entry in THIS claim, in source inventory order. numeric routeFrame is the original inventory id."),
-    facts:z.array(fact).max(48).describe("Additional literal propositions in THIS claim. Explicit frame or null, never numeric routeFrame. Canonical-only or unrepresentable content may yield no additional facts; never invent one."),
+    facts:z.array(fact).max(48).describe("Additional literal propositions in THIS claim. Read all its routes, actions, capabilities and conditions. canonicalModeSets omits only identical set propositions, not other content in their declaration. Explicit frame or null, never numeric routeFrame. Never invent a predicate for unrepresentable content."),
   }).strict();
-  const schema=z.object({locatorVersion:z.literal(7),sources:z.array(z.object({
+  const schema=z.object({locatorVersion:z.literal(8),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
     claims:z.array(reading).describe("Every input claim exactly once in input order, including ancestors. Each fact owns its basis and locator array; never borrow an index from another fact."),
   }).strict()).length(input.sources.length)}).strict();
@@ -136,11 +135,12 @@ export function sourcePropositionModelSchemaFor(chunks:readonly ManagedCompariso
       if(c.requiredLoops.length!==loops.length||c.requiredLoops.some((f,n)=>f.routeFrame!==loops[n].id)||
         c.facts.some(f=>typeof f.routeFrame==="number"))throw invalid();
       const facts=[...c.requiredLoops,...c.facts].map(f=>{
-        // Resolve within exactly one model-selected range, never across gaps.
-        const basis=f.basis.map(b=>sourceCitationRange(claim.parts,b.firstPart,b.lastPart));
+        // The model chooses one complete contiguous range. No second address
+        // space, union across gaps, or automatic expansion after a failed quote.
+        const range=sourceCitationRange(claim.parts,f.basis.firstPart,f.basis.lastPart);
+        const basis=[range];
         const seen=new Set<string>(),used=new Set<number>();
         const resolved=f.locators.map(l=>{
-          const range=basis[l.basisIndex];if(!range)throw invalid();
           const [a,b]=range;
           if(l.quote===null&&l.occurrence!==0)throw invalid();
           const position:Span=l.quote===null?[a,b]:resolvePropositionQuote(claim.text.slice(a,b),l.quote,l.occurrence).map(n=>n+a) as Span;

@@ -30,12 +30,20 @@ const managedIssue150IntegrationV3Schema = managedIssue150IntegrationV1Schema.ex
   scope: z.literal("ISSUE150_INTEGRATION_V3"), approvedAt: z.iso.datetime(),
   validUntil: z.literal("2026-10-20T14:59:00Z"),
 }).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
-export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema]);
+// Pending V4 keeps every historical approval byte/ceiling unchanged. Admission
+// still requires a fresh independently signed owner approval and preflight.
+const managedIssue150IntegrationV4Schema = managedIssue150IntegrationV1Schema.extend({
+  scope: z.literal("ISSUE150_INTEGRATION_V4"), approvedAt: z.iso.datetime(),
+  validUntil: z.literal("2026-10-20T14:59:00Z"),
+}).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
+export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema]);
 export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [managedIssue150PreflightV1Schema,
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V2"),
     aiExposureYen: yen.max(4843), rollbackReserveYen: yen.max(1400) }),
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V3"),
-    aiExposureYen: yen.max(5421), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
+    aiExposureYen: yen.max(5421), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
+  managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V4"),
+    aiExposureYen: yen.max(5437), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
 export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
   forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
   prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,

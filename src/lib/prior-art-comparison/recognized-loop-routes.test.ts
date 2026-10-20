@@ -122,7 +122,7 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="partial")fact.meaning.extent="segment";
   if(mode==="precedes")fact.meaning.relation="precedes";
   if(mode==="non_path"){const m=fact.meaning;fact.meaning={kind:"relation",subject:m.subject,context:m.context,guardRelation:m.guardRelation,guardConditions:m.guardConditions,polarity:m.polarity,predicate:"has",objects:[m.origin]};}
-  if(mode==="basis_missing")fact.basis=[{firstPart:0,lastPart:0}];
+  if(mode==="basis_missing")fact.basis={firstPart:0,lastPart:0};
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(fixtureCompactSource(wire))).success).toBe(false);
 });
 it.each(["missing", "duplicate", "reordered", "in_facts", "numeric_extra", "combined_limit", "unexpected", "legacy_v5"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{

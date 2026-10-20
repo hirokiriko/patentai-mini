@@ -2,9 +2,9 @@
 // plumbing only and must never be reported as real-model extraction quality.
 const fixtureInputs = new WeakMap();
 const withInput = (value,input) => { fixtureInputs.set(value,input);return value; };
-// Independent test spelling of source v7; production codecs are not imported.
+// Independent test spelling of source v8; production codecs are not imported.
 const sourceNames={locatorVersion:"v",sources:"ss",sourceDigest:"sd",claims:"cc",claimNo:"cn",
-  requiredLoops:"rr",facts:"ff",basis:"bb",firstPart:"fp",lastPart:"lp",locators:"ll",basisIndex:"bi",
+  requiredLoops:"rr",facts:"ff",basis:"bb",firstPart:"fp",lastPart:"lp",locators:"ll",
   quote:"q",occurrence:"o",meaning:"mm",operators:"op",routeFrame:"rf",subject:"su",context:"cx",
   guardRelation:"gr",guardConditions:"gc",polarity:"po",kind:"ki",selection:"se",extent:"ex",
   members:"me",origin:"or",destination:"de",via:"vi",bypass:"by",relation:"re",predicate:"pr",
@@ -30,8 +30,8 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(value.locatorVersion===7)return fixtureCompactSource(value);
-  if(!input||[1,2,3,4,5,6].includes(value.locatorVersion))return flattenGuards(value);
+  if(value.locatorVersion===8)return fixtureCompactSource(value);
+  if(!input||[1,2,3,4,5,6,7].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
     const locators=[];
     const add=(range,claimNo)=>{
@@ -59,7 +59,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return fixtureCompactSource({locatorVersion:7,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return fixtureCompactSource({locatorVersion:8,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
@@ -69,26 +69,27 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     let at=0;const ranges=parts(c.claimNo).map(text=>{const start=at;at+=text.length;return[start,at];});
     const facts=s.facts.filter(f=>f.claimNo===c.claimNo).map(f=>{
       const text=parts(c.claimNo).join(""),locators=[],positions=[];
+      if(f.basis.length!==1)throw Error("fictional_basis_requires_single_range");
+      const selected=f.basis[0];
+      if(!Array.isArray(selected)||selected.length!==2||selected.some(n=>!Number.isSafeInteger(n))||
+        selected[0]<0||selected[1]<=selected[0]||selected[1]>at)throw Error("fictional_locator_invalid");
+      const firstPart=ranges.findIndex(r=>r[0]===selected[0]),lastPart=ranges.findIndex(r=>r[1]===selected[1]);
+      if(firstPart<0||lastPart<firstPart)throw Error("fictional_basis_not_part_range");
+      const basis={firstPart,lastPart};
       const add=range=>{
         if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||
           range[0]<0||range[1]<=range[0]||range[1]>text.length)throw Error("fictional_locator_invalid");
         const prior=positions.findIndex(r=>r[0]===range[0]&&r[1]===range[1]);if(prior>=0)return prior;
-        const basisIndex=f.basis.findIndex(([a,b])=>range[0]>=a&&range[1]<=b);
-        if(basisIndex<0)throw Error("fictional_locator_outside_basis");
-        const [a,b]=f.basis[basisIndex],quote=text.slice(...range),anchor=text.slice(a,b);
+        const [a,b]=selected;
+        if(range[0]<a||range[1]>b)throw Error("fictional_locator_outside_basis");
+        const quote=text.slice(...range),anchor=text.slice(a,b);
         if(!quote.length)throw Error("fictional_locator_invalid");
         let occurrence=0,p=anchor.indexOf(quote);
         while(p>=0&&p<range[0]-a){occurrence++;p=anchor.indexOf(quote,p+1);}
         if(p!==range[0]-a)throw Error("fictional_locator_invalid");
-        positions.push(range);locators.push({basisIndex,quote,occurrence});return locators.length-1;
+        positions.push(range);locators.push({quote,occurrence});return locators.length-1;
       };
       const encoded=fact({...f,basis:[],bindings:[]},add),m=f.meaning;
-      const basis=f.basis.map(range=>{
-        if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||range[0]<0||range[1]<=range[0]||range[1]>at)throw Error("fictional_locator_invalid");
-        const firstPart=ranges.findIndex(r=>r[0]===range[0]),lastPart=ranges.findIndex(r=>r[1]===range[1]);
-        if(firstPart<0||lastPart<firstPart)throw Error("fictional_basis_not_part_range");
-        return {firstPart,lastPart};
-      });
       const usedTerms=new Set();
       if(new Set(f.bindings.map(b=>b.term)).size!==f.bindings.length)throw Error("fictional_binding_duplicate");
       const term=value=>{

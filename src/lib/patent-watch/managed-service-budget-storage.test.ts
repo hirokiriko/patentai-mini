@@ -626,7 +626,7 @@ function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseSt
     remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
     ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
 }
-function issue150Fixture(version: 1 | 2 | 3 = 1) {
+function issue150Fixture(version: 1 | 2 | 3 | 4 = 1) {
   const f = executionFixture(), now = version >= 2 ? "2026-10-19T12:00:00Z" : "2026-10-17T12:00:00Z";
   vi.setSystemTime(new Date(now)); f.setDate(new Date(now).toUTCString());
   const put = (value: unknown) => {
@@ -650,7 +650,7 @@ function issue150Fixture(version: 1 | 2 | 3 = 1) {
   const pins = { publicKeySpkiBase64: der.toString("base64"), publicKeySha256: sha256(der),
     ownerBindingHash: f.binding.ownerBindingHash, targetBindingHash: f.binding.targetBindingHash, productionGoDigest: hash(1599) };
   const approval: NonNullable<ManagedReleaseStep["issue150Integration"]> = version >= 2 ? {
-    scope: version === 3 ? "ISSUE150_INTEGRATION_V3" : "ISSUE150_INTEGRATION_V2", ownerApprovalDigest: owner.digest, profileDigest,
+    scope: version === 4 ? "ISSUE150_INTEGRATION_V4" : version === 3 ? "ISSUE150_INTEGRATION_V3" : "ISSUE150_INTEGRATION_V2", ownerApprovalDigest: owner.digest, profileDigest,
     approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", forwardOperationId: null } : {
     scope: "ISSUE150_INTEGRATION_V1", ownerApprovalDigest: owner.digest, profileDigest,
     approvedAt: "2026-10-17T06:41:40Z", validUntil: "2026-10-18T06:41:40Z", forwardOperationId: null };
@@ -658,8 +658,8 @@ function issue150Fixture(version: 1 | 2 | 3 = 1) {
     issue150Integration: approval };
   const preflight = { scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${version}`, ownerApprovalDigest: owner.digest,
     technicalGoHeadSha: forward.headSha, technicalGoTreeSha: forward.treeSha, baseTreeSha: "d".repeat(40),
-    aiExposureYen: version === 3 ? 5421 : version === 2 ? 4843 : 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null,
-    ...(version === 3 ? { productionNonAiReserveYen: 150 } : {}) };
+    aiExposureYen: version === 4 ? 5437 : version === 3 ? 5421 : version === 2 ? 4843 : 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null,
+    ...(version >= 3 ? { productionNonAiReserveYen: 150 } : {}) };
   forward.preflightDigest = put(preflight).digest;
   const signReview = (action: ManagedAdministrationReview["action"], sources: ManagedAdministrationReview["sources"], changes: Partial<ManagedAdministrationReview> = {}) => {
     const current = f.current(), review = managedAdministrationReviewSchema.parse({ schema: 1,
@@ -702,7 +702,7 @@ function issue150Fixture(version: 1 | 2 | 3 = 1) {
   };
   return { ...f, put, profile, pins, approval, forward, preflight, reviewed, admit, rollbackStep, rollbackFacts, result, resultSource, signReview };
 }
-it.each([1, 2, 3] as const)("admits only the signed Issue150 V%s forward and exact revert push/open/merge lineage", async version => {
+it.each([1, 2, 3, 4] as const)("admits only the signed Issue150 V%s forward and exact revert push/open/merge lineage", async version => {
   const f = issue150Fixture(version), before = f.current(); await f.admit();
   const push = f.rollbackStep(); await f.admit(push, f.rollbackFacts);
   await f.admit(f.rollbackStep("pr-open"), f.rollbackFacts);
@@ -720,14 +720,14 @@ it("admits the exact V2 AI and combined release ceilings", async () => {
   await f.admit({ ...f.forward, reservationYen: 900 });
   expect(f.current().operations.at(-1)?.reservationYen).toBe(900);
 });
-it("admits V3 only with its signed non-AI reserve and exact combined ceilings", async () => {
-  const f = issue150Fixture(3);
+it.each([3,4] as const)("admits V%s only with its signed non-AI reserve and exact combined ceilings", async version => {
+  const f = issue150Fixture(version);
   await f.admit({ ...f.forward, reservationYen: 900 });
   expect(f.current().operations.at(-1)?.reservationYen).toBe(900);
 });
-it.each(["ai", "release", "rollback", "missing-non-ai", "smaller-non-ai", "pool", "expiry"])("rejects invalid V3 %s before CAS", async reason => {
-  const f = issue150Fixture(3), step = { ...f.forward, reservationYen: 900 }, facts = { ...f.preflight };
-  if (reason === "ai") facts.aiExposureYen = 5422;
+it.each(([3,4] as const).flatMap(version=>["ai", "release", "rollback", "missing-non-ai", "smaller-non-ai", "pool", "expiry"].map(reason=>({version,reason}))))("rejects invalid V$version $reason before CAS", async ({version,reason}) => {
+  const f = issue150Fixture(version), step = { ...f.forward, reservationYen: 900 }, facts = { ...f.preflight };
+  if (reason === "ai") facts.aiExposureYen++;
   if (reason === "release") step.reservationYen = 901;
   if (reason === "rollback") facts.rollbackReserveYen = 1401;
   if (reason === "missing-non-ai") delete facts.productionNonAiReserveYen;
@@ -738,9 +738,9 @@ it.each(["ai", "release", "rollback", "missing-non-ai", "smaller-non-ai", "pool"
   await expect(f.store.applyReviewedAdministration(r.digest, f.pins)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);
 });
-it.each([[1,2],[1,3],[2,1],[2,3],[3,1],[3,2]] as const)("rejects V%i authority with V%i preflight before CAS", async (authority, preflightVersion) => {
+it.each([[1,2],[1,3],[2,1],[2,3],[3,1],[3,2],[1,4],[2,4],[3,4],[4,1],[4,2],[4,3]] as const)("rejects V%i authority with V%i preflight before CAS", async (authority, preflightVersion) => {
   const f = issue150Fixture(authority), facts = { ...f.preflight, scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${preflightVersion}`, aiExposureYen: 2000 };
-  if (preflightVersion === 3) facts.productionNonAiReserveYen = 150;
+  if (preflightVersion >= 3) facts.productionNonAiReserveYen = 150;
   else delete facts.productionNonAiReserveYen;
   const r = f.reviewed(f.forward, facts);
   await expect(f.store.applyReviewedAdministration(r.digest, f.pins)).rejects.toThrow();
@@ -752,6 +752,43 @@ it("never restores a used V2 forward by obtaining new V3 authority", async () =>
   const step: ManagedReleaseStep = { ...f.forward, operationId: randomUUID(), issue150Integration: {
     ...f.approval, scope: "ISSUE150_INTEGRATION_V3", approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", ownerApprovalDigest: owner.digest } };
   const facts = { ...f.preflight, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V3", ownerApprovalDigest: owner.digest, aiExposureYen: 5421, productionNonAiReserveYen: 150 };
+  await expect(f.store.applyReviewedAdministration(f.reviewed(step, facts).digest, f.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(1);
+});
+it("never restores a used V3 forward with a new V4 signature", async () => {
+  const f = issue150Fixture(3); await f.admit();
+  const owner = f.put({ scope: "FICTIONAL_NEW_V4_APPROVAL" });
+  const step: ManagedReleaseStep = { ...f.forward, operationId: randomUUID(), issue150Integration: {
+    ...f.approval, scope: "ISSUE150_INTEGRATION_V4", approvedAt: "2026-10-19T00:00:00Z",
+    validUntil: "2026-10-20T14:59:00Z", ownerApprovalDigest: owner.digest } };
+  const facts = { ...f.preflight, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V4",
+    ownerApprovalDigest: owner.digest, aiExposureYen: 5437 };
+  await expect(f.store.applyReviewedAdministration(f.reviewed(step, facts).digest, f.pins)).rejects.toThrow();
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(1);
+});
+it("permits signed V3-to-V4 recovery with the original lineage and retained holds", async () => {
+  const f = issue150Fixture(3); await f.admit();
+  const owner = f.put({ scope: "FICTIONAL_V4_RECOVERY_APPROVAL" });
+  const step: ManagedReleaseStep = { ...f.rollbackStep(), issue150Integration: {
+    ...f.approval, scope: "ISSUE150_INTEGRATION_V4", approvedAt: "2026-10-19T00:00:00Z",
+    validUntil: "2026-10-20T14:59:00Z", ownerApprovalDigest: owner.digest, forwardOperationId: f.forward.operationId } };
+  const facts = { ...f.rollbackFacts, scope: "ISSUE150_INTEGRATION_PREFLIGHT_V4",
+    ownerApprovalDigest: owner.digest, aiExposureYen: 5437 };
+  await f.admit(step, facts);
+  expect(f.current().operations).toHaveLength(2);
+  expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(2);
+});
+it.each([2,3] as const)("rejects V4-to-V%s downgrade even when exposure and lineage match", async version => {
+  const f = issue150Fixture(4); await f.admit(f.forward, { ...f.preflight, aiExposureYen: 4000 });
+  const result = f.put({ ...f.result, forwardRequestDigest: f.current().operations.find(o => o.operationId === f.forward.operationId)!.requestDigest });
+  const owner = f.put({ scope: "FICTIONAL_DOWNGRADED_V4_AUTHORITY" });
+  const step: ManagedReleaseStep = { ...f.rollbackStep(), issue150Integration: { ...f.approval,
+    scope: version === 3 ? "ISSUE150_INTEGRATION_V3" : "ISSUE150_INTEGRATION_V2",
+    approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z",
+    ownerApprovalDigest: owner.digest, forwardOperationId: f.forward.operationId } };
+  const facts = { ...f.rollbackFacts, scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${version}`,
+    ownerApprovalDigest: owner.digest, aiExposureYen: 4000, forwardResultDigest: result.digest };
+  if(version === 2)delete facts.productionNonAiReserveYen;
   await expect(f.store.applyReviewedAdministration(f.reviewed(step, facts).digest, f.pins)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(1);
 });

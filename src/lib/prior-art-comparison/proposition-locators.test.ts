@@ -10,6 +10,7 @@ import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPr
 import { resolvePropositionQuote, sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
 import { parseComparisonSource } from "./source";
 import { compactSourceWire, expandSourceWire } from "./source-wire-schema";
+import { compareProposition } from "./propositions";
 
 function setup(){
   const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceTransport(propositionSourceInput(plan));
@@ -70,14 +71,14 @@ function boundExample(text:string,second?:string) {
   const f=fictionalInputs();f.inputs.draft=parseComparisonSource("【請求項1】\n"+text+(second?"\n【請求項2】\n"+second:""),11,"draft-11");
   if(second)f.selection.draftClaimNos=[1,2];
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const wire={locatorVersion:7,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,claims:s.source.claims.map(c=>({
+  const wire={locatorVersion:8,sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,claims:s.source.claims.map(c=>({
     claimNo:c.claimNo,requiredLoops:[],facts:[] as unknown[]}))}))};
   const model=sourcePropositionModelSchemaFor(plan);
   return {model,validate:(value:unknown)=>model.validate!(fixtureCompactSource(value)),wire,row:wire.sources[0].claims[0],plan,input};
 }
 const neutralBound={selection:null,extent:null,polarity:null,guard:null,context:null};
-const citation=(quote:string|null,occurrence=0,basisIndex=0)=>({quote,occurrence,basisIndex});
-const basis=(firstPart=0,lastPart=firstPart)=>[{firstPart,lastPart}];
+const citation=(quote:string|null,occurrence=0)=>({quote,occurrence});
+const basis=(firstPart=0,lastPart=firstPart)=>({firstPart,lastPart});
 function keyedExample(){
   const f=boundExample("装置は青色弁を備える。");
   const fact={basis:basis(),locators:[citation("装置"),citation("青色弁")],
@@ -91,7 +92,7 @@ it("uses source-only short spelling, preserving all values and rejecting mixed k
   expect(expandSourceWire(wire)).toEqual(f.wire);
   expect((await f.model.validate!(wire)).success).toBe(true);
   expect(JSON.stringify(wire)).toBe(before);
-  expect((await f.model.validate!({...wire as object,locatorVersion:7})).success).toBe(false);
+  expect((await f.model.validate!({...wire as object,locatorVersion:8})).success).toBe(false);
   expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
 it("each fact resolves its own array, even when another fact reuses those indexes",async()=>{
@@ -101,17 +102,17 @@ it("each fact resolves its own array, even when another fact reuses those indexe
   const r=await f.validate(f.wire);expect(r.success).toBe(true);
   if(r.success)expect(r.value.sources[0].facts[0]).toEqual(r.value.sources[0].facts[1]);
 });
-it.each(["absent","negative","fraction","outside","unused","duplicate","null_occurrence","legacy_id","other_basis"])("rejects fact-local locator error %s",async mode=>{
+it.each(["absent","negative","fraction","outside","unused","duplicate","null_occurrence","legacy_id","legacy_basis_index"])("rejects fact-local locator error %s",async mode=>{
   const f=keyedExample(),l=f.fact.locators[0];
   if(mode==="absent")l.quote="存在しない名";
-  if(mode==="negative")l.basisIndex=-1;
-  if(mode==="fraction")l.basisIndex=0.5;
-  if(mode==="outside")l.basisIndex=12;
+  if(mode==="negative")l.occurrence=-1;
+  if(mode==="fraction")l.occurrence=0.5;
+  if(mode==="outside")l.occurrence=12;
   if(mode==="unused")f.fact.locators.push(citation("備える"));
   if(mode==="duplicate")f.fact.locators.push({...l});
   if(mode==="null_occurrence"){l.quote=null;l.occurrence=1;}
   if(mode==="legacy_id")Object.assign(l,{id:0});
-  if(mode==="other_basis"){f.fact.basis.push({...f.fact.basis[0]});f.fact.locators.push({...l,basisIndex:1});}
+  if(mode==="legacy_basis_index")Object.assign(l,{basisIndex:0});
   const before=JSON.stringify(f.wire);
   expect((await f.validate(f.wire)).success).toBe(false);expect(JSON.stringify(f.wire)).toBe(before);
 });
@@ -129,13 +130,43 @@ it("retains canonical-only claims without claiming complete semantic coverage",a
   expect(r.success).toBe(true);
   if(r.success)expect(decodeSourcePropositions(f.plan,r.value).facts.some(f=>f.authority==="literal")).toBe(true);
 });
-it.each(["negative","reversed","fraction","outside","legacy","extra"])("rejects malformed chosen basis %s",async mode=>{
-  const f=keyedExample(),b=f.fact.basis[0];
+it.each([false,true])("distinguishes a supplied canonical set from other actions, conditional=%s",async conditional=>{
+  const f=boundExample(`前記第１の運転モードは紫色モードであり、装置は${conditional?"温度が七度を超える場合に":""}青色弁を開く。`);
+  const claim=propositionSourceTransport(f.input).sources[0].source.claims[0];
+  expect(claim.canonicalModeSets).toEqual(conditional?[]:[{subject:"第１の運転モード",selection:"required",extent:"closed",members:["紫色モード"]}]);
+  const fact=keyedExample().fact;fact.basis=basis(0,claim.parts.length-1);
+  fact.locators=[citation("装置"),citation("青色弁")];
+  Object.assign(fact.meaning,{predicate:"opens",context:"operation"});
+  if(conditional){
+    fact.locators.push(citation("温度が七度を超える場合"));
+    Object.assign(fact.meaning,{guardRelation:"when",guardConditions:[[2]]});
+    Object.assign(fact.operators,{guard:2});
+  }
+  f.row.facts=[fact];
+  const r=await f.validate(f.wire);expect(r.success).toBe(true);
+  if(!r.success)return;
+  const complete=decodeSourcePropositions(f.plan,r.value),action=complete.facts.find(p=>p.authority==="extracted")!;
+  expect(action.meaning).toMatchObject({kind:"relation",predicate:"opens",guard:conditional?
+    {relation:"when",conditions:["温度が七度を超える場合"]}:{relation:"unconditional",conditions:[]}});
+  expect(complete.facts.some(p=>p.authority==="literal"&&p.meaning.kind==="set")).toBe(!conditional);
+  const t={id:"target",targetId:"statement",span:[0,1] as [number,number],scope:action.scope,claimNo:action.claimNo,
+    meaning:action.meaning,sourceIds:[action.id]};
+  expect(compareProposition(t,complete.facts).relation).toBe("entailed");
+  f.row.facts=[];const empty=await f.validate(f.wire);expect(empty.success).toBe(true);
+  if(empty.success)expect(compareProposition(t,decodeSourcePropositions(f.plan,empty.value).facts).relation).toBe("unresolved");
+});
+it.each([7,6])("rejects an old source wire version without repairing it: %s",async version=>{
+  const f=keyedExample(),wire={...f.wire,locatorVersion:version},before=JSON.stringify(wire);
+  expect((await f.validate(wire)).success).toBe(false);expect(JSON.stringify(wire)).toBe(before);
+});
+it.each(["negative","reversed","fraction","outside","legacy","split_ranges","extra"])("rejects malformed chosen basis %s",async mode=>{
+  const f=keyedExample(),b=f.fact.basis;
   if(mode==="negative")b.firstPart=-1;
   if(mode==="reversed"){b.firstPart=1;b.lastPart=0;}
   if(mode==="fraction")b.lastPart=0.5;
   if(mode==="outside")b.lastPart=100;
   if(mode==="legacy")Object.assign(f.fact,{basis:[0]});
+  if(mode==="split_ranges")Object.assign(f.fact,{basis:[{...b},{...b}]});
   if(mode==="extra")Object.assign(b,{quote:"装置"});
   expect((await f.validate(f.wire)).success).toBe(false);
 });
@@ -145,7 +176,7 @@ it("counts occurrences in one selected range and never concatenates separate ran
   const r=await f.validate(f.wire);expect(r.success).toBe(true);
   if(r.success){const offset=parts.slice(0,last).reduce((n,p)=>n+p.text.length,0);
     expect(r.value.sources[0].facts[0].bindings.find(b=>b.term==="甲")!.spans[0][0]).toBe(offset+parts[last].text.indexOf("甲"));}
-  fact.basis=[{firstPart:0,lastPart:0},{firstPart:last,lastPart:last}];
+  Object.assign(fact,{basis:[{firstPart:0,lastPart:0},{firstPart:last,lastPart:last}]});
   fact.locators[0]=citation(parts[0].text+parts[last].text);
   expect((await f.validate(f.wire)).success).toBe(false);
 });

@@ -5,7 +5,7 @@ import { jsonSchema, type JSONSchema7, type Schema } from "ai";
 const names: Record<string, string> = {
   locatorVersion:"v", sources:"ss", sourceDigest:"sd", claims:"cc", claimNo:"cn",
   requiredLoops:"rr", facts:"ff", basis:"bb", firstPart:"fp", lastPart:"lp",
-  locators:"ll", basisIndex:"bi", quote:"q", occurrence:"o", meaning:"mm",
+  locators:"ll", quote:"q", occurrence:"o", meaning:"mm",
   operators:"op", routeFrame:"rf", subject:"su", context:"cx", guardRelation:"gr",
   guardConditions:"gc", polarity:"po", kind:"ki", selection:"se", extent:"ex",
   members:"me", origin:"or", destination:"de", via:"vi", bypass:"by",
