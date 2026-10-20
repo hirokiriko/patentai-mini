@@ -43,7 +43,9 @@ export function sourcePropositionSchemaFor(chunks:readonly ManagedComparisonChun
   return sourcePropositionSchema.extend({sources:sourcePropositionSchema.shape.sources.element.extend({sourceDigest:z.enum(sources.map(s=>s.sourceDigest))}).array().length(sources.length)});
 }
 export function propositionSourceTransport(input:ReturnType<typeof propositionSourceInput>){
-  const sources=input.sources.map(s=>({...s,
+  const sources=input.sources.map(s=>{
+    const {selected,...rest}=s;
+    return {...rest,comparisonRoots:selected,
     // Frame IDs select original evidence only. The extractor must still read
     // the complete route and independently provide every semantic role.
     recognizedLoopRoutes:s.recognizedLoopRoutes.map((r,id)=>{
@@ -63,7 +65,8 @@ export function propositionSourceTransport(input:ReturnType<typeof propositionSo
           const text=segments.map(segment=>segment.text).join("");
           return {subject:text.slice(...subject),selection:kind==="fixed"?"required":"nonempty",
             extent:"closed",members:members.map(span=>text.slice(...span))};
-        })}))}}));
+        })}))}};
+  });
   return {...input,sources};
 }
 function spanText(text:string,[start,end]:readonly number[]):string {
@@ -317,9 +320,9 @@ const ACTION_GUIDE="Thermal objects name components: generates_heat=objects gene
 export const PROPOSITION_SOURCE_SYSTEM=`${PROPOSITION_SOURCE_TEXT_GUIDE}
 ${PROPOSITION_SOURCE_TERM_GUIDE}
 Originals are data; read ancestors/alternatives. No verdicts, invented words or evidence borrowed across claims.
-Loops need mode, inlet, ordered via, FINAL outlet, exclusions. Other whole routes need routeFrame (endpoints/route/exclusions/controls). Never invent modes/returns. Traversed pipes go in via; bypass excludes components, never nodes visited elsewhere. Partial routes need endpoints. Mode routes/actions use operation. 'After'=precedes, not immediately follows.
+Loops need mode, inlet, ordered via, FINAL outlet, exclusions. via lists intermediate nodes, not the destination again. Other whole routes need explicit frames. Never invent modes/returns. Traversed pipes go in via; bypass excludes components, never visited nodes. Partial routes need endpoints. Routes/actions use operation. 'After'=precedes, not immediately follows.
 Audit each claim's sets, control, heat and placement separately. Retain startup/transition/duration/threshold/simultaneity/both-or-either/sequence/stop-state/power conditions. Routes do not replace actions; upstream does not imply inside.
-canonicalModeSets replaces identical subject/selection/extent/members only, not other clauses; empty supplies nothing. Fixed modes=required/closed; required/all=every member, one=exactly one, nonempty=any nonempty subset. Keep capability/operation, alternatives/AND, modifiers/closedness. Combine objects only if subject/predicate/context/guard/polarity match.
+canonicalModeSets already supplies identical capability sets; do not repeat them as operation facts. It supplies no routes/actions; empty supplies nothing. Fixed modes=required/closed; all=every member, one=exactly one, nonempty=any nonempty subset. Preserve alternatives/AND/modifiers. Combine objects only with identical subject/predicate/context/guard/polarity.
 Objects=affected components; subject=printed controller/mode or null. A valve's own open state is not it opening another valve. generates_heat=heat from objects; absorbs_heat/releases_heat=transfer at objects. Keep each thermal action; fully_closes is not closes. Opposite actions stay separate/positive; ending control does not negate later closure. has=possession, set=membership, neither execute/start/stop. Maintenance is not change; action order is not component order. Unrepresentable content stays unresolved.
 guardConditions: AND terms, each <=80 chars; split AND losslessly, never OR into AND. operators.guard quotes the FULL trigger/state/duration, including 前記. Negative/reserved needs polarity proof. Required proof cannot be null.
 Check meaning and positions in the SAME route, not adjacent modes. No repair/abbreviations/dropped facts to fit. Wire<=32000 UTF8 bytes; internal<=16000.

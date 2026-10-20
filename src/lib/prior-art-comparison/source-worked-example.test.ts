@@ -6,6 +6,7 @@ import { decodeSourcePropositions, propositionSourceInput, propositionSourceTran
 import { sourcePropositionModelSchemaFor } from "./proposition-locators";
 import { SOURCE_WORKED_FACTS, SOURCE_WORKED_PARTS } from "./source-worked-example";
 import { compareProposition, type TargetProposition } from "./propositions";
+import { fixtureRequiredSourceWire } from "../../../scripts/prior-art-proposition-fixture.mjs";
 
 function setup() {
   const f=fictionalInputs();
@@ -17,7 +18,7 @@ function setup() {
   const wire={locatorVersion:9,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
     coverage:s.source.claims.map(c=>({claimNo:c.claimNo,unresolved:i===0?null:
       {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture has no additional fact."}})),facts:i===0?rows:[]}))};
-  return {plan,input,rows,wire,model:sourcePropositionModelSchemaFor(plan)};
+  return {plan,input,rows,get wire(){return fixtureRequiredSourceWire(wire);},model:sourcePropositionModelSchemaFor(plan)};
 }
 it("decodes the actual instruction example, preserving loop roles, exact endpoints and a separate guarded heat action",async()=>{
   const f=setup(),input=propositionSourceTransport(f.input),before=JSON.stringify(f.wire);

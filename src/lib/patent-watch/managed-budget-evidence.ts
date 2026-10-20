@@ -41,7 +41,12 @@ const managedIssue150IntegrationV5Schema = managedIssue150IntegrationV1Schema.ex
   scope: z.literal("ISSUE150_INTEGRATION_V5"), approvedAt: z.iso.datetime(),
   validUntil: z.literal("2026-10-20T14:59:00Z"),
 }).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
-export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema]);
+// Pending V6 retains historical ceilings and still needs a genuine signature.
+const managedIssue150IntegrationV6Schema = managedIssue150IntegrationV1Schema.extend({
+  scope: z.literal("ISSUE150_INTEGRATION_V6"), approvedAt: z.iso.datetime(),
+  validUntil: z.literal("2026-10-20T14:59:00Z"),
+}).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
+export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema, managedIssue150IntegrationV6Schema]);
 export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [managedIssue150PreflightV1Schema,
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V2"),
     aiExposureYen: yen.max(4843), rollbackReserveYen: yen.max(1400) }),
@@ -50,7 +55,9 @@ export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [man
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V4"),
     aiExposureYen: yen.max(5437), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V5"),
-    aiExposureYen: yen.max(5509), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
+    aiExposureYen: yen.max(5509), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
+  managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V6"),
+    aiExposureYen: yen.max(5588), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
 export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
   forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
   prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,

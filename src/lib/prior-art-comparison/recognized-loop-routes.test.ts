@@ -90,13 +90,14 @@ it.each(["has_mode","changed_selection","ordinary_has"])("preserves a literal mo
 
 function indexedWire(f:ReturnType<typeof setup>){
   const wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input));
-  wire.sources[0].facts.forEach((fact:{routeFrame:unknown},i:number)=>{fact.routeFrame=i;});
+  wire.sources[0].facts.forEach((fact:{routeFrame:unknown},i:number)=>{fact.routeFrame=i;wire.sources[0][`loop${i}`]=fact;});
+  wire.sources[0].facts=[];
   return wire;
 }
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
   const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
-  expect(wire.sources[0].facts.map((f:{routeFrame:number})=>f.routeFrame)).toEqual([0,1]);
+  expect([wire.sources[0].loop0.routeFrame,wire.sources[0].loop1.routeFrame]).toEqual([0,1]);
   if(result.success){
     expect(result.value).toEqual(f.raw);
     expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
@@ -104,7 +105,7 @@ it("selects immutable loop evidence while retaining independently extracted mean
   }
 });
 it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destination","partial","precedes","non_path","basis_missing"])("rejects each incorrectly assigned catalog frame: %s",async mode=>{
-  const f=setup(),wire=indexedWire(f),row=wire.sources[0],fact=row.facts[0];
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0],fact=row.loop0;
   if(mode==="other_claim")fact.routeFrame=1;
   if(mode==="out_of_range")fact.routeFrame=2;
   if(mode==="wrong_mode")fact.meaning.subject=fact.meaning.origin;
@@ -116,14 +117,15 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="basis_missing")fact.basis={firstPart:0,lastPart:0};
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
 });
-it.each(["missing","duplicate","reordered","numeric_extra","combined_limit","unexpected","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
+it.each(["missing","null","duplicate","reordered","numeric_extra","combined_limit","unexpected","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
   const f=setup(),wire=indexedWire(f),row=wire.sources[0];
-  if(mode==="missing")row.facts.pop();
-  if(mode==="duplicate")row.facts.splice(1,0,structuredClone(row.facts[0]));
-  if(mode==="reordered")row.facts.reverse();
-  if(mode==="numeric_extra")row.facts.push(structuredClone(row.facts[0]));
-  if(mode==="combined_limit")row.facts.splice(1,0,...Array.from({length:47},()=>({...structuredClone(row.facts[0]),routeFrame:null})));
-  if(mode==="unexpected"){wire.sources[1].facts.push(structuredClone(row.facts[0]));wire.sources[1].coverage[0].unresolved=null;}
+  if(mode==="missing")delete row.loop1;
+  if(mode==="null")row.loop1=null;
+  if(mode==="duplicate")row.loop1=structuredClone(row.loop0);
+  if(mode==="reordered")[row.loop0,row.loop1]=[row.loop1,row.loop0];
+  if(mode==="numeric_extra")row.facts.push(structuredClone(row.loop0));
+  if(mode==="combined_limit")row.facts.push(...Array.from({length:47},()=>({...structuredClone(row.loop0),routeFrame:null})));
+  if(mode==="unexpected"){wire.sources[1].loop0=structuredClone(row.loop0);wire.sources[1].coverage.c1=null;}
   if(mode==="legacy_v8")wire.locatorVersion=8;
   const before=JSON.stringify(wire);
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);

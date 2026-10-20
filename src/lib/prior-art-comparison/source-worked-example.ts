@@ -27,6 +27,5 @@ export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
   operators:{...neutral,guard:q("前記通電状態で温度が七度を超える場合")},routeFrame:null,
 }));
 export const SOURCE_WORKED_GUIDE=
-  `Fictional examples, not answers. Loop claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; first fact=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
-Action claim1 part0=${JSON.stringify(SOURCE_ACTION_TEXT)}; opening fact=${JSON.stringify(SOURCE_ACTION_FACTS[0])}.
-Separate positive closes fact: 青色弁, same guard. 通電状態 inside 非通電状態 counts as 0; this guard uses 1. Numeric routeFrame=ONLY catalog whole path, never controls. Sets/relations: routeFrame:null.`;
+  `Fictional example, not an answer. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
+Place that fact in loop0, not facts. Other actions go in facts. In 非通電状態…通電状態, the latter 通電状態 has occurrence1 within that same basis. A smaller basis may reset it to 0. Opposite open/close actions remain separate positive facts with their full shared guard.`;

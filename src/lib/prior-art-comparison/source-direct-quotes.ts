@@ -6,6 +6,7 @@ import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } 
 import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
 import { sourceCitationParts, sourceCitationRange } from "./source-citation-parts";
 import { resolvePropositionQuote } from "./proposition-quotes";
+import { ComparisonError } from "./source";
 
 const index=z.number().int().nonnegative();
 const quote=z.object({
@@ -30,40 +31,72 @@ const meaning=z.discriminatedUnion("kind",[
   meaningSchema.options[0].extend({...common,members:terms.min(1)}),
   meaningSchema.options[1].extend({...common,origin:term.nullable(),destination:term.nullable(),via:terms,bypass:terms}),
   meaningSchema.options[2].extend({...common,objects:terms.min(1)}),
-]);
+]).meta({id:"PriorArtSourceMeaning"});
 const frame=z.object({entry:evidence,exit:evidence,route:evidence,
-  exclusions:z.array(evidence).max(6),controls:z.array(evidence).max(6)}).strict();
+  exclusions:z.array(evidence).max(6),controls:z.array(evidence).max(6)}).strict().meta({id:"PriorArtSourceFrame"});
 const fact=z.object({
   claimNo:z.number().int().positive(),
   basis:z.object({firstPart:index,lastPart:index}).strict()
-    .describe("One inclusive range of original parts containing every quoted role, complete guard and frame."),
+    .describe("Inclusive parts containing ALL roles, guards and frame.")
+    .meta({id:"PriorArtSourceBasis"}),
   meaning,
   operators:z.object({selection:evidence.nullable(),extent:evidence.nullable(),polarity:evidence.nullable(),
     guard:evidence.nullable(),context:evidence.nullable()}).strict().nullable()
-    .describe("null abbreviates five null fields; required operator evidence must still be supplied."),
+    .describe("null abbreviates five null fields; required operator evidence must still be supplied.")
+    .meta({id:"PriorArtSourceOperators"}),
   routeFrame:z.union([index,frame]).nullable(),
 }).strict();
 const invalid=()=>new Error("comparison_locator_invalid");
+function propertyCount(value:unknown):number {
+  if(!value||typeof value!=="object")return 0;
+  if(Array.isArray(value))return value.reduce((n,v)=>n+propertyCount(v),0);
+  const record=value as Record<string,unknown>;
+  return (record.properties?Object.keys(record.properties).length:0)+
+    Object.values(record).reduce<number>((n,v)=>n+propertyCount(v),0);
+}
 
-/** Source-only v9. Each semantic role carries its own exact quotation, avoiding
+/** Source-only v10. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
 export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const schema=z.object({locatorVersion:z.literal(9),sources:z.array(z.object({
-    sourceDigest:local.shape.sources.element.shape.sourceDigest,
-    coverage:z.array(z.object({claimNo:z.number().int().positive(),
-      unresolved:quote.extend({reason:z.string().min(1).max(400)}).nullable(),
-    }).strict()).describe("Every input claim in order. With facts: unresolved=null. Without facts: exact claim quote and why it remains unresolved. This is not a quality verdict."),
-    facts:z.array(fact).max(48).describe("Claim order; each claim's required catalog loops first, in catalog order, then all other expressible facts. Keep opposite actions separate."),
-  }).strict()).length(input.sources.length)}).strict();
+  const unresolved=quote.extend({reason:z.string().min(1).max(400)}).nullable()
+    .meta({id:"PriorArtSourceUnresolved"});
+  const additional=fact.extend({routeFrame:frame.nullable()}).meta({id:"PriorArtSourceAdditionalFact"});
+  const additionalFacts=z.array(additional).max(48).meta({id:"PriorArtSourceAdditionalFacts"});
+  type RawFact=z.infer<typeof fact>;
+  type RawSource={sourceDigest:string;coverage:Record<string,z.infer<typeof unresolved>>;
+    facts:RawFact[]} & Record<string,unknown>;
+  // Required keys make omissions a provider schema violation, not merely a
+  // prose instruction. Catalog IDs constrain identity only: every loop's
+  // meaning, role quotations and basis still come from the model.
+  const sourceSchemas=input.sources.map(source=>z.object({
+    sourceDigest:z.literal(source.sourceDigest),
+    coverage:z.object(Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,unresolved]))).strict(),
+    ...Object.fromEntries(source.recognizedLoopRoutes.map((r,id)=>[`loop${id}`,fact.extend({
+      claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),
+    })])),
+    facts:additionalFacts,
+  }).strict());
+  const schema=z.object({locatorVersion:z.literal(10),sources:z.array(
+    z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
+  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:10;sources:RawSource[]}>;
   const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
     const source=input.sources[i],expected=source.source.claims;
-    if(s.sourceDigest!==source.sourceDigest||s.coverage.length!==expected.length||
-      s.coverage.some((c,n)=>c.claimNo!==expected[n].claimNo))throw invalid();
+    if(s.sourceDigest!==source.sourceDigest)throw invalid();
     const order=new Map(expected.map((c,n)=>[c.claimNo,n]));
     let previous=-1,quotes=0;
-    const facts=s.facts.map(f=>{
+    for(const f of s.facts){
+      const at=order.get(f.claimNo);
+      if(at===undefined||at<previous)throw invalid();previous=at;
+    }
+    const allFacts=expected.flatMap(c=>[
+      ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?[s[`loop${id}`] as RawFact]:[]),
+      ...s.facts.filter(f=>f.claimNo===c.claimNo),
+    ]);
+    if(allFacts.length>48)throw invalid();
+    previous=-1;
+    const facts=allFacts.map(f=>{
       const at=order.get(f.claimNo);
       if(at===undefined||at<previous)throw invalid();previous=at;
       const claim=expected[at],text=claim.segments.map(p=>p.text).join("");
@@ -116,8 +149,8 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       }
       return {claimNo:f.claimNo,basis:[basis],meaning:decoded,bindings,operators,routeFrame};
     });
-    for(const [at,claim]of expected.entries()){
-      const own=s.facts.filter(f=>f.claimNo===claim.claimNo),unresolved=s.coverage[at].unresolved;
+    for(const claim of expected){
+      const own=allFacts.filter(f=>f.claimNo===claim.claimNo),unresolved=s.coverage[`c${claim.claimNo}`];
       if(own.length){if(unresolved!==null)throw invalid();}
       else{
         if(!unresolved||!unresolved.reason.trim())throw invalid();
@@ -129,6 +162,9 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
     }
     return {sourceDigest:s.sourceDigest,facts};
   })}));
+  // Dynamic claim keys must fit the documented Azure schema budget too.
+  // Reject the complete plan before sending; never omit claims to fit it.
+  if(propertyCount(model.jsonSchema)>100)throw new ComparisonError("plan_limit");
   return jsonSchema(model.jsonSchema,{validate:async value=>{
     try{
       if(Buffer.byteLength(JSON.stringify(value),"utf8")>32_000||!model.validate)throw invalid();

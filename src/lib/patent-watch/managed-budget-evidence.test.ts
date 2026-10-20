@@ -57,7 +57,7 @@ it.each(["content", "signature", "key", "owner", "target", "digest", "future"])(
     expect(() => verifyManagedAdministrationHistory(envelope, reason === "digest" ? hash(90) : managedDigest(envelope), f.pins,
       reason === "future" ? new Date("2026-09-23T23:59:59Z") : now)).toThrow();
   });
-it.each(["completion140", "integration150-v1", "integration150-v2", "integration150-v3", "integration150-v4", "integration150-v5"])(
+it.each(["completion140", "integration150-v1", "integration150-v2", "integration150-v3", "integration150-v4", "integration150-v5", "integration150-v6"])(
   "rejects foreign authority on signed Issue139 history: %s", reason => {
     const f = history139Fixture();
     const patch = reason === "completion140" ? { completionAllowance: managedCompletionAllowanceSchema.parse({
@@ -65,14 +65,14 @@ it.each(["completion140", "integration150-v1", "integration150-v2", "integration
       monthlyCapYen: 30000, cumulativeUnits: emptyManagedBudgetUnits(), validUntil: "2026-10-20T14:59:00Z" }) } : {
       issue150Integration: managedIssue150IntegrationSchema.parse({
         scope: reason === "integration150-v1" ? "ISSUE150_INTEGRATION_V1" : reason === "integration150-v2" ? "ISSUE150_INTEGRATION_V2" :
-          reason === "integration150-v3" ? "ISSUE150_INTEGRATION_V3" : reason === "integration150-v4" ? "ISSUE150_INTEGRATION_V4" : "ISSUE150_INTEGRATION_V5",
+          reason === "integration150-v3" ? "ISSUE150_INTEGRATION_V3" : reason === "integration150-v4" ? "ISSUE150_INTEGRATION_V4" : reason === "integration150-v5" ? "ISSUE150_INTEGRATION_V5" : "ISSUE150_INTEGRATION_V6",
         ownerApprovalDigest: hash(12), profileDigest: hash(13), forwardOperationId: null,
         approvedAt: reason === "integration150-v1" ? "2026-10-17T06:41:40Z" : "2026-10-19T00:00:00Z",
         validUntil: reason === "integration150-v1" ? "2026-10-18T06:41:40Z" : "2026-10-20T14:59:00Z" }) };
     const envelope = f.signedReview({ ...f.review, action: { ...f.review.action, step: { ...f.review.action.step, ...patch } } });
     expect(() => verifyManagedAdministrationHistory(envelope, managedDigest(envelope), f.pins, now)).toThrow();
   });
-it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400]] as const)(
+it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400],[6,5588,1400]] as const)(
   "keeps the exact historical V%i AI and rollback ceilings", (version, aiExposureYen, rollbackReserveYen) => {
     const facts = { scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${version}`, ownerApprovalDigest: hash(12),
       technicalGoHeadSha: "a".repeat(40), technicalGoTreeSha: "b".repeat(40), baseTreeSha: "c".repeat(40),
@@ -82,27 +82,27 @@ it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400]] 
     expect(() => managedIssue150PreflightSchema.parse({ ...facts, aiExposureYen: aiExposureYen + 1 })).toThrow();
     expect(() => managedIssue150PreflightSchema.parse({ ...facts, rollbackReserveYen: rollbackReserveYen + 1 })).toThrow();
   });
-function issue150V5ReviewFixture() {
+function issue150ReviewFixture(version: 5 | 6) {
   const f = history139Fixture();
   const review = { ...f.review, issuedAt: "2026-10-20T00:00:00Z", validUntil: "2026-10-20T00:10:00Z",
     sources: [...f.review.sources, { digest: hash(12), bytes: 80 }],
     action: { ...f.review.action, step: { ...f.review.action.step, issue: 150,
-      issue150Integration: { scope: "ISSUE150_INTEGRATION_V5", ownerApprovalDigest: hash(12), profileDigest: hash(13),
+      issue150Integration: { scope: `ISSUE150_INTEGRATION_V${version}`, ownerApprovalDigest: hash(12), profileDigest: hash(13),
         approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", forwardOperationId: null } } } };
   Object.assign(review, managedAdministrationReviewSchema.parse(review));
   return { ...f, review };
 }
-it("authenticates immutable V5 history while an expired review cannot authorize a new start", () => {
-  const f = issue150V5ReviewFixture(), envelope = f.signedReview(f.review), digest = managedDigest(envelope);
+it.each([5,6] as const)("authenticates immutable V%s history while an expired review cannot authorize a new start", version => {
+  const f = issue150ReviewFixture(version), envelope = f.signedReview(f.review), digest = managedDigest(envelope);
   const bytes = JSON.stringify(envelope), at = new Date("2026-10-20T00:05:00Z");
   expect(verifyManagedAdministrationReview(envelope, digest, f.pins, at)).toEqual(envelope);
   expect(verifyManagedAdministrationHistory(envelope, digest, f.pins, new Date("2026-10-21T00:00:00Z"))).toEqual(envelope);
   expect(JSON.stringify(envelope)).toBe(bytes);
   expect(() => verifyManagedAdministrationReview(envelope, digest, f.pins, new Date("2026-10-21T00:00:00Z"))).toThrow();
 });
-it.each(["signature", "key", "owner", "target", "digest", "head", "approval-before", "approval-expiry", "extended-expiry"])(
-  "rejects V5 %s without changing signature pins or the approval window", reason => {
-    const f = issue150V5ReviewFixture(), at = new Date("2026-10-20T00:05:00Z");
+it.each(([5,6] as const).flatMap(version => ["signature", "key", "owner", "target", "digest", "head", "approval-before", "approval-expiry", "extended-expiry"].map(reason => ({version,reason}))))(
+  "rejects V$version $reason without changing signature pins or the approval window", ({version,reason}) => {
+    const f = issue150ReviewFixture(version), at = new Date("2026-10-20T00:05:00Z");
     const approval = f.review.action.step.issue150Integration;
     if (reason === "head") f.review.action.step.headSha = "a".repeat(39);
     if (reason === "approval-before") approval.approvedAt = "2026-10-18T23:59:59Z";
