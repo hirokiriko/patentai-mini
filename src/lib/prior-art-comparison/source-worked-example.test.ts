@@ -42,13 +42,15 @@ it("decodes the actual instruction example, preserving loop roles, exact endpoin
   // A valid loop does not prove the separately printed thermal action.
   expect(compareProposition(target,parsed.facts.filter(p=>p.id!==heat.id)).relation).toBe("unresolved");
 });
-it.each(["mode_subject","occurrence","basis","legacy_table","missing_guard","traversed_pipe_excluded"])("rejects the worked example with %s evidence corrupted, without repairing raw",async kind=>{
+it.each(["mode_subject","occurrence","basis","legacy_table","missing_guard","traversed_pipe_excluded","nonpath_frame","duplicate_loop"])("rejects the worked example with %s evidence corrupted, without repairing raw",async kind=>{
   const f=setup(),loop=f.rows[0],heat=f.rows[1];
   if(kind==="mode_subject")loop.meaning.subject=loop.meaning.origin!;
   if(kind==="occurrence")heat.meaning.objects![0][0].occurrence=1;
   if(kind==="basis")loop.basis.lastPart=0;
   if(kind==="legacy_table")Object.assign(heat,{locators:[]});
-  if(kind==="missing_guard")Object.assign(heat.operators,{guard:null});
+  if(kind==="missing_guard")Object.assign(heat.operators!,{guard:null});
+  if(kind==="nonpath_frame")heat.routeFrame=0;
+  if(kind==="duplicate_loop")f.rows.push(structuredClone(loop));
   if(kind==="traversed_pipe_excluded")loop.meaning.bypass!.push(loop.meaning.via![2]);
   const before=JSON.stringify(f.wire),r=await f.model.validate!(f.wire);
   if(["missing_guard","traversed_pipe_excluded"].includes(kind)&&r.success)expect(()=>decodeSourcePropositions(f.plan,r.value)).toThrow("ai_incomplete");

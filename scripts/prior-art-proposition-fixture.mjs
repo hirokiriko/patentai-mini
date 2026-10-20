@@ -105,16 +105,14 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         {...common,origin:m.origin===null?null:term(m.origin),destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term)}:
         {...common,objects:m.objects.map(term)};
       if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
-      const direct=i=>{
-        const q=locators[i],anchor=text.slice(...selected),at=anchor.indexOf(q.quote);
-        return anchor.indexOf(q.quote,at+1)<0?q.quote:q;
-      };
+      const direct=i=>locators[i];
       const dereference=v=>v===null?null:typeof v==="number"?direct(v):
         Array.isArray(v)?v.map(dereference):v&&typeof v==="object"?
           Object.fromEntries(Object.entries(v).map(([k,x])=>[k,dereference(x)])):v;
       delete encoded.bindings;
       return {...encoded,basis,meaning:dereference(meaning),
-        operators:dereference(encoded.operators),routeFrame:dereference(encoded.routeFrame)};
+        operators:Object.values(encoded.operators).every(v=>v===null)?null:dereference(encoded.operators),
+        routeFrame:dereference(encoded.routeFrame)};
     });return {claimNo:c.claimNo,facts,unresolved:facts.length?null:
       {quote:parts(c.claimNo).join(""),occurrence:0,reason:"Fictional fixture supplies no expressible additional fact."}};
     });return {sourceDigest:s.sourceDigest,coverage:claims.map(({claimNo,unresolved})=>({claimNo,unresolved})),

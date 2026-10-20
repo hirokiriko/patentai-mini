@@ -12,12 +12,11 @@ const quote=z.object({
   quote:z.string().min(1).max(12_000),
   occurrence:index.describe("Exact-match starts, zero-based within this fact's single basis. Count embedded matches too."),
 }).strict().meta({id:"PriorArtSourceQuote"});
-const evidence=z.union([z.string().min(1).max(12_000),quote,
+const evidence=z.union([quote,
   z.object({quote:z.null(),occurrence:z.literal(0)}).strict()])
-  .describe("A string requires exactly one match within basis. Otherwise specify quote and occurrence.")
   .meta({id:"PriorArtSourceEvidence"});
-const term=z.array(z.union([z.string().min(1).max(80),
-  quote.extend({quote:z.string().min(1).max(80)}).meta({id:"PriorArtSourceTermQuote"})])).min(1).max(4)
+const term=z.array(
+  quote.extend({quote:z.string().min(1).max(80)}).meta({id:"PriorArtSourceTermQuote"})).min(1).max(4)
   .describe("Exact noun/condition quotes concatenated in this order, at most 80 characters in total.")
   .meta({id:"PriorArtSourceTerm"});
 const terms=z.array(term).max(12);
@@ -40,7 +39,8 @@ const fact=z.object({
     .describe("One inclusive range of original parts containing every quoted role, complete guard and frame."),
   meaning,
   operators:z.object({selection:evidence.nullable(),extent:evidence.nullable(),polarity:evidence.nullable(),
-    guard:evidence.nullable(),context:evidence.nullable()}).strict(),
+    guard:evidence.nullable(),context:evidence.nullable()}).strict().nullable()
+    .describe("null abbreviates five null fields; required operator evidence must still be supplied."),
   routeFrame:z.union([index,frame]).nullable(),
 }).strict();
 const invalid=()=>new Error("comparison_locator_invalid");
@@ -70,18 +70,13 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       const basis=sourceCitationRange(sourceCitationParts(claim.segments.map(p=>p.text)),f.basis.firstPart,f.basis.lastPart);
       const seen=new Set<string>();
       const get=(q:z.infer<typeof evidence>):Span=>{
-        if(typeof q!=="string"&&q.quote===null){
+        if(q.quote===null){
           const key=JSON.stringify(basis);
           if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
           return [...basis];
         }
-        const anchor=text.slice(...basis),literal=typeof q==="string"?q:q.quote;
-        // A shorthand never chooses among repeated matches, including overlaps.
-        if(typeof q==="string"){
-          const at=anchor.indexOf(q);
-          if(at<0||anchor.indexOf(q,at+1)>=0)throw invalid();
-        }
-        const span=resolvePropositionQuote(anchor,literal,typeof q==="string"?0:q.occurrence).map(n=>n+basis[0]) as Span;
+        const anchor=text.slice(...basis);
+        const span=resolvePropositionQuote(anchor,q.quote,q.occurrence).map(n=>n+basis[0]) as Span;
         const key=JSON.stringify(span);
         if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
         return span;
@@ -101,9 +96,11 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
         m.kind==="path"?{...c,kind:m.kind,origin:m.origin===null?null:readTerm(m.origin),
           destination:m.destination===null?null:readTerm(m.destination),via:m.via.map(readTerm),bypass:m.bypass.map(readTerm),
           extent:m.extent,relation:m.relation}:{...c,kind:m.kind,predicate:m.predicate,objects:m.objects.map(readTerm)};
-      const operators={selection:f.operators.selection===null?null:get(f.operators.selection),
-        extent:f.operators.extent===null?null:get(f.operators.extent),polarity:f.operators.polarity===null?null:get(f.operators.polarity),
-        guard:f.operators.guard===null?null:get(f.operators.guard),context:f.operators.context===null?null:get(f.operators.context)};
+      // This is only a reversible spelling of five nulls, never missing proof.
+      const op=f.operators??{selection:null,extent:null,polarity:null,guard:null,context:null};
+      const operators={selection:op.selection===null?null:get(op.selection),
+        extent:op.extent===null?null:get(op.extent),polarity:op.polarity===null?null:get(op.polarity),
+        guard:op.guard===null?null:get(op.guard),context:op.context===null?null:get(op.context)};
       let routeFrame:z.infer<typeof extractionSchema>["routeFrame"]=null;
       if(typeof f.routeFrame==="number"){
         const r=source.recognizedLoopRoutes[f.routeFrame],same=(t:string|null,p:Span)=>

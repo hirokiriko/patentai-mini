@@ -11,21 +11,22 @@ export const SOURCE_WORKED_FACTS = [{
   meaning:{subject:[q("第１の運転モード")],context:"operation",guardRelation:"unconditional",guardConditions:[],
     polarity:"positive",kind:"path",origin:[q("送出器")],destination:[q("送出器",1)],
     via:[[q("加熱器")],[q("分岐器",1)],[q("バイパス配管")],[q("蓄積器",1)]],bypass:[[q("冷却器")]],extent:"whole",relation:"route"},
-  operators:{...neutral},routeFrame:0,
+  operators:null,routeFrame:0,
 },{
   claimNo:1,basis:{firstPart:1,lastPart:1},
   meaning:{subject:[q("第１の運転モード",1)],context:"operation",guardRelation:"when",guardConditions:[[q("温度が五度を下回る")]],
     polarity:"positive",kind:"relation",predicate:"generates_heat",objects:[[q("補助ヒータ")]]},
   operators:{...neutral,guard:q("温度が五度を下回る")},routeFrame:null,
 }];
-export const SOURCE_ACTION_TEXT="制御器は、温度が七度を超える場合、赤色弁を開き、青色弁を閉じる。";
+export const SOURCE_ACTION_TEXT="制御器は非通電状態を記録し、前記制御器は、前記通電状態で温度が七度を超える場合、赤色弁を開き、青色弁を閉じる。";
 export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
   claimNo:1,basis:{firstPart:0,lastPart:0},
-  meaning:{subject:["制御器"],context:"operation",guardRelation:"when",guardConditions:[["温度が七度を超える場合"]],
-    polarity:"positive",kind:"relation",predicate,objects:[[i===0?"赤色弁":"青色弁"]]},
-  operators:{...neutral,guard:"温度が七度を超える場合"},routeFrame:null,
+    meaning:{subject:[q("制御器",1)],context:"operation",guardRelation:"when",
+      guardConditions:[[q("通電状態",1)],[q("温度が七度を超える場合")]],
+    polarity:"positive",kind:"relation",predicate,objects:[[q(i===0?"赤色弁":"青色弁")]]},
+  operators:{...neutral,guard:q("前記通電状態で温度が七度を超える場合")},routeFrame:null,
 }));
 export const SOURCE_WORKED_GUIDE=
-  `Fictional action example, not answer data. Claim1 part0=${JSON.stringify(SOURCE_ACTION_TEXT)}.
-coverage=[{"claimNo":1,"unresolved":null}]; facts=${JSON.stringify(SOURCE_ACTION_FACTS)}.
-Opening and closing are separate POSITIVE actions under the same guard, not a member set or a negated action. Read every original claim independently.`;
+  `Fictional examples, not answers. Loop claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; first fact=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
+Action claim1 part0=${JSON.stringify(SOURCE_ACTION_TEXT)}; opening fact=${JSON.stringify(SOURCE_ACTION_FACTS[0])}.
+Separate positive closes fact: 青色弁, same guard. 通電状態 inside 非通電状態 counts as 0; this guard uses 1. Numeric routeFrame=ONLY catalog whole path, never controls. Sets/relations: routeFrame:null.`;

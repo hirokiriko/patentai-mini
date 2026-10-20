@@ -156,16 +156,49 @@ it("enforces 32000 UTF8 bytes on otherwise valid v9 facts",async()=>{
   expect(bytes()).toBe(32_001);expect((await f.model.validate!(f.wire)).success).toBe(false);
   expect((await f.model.validate!({v:8,ss:[]})).success).toBe(false);
 });
-it.each(["unique","absent","repeated","overlap","surrogate"])("requires unambiguous exact string evidence: %s",async mode=>{
+it.each(["unique","absent","repeated","overlap","surrogate"])("requires explicit occurrence even for a unique quote: %s",async mode=>{
   const text=mode==="repeated"?"装置は青色弁と青色弁を備える。":
     mode==="overlap"?"装置はあああを備える。":mode==="surrogate"?"装置は😀を備える。":"装置は青色弁を備える。";
   const f=setup(text),literal=mode==="absent"?"別の弁":mode==="overlap"?"ああ":mode==="surrogate"?"\ud83d":"青色弁";
   Object.assign(f.fact.meaning,{subject:["装置"],objects:[[literal]]});
-  expect((await f.model.validate!(f.wire)).success).toBe(mode==="unique");
-  if(mode==="repeated"||mode==="overlap"){
-    Object.assign(f.fact.meaning,{objects:[[q(literal,1)]]});
-    expect((await f.model.validate!(f.wire)).success).toBe(true);
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
+  Object.assign(f.fact.meaning,{subject:[q("装置")],objects:[[q(literal,mode==="repeated"||mode==="overlap"?1:0)]]});
+  expect((await f.model.validate!(f.wire)).success).toBe(!["absent","surrogate"].includes(mode));
+});
+it("round-trips null operators as five nulls without changing meaning or accepting missing guard/polarity proof",async()=>{
+  const f=setup(),full=await f.model.validate!(f.wire);
+  Object.assign(f.fact,{operators:null});
+  const abbreviated=await f.model.validate!(f.wire);
+  expect(abbreviated).toEqual(full);
+  for(const mode of ["guard","negative"]){
+    const g=setup("装置は温度が七度を超える場合に青色弁を開かない。");
+    Object.assign(g.fact,{operators:null});
+    Object.assign(g.fact.meaning,{predicate:"opens",context:"operation",guardRelation:mode==="guard"?"when":"unconditional",
+      guardConditions:mode==="guard"?[[q("温度が七度を超える場合")]]:[],polarity:mode==="negative"?"negative":"positive"});
+    const r=await g.model.validate!(g.wire);expect(r.success).toBe(true);
+    if(r.success)expect(()=>decodeSourcePropositions(g.plan,r.value)).toThrow("ai_incomplete");
   }
+});
+it.each(["operator_string","missing_key","extra_key","composed_guard"])("rejects incomplete or synthesized evidence: %s",async mode=>{
+  const f=setup(SOURCE_ACTION_TEXT);f.wire.sources[0].facts=structuredClone(SOURCE_ACTION_FACTS);
+  const a=f.wire.sources[0].facts[0];
+  if(mode==="operator_string")a.operators.guard="前記通電状態で温度が七度を超える場合";
+  if(mode==="missing_key")delete a.operators.context;
+  if(mode==="extra_key")a.operators.invented=null;
+  if(mode==="composed_guard")a.operators.guard=q("通電状態で前記温度が七度を超える場合");
+  const before=JSON.stringify(f.wire);
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
+  expect(JSON.stringify(f.wire)).toBe(before);
+});
+it("rejects a subject outside a valid selected part even when its object is within that part",async()=>{
+  const f=setup("装置は"+"甲".repeat(125)+"、青色弁を備える。");
+  const parts=f.input.sources[0].source.claims[0].segments,last=parts.length-1;
+  expect(last).toBeGreaterThan(0);
+  expect(parts[last].text).toContain("青色弁");expect(parts[last].text).not.toContain("装置");
+  f.fact.basis={firstPart:last,lastPart:last};
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
+  Object.assign(f.fact.meaning,{subject:null});
+  expect((await f.model.validate!(f.wire)).success).toBe(true);
 });
 it("allows only operator/frame evidence to name the already selected whole basis",async()=>{
   const f=setup();Object.assign(f.fact.operators,{guard:{quote:null,occurrence:0}});
@@ -180,9 +213,9 @@ it("allows only operator/frame evidence to name the already selected whole basis
 it.each(["送出器","予備送出器"])("checks exact component equivalence in manual route frames: %s",async inlet=>{
   const route=`流体は${inlet}から受入器へ流れる。`,f=setup(`前記送出器を備える。${route}`);
   Object.assign(f.fact,{meaning:{kind:"path",subject:null,context:"operation",guardRelation:"unconditional",
-    guardConditions:[],polarity:"positive",origin:["前記送出器"],destination:["受入器"],via:[],bypass:[],
+    guardConditions:[],polarity:"positive",origin:[q("前記送出器")],destination:[q("受入器")],via:[],bypass:[],
     extent:"whole",relation:"route"},
-    routeFrame:{entry:q(inlet,inlet==="送出器"?1:0),exit:"受入器",route,exclusions:[],controls:[]}});
+    routeFrame:{entry:q(inlet,inlet==="送出器"?1:0),exit:q("受入器"),route:q(route),exclusions:[],controls:[]}});
   const r=await f.model.validate!(f.wire);expect(r.success).toBe(true);if(!r.success)return;
   if(inlet==="送出器")expect(()=>decodeSourcePropositions(f.plan,r.value)).not.toThrow();
   else expect(()=>decodeSourcePropositions(f.plan,r.value)).toThrow("ai_incomplete");
