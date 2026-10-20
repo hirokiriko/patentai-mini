@@ -15,7 +15,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(!input||[1,2,3,4,5].includes(value.locatorVersion))return flattenGuards(value);
+  if(!input||[1,2,3,4,5,6].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
     const locators=[];
     const add=(range,claimNo)=>{
@@ -43,14 +43,23 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:5,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:6,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
     const parts=no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(p=>p.text):c.segments?c.segments.map(s=>Array.isArray(s)?s[1]:s.text):[c.text];};
+    if(s.facts.some(f=>!source.claims.some(c=>c.claimNo===f.claimNo)))throw Error("fictional_locator_invalid");
+    const claims=source.claims.map(c=>{
     const t=table(no=>parts(no).join(""),parts);
-    const facts=s.facts.map(f=>{
-      const add=r=>t.add(r,f.claimNo),encoded=fact({...f,bindings:[]},add),m=f.meaning;
+    let at=0;const ranges=parts(c.claimNo).map(text=>{const start=at;at+=text.length;return[start,at];});
+    const facts=s.facts.filter(f=>f.claimNo===c.claimNo).map(f=>{
+      const add=r=>t.add(r,f.claimNo),encoded=fact({...f,basis:[],bindings:[]},add),m=f.meaning;
+      const basis=f.basis.map(range=>{
+        if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||range[0]<0||range[1]<=range[0]||range[1]>at)throw Error("fictional_locator_invalid");
+        const firstPart=ranges.findIndex(r=>r[0]===range[0]),lastPart=ranges.findIndex(r=>r[1]===range[1]);
+        if(firstPart<0||lastPart<firstPart)throw Error("fictional_basis_not_part_range");
+        return {firstPart,lastPart};
+      });
       const usedTerms=new Set();
       if(new Set(f.bindings.map(b=>b.term)).size!==f.bindings.length)throw Error("fictional_binding_duplicate");
       const term=value=>{
@@ -66,8 +75,9 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         {...common,origin:m.origin===null?null:term(m.origin),destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term)}:
         {...common,objects:m.objects.map(term)};
       if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
-      delete encoded.bindings;return {...encoded,meaning};
-    });return {...s,locators:t.locators.map((l,id)=>({id,...l})),requiredLoops:[],facts};
+      delete encoded.bindings;delete encoded.claimNo;return {...encoded,basis,meaning};
+    });return {claimNo:c.claimNo,locators:t.locators.map(({claimNo,...l},id)=>{void claimNo;return{id,...l};}),requiredLoops:[],facts};
+    });return {sourceDigest:s.sourceDigest,claims};
   })});
   if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
     const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);
@@ -100,9 +110,9 @@ export function fixturePropositionSource(input){
   input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>c.parts?{...c,text:c.parts.map(p=>p.text).join("")}:c)}}))};
   return withInput({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>{
     const text=textOf(c),f=extraction(text,m);
-    // Keep exact small supporting spans, rather than repeating a long claim in
-    // each locator. This fixture remains hand-authored, not model QA evidence.
-    f.basis=terms(m).map(term=>span(text,term));return {claimNo:c.claimNo,...f};
+    // The fictional model explicitly selects the complete claim's part range.
+    // No original text is repeated in the basis wire, and no role fills it in.
+    return {claimNo:c.claimNo,...f};
   }))}))},input);
 }
 export function fixturePropositionGeneration(input){

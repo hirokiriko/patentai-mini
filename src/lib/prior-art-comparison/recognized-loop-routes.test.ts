@@ -92,19 +92,21 @@ function indexedWire(f:ReturnType<typeof setup>){
   const wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input)),row=wire.sources[0];
   // Re-encode only the selected roles. Catalog frames no longer consume the
   // old fixture's explicit frame locators, so do not retain unused entries.
+  for(const claim of row.claims){
   const locators:unknown[]=[],ids=new Map<number,number>();
-  const ref=(id:number)=>{if(!ids.has(id)){const key=41+ids.size*3;ids.set(id,key);locators.push({...row.locators.find((l:{id:number})=>l.id===id),id:key});}return ids.get(id)!;};
+  const ref=(id:number)=>{if(!ids.has(id)){const key=41+ids.size*3;ids.set(id,key);locators.push({...claim.locators.find((l:{id:number})=>l.id===id),id:key});}return ids.get(id)!;};
   const refs=(v:unknown):unknown=>Array.isArray(v)?v.map(refs):typeof v==="number"?ref(v):
     v&&typeof v==="object"?Object.fromEntries(Object.entries(v).map(([k,v])=>[k,refs(v)])):v;
-  row.requiredLoops=row.facts.map((fact:Record<string,unknown>,i:number)=>({...fact,basis:refs(fact.basis),meaning:refs(fact.meaning),operators:refs(fact.operators),routeFrame:i}));
-  row.facts=[];
-  row.locators=locators.reverse();return wire;
+  const loops=f.input.sources[0].recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===claim.claimNo);
+  claim.requiredLoops=claim.facts.map((fact:Record<string,unknown>,i:number)=>({...fact,meaning:refs(fact.meaning),operators:refs(fact.operators),routeFrame:loops[i].id}));
+  claim.facts=[];claim.locators=locators.reverse();
+  }return wire;
 }
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
   const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
-  expect(wire.sources[0].requiredLoops.map((f:{routeFrame:number})=>f.routeFrame)).toEqual([0,1]);
-  expect(wire.sources[0].locators.every((l:{id:number})=>l.id>=41)).toBe(true);
+  expect(wire.sources[0].claims.flatMap((c:{requiredLoops:{routeFrame:number}[]})=>c.requiredLoops.map(f=>f.routeFrame))).toEqual([0,1]);
+  expect(wire.sources[0].claims.every((c:{locators:{id:number}[]})=>c.locators.every(l=>l.id>=41))).toBe(true);
   if(result.success){
     expect(result.value).toEqual(f.raw);
     expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
@@ -112,7 +114,7 @@ it("selects immutable loop evidence while retaining independently extracted mean
   }
 });
 it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destination","partial","precedes","non_path","basis_missing"])("rejects each incorrectly assigned catalog frame: %s",async mode=>{
-  const f=setup(),wire=indexedWire(f),row=wire.sources[0],fact=row.requiredLoops[0];
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0].claims[0],fact=row.requiredLoops[0];
   if(mode==="other_claim")fact.routeFrame=1;
   if(mode==="out_of_range")fact.routeFrame=2;
   if(mode==="wrong_mode")fact.meaning.subject=fact.meaning.origin;
@@ -121,19 +123,19 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="partial")fact.meaning.extent="segment";
   if(mode==="precedes")fact.meaning.relation="precedes";
   if(mode==="non_path"){const m=fact.meaning;fact.meaning={kind:"relation",subject:m.subject,context:m.context,guardRelation:m.guardRelation,guardConditions:m.guardConditions,polarity:m.polarity,predicate:"has",objects:[m.origin]};}
-  if(mode==="basis_missing")fact.basis=[fact.meaning.origin[0]];
+  if(mode==="basis_missing")fact.basis=[{firstPart:0,lastPart:0}];
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
 });
-it.each(["missing", "duplicate", "reordered", "in_facts", "numeric_extra", "combined_limit", "unexpected", "legacy_v4"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
-  const f=setup(),wire=indexedWire(f),row=wire.sources[0];
+it.each(["missing", "duplicate", "reordered", "in_facts", "numeric_extra", "combined_limit", "unexpected", "legacy_v5"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0].claims[0];
   if(mode==="missing")row.requiredLoops.pop();
-  if(mode==="duplicate")row.requiredLoops[1]=structuredClone(row.requiredLoops[0]);
-  if(mode==="reordered")row.requiredLoops.reverse();
+  if(mode==="duplicate")row.requiredLoops.push(structuredClone(row.requiredLoops[0]));
+  if(mode==="reordered")wire.sources[0].claims.reverse();
   if(mode==="in_facts")row.facts.push(row.requiredLoops.pop());
   if(mode==="numeric_extra")row.facts.push(structuredClone(row.requiredLoops[0]));
   if(mode==="combined_limit")row.facts=Array.from({length:47},()=>({...structuredClone(row.requiredLoops[0]),routeFrame:null}));
-  if(mode==="unexpected")wire.sources[1].requiredLoops.push(structuredClone(row.requiredLoops[0]));
-  if(mode==="legacy_v4"){wire.locatorVersion=4;for(const s of wire.sources)delete s.requiredLoops;}
+  if(mode==="unexpected")wire.sources[1].claims[0].requiredLoops.push(structuredClone(row.requiredLoops[0]));
+  if(mode==="legacy_v5")wire.locatorVersion=5;
   const before=JSON.stringify(wire);
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
   expect(JSON.stringify(wire)).toBe(before);

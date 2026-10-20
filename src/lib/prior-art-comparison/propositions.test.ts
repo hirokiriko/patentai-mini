@@ -58,6 +58,21 @@ describe("position-bound proposition comparison (fictional extraction, not AI qu
     const s=source("s1",set("補助系",["青","黄"]));s.meaning.guard={relation:"when",conditions:["高温時"]};
     expect(compareProposition(target(set("補助系",["青","黄"])),[s])).toMatchObject({relation:"unresolved",rule:"guard_lost"});
   });
+  it("keeps alternative operating modes as separate guarded actions, not a conjunction",()=>{
+    const action=(mode:string):Meaning=>({kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:[mode]},polarity:"positive",predicate:"opens",objects:["青色弁"]});
+    const a=action("紫色モード"),b=action("緑色モード"),separate=[source("s1",a),source("s2",b)];
+    for(const [id,m] of [["s1",a],["s2",b]] as const)expect(compareProposition(target(m,[id]),separate).relation).toBe("entailed");
+    const both:Meaning={...a,guard:{relation:"when",conditions:["紫色モード","緑色モード"]}};
+    expect(compareProposition(target(both,["s1","s2"]),separate).relation).toBe("unresolved");
+    expect(compareProposition(target(a),[source("s1",both)]).relation).toBe("unresolved");
+  });
+  it("does not drop the operating-state trigger or replace maintaining a closed state with closing",()=>{
+    const full:Meaning={kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["紫色モード運転中から停止","停止後所定期間"]},polarity:"positive",predicate:"maintains",objects:["青色弁の閉状態"]};
+    const facts=[source("s1",full)];
+    expect(compareProposition(target(full),facts).relation).toBe("entailed");
+    expect(compareProposition(target({...full,guard:{relation:"when",conditions:["停止後所定期間"]}}),facts).relation).toBe("unresolved");
+    expect(compareProposition(target({...full,predicate:"closes",objects:["青色弁"]}),facts).relation).toBe("unresolved");
+  });
   it("compares via/bypass only with matching endpoints",()=>{
     expect(compareProposition(target(path(["中間槽"],[])),[source("s1",path([],["中間槽"]))])).toMatchObject({relation:"contradicted",rule:"path_conflict"});
     const t=target(path(["中間槽"],[]));if(t.meaning.kind==="path")t.meaning.origin=null;

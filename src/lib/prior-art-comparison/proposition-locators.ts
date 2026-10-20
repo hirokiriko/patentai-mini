@@ -37,6 +37,7 @@ const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning
   routeFrame:z.union([index,spans.routeFrame.unwrap()]).nullable()});
 const sourceLocator=z.object({id:index.max(511),claimNo:z.number().int().positive(),firstPart:index,lastPart:index,
   quote:locator.shape.quote.nullable(),occurrence:index}).strict();
+const sourceBasis=z.object({firstPart:index,lastPart:index}).strict();
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
   reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
@@ -84,8 +85,8 @@ function tableReader<T extends z.infer<typeof locator>>(table:T[], text:(entry:T
   }, complete:()=>{if(used.size!==table.length)throw invalid();}};
 }
 
-function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame">&{routeFrame:z.infer<typeof spans.routeFrame>},get:(at:number)=>Span,text:string) {
-  const basis=raw.basis.map(get),bindings:z.infer<typeof extractionSchema>["bindings"]=[];
+function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame">&{routeFrame:z.infer<typeof spans.routeFrame>},get:(at:number)=>Span,text:string,basis:Span[]) {
+  const bindings:z.infer<typeof extractionSchema>["bindings"]=[];
   const term=(refs:number[]):string=>{
     const positions=refs.map(get);
     // Check every role before coalescing identical terms. A second occurrence
@@ -101,60 +102,69 @@ function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame
     m.kind==="path"?{...common,kind:m.kind,origin:m.origin===null?null:term(m.origin),
       destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term),extent:m.extent,relation:m.relation}:
     {...common,kind:m.kind,predicate:m.predicate,objects:m.objects.map(term)};
-  return {...expandExtraction({...raw,meaning,bindings:[]},get),bindings};
+  return {...expandExtraction({...raw,basis:[],meaning,bindings:[]},get),basis,bindings};
 }
 
 /** The wire result is converted once to the unchanged internal span schema.
  * The domain decoder still checks containment, scope, terms and semantics. */
 export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const fact=boundSourceExtraction.extend({claimNo:z.number().int().positive()}).meta({id:"PriorArtSourceFact"});
-  const schema=z.object({locatorVersion:z.literal(5),sources:z.array(z.object({
+  const fact=boundSourceExtraction.extend({basis:z.array(sourceBasis).min(1).max(12)}).meta({id:"PriorArtSourceFact"});
+  const reading=z.object({claimNo:z.number().int().positive(),
+    locators:z.array(sourceLocator.omit({claimNo:true})).max(512),
+    requiredLoops:z.array(fact).max(48).describe("One independently extracted whole path for each recognizedLoopRoutes entry in THIS claim, in source inventory order. numeric routeFrame is the original inventory id."),
+    facts:z.array(fact).max(48).describe("Additional literal propositions in THIS claim. Explicit frame or null, never numeric routeFrame. Canonical-only or unrepresentable content may yield no additional facts; never invent one."),
+  }).strict();
+  const schema=z.object({locatorVersion:z.literal(6),sources:z.array(z.object({
     sourceDigest:local.shape.sources.element.shape.sourceDigest,
-    locators:z.array(sourceLocator).max(512),
-    requiredLoops:z.array(fact).max(48).describe("Exactly one independently extracted whole path per recognizedLoopRoutes entry, in its id order; numeric routeFrame is that id. Empty only when that source's inventory is empty."),
-    facts:z.array(fact).max(48).describe("Additional propositions from all reference claims. Do not duplicate requiredLoops or canonical mode sets. Explicit frame or null, never a numeric routeFrame."),
+    claims:z.array(reading).describe("Every input claim exactly once in input order, including all ancestors. Each claim has its own locator IDs; never borrow a locator from another claim."),
   }).strict()).length(input.sources.length)}).strict();
   const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,{text:c.segments.map(p=>p.text).join(""),parts:sourceCitationParts(c.segments.map(p=>p.text))}])));
   return comparisonModelSchema(schema,raw=>{
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_LOCATOR_MAX_BYTES)throw invalid();
     return local.parse({sources:raw.sources.map((s,i)=>{
       if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
-      // Expose the existing coverage obligation in the generation shape. No
-      // missing path or semantic role is filled from the evidence inventory.
-      if(s.requiredLoops.length!==input.sources[i].recognizedLoopRoutes.length||
-        s.requiredLoops.some((f,id)=>f.routeFrame!==id)||
-        s.facts.some(f=>typeof f.routeFrame==="number")||s.requiredLoops.length+s.facts.length>48)throw invalid();
-      const seen=new Set<string>(),used=new Set<number>(),resolved=new Map<number,{claimNo:number;position:Span}>();
-      for(const l of s.locators){
+      const expected=input.sources[i].source.claims;
+      if(s.claims.length!==expected.length||s.claims.some((c,n)=>c.claimNo!==expected[n].claimNo)||
+        s.claims.reduce((n,c)=>n+c.locators.length,0)>512||
+        s.claims.reduce((n,c)=>n+c.requiredLoops.length+c.facts.length,0)>48)throw invalid();
+      const facts=s.claims.flatMap(c=>{
+      const claim=originals[i].get(c.claimNo)!;
+      const loops=input.sources[i].recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===c.claimNo);
+      if(c.requiredLoops.length!==loops.length||c.requiredLoops.some((f,n)=>f.routeFrame!==loops[n].id)||
+        c.facts.some(f=>typeof f.routeFrame==="number"))throw invalid();
+      const seen=new Set<string>(),used=new Set<number>(),resolved=new Map<number,Span>();
+      for(const l of c.locators){
         if(resolved.has(l.id))throw invalid();
-        const claim=originals[i].get(l.claimNo);if(!claim)throw invalid();
         const [a,b]=sourceCitationRange(claim.parts,l.firstPart,l.lastPart);
         if(l.quote===null&&l.occurrence!==0)throw invalid();
         const position:Span=l.quote===null?[a,b]:resolvePropositionQuote(claim.text.slice(a,b),l.quote,l.occurrence).map(n=>n+a) as Span;
         // Different anchors must not disguise duplicate positions.
-        const key=JSON.stringify([l.claimNo,position]);if(seen.has(key))throw invalid();seen.add(key);
-        resolved.set(l.id,{claimNo:l.claimNo,position});
+        const key=JSON.stringify(position);if(seen.has(key))throw invalid();seen.add(key);
+        resolved.set(l.id,position);
       }
-      const facts=[...s.requiredLoops,...s.facts].map(f=>{
-        const claim=originals[i].get(f.claimNo);if(!claim)throw invalid();
+      const facts=[...c.requiredLoops,...c.facts].map(f=>{
         const get=(at:number):Span=>{
           const entry=resolved.get(at);
-          if(!Number.isSafeInteger(at)||entry?.claimNo!==f.claimNo)throw invalid();used.add(at);return [...entry.position];
+          if(!Number.isSafeInteger(at)||!entry)throw invalid();used.add(at);return [...entry];
         };
         const indexed=typeof f.routeFrame==="number",r=indexed?input.sources[i].recognizedLoopRoutes[f.routeFrame as number]:undefined;
-        const expanded=expandSource({...f,routeFrame:indexed?null:f.routeFrame as z.infer<typeof spans.routeFrame>},get,claim.text);
+        // The model explicitly selects complete part ranges. Never derive or
+        // enlarge its basis from a role, a frame, or a failed quote lookup.
+        const basis=f.basis.map(b=>sourceCitationRange(claim.parts,b.firstPart,b.lastPart));
+        const expanded=expandSource({...f,basis:[],routeFrame:indexed?null:f.routeFrame as z.infer<typeof spans.routeFrame>},get,claim.text,basis);
         if(indexed){
           const m=expanded.meaning,same=(t:string|null,span:Span)=>t!==null&&propositionKey(t)===propositionKey(claim.text.slice(...span));
-          if(!r||r.claimNo!==f.claimNo||m.kind!=="path"||m.extent!=="whole"||m.relation!=="route"||
+          if(!r||r.claimNo!==c.claimNo||m.kind!=="path"||m.extent!=="whole"||m.relation!=="route"||
             !same(m.subject,r.mode)||!same(m.origin,r.entry)||!same(m.destination,r.exit))throw invalid();
           const frame={entry:r.entry,exit:r.exit,route:r.route,exclusions:[r.definition],controls:[r.control]};
           if([r.mode,r.entry,r.exit,r.route,r.definition,r.control].some(span=>!expanded.basis.some(([a,b])=>span[0]>=a&&span[1]<=b)))throw invalid();
           expanded.routeFrame=structuredClone(frame);
         }
-        return {...expanded,claimNo:f.claimNo};
+        return {...expanded,claimNo:c.claimNo};
       });
-      if(used.size!==s.locators.length)throw invalid();return {sourceDigest:s.sourceDigest,facts};
+      if(used.size!==c.locators.length)throw invalid();return facts;
+      });return {sourceDigest:s.sourceDigest,facts};
     })});
   });
 }
