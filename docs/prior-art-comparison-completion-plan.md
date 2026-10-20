@@ -1,0 +1,243 @@
+# Issue #150：期限経過後の完遂案
+
+2026-10-21 JST作成。Issue #150 §0-Jと進行指示comment 6294248189に対応する。
+同じLocal worktree・`codex/issue-150-prior-art-quality`・Draft PR #151を使用する。
+この文書は未承認の案であり、送信・期限延長・新鍵生成・pin変更・配備を許可しない。
+保留された1,325円案と、停止済みprogramの未使用枠は再利用しない。
+
+## 先に使える成果と残る判断
+
+- 比較v10は完成済みで、今回の比較・画面・保存・帳票コード変更はない。
+  原文一覧・参照・位置をコードで確定する責務と、意味をAIが抽出する責務を、
+  失敗139/144と現実装で一度照合した。追加の汎用パーサーや評価基盤は作らない。
+- 架空AIによる保存結果、11頁のPDF、33行66セルのCSVは取得・点検可能。
+  保存／再表示／再起動、全頁の内容・順序・描画、CSV全セル、再取得AI0の有効な証拠を再利用する。
+  これは実AIの品質合格や本番受入ではない。
+- 鍵の復元先不明を解決対象に含めた。旧署名履歴を保持し、今回だけの新鍵を
+  独立に確認したreview digestに限定する互換処理を実装した。実鍵とpinは未変更。
+- 残る人の判断は、この有限program、期限、累計費用、最小鍵更新と通常配備に伴う
+  二設定の整合を一括承認するかどうか。既承認の通常工程を承認し直す案ではない。
+
+最初の完了目標は、運営者が既存の恒久クラウドで、同一案件の入力→実AI比較→
+根拠確認→保存・再表示→PDF/CSV取得を一巡できること。
+TECHNICAL_GO、実AI正常結果、本番の一巡は現在未達。固定24文はNOT_EVALUATED。
+
+## 一度の品質原因点検
+
+139は36命題・171引用中、反復位置不明27件と選択範囲にない引用14件で失敗した。
+144は41命題・151引用を返したが、引用4件が不適合で、
+入力19請求項中14件のcoverageと必須閉路2件の回答が欠けていた。
+両回はcompletedとusageを取得しており、この2件の原因をtimeoutや出力上限とは扱わない。
+別の過去timeoutの原因は未特定のまま保持する。
+
+現v10は原文digest・請求項・part座標・参照DAG・catalog IDをコードで生成し、
+AIの回答schemaへ固定する。全入力請求項のcoverage、既知閉路の回答も必須にした。
+AIには意味・条件・経路、根拠範囲、実際に選んだ引用と反復位置を回答させる。
+反復箇所の選択は意味に関わるため、コードが都合のよい位置へ補修しない。
+現promptにはmode、内外、動作主体、経路入口・出口、条件、熱の具体的な注意も既にある。
+
+従って追加の比較コード変更は不要と判断した。引用位置の一致は意味品質の証明ではない。
+原本22請求項／入力19請求項65片、固定20欄24文14参照、既知4誤りと正対照を維持し、
+旧rawの修理、原文削減、失敗を除いた部分合格は行わない。
+
+## 有限の再検証と新期限
+
+案名は `ISSUE150_COMPLETION_1522_V1`。
+新絶対期限は **2026-10-23 23:59 JST（2026-10-23T14:59:00Z）**。
+期限は有料Local、本番確認、通常配備・rollback・限定cleanupまで共通とする。
+旧期限の書換えではなく、新しい真正承認が必要である。
+
+1. Local診断は初回1回。確定した診断品質FAILの原因を全件点検し、
+   具体修正・無課金差分検証・新headの必須CI／独立2名レビューが済んだ場合だけ第2診断を1回認める。
+2. 診断の全件QAが合格した場合、正常比較は合計1回だけ。
+   初回診断が合格すれば第2診断は使わない。Local全体は最大7送信、request retryは0。
+3. 各小修正で新しい有限programを作らず、この1回の修正機会に含める。
+   同じ原文・固定対象・model/default/low、意味の厳格検証、時間・出力・保存形式を保持する。
+   schema/prompt/locatorの必要な最小修正に限定し、最終headと再測定した入力を結ぶ。
+   上限超過や方式・対象の拡張は本案に含まれない。
+4. 正常比較の最初の予約後は、品質FAILでも第2診断に戻れない。
+   UNKNOWN、incomplete、timeout、ACK／書込不明、第2診断FAILでprogram全体を停止する。
+   生raw、usage、予約・UNKNOWN、停止とcleanup記録を保持し、新UUIDで再開しない。
+
+| 段階 | 入力上限 | 出力上限 | 1送信の予約 |
+| --- | ---: | ---: | ---: |
+| 診断・原文 | 90,000 | 16,384 | 208円 |
+| 診断・対象 | 90,000 | 22,528 | 248円 |
+| 正常・原文 | 90,000 | 16,384 | 208円 |
+| 正常・比較生成 | 90,000 | 8,192 | 154円 |
+| 正常・対象 | 90,000 | 22,528 | 248円 |
+
+診断456円×最大2＋正常610円＝**全予約1,522円**。
+入力予約を既存の製品上限90,000へそろえ、有限修正に伴う小さなprompt増を最初から含める。
+実入力を増やす変更ではない。現v10の無通信SDK計測上界は
+55,800／70,668／55,800／54,828／87,629 bytesで、対応sourceは不変。
+各入力は実送信bytes＋8,192の保守上界とusageの両方で確認する。
+出力のreasoning tokensは出力枠に含む。
+
+request 210秒、比較operation 230秒、製品API 240秒、保護親1,800秒、
+runner 1,740秒、診断QA待ち900秒を維持する。
+Local有料開始は共通期限まで6時間以上、通常forward開始は240分以上、
+本番確認開始は180分以上を残し、不足時は新しい操作を開始しない。
+forward40分＋再束縛30分＋本番45分＋必要時revert validation40分＋
+rollback40分＋再束縛30分＝225分にIO余裕15分を加えたもの。
+本番開始にも45分＋rollback側110分とIO余裕を残す。未使用の時間枠を送信権へ転用しない。
+通常workflowは各40分、forward＋rollback合計80分を維持する。
+
+## 総費用と既存月次枠
+
+過去台帳124行・予約62件、既知実費1,443.78465円、UNKNOWN2,832円を全額保持する。
+既存exposureは4,275.78465円。過去失敗139＋144の76.73215円はこの既知実費に含む。
+
+| 項目 | 保守額 |
+| --- | ---: |
+| 既存実費＋UNKNOWN | 4,275.78465円 |
+| 新Local全予約 | 1,522円 |
+| 既承認本番AI留保 | 650円 |
+| AI上界 | **6,447.78465円** |
+| 本番非AI留保 | 150円 |
+| 通常配備＋rollback留保 | 1,400円 |
+| 総上界 | **7,997.78465円** |
+
+累計上限案は **AI6,448円／総7,998円**。
+最後の真正承認6,172円／7,722円から各276円増。
+未承認の1,325円案との比較では各197円増だが、その枠を承認済みとして転用しない。
+今後の全予約は合計3,722円（Local1,522＋本番800＋配備等1,400）。
+
+予約は既存の税・為替込み保守式 `ceil((5×input＋30×output)×220/1,000,000)`。
+既知usageは既存評価式 `(2.5×input＋15×output)×220/1,000,000` で精算する。
+全7送信が既知usageで終了する場合のLocal最大実費は758.76240円。
+全件合格・全精算後のrelease上界はAI5,684.54705円／総7,234.54705円で、
+新署名scope V7だけAI5,685円／総7,235円へ整合する。
+旧V1–V6、旧金額、消費済みforward/rollback、UNKNOWNは変更しない。
+
+通常配備等の1,400円は既存のforward255円＋rollback850円、
+二設定・profile整合等の管理分250円（各125円×2）、余白45円に分けて保守留保する。
+管理分は既存117.22874円モデルのBlob保持だけ1→32MiB、転送100→256MiBへ増やした
+各124.145031円を切り上げたもの。各phaseで30分／2vCPU・4GiB、
+HTTP1,000、Blob書込・list1,000／読込1,000、ログ100MiB、30日保持を上限とする。
+旧保守モデルのDB／WAL／backup分も差し引かず保持する。親が数量と累計を監視し、
+新Job・AI・追加image buildをこの管理分で実行しない。
+鍵生成・DPAPI保管・Local pinはクラウド費用0。
+本番非AIは既存固定数量の見積117.22874円に対して150円を留保する。
+30分のApp計算、HTTP1,000、DB16MiB／WAL128MiB／backup256MiB、
+Blob1MiB／read-write各1,000、転送・ログ各100MiBと30日残留分を含む。
+AI、月次pool、releaseの内訳を二重使用しない。
+
+10月21日00:29 JSTの読取では、既存stateの74 administration／101 operations、
+月次forecast38,331円を保持。月次補足は未適用で、
+jobs25／minutes3,000／forward8に対し通常上限24／2,880／8である。
+既承認の補足 **月次38,331円、jobs25、minutes3,000、forward9** のみ正規署名で適用する。
+残りの9単位、pool、既存#140 allowance（10月31日まで有効）はそのまま保持する。
+書込直前に新鮮なstate・履歴・実消費・poolを再照合し、不足なら停止する。
+
+## 復旧不能な既存署名鍵の最小置換
+
+旧鍵の既知参照先不在とOWNERの「復元先不明」は確定済みで、同じ探索を繰り返さない。
+実施者は現Local root。OWNERが本案の鍵更新を真正承認した後に限り、次を行う。
+
+1. 旧公開鍵、owner／target binding、既存管理履歴の連続sequenceとenvelope digestを固定し、
+   旧署名全件と連鎖を検証する。台帳・旧署名・旧公開鍵を上書きしない。
+2. Ed25519鍵をLocalメモリ内で1回生成する。秘密PKCS8は非表示pipeのみで扱い、
+   Windows DPAPI CurrentUserで暗号化して、Temp・repo・OneDrive外の永続保存先へcreate-only保存する。
+   mainと暗号化backupをOWNER専用ACLで保管し、固定保管先識別子をLocal記録へ残す。
+   別の短命processでmain／backupの復号、公開SPKI／SHA256一致、署名の自己検証を確認してから使う。
+   DPAPI復元は同じWindowsユーザー環境に依存し、別PCでの復元を保証するものではない。
+3. 既存署名helperの秘密鍵入力を、この固定保管先からのメモリ／pipe取得へ置換する。
+   新しい独立確認済みreviewの正規digestだけを署名し、既存validatorで署名を再検証する。
+   argv・標準出力・ログ・GitHub・環境変数へ秘密を出さない。
+4. `ISSUE150_KEY_REPLACEMENT_V1` のLocal管理pinを明示注入する。
+   固定した旧履歴prefixだけ旧鍵で検証し、それ以後は新鍵で、
+   OWNER証拠digest、独立レビュー済みunsigned review digest、許可operation IDを照合する。
+   デフォルトenv loader、HTTP、stdin、Blobから置換pinを取り込む入口は追加しない。
+5. 新鍵の用途は今回の正規月次補足、V7 forward／必要時rollback、
+   対応するprofile activateと精算だけ。最大16 administration reviews、
+   最大16 settlement reviews、最大4 operation IDsというschema上限の内側でも、
+   実際には独立確認した必要件数と、forward1件、必要時のrevert PRの
+   pr-push／pr-open validation各1件、rollback1件の最大4 operation IDsだけを列挙する。
+   精算signerには、そのうちforward／rollbackの固定2 IDsを別に渡してsubset一致を確認する。
+   新しいJob／watch開始権を与えない。
+
+新旧どちらかの鍵なら通るfallbackは設けない。期限後は既存書込の照合・履歴読取に限定する。
+新しい履歴を書く前ならLocal pinを元へ戻せる。新鍵の履歴を書いた後は、
+新公開鍵と対応記録を残したまま正規rollbackを使う。台帳巻戻しや旧鍵への偽装は行わない。
+暗号化秘密と公開検証記録はcleanupで消さず、再取得可能な状態で保持する。
+鍵復号・pin・旧署名のどれかが確認できなければ、有料Localを始める前に停止する。
+
+## 通常統合・配備と設定整合
+
+本番は既存resource group、App `ca-patentai-mini`、
+Manual Job `issue123-import-cedbbb648b57` だけ。Jobはimage更新のみで起動0。
+Local全件QA、正常保存・再表示・帳票、TECHNICAL_GO、最終headのCI／独立レビュー、
+競合・未解決必須指摘なし、#148非影響、月次9単位／pool、正規署名を満たした時だけ進む。
+既承認の通常Squash Merge・forward1回／rollback1回という工程は維持する。
+
+既存watchは `codeSha`、build SHA、Job image、pricing policy、active profileの一致を要求する。
+従ってimageだけを更新して旧設定を残す案にはしない。既存Issue #139の
+successor／runtime projectionの手順を参照し、#150の新しい承認と実測値へ限定して再bindする。
+旧helper内のIssue番号・head・履歴件数・UNKNOWN0の固定値を流用しない。
+
+- deployment後のmerge SHA／tree／image digest／App・Job metadataを採取し、
+  既存measurementと旧GOの原証拠を保った互換code更新証拠へ結ぶ。
+- 配備前のmonth補足は現profile Q0に結び、正規release admission後に通常配備する。
+  配備後の新pricing P1は旧P0のcodeSha／imageのみ整合し、単価・数量・計測・既存期限を引き継ぐ。
+  profileはそのpricing digestとGO evidence digestだけを改版し、消費・pool・案件枠を維持する。
+- 配備後のmonthで通常補足のprofileDigestだけを新profile Q1に結び、
+  新GO digestをLocal管理pinへ設定して正規署名reviewでQ1をactivateする。
+  既存#140 completionAllowanceは旧profileDigestを含め完全一致で保持する。
+  補足は `ISSUE150_STANDARD_MONTH_V1`、month、ownerApprovalDigest、profileDigest、
+  monthlyCapYen38,331、jobs25、minutes3,000、forward9に限定する。
+- Appの `MANAGED_KOHO_UPLOAD_SETTINGS` と `MANAGED_WATCH_WEB_SETTINGS` の二設定だけを、
+  前者の`codeSha`／`job.image`、後者の`codeSha`／`image`と、それらが参照する
+  pricing policyへ整合する。既存executorのforward PATCH最大1回、
+  必要時rollback PATCH最大1回、phase毎300秒・ARM読取最大12・retry0を使う。
+  新たなauth・DB・Storage資格情報・identity・ACLを変更しない。
+- 設定変更前のimage／二設定／profileとsourceを固定する。rollbackは本変更のsourceを
+  打ち消すrevert PRの正規validation・merge／配備経路を使い、実際のrollback squash SHAと
+  imageからP2／G2／Q2を作り、month／activate／二設定をその実SHA・imageへ再bindする。
+  新しいbuildを旧SHAと偽らず、旧imageと旧profileへ見かけ上戻さない。
+  共有stateのリセットや、#148試用のimage・profile・DB・保護journalへの変更は行わない。
+
+この二設定の限定更新とLocal鍵更新は、§7の一般的な設定・秘密変更禁止に対する
+今回だけの明示的な承認対象として一括案に含める。
+署名公開鍵をApp／Job環境変数へ追加する必要はない。
+#148の完成や新しいwatch実AI受入は追加の依存にしない。
+既存GOの再利用と配置・設定の一致は確認するが、未実行のwatch開始を新たな成功とは報告しない。
+
+## 既承認の本番確認1回と受入成果物
+
+800円（AI650＋非AI150）、公開3公報4組、専用1案件、実AI最大3送信・再送0を維持し、
+本案の期限・最終headへ結ぶ。新しいテスト案件を使うこと自体を成功とは扱わない。
+
+1. OWNER認証の固定URLから専用案件を作り、公開TXT3件を入力する。
+   その同じcaseIdで原文・組合せを選択し、比較開始は1回だけ。
+   クリック前に650円を全予約し、製品がPOST内で作るoperationIdと選択を保存して送信を許可する。
+2. 返答とusageを保持し、root＋独立Local2名で全4組の判定・説明・引用・条件・経路を原本照合する。
+   保存結果・再表示結果の同一性、全PDF頁とCSV全行全セル、再取得の内容一致と追加AI0を確認する。
+3. 専用案件とその3個の公開TXT Blobだけを既存経路でcleanupし、
+   Blob削除3／失敗0、案件再読取404を確認する。曖昧なwriteは再送せず照合して停止する。
+   帳票と秘密を含まない受入証拠は保持し、既存業務データは削除しない。
+
+固定URL・OWNER認証・常設App/API・DB/Blobの保存を実際の一巡へ結ぶ。
+既存のLocal PC非依存証拠は再利用し、OWNERのPC電源操作や別端末を新しい必須条件にしない。
+過去の架空試験ではuploadと比較が別caseだったため、その証拠だけで本番の同一case一巡を合格にしない。
+本番品質FAIL・UNKNOWN等では後続実AIを停止し、再比較を追加しない。
+
+## 差分検証と引継ぎ
+
+今回の製品差分は署名・台帳の2ファイルと対応テスト2ファイル。
+V7、旧署名prefix、新鍵用途制限、month／settlementの改変拒否、
+ACK不明後の期限切れ照合を確認した。署名／台帳405件、費用・期限の新差分4件、
+型確認、変更ファイルlint、製品buildはPASS。
+build IDは `2u4CYeOSe9ZQNIbdolzDc`。
+比較881件、guard105件、Windows親8・再開24・有限2枠、
+架空実アプリ9/9と全帳票証拠はsource一致を確認して再利用する。
+
+実行コマンドはpnpmの対象vitest、scoped `tsc --noEmit`、変更ファイルeslint、
+隔離snapshotの `next build`、pending gate／費用の無通信確認、`git diff --check`。
+初回の新テストでは未正規化fixtureの署名不一致と型union不一致を修正した。
+snapshot junctionはsandbox権限で失敗し、同じ範囲の許可された実行で成功した。
+失敗ログは成功証拠と区別して保持する。旧1,325円案と124行の台帳は不変。
+
+新実AI、鍵生成、pin適用、通常統合・配備、本番書込は今回0。
+CIと独立レビューは最終PR headに照合し、その記録をIssue #150へ付ける。
+真正承認後は同じ有限範囲で進め、未承認・期限切れ・実品質未証明を成功として引き継がない。

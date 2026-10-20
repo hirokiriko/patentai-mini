@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { managedDigest } from "./managed-claims";
 import { emptyManagedBudgetUnits, MANAGED_SERVICE_KEY, managedBudgetProfileSchema, managedBudgetStateSchema, managedCompletionAllowanceSchema, managedReleaseCaps, reserveManagedBudget, settleManagedBudget, setManagedMonthPlan } from "./managed-service-budget";
 import { MANAGED_BUDGET_PREFIX, ManagedServiceBudgetStorage } from "./managed-service-budget-storage";
-import { managedAdministrationReviewSchema, managedReleaseBudgetRequest, type ManagedAdministrationReview, type ManagedSettlementReview, type ManagedReleaseStep } from "./managed-budget-evidence";
+import { managedAdministrationReviewSchema, managedSettlementReviewSchema, managedIssue150IntegrationSchema, managedReleaseBudgetRequest, type ManagedAdministrationReview, type ManagedSettlementReview, type ManagedReleaseStep, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 import { managedBudgetedWatchFixture } from "./managed-execution-budget.test-support";
 import { managedCloudFixture } from "./managed-cloud.test-support";
 import type { ManagedBudgetBinding } from "./managed-budget-contract";
@@ -626,8 +626,8 @@ function releaseStep(f:ReturnType<typeof executionFixture>,kind:ManagedReleaseSt
     remoteBeforeSha:"b".repeat(40),headSha:"a".repeat(40),baseSha:"b".repeat(40),treeSha:"c".repeat(40),
     ciWorkflowSha256:hash(40),deployWorkflowSha256:hash(41),preflightDigest:hash(42),pricingDigest:f.pricingDigest,reservationYen:100};
 }
-function issue150Fixture(version: 1 | 2 | 3 | 4 | 5 | 6 = 1) {
-  const f = executionFixture(), now = version >= 2 ? "2026-10-19T12:00:00Z" : "2026-10-17T12:00:00Z";
+function issue150Fixture(version: 1 | 2 | 3 | 4 | 5 | 6 | 7 = 1) {
+  const f = executionFixture(), now = version === 7 ? "2026-10-21T12:00:00Z" : version >= 2 ? "2026-10-19T12:00:00Z" : "2026-10-17T12:00:00Z";
   vi.setSystemTime(new Date(now)); f.setDate(new Date(now).toUTCString());
   const put = (value: unknown) => {
     const bytes = Buffer.from(JSON.stringify(value)), digest = sha256(bytes);
@@ -649,16 +649,17 @@ function issue150Fixture(version: 1 | 2 | 3 | 4 | 5 | 6 = 1) {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519"), der = publicKey.export({ format: "der", type: "spki" });
   const pins = { publicKeySpkiBase64: der.toString("base64"), publicKeySha256: sha256(der),
     ownerBindingHash: f.binding.ownerBindingHash, targetBindingHash: f.binding.targetBindingHash, productionGoDigest: hash(1599) };
-  const approval: NonNullable<ManagedReleaseStep["issue150Integration"]> = version >= 2 ? {
-    scope: version === 6 ? "ISSUE150_INTEGRATION_V6" : version === 5 ? "ISSUE150_INTEGRATION_V5" : version === 4 ? "ISSUE150_INTEGRATION_V4" : version === 3 ? "ISSUE150_INTEGRATION_V3" : "ISSUE150_INTEGRATION_V2", ownerApprovalDigest: owner.digest, profileDigest,
-    approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", forwardOperationId: null } : {
+  const approval = managedIssue150IntegrationSchema.parse(version >= 2 ? {
+    scope: version === 7 ? "ISSUE150_INTEGRATION_V7" : version === 6 ? "ISSUE150_INTEGRATION_V6" : version === 5 ? "ISSUE150_INTEGRATION_V5" : version === 4 ? "ISSUE150_INTEGRATION_V4" : version === 3 ? "ISSUE150_INTEGRATION_V3" : "ISSUE150_INTEGRATION_V2", ownerApprovalDigest: owner.digest, profileDigest,
+    approvedAt: version === 7 ? "2026-10-21T00:00:00Z" : "2026-10-19T00:00:00Z",
+    validUntil: version === 7 ? "2026-10-23T14:59:00Z" : "2026-10-20T14:59:00Z", forwardOperationId: null } : {
     scope: "ISSUE150_INTEGRATION_V1", ownerApprovalDigest: owner.digest, profileDigest,
-    approvedAt: "2026-10-17T06:41:40Z", validUntil: "2026-10-18T06:41:40Z", forwardOperationId: null };
+    approvedAt: "2026-10-17T06:41:40Z", validUntil: "2026-10-18T06:41:40Z", forwardOperationId: null });
   const forward: ManagedReleaseStep = { ...releaseStep(f, "forward"), issue: 150, prNumber: 151, pricingDigest: pricing.digest,
     issue150Integration: approval };
   const preflight = { scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${version}`, ownerApprovalDigest: owner.digest,
     technicalGoHeadSha: forward.headSha, technicalGoTreeSha: forward.treeSha, baseTreeSha: "d".repeat(40),
-    aiExposureYen: version === 6 ? 5588 : version === 5 ? 5509 : version === 4 ? 5437 : version === 3 ? 5421 : version === 2 ? 4843 : 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null,
+    aiExposureYen: version === 7 ? 5685 : version === 6 ? 5588 : version === 5 ? 5509 : version === 4 ? 5437 : version === 3 ? 5421 : version === 2 ? 4843 : 2000, rollbackReserveYen: 500, forwardResultDigest: null as string | null,
     ...(version >= 3 ? { productionNonAiReserveYen: 150 } : {}) };
   forward.preflightDigest = put(preflight).digest;
   const signReview = (action: ManagedAdministrationReview["action"], sources: ManagedAdministrationReview["sources"], changes: Partial<ManagedAdministrationReview> = {}) => {
@@ -666,7 +667,7 @@ function issue150Fixture(version: 1 | 2 | 3 | 4 | 5 | 6 = 1) {
       purpose: "MANAGED_WATCH_ADMINISTRATION_REVIEW_V1", targetBindingHash: pins.targetBindingHash, ownerBindingHash: pins.ownerBindingHash,
       sequence: current.administration.length + 1, previousReviewDigest: current.administration.at(-1)!.digest,
       expectedStateDigest: managedDigest(current), issuedAt: now,
-      validUntil: version >= 2 ? "2026-10-19T12:15:00Z" : "2026-10-17T12:15:00Z", action, sources, ...changes });
+      validUntil: version === 7 ? "2026-10-21T12:15:00Z" : version >= 2 ? "2026-10-19T12:15:00Z" : "2026-10-17T12:15:00Z", action, sources, ...changes });
     const envelope = { review, signature: sign(null, Buffer.from(managedDigest(review), "hex"), privateKey).toString("base64") };
     const digest = managedDigest(envelope), name = `${MANAGED_BUDGET_PREFIX}administration-reviews/${digest}.json`;
     f.files.set(name, { bytes: Buffer.from(JSON.stringify(envelope)), etag: '"signed150"' });
@@ -702,7 +703,121 @@ function issue150Fixture(version: 1 | 2 | 3 | 4 | 5 | 6 = 1) {
   };
   return { ...f, put, profile, pins, approval, forward, preflight, reviewed, admit, rollbackStep, rollbackFacts, result, resultSource, signReview };
 }
-it.each([1, 2, 3, 4, 5, 6] as const)("admits only the signed Issue150 V%s forward and exact revert push/open/merge lineage", async version => {
+function replacementSigner(f:ReturnType<typeof issue150Fixture>, ownerApprovalDigest:string) {
+  const { publicKey, privateKey }=generateKeyPairSync("ed25519"), der=publicKey.export({format:"der",type:"spki"});
+  const pins:ManagedBudgetEvidencePins={...f.pins,issue150Replacement:{
+    scope:"ISSUE150_KEY_REPLACEMENT_V1",ownerApprovalDigest,validUntil:"2026-10-23T14:59:00Z",
+    publicKeySpkiBase64:der.toString("base64"),publicKeySha256:sha256(der),
+    historicalAdministration:structuredClone(f.current().administration),
+    administrationReviewDigests:[],settlementReviewDigests:[],operationIds:[],
+  }};
+  const resign=(r:ReturnType<typeof f.reviewed>)=>{
+    const review=r.envelope.review;
+    pins.issue150Replacement!.administrationReviewDigests.push(managedDigest(review));
+    if(review.action.kind==="release-start")pins.issue150Replacement!.operationIds.push(review.action.step.operationId);
+    const envelope={review,signature:sign(null,Buffer.from(managedDigest(review),"hex"),privateKey).toString("base64")};
+    const digest=managedDigest(envelope);
+    f.files.set(`${MANAGED_BUDGET_PREFIX}administration-reviews/${digest}.json`,{bytes:Buffer.from(JSON.stringify(envelope)),etag:'"replacement"'});
+    return digest;
+  };
+  const settlement=(value:ManagedSettlementReview)=>{
+    const review=managedSettlementReviewSchema.parse(value);
+    pins.issue150Replacement!.settlementReviewDigests.push(managedDigest(review));
+    const envelope={review,signature:sign(null,Buffer.from(managedDigest(review),"hex"),privateKey).toString("base64")};
+    const digest=managedDigest(envelope);
+    f.files.set(`${MANAGED_BUDGET_PREFIX}settlement-reviews/${digest}.json`,{bytes:Buffer.from(JSON.stringify(envelope)),etag:'"replacement-settlement"'});
+    return digest;
+  };
+  return {pins,resign,settlement};
+}
+it("applies the exact new-key October supplement while retaining the old completion allowance and costs",async()=>{
+  const f=issue150Fixture(7), oldOwner=f.put({scope:"FICTIONAL_OLD_ALLOWANCE"});
+  const s=f.current(), plan=s.plans.find(p=>p.month==="2026-10")!;
+  plan.completionAllowance=managedCompletionAllowanceSchema.parse({scope:"ISSUE140_COMPLETION_V2",issue:140,month:"2026-10",
+    ownerApprovalDigest:oldOwner.digest,profileDigest:f.approval.profileDigest,monthlyCapYen:45000,
+    cumulativeUnits:{...managedReleaseCaps,jobs:40,minutes:4681,forward:15},validUntil:"2026-10-31T15:00:00.000Z"});
+  f.files.get(key)!.bytes=Buffer.from(JSON.stringify(s));
+  const ownerDigest=f.approval.ownerApprovalDigest, owner={digest:ownerDigest,bytes:f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${ownerDigest}.json`)!.bytes.length},
+    pricing={digest:plan.pricingDigest,bytes:f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${plan.pricingDigest}.json`)!.bytes.length};
+  const a:ManagedAdministrationReview["action"]={kind:"month",processingMonth:"2026-10",baseYen:plan.baseYen,pools:plan.pools,
+    pricingDigest:plan.pricingDigest,releaseTailYen:s.releaseTailYen,reviewedOperationIds:[],
+    completionAllowance:plan.completionAllowance,standardMonthAdjustment:{scope:"ISSUE150_STANDARD_MONTH_V1",month:"2026-10",
+      ownerApprovalDigest:ownerDigest,profileDigest:f.approval.profileDigest,monthlyCapYen:38331,jobs:25,minutes:3000,forward:9}};
+  const signer=replacementSigner(f,ownerDigest),r=f.signReview(a,[owner,pricing,oldOwner]),digest=signer.resign(r);
+  const old=signer.pins.issue150Replacement!.historicalAdministration[0].digest;
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=hash(999);
+  for(const reconcile of [true,false])await expect(f.store.applyReviewedAdministration(digest,signer.pins,reconcile)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=old;
+  expect(await f.store.applyReviewedAdministration(digest,signer.pins)).toEqual({status:"applied"});
+  const after=f.current();
+  expect(after.plans.find(p=>p.month==="2026-10")?.completionAllowance).toEqual(plan.completionAllowance);
+  expect(after.plans.find(p=>p.month==="2026-10")?.standardMonthAdjustment).toEqual(a.standardMonthAdjustment);
+  expect(after.operations).toEqual(s.operations);expect(after.releaseTailYen).toBe(s.releaseTailYen);
+});
+it("rejects mismatched history before a new-key settlement and reconciles lost state ACK after expiry",async()=>{
+  const f=issue150Fixture(7),signer=replacementSigner(f,f.approval.ownerApprovalDigest);
+  const admin=signer.resign(f.reviewed());await f.store.applyReviewedAdministration(admin,signer.pins);
+  const o=f.current().operations.at(-1)!,proof=f.put({scope:"FICTIONAL_CONFIRMED_UNITS"}),ownerDigest=f.approval.ownerApprovalDigest;
+  const digest=signer.settlement({schema:1,purpose:"MANAGED_WATCH_SETTLEMENT_REVIEW_V1",
+    ownerBindingHash:f.pins.ownerBindingHash,targetBindingHash:f.pins.targetBindingHash,
+    operationId:o.operationId,requestDigest:o.requestDigest,pricingDigest:o.pricingDigest,sequence:1,previousProofDigest:null,
+    issuedAt:"2026-10-21T12:00:00Z",validUntil:"2026-10-21T12:15:00Z",
+    sources:[proof,{digest:ownerDigest,bytes:f.files.get(`${MANAGED_BUDGET_PREFIX}evidence/${ownerDigest}.json`)!.bytes.length}],
+    finalizedUnits:{forward:1},unitEvidence:[{unit:"forward",sourceDigest:proof.digest}],cost:null});
+  const original=signer.pins.issue150Replacement!.historicalAdministration[0].digest,before=f.calls.length;
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=hash(999);
+  for(const reconcile of [true,false])await expect(f.store.settleReviewed(digest,signer.pins,reconcile)).rejects.toThrow();
+  expect(f.calls.slice(before).filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=original;f.loseAck(key);
+  await expect(f.store.settleReviewed(digest,signer.pins)).rejects.toThrow();
+  f.restoreAck();f.setDate("Sat, 24 Oct 2026 00:00:00 GMT");
+  const after=JSON.stringify(f.current()),calls=f.calls.length;
+  expect(await f.store.settleReviewed(digest,signer.pins,true)).toEqual({status:"already_applied"});
+  expect(JSON.stringify(f.current())).toBe(after);expect(f.calls.slice(calls).filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+});
+it("admits one V7 operation with the replacement key and reconciles it after expiry without new writes",async()=>{
+  const f=issue150Fixture(7), signer=replacementSigner(f,f.approval.ownerApprovalDigest), r=f.reviewed(), digest=signer.resign(r);
+  await expect(f.store.applyReviewedAdministration(r.digest,signer.pins)).rejects.toThrow();
+  expect(await f.store.applyReviewedAdministration(digest,signer.pins)).toMatchObject({status:"admitted"});
+  const before=JSON.stringify(f.current()),puts=f.calls.filter(c=>c.startsWith("PUT:")).length;
+  f.setDate("Sat, 24 Oct 2026 00:00:00 GMT");
+  expect(await f.store.applyReviewedAdministration(digest,signer.pins,true)).toEqual({status:"already_applied"});
+  expect(JSON.stringify(f.current())).toBe(before);expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(puts);
+});
+it("keeps an old-key V6 forward consumed when the replacement key signs V7 recovery",async()=>{
+  const f=issue150Fixture(6);await f.admit();const prior=structuredClone(f.current());
+  f.setDate("Wed, 21 Oct 2026 12:00:00 GMT");
+  const owner=f.put({scope:"FICTIONAL_V7_REPLACEMENT_OWNER"}), signer=replacementSigner(f,owner.digest);
+  const approval=managedIssue150IntegrationSchema.parse({...f.approval,scope:"ISSUE150_INTEGRATION_V7",
+    ownerApprovalDigest:owner.digest,approvedAt:"2026-10-21T00:00:00Z",validUntil:"2026-10-23T14:59:00Z",
+    forwardOperationId:f.forward.operationId});
+  const step={...f.rollbackStep(),issue150Integration:approval};
+  const facts={...f.rollbackFacts,scope:"ISSUE150_INTEGRATION_PREFLIGHT_V7",ownerApprovalDigest:owner.digest,aiExposureYen:5685};
+  const changes={issuedAt:"2026-10-21T12:00:00Z",validUntil:"2026-10-21T12:15:00Z"};
+  const digest=signer.resign(f.reviewed(step,facts,changes));
+  expect(await f.store.applyReviewedAdministration(digest,signer.pins)).toMatchObject({status:"admitted"});
+  expect(f.current().operations[0]).toEqual(prior.operations[0]);
+  expect(f.current().administration.slice(0,prior.administration.length)).toEqual(prior.administration);
+  expect(f.current().releaseTailYen).toBe(prior.releaseTailYen);
+  const retry={...f.forward,operationId:randomUUID(),issue150Integration:{...approval,forwardOperationId:null}};
+  const denied=signer.resign(f.reviewed(retry,{...facts,forwardResultDigest:null},changes));
+  const before=JSON.stringify(f.current());
+  await expect(f.store.applyReviewedAdministration(denied,signer.pins)).rejects.toThrow();
+  expect(JSON.stringify(f.current())).toBe(before);
+});
+it("rejects an unrecorded old-key history prefix and an expired unconsumed V7 operation before CAS",async()=>{
+  const f=issue150Fixture(7), signer=replacementSigner(f,f.approval.ownerApprovalDigest),r=f.reviewed(),digest=signer.resign(r);
+  const original=signer.pins.issue150Replacement!.historicalAdministration[0].digest;
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=hash(999);
+  await expect(f.store.applyReviewedAdministration(digest,signer.pins)).rejects.toThrow();
+  signer.pins.issue150Replacement!.historicalAdministration[0].digest=original;
+  f.setDate("Sat, 24 Oct 2026 00:00:00 GMT");
+  expect(await f.store.applyReviewedAdministration(digest,signer.pins,true)).toEqual({status:"not_applied"});
+  await expect(f.store.applyReviewedAdministration(digest,signer.pins)).rejects.toThrow();
+  expect(f.calls.filter(c=>c.startsWith("PUT:"))).toHaveLength(0);
+});
+it.each([1, 2, 3, 4, 5, 6, 7] as const)("admits only the signed Issue150 V%s forward and exact revert push/open/merge lineage", async version => {
   const f = issue150Fixture(version), before = f.current(); await f.admit();
   const push = f.rollbackStep(); await f.admit(push, f.rollbackFacts);
   await f.admit(f.rollbackStep("pr-open"), f.rollbackFacts);
@@ -720,12 +835,12 @@ it("admits the exact V2 AI and combined release ceilings", async () => {
   await f.admit({ ...f.forward, reservationYen: 900 });
   expect(f.current().operations.at(-1)?.reservationYen).toBe(900);
 });
-it.each([3,4,5,6] as const)("admits V%s only with its signed non-AI reserve and exact combined ceilings", async version => {
+it.each([3,4,5,6,7] as const)("admits V%s only with its signed non-AI reserve and exact combined ceilings", async version => {
   const f = issue150Fixture(version);
   await f.admit({ ...f.forward, reservationYen: 900 });
   expect(f.current().operations.at(-1)?.reservationYen).toBe(900);
 });
-it.each(([3,4,5,6] as const).flatMap(version=>["ai", "release", "rollback", "missing-non-ai", "smaller-non-ai", "pool", "expiry"].map(reason=>({version,reason}))))("rejects invalid V$version $reason before CAS", async ({version,reason}) => {
+it.each(([3,4,5,6,7] as const).flatMap(version=>["ai", "release", "rollback", "missing-non-ai", "smaller-non-ai", "pool", "expiry"].map(reason=>({version,reason}))))("rejects invalid V$version $reason before CAS", async ({version,reason}) => {
   const f = issue150Fixture(version), step = { ...f.forward, reservationYen: 900 }, facts = { ...f.preflight };
   if (reason === "ai") facts.aiExposureYen++;
   if (reason === "release") step.reservationYen = 901;
@@ -733,7 +848,7 @@ it.each(([3,4,5,6] as const).flatMap(version=>["ai", "release", "rollback", "mis
   if (reason === "missing-non-ai") delete facts.productionNonAiReserveYen;
   if (reason === "smaller-non-ai") facts.productionNonAiReserveYen = 149;
   if (reason === "pool") { const s = f.current(); s.plans[1].pools.recovery = 499; f.files.get(key)!.bytes = Buffer.from(JSON.stringify(s)); }
-  if (reason === "expiry") f.setDate("Tue, 20 Oct 2026 14:59:00 GMT");
+  if (reason === "expiry") f.setDate(version === 7 ? "Fri, 23 Oct 2026 14:59:00 GMT" : "Tue, 20 Oct 2026 14:59:00 GMT");
   const r = f.reviewed(step, facts);
   await expect(f.store.applyReviewedAdministration(r.digest, f.pins)).rejects.toThrow();
   expect(f.calls.filter(c => c.startsWith("PUT:"))).toHaveLength(0);

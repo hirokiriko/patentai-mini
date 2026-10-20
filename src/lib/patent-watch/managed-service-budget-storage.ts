@@ -7,7 +7,7 @@ import { MANAGED_SERVICE_KEY, ManagedBudgetError, managedBudgetProfileSchema,
   validateManagedBudgetState, settleManagedBudget, setManagedMonthPlan, activateManagedBudgetProfile,
   managedBudgetForecast, checkManagedCompletionBudget, checkManagedStandardBudget, checkManagedExecutionBudget, type ManagedBudgetClock, type ManagedBudgetState } from "./managed-service-budget";
 import { verifyManagedSettlementReview, verifyManagedAdministrationReview, verifyManagedAdministrationHistory,
-  managedIssue150PreflightSchema, managedIssue150ForwardResultSchema, managedSettlementProof, managedReleaseBudgetRequest,
+  managedAdministrationReviewSchema, managedIssue150PreflightSchema, managedIssue150ForwardResultSchema, managedSettlementProof, managedReleaseBudgetRequest,
   type ManagedBudgetEvidencePins, type ManagedAdministrationReview } from "./managed-budget-evidence";
 import { managedBudgetBindingSchema, managedBudgetBindingFromEnvironment } from "./managed-budget-contract";
 import { validateManagedBudgetPolicy } from "./managed-budget-policy";
@@ -504,7 +504,8 @@ export class ManagedServiceBudgetStorage {
     const scopes = { ISSUE150_INTEGRATION_V1: "ISSUE150_INTEGRATION_PREFLIGHT_V1",
       ISSUE150_INTEGRATION_V2: "ISSUE150_INTEGRATION_PREFLIGHT_V2", ISSUE150_INTEGRATION_V3: "ISSUE150_INTEGRATION_PREFLIGHT_V3",
       ISSUE150_INTEGRATION_V4: "ISSUE150_INTEGRATION_PREFLIGHT_V4", ISSUE150_INTEGRATION_V5: "ISSUE150_INTEGRATION_PREFLIGHT_V5",
-      ISSUE150_INTEGRATION_V6: "ISSUE150_INTEGRATION_PREFLIGHT_V6" } as const;
+      ISSUE150_INTEGRATION_V6: "ISSUE150_INTEGRATION_PREFLIGHT_V6",
+      ISSUE150_INTEGRATION_V7: "ISSUE150_INTEGRATION_PREFLIGHT_V7" } as const;
     check(scopes[approval!.scope] === preflight.scope);
     check(preflight.ownerApprovalDigest === approval!.ownerApprovalDigest &&
       Date.parse(review.issuedAt) >= Date.parse(approval!.approvedAt) &&
@@ -517,8 +518,13 @@ export class ManagedServiceBudgetStorage {
     }
     return { step, approval: approval!, preflight, result };
   }
+  private checkReplacementHistory(saved: ReadState | null, pins: ManagedBudgetEvidencePins) {
+    if (pins.issue150Replacement) check(saved && pins.issue150Replacement.historicalAdministration.every((r, i) =>
+      saved.state.administration[i]?.sequence === r.sequence && saved.state.administration[i]?.digest === r.digest));
+  }
   private async issue150History(saved: ReadState, pins: ManagedBudgetEvidencePins) {
     const history: Awaited<ReturnType<ManagedServiceBudgetStorage["issue150Preflight"]>>[] = [];
+    this.checkReplacementHistory(saved, pins);
     // Retained admin rows are never compacted/reset. Authenticate all later
     // actions so an expired, renamed or different-approval step cannot hide a use.
     for (const [i, entry] of saved.state.administration.entries()) {
@@ -527,7 +533,9 @@ export class ManagedServiceBudgetStorage {
       const envelope = verifyManagedAdministrationHistory(source.value, entry.digest, pins, saved.date), r = envelope.review;
       check(r.sequence === entry.sequence && r.previousReviewDigest === saved.state.administration[i - 1].digest);
       if (r.action.kind !== "release-start" || r.action.step.issue !== 150) continue;
-      const activeReview = verifyManagedAdministrationReview(envelope, entry.digest, pins, saved.date, false).review;
+      // History authentication already validates Issue150 semantics, without
+      // reopening the old key's authority to apply or reconcile a new write.
+      const activeReview = managedAdministrationReviewSchema.parse(r);
       await this.verifySources(r.sources);
       const record = await this.issue150Preflight(activeReview), request = managedReleaseBudgetRequest(record.step, pins.targetBindingHash, pins.ownerBindingHash);
       const o = saved.state.operations.find(o => o.operationId === request.operationId);
@@ -554,14 +562,16 @@ export class ManagedServiceBudgetStorage {
     const forecast = exposure + preflight.rollbackReserveYen;
     const legacy = approval.scope === "ISSUE150_INTEGRATION_V1", v3 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V3",
       v4 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V4", v5 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V5",
-      v6 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V6";
-    check(v3 || v4 || v5 || v6 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V3"));
-    check(v4 || v5 || v6 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V4"));
-    check(v5 || v6 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V5"));
-    check(v6 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V6"));
-    const nonAi = v3 || v4 || v5 || v6 ? preflight.productionNonAiReserveYen : 0;
+      v6 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V6",
+      v7 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V7";
+    check(v3 || v4 || v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V3"));
+    check(v4 || v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V4"));
+    check(v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V5"));
+    check(v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V6"));
+    check(v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V7"));
+    const nonAi = v3 || v4 || v5 || v6 || v7 ? preflight.productionNonAiReserveYen : 0;
     check(Number.isSafeInteger(forecast) && exposure <= (legacy ? 2000 : 1400) && forecast <= (legacy ? 1600 : 1400) &&
-      forecast + preflight.aiExposureYen + nonAi <= (v6 ? 7138 : v5 ? 7059 : v4 ? 6987 : v3 ? 6971 : legacy ? 5000 : 6243) &&
+      forecast + preflight.aiExposureYen + nonAi <= (v7 ? 7235 : v6 ? 7138 : v5 ? 7059 : v4 ? 6987 : v3 ? 6971 : legacy ? 5000 : 6243) &&
       history.every(r => preflight.aiExposureYen >= r.preflight.aiExposureYen));
     const month = new Date(at + 9 * 60 * 60_000).toISOString().slice(0, 7), plan = state.plans.find(p => p.month === month); check(plan);
     const recoveryUsed = state.operations.filter(o => o.processingMonth === month && (o.kind === "recovery" || o.units.rollback > 0))
@@ -660,6 +670,7 @@ export class ManagedServiceBudgetStorage {
         return !!previous;
       };
       let saved = await readOptional();
+      this.checkReplacementHistory(saved, pins);
       if (applied(saved)) return { status: "already_applied" as const };
       const matches = (value: ReadState | null) => !!value &&
         managedDigest(value.state) === r.expectedStateDigest && r.sequence === value.state.administration.length + 1 &&
@@ -684,6 +695,7 @@ export class ManagedServiceBudgetStorage {
         const profile = await this.profile(saved!.state, issue150.approval.profileDigest); check(profile); p = profile!;
       }
       saved = await readOptional();
+      this.checkReplacementHistory(saved, pins);
       if (applied(saved)) return { status: "already_applied" as const };
       check(matches(saved));
       const date = saved!.date;
@@ -746,6 +758,7 @@ export class ManagedServiceBudgetStorage {
         verifyManagedSettlementReview(envelope, evidenceDigest, pins, slot.createdAt!);
       }
       let saved = await this.read();
+      this.checkReplacementHistory(saved, pins);
       const operation = () => { const o = saved.state.operations.find(o => o.operationId === r.operationId);
         check(o && o.requestDigest === r.requestDigest && o.pricingDigest === r.pricingDigest); return o!; };
       let o = operation();
@@ -762,6 +775,7 @@ export class ManagedServiceBudgetStorage {
       // Read the real clock/state again after bounded evidence IO. This also
       // detects a competing settlement before creating its immutable slot.
       saved = await this.read(); o = operation();
+      this.checkReplacementHistory(saved, pins);
       check(r.sequence === o.lastProofSequence + 1 && r.previousProofDigest === (o.settlements.at(-1)?.evidenceDigest ?? null));
       verifyManagedSettlementReview(envelope, evidenceDigest, pins, saved.date, !slot);
       if (!slot) check(saved.date.getTime() + 3 * IO_MS + 1000 < Date.parse(r.validUntil));

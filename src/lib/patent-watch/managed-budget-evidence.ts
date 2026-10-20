@@ -46,7 +46,12 @@ const managedIssue150IntegrationV6Schema = managedIssue150IntegrationV1Schema.ex
   scope: z.literal("ISSUE150_INTEGRATION_V6"), approvedAt: z.iso.datetime(),
   validUntil: z.literal("2026-10-20T14:59:00Z"),
 }).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-19T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
-export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema, managedIssue150IntegrationV6Schema]);
+// Inactive until a new owner decision and independently signed review exist.
+const managedIssue150IntegrationV7Schema = managedIssue150IntegrationV1Schema.extend({
+  scope: z.literal("ISSUE150_INTEGRATION_V7"), approvedAt: z.iso.datetime(),
+  validUntil: z.literal("2026-10-23T14:59:00Z"),
+}).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-20T15:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
+export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema, managedIssue150IntegrationV6Schema, managedIssue150IntegrationV7Schema]);
 export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [managedIssue150PreflightV1Schema,
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V2"),
     aiExposureYen: yen.max(4843), rollbackReserveYen: yen.max(1400) }),
@@ -57,7 +62,9 @@ export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [man
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V5"),
     aiExposureYen: yen.max(5509), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V6"),
-    aiExposureYen: yen.max(5588), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
+    aiExposureYen: yen.max(5588), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
+  managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V7"),
+    aiExposureYen: yen.max(5685), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
 export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
   forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
   prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,
@@ -152,8 +159,22 @@ const historicalSignedAdministrationSchema = managedSignedAdministrationSchema.e
 });
 export type ManagedAdministrationReview = z.infer<typeof managedAdministrationReviewSchema>;
 export type ManagedSettlementReview = z.infer<typeof managedSettlementReviewSchema>;
+const issue150ReplacementSchema = z.object({
+  scope: z.literal("ISSUE150_KEY_REPLACEMENT_V1"), ownerApprovalDigest: hash,
+  validUntil: z.literal("2026-10-23T14:59:00Z"),
+  publicKeySpkiBase64: z.string(), publicKeySha256: hash,
+  historicalAdministration: z.array(z.object({ sequence: quantity.refine(n => n > 0), digest: hash }).strict()).min(1).max(1200),
+  // Independently reviewed canonical UNSIGNED review digests, not envelope hashes.
+  administrationReviewDigests: z.array(hash).max(16),
+  settlementReviewDigests: z.array(hash).max(16),
+  operationIds: z.array(z.uuidv4()).max(4),
+}).strict().refine(p => p.historicalAdministration.every((r, i) => r.sequence === i + 1) &&
+  new Set(p.historicalAdministration.map(r => r.digest)).size === p.historicalAdministration.length &&
+  [p.administrationReviewDigests, p.settlementReviewDigests, p.operationIds].every(a => new Set(a).size === a.length));
 export type ManagedBudgetEvidencePins = Readonly<{ publicKeySpkiBase64: string; publicKeySha256: string;
-  ownerBindingHash: string; targetBindingHash: string; productionGoDigest?: string }>;
+  ownerBindingHash: string; targetBindingHash: string; productionGoDigest?: string;
+  /** Explicit Local management injection only; never loaded from environment/stdin/Blob. */
+  issue150Replacement?: z.infer<typeof issue150ReplacementSchema> }>;
 const check = (value: unknown) => { if (!value) throw new ManagedBudgetError(); };
 
 /** Public verification key and its independently installed pin. No signing key
@@ -178,11 +199,37 @@ function verifyReview(envelope: { review: { targetBindingHash: string; ownerBind
   check(!requireFresh || now < until);
   check(new Set(r.sources.map(s => s.digest)).size === r.sources.length);
 }
+function replacementPins(pins: ManagedBudgetEvidencePins, review: ManagedAdministrationReview | ManagedSettlementReview,
+  kind: "administration" | "settlement", at: Date, historical: boolean): ManagedBudgetEvidencePins {
+  if (!pins.issue150Replacement) return pins;
+  const p = issue150ReplacementSchema.parse(pins.issue150Replacement);
+  publicKey(pins); check(p.publicKeySha256 !== pins.publicKeySha256);
+  const approved = kind === "administration" ? p.administrationReviewDigests : p.settlementReviewDigests;
+  check(approved.includes(managedDigest(review)) && review.sources.some(s => s.digest === p.ownerApprovalDigest));
+  check(Date.parse(review.validUntil) <= Date.parse(p.validUntil) && (historical || at.getTime() < Date.parse(p.validUntil)));
+  if ("action" in review) {
+    const a = review.action;
+    if (a.kind === "release-start") check(a.step.issue === 150 &&
+      a.step.issue150Integration?.scope === "ISSUE150_INTEGRATION_V7" &&
+      a.step.issue150Integration.ownerApprovalDigest === p.ownerApprovalDigest &&
+      p.operationIds.includes(a.step.operationId));
+    else if (a.kind === "month") check(a.processingMonth === "2026-10" &&
+      a.standardMonthAdjustment?.ownerApprovalDigest === p.ownerApprovalDigest);
+    else check(a.kind === "activate"); // Existing profile/GO checks still apply.
+  } else check(p.operationIds.includes(review.operationId));
+  return { ...pins, publicKeySpkiBase64: p.publicKeySpkiBase64, publicKeySha256: p.publicKeySha256,
+    issue150Replacement: undefined };
+}
 export function verifyManagedAdministrationReview(value: unknown, expectedDigest: string, pins: ManagedBudgetEvidencePins, at: Date,
   requireFresh = true) {
   try {
     const envelope = managedSignedAdministrationSchema.parse(value), r = envelope.review;
-    verifyReview(envelope, expectedDigest, pins, at, requireFresh);
+    verifyReview(envelope, expectedDigest, replacementPins(pins, r, "administration", at, !requireFresh), at, requireFresh);
+    checkAdministrationReview(r, pins);
+    return envelope;
+  } catch { throw new ManagedBudgetError(); }
+}
+function checkAdministrationReview(r: ManagedAdministrationReview, pins: ManagedBudgetEvidencePins) {
     const sources = new Set(r.sources.map(s => s.digest));
     if (r.action.kind === "activate") check(r.action.goEvidenceDigest === hash.parse(pins.productionGoDigest) &&
       [r.action.goEvidenceDigest, r.action.measurementDigest, r.action.pricingDigest].every(d => sources.has(d)));
@@ -209,15 +256,22 @@ export function verifyManagedAdministrationReview(value: unknown, expectedDigest
       check(sources.has(a.ownerApprovalDigest) && Date.parse(r.issuedAt) >= Date.parse(a.approvedAt) &&
         Date.parse(r.validUntil) <= Date.parse(a.validUntil));
     }
-    return envelope;
-  } catch { throw new ManagedBudgetError(); }
 }
 /** Read-only historical authentication. A past activation keeps its original GO
  * binding; it is not reapplied against today's production GO pin. */
 export function verifyManagedAdministrationHistory(value: unknown, expectedDigest: string, pins: ManagedBudgetEvidencePins, at: Date) {
   try {
     const envelope = historicalSignedAdministrationSchema.parse(value);
-    verifyReview(envelope, expectedDigest, pins, at, false);
+    let selected = pins;
+    if (pins.issue150Replacement) {
+      const p = issue150ReplacementSchema.parse(pins.issue150Replacement), r = envelope.review;
+      const old = p.historicalAdministration.find(e => e.sequence === r.sequence);
+      if (old) check(old.digest === expectedDigest);
+      else selected = replacementPins(pins, managedAdministrationReviewSchema.parse(r), "administration", at, true);
+    }
+    verifyReview(envelope, expectedDigest, selected, at, false);
+    if (envelope.review.action.kind === "release-start" && envelope.review.action.step.issue === 150)
+      checkAdministrationReview(managedAdministrationReviewSchema.parse(envelope.review), pins);
     return envelope;
   } catch { throw new ManagedBudgetError(); }
 }
@@ -232,7 +286,7 @@ export function verifyManagedSettlementReview(value: unknown, expectedDigest: st
   requireFresh = true) {
   try {
     const envelope = managedSignedSettlementSchema.parse(value), r = envelope.review;
-    verifyReview(envelope, expectedDigest, pins, at, requireFresh);
+    verifyReview(envelope, expectedDigest, replacementPins(pins, r, "settlement", at, !requireFresh), at, requireFresh);
     const digests = new Set(r.sources.map(s => s.digest));
     check(new Set(r.unitEvidence.map(e => e.unit)).size === r.unitEvidence.length);
     check(r.unitEvidence.every(e => digests.has(e.sourceDigest) && r.finalizedUnits[e.unit] !== undefined));

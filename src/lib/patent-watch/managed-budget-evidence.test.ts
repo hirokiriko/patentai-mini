@@ -5,7 +5,7 @@ import { emptyManagedBudgetUnits, managedCompletionAllowanceSchema } from "./man
 import { managedBudgetEvidencePins, managedSettlementReviewSchema, managedSettlementProof, verifyManagedSettlementReview,
   managedReleaseStepSchema, managedReleaseBudgetRequest, managedIssue150IntegrationSchema, managedIssue150PreflightSchema, managedAdministrationReviewSchema,
   verifyManagedAdministrationReview, verifyManagedAdministrationHistory,
-  type ManagedSettlementReview } from "./managed-budget-evidence";
+  type ManagedSettlementReview, type ManagedBudgetEvidencePins } from "./managed-budget-evidence";
 
 const hash = (n: number) => n.toString(16).padStart(64, "0"), now = new Date("2026-09-24T00:00:00Z");
 function fixture() {
@@ -72,7 +72,7 @@ it.each(["completion140", "integration150-v1", "integration150-v2", "integration
     const envelope = f.signedReview({ ...f.review, action: { ...f.review.action, step: { ...f.review.action.step, ...patch } } });
     expect(() => verifyManagedAdministrationHistory(envelope, managedDigest(envelope), f.pins, now)).toThrow();
   });
-it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400],[6,5588,1400]] as const)(
+it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400],[6,5588,1400],[7,5685,1400]] as const)(
   "keeps the exact historical V%i AI and rollback ceilings", (version, aiExposureYen, rollbackReserveYen) => {
     const facts = { scope: `ISSUE150_INTEGRATION_PREFLIGHT_V${version}`, ownerApprovalDigest: hash(12),
       technicalGoHeadSha: "a".repeat(40), technicalGoTreeSha: "b".repeat(40), baseTreeSha: "c".repeat(40),
@@ -82,16 +82,80 @@ it.each([[1,3000,1600],[2,4843,1400],[3,5421,1400],[4,5437,1400],[5,5509,1400],[
     expect(() => managedIssue150PreflightSchema.parse({ ...facts, aiExposureYen: aiExposureYen + 1 })).toThrow();
     expect(() => managedIssue150PreflightSchema.parse({ ...facts, rollbackReserveYen: rollbackReserveYen + 1 })).toThrow();
   });
-function issue150ReviewFixture(version: 5 | 6) {
+function issue150ReviewFixture(version: 5 | 6 | 7) {
   const f = history139Fixture();
-  const review = { ...f.review, issuedAt: "2026-10-20T00:00:00Z", validUntil: "2026-10-20T00:10:00Z",
+  const review = { ...f.review, issuedAt: version === 7 ? "2026-10-21T00:00:00Z" : "2026-10-20T00:00:00Z",
+    validUntil: version === 7 ? "2026-10-21T00:10:00Z" : "2026-10-20T00:10:00Z",
     sources: [...f.review.sources, { digest: hash(12), bytes: 80 }],
     action: { ...f.review.action, step: { ...f.review.action.step, issue: 150,
       issue150Integration: { scope: `ISSUE150_INTEGRATION_V${version}`, ownerApprovalDigest: hash(12), profileDigest: hash(13),
-        approvedAt: "2026-10-19T00:00:00Z", validUntil: "2026-10-20T14:59:00Z", forwardOperationId: null } } } };
+        approvedAt: version === 7 ? "2026-10-21T00:00:00Z" : "2026-10-19T00:00:00Z",
+        validUntil: version === 7 ? "2026-10-23T14:59:00Z" : "2026-10-20T14:59:00Z", forwardOperationId: null } } } };
   Object.assign(review, managedAdministrationReviewSchema.parse(review));
   return { ...f, review };
 }
+function replacementFixture() {
+  const old = issue150ReviewFixture(6), oldEnvelope = old.signedReview(old.review), fresh = issue150ReviewFixture(7);
+  fresh.review.sequence = 3; fresh.review.previousReviewDigest = managedDigest(oldEnvelope);
+  const envelope = fresh.signedReview(fresh.review), digest = managedDigest(envelope);
+  const pins: ManagedBudgetEvidencePins = { ...old.pins, issue150Replacement: {
+    scope: "ISSUE150_KEY_REPLACEMENT_V1", ownerApprovalDigest: hash(12), validUntil: "2026-10-23T14:59:00Z",
+    publicKeySpkiBase64: fresh.pins.publicKeySpkiBase64, publicKeySha256: fresh.pins.publicKeySha256,
+    historicalAdministration: [{sequence:1,digest:hash(1)}, {sequence:2,digest:managedDigest(oldEnvelope)}],
+    administrationReviewDigests: [managedDigest(envelope.review)], settlementReviewDigests: [],
+    operationIds: [fresh.review.action.step.operationId],
+  } };
+  return { old, fresh, oldEnvelope, envelope, digest, pins, at: new Date("2026-10-21T00:05:00Z") };
+}
+it("separates exact old history from new Issue150 authority, without changing the default pin loader", () => {
+  const f = replacementFixture(), original = JSON.stringify(f.oldEnvelope);
+  expect(verifyManagedAdministrationHistory(f.oldEnvelope, managedDigest(f.oldEnvelope), f.pins, f.at)).toEqual(f.oldEnvelope);
+  expect(verifyManagedAdministrationReview(f.envelope, f.digest, f.pins, f.at)).toEqual(f.envelope);
+  expect(verifyManagedAdministrationHistory(f.envelope, f.digest, f.pins, new Date("2026-10-24T00:00:00Z"))).toEqual(f.envelope);
+  for (const fresh of [true, false]) {
+    expect(() => verifyManagedAdministrationReview(f.oldEnvelope, managedDigest(f.oldEnvelope), f.pins, f.at, fresh)).toThrow();
+  }
+  expect(() => verifyManagedAdministrationReview(f.envelope, f.digest, f.pins, new Date("2026-10-24T00:00:00Z"))).toThrow();
+  expect(verifyManagedAdministrationReview(f.envelope, f.digest, f.pins, new Date("2026-10-24T00:00:00Z"), false)).toEqual(f.envelope);
+  expect(JSON.stringify(f.oldEnvelope)).toBe(original);
+  expect(managedBudgetEvidencePins({
+    MANAGED_BUDGET_REVIEW_PUBLIC_KEY:f.old.pins.publicKeySpkiBase64,MANAGED_BUDGET_REVIEW_KEY_SHA256:f.old.pins.publicKeySha256,
+    MANAGED_BUDGET_OWNER_SHA256:f.old.pins.ownerBindingHash,MANAGED_BUDGET_TARGET_SHA256:f.old.pins.targetBindingHash,
+    ISSUE150_KEY_REPLACEMENT:JSON.stringify(f.pins.issue150Replacement),
+  })).not.toHaveProperty("issue150Replacement");
+});
+it.each(["unreviewed","old-key","new-pin","owner","operation","old-history-digest","old-history-sequence","other-issue"] as const)(
+  "rejects replacement boundary violation %s", reason => {
+    const f = replacementFixture(), p = f.pins.issue150Replacement!;
+    let envelope = f.envelope;
+    if(reason==="unreviewed")p.administrationReviewDigests=[];
+    if(reason==="old-key")envelope=f.old.signedReview(f.envelope.review);
+    if(reason==="new-pin")p.publicKeySha256=hash(88);
+    if(reason==="owner")p.ownerApprovalDigest=hash(89);
+    if(reason==="operation")p.operationIds=[];
+    if(reason==="old-history-digest")p.historicalAdministration[1].digest=hash(90);
+    if(reason==="old-history-sequence")p.historicalAdministration[1].sequence=3;
+    if(reason==="other-issue"){
+      const old139=history139Fixture().review;
+      const review={...f.envelope.review,action:old139.action};
+      envelope=f.fresh.signedReview(review) as typeof envelope;p.administrationReviewDigests=[managedDigest(review)];
+    }
+    if(reason.startsWith("old-history"))
+      expect(()=>verifyManagedAdministrationHistory(f.oldEnvelope,managedDigest(f.oldEnvelope),f.pins,f.at)).toThrow();
+    else expect(()=>verifyManagedAdministrationReview(envelope,managedDigest(envelope),f.pins,f.at,false)).toThrow();
+  });
+it("accepts only the reviewed new-key settlement for the bounded Issue150 operation", () => {
+  const f=replacementFixture(), r={...f.fresh.review};
+  const s=fixture(), review=managedSettlementReviewSchema.parse({...s.review,operationId:r.action.step.operationId,issuedAt:r.issuedAt,validUntil:r.validUntil,
+    sources:[...s.review.sources,{digest:hash(12),bytes:80}]});
+  const envelope=f.fresh.signedReview(review), p=f.pins.issue150Replacement!;
+  p.settlementReviewDigests=[managedDigest(review)];
+  expect(verifyManagedSettlementReview(envelope,managedDigest(envelope),f.pins,f.at)).toEqual(envelope);
+  const old=f.old.signedReview(review);
+  expect(()=>verifyManagedSettlementReview(old,managedDigest(old),f.pins,f.at,false)).toThrow();
+  p.operationIds=[];
+  expect(()=>verifyManagedSettlementReview(envelope,managedDigest(envelope),f.pins,f.at,false)).toThrow();
+});
 it.each([5,6] as const)("authenticates immutable V%s history while an expired review cannot authorize a new start", version => {
   const f = issue150ReviewFixture(version), envelope = f.signedReview(f.review), digest = managedDigest(envelope);
   const bytes = JSON.stringify(envelope), at = new Date("2026-10-20T00:05:00Z");
