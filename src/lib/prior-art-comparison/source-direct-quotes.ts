@@ -1,0 +1,141 @@
+import { z } from "zod";
+import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
+import { jsonSchema } from "ai";
+import { comparisonModelSchema } from "./model-schema";
+import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } from "./proposition-extraction";
+import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
+import { sourceCitationParts, sourceCitationRange } from "./source-citation-parts";
+import { resolvePropositionQuote } from "./proposition-quotes";
+
+const index=z.number().int().nonnegative();
+const quote=z.object({
+  quote:z.string().min(1).max(12_000),
+  occurrence:index.describe("Exact-match starts, zero-based within this fact's single basis. Count embedded matches too."),
+}).strict().meta({id:"PriorArtSourceQuote"});
+const evidence=z.union([z.string().min(1).max(12_000),quote,
+  z.object({quote:z.null(),occurrence:z.literal(0)}).strict()])
+  .describe("A string requires exactly one match within basis. Otherwise specify quote and occurrence.")
+  .meta({id:"PriorArtSourceEvidence"});
+const term=z.array(z.union([z.string().min(1).max(80),
+  quote.extend({quote:z.string().min(1).max(80)}).meta({id:"PriorArtSourceTermQuote"})])).min(1).max(4)
+  .describe("Exact noun/condition quotes concatenated in this order, at most 80 characters in total.")
+  .meta({id:"PriorArtSourceTerm"});
+const terms=z.array(term).max(12);
+const common={
+  subject:term.nullable(),
+  context:meaningSchema.options[0].shape.context,
+  guard:z.object({relation:guardSchema.shape.relation,conditions:terms}).strict().meta({id:"PriorArtGuard"}),
+  polarity:meaningSchema.options[0].shape.polarity,
+};
+const meaning=z.discriminatedUnion("kind",[
+  meaningSchema.options[0].extend({...common,members:terms.min(1)}),
+  meaningSchema.options[1].extend({...common,origin:term.nullable(),destination:term.nullable(),via:terms,bypass:terms}),
+  meaningSchema.options[2].extend({...common,objects:terms.min(1)}),
+]);
+const frame=z.object({entry:evidence,exit:evidence,route:evidence,
+  exclusions:z.array(evidence).max(6),controls:z.array(evidence).max(6)}).strict();
+const fact=z.object({
+  claimNo:z.number().int().positive(),
+  basis:z.object({firstPart:index,lastPart:index}).strict()
+    .describe("One inclusive range of original parts containing every quoted role, complete guard and frame."),
+  meaning,
+  operators:z.object({selection:evidence.nullable(),extent:evidence.nullable(),polarity:evidence.nullable(),
+    guard:evidence.nullable(),context:evidence.nullable()}).strict(),
+  routeFrame:z.union([index,frame]).nullable(),
+}).strict();
+const invalid=()=>new Error("comparison_locator_invalid");
+
+/** Source-only v9. Each semantic role carries its own exact quotation, avoiding
+ * a model-generated locator table and a second address space of role indexes.
+ * Flat facts keep quote objects within Azure's five object levels. */
+export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
+  const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
+  const schema=z.object({locatorVersion:z.literal(9),sources:z.array(z.object({
+    sourceDigest:local.shape.sources.element.shape.sourceDigest,
+    coverage:z.array(z.object({claimNo:z.number().int().positive(),
+      unresolved:quote.extend({reason:z.string().min(1).max(400)}).nullable(),
+    }).strict()).describe("Every input claim in order. With facts: unresolved=null. Without facts: exact claim quote and why it remains unresolved. This is not a quality verdict."),
+    facts:z.array(fact).max(48).describe("Claim order; each claim's required catalog loops first, in catalog order, then all other expressible facts. Keep opposite actions separate."),
+  }).strict()).length(input.sources.length)}).strict();
+  const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
+    const source=input.sources[i],expected=source.source.claims;
+    if(s.sourceDigest!==source.sourceDigest||s.coverage.length!==expected.length||
+      s.coverage.some((c,n)=>c.claimNo!==expected[n].claimNo))throw invalid();
+    const order=new Map(expected.map((c,n)=>[c.claimNo,n]));
+    let previous=-1,quotes=0;
+    const facts=s.facts.map(f=>{
+      const at=order.get(f.claimNo);
+      if(at===undefined||at<previous)throw invalid();previous=at;
+      const claim=expected[at],text=claim.segments.map(p=>p.text).join("");
+      const basis=sourceCitationRange(sourceCitationParts(claim.segments.map(p=>p.text)),f.basis.firstPart,f.basis.lastPart);
+      const seen=new Set<string>();
+      const get=(q:z.infer<typeof evidence>):Span=>{
+        if(typeof q!=="string"&&q.quote===null){
+          const key=JSON.stringify(basis);
+          if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
+          return [...basis];
+        }
+        const anchor=text.slice(...basis),literal=typeof q==="string"?q:q.quote;
+        // A shorthand never chooses among repeated matches, including overlaps.
+        if(typeof q==="string"){
+          const at=anchor.indexOf(q);
+          if(at<0||anchor.indexOf(q,at+1)>=0)throw invalid();
+        }
+        const span=resolvePropositionQuote(anchor,literal,typeof q==="string"?0:q.occurrence).map(n=>n+basis[0]) as Span;
+        const key=JSON.stringify(span);
+        if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
+        return span;
+      };
+      const bindings:z.infer<typeof extractionSchema>["bindings"]=[];
+      const readTerm=(items:z.infer<typeof term>):string=>{
+        // Resolve EVERY role before coalescing equal strings. A repeated term
+        // at a wrong location must never hide behind an earlier valid binding.
+        const positions=items.map(get),value=positions.map(p=>text.slice(...p)).join("");
+        if(value.length>80)throw invalid();
+        if(!bindings.some(b=>b.term===value))bindings.push({term:value,spans:positions});
+        return value;
+      };
+      const m=f.meaning,c={subject:m.subject===null?null:readTerm(m.subject),context:m.context,
+        guard:{relation:m.guard.relation,conditions:m.guard.conditions.map(readTerm)},polarity:m.polarity};
+      const decoded:Meaning=m.kind==="set"?{...c,kind:m.kind,selection:m.selection,extent:m.extent,members:m.members.map(readTerm)}:
+        m.kind==="path"?{...c,kind:m.kind,origin:m.origin===null?null:readTerm(m.origin),
+          destination:m.destination===null?null:readTerm(m.destination),via:m.via.map(readTerm),bypass:m.bypass.map(readTerm),
+          extent:m.extent,relation:m.relation}:{...c,kind:m.kind,predicate:m.predicate,objects:m.objects.map(readTerm)};
+      const operators={selection:f.operators.selection===null?null:get(f.operators.selection),
+        extent:f.operators.extent===null?null:get(f.operators.extent),polarity:f.operators.polarity===null?null:get(f.operators.polarity),
+        guard:f.operators.guard===null?null:get(f.operators.guard),context:f.operators.context===null?null:get(f.operators.context)};
+      let routeFrame:z.infer<typeof extractionSchema>["routeFrame"]=null;
+      if(typeof f.routeFrame==="number"){
+        const r=source.recognizedLoopRoutes[f.routeFrame],same=(t:string|null,p:Span)=>
+          t!==null&&propositionKey(t)===propositionKey(text.slice(...p));
+        if(!r||r.claimNo!==f.claimNo||decoded.kind!=="path"||decoded.extent!=="whole"||decoded.relation!=="route"||
+          !same(decoded.subject,r.mode)||!same(decoded.origin,r.entry)||!same(decoded.destination,r.exit))throw invalid();
+        if([r.mode,r.entry,r.exit,r.route,r.definition,r.control].some(([a,b])=>a<basis[0]||b>basis[1]))throw invalid();
+        routeFrame={entry:[...r.entry],exit:[...r.exit],route:[...r.route],exclusions:[[...r.definition]],controls:[[...r.control]]};
+      }else if(f.routeFrame){
+        const r=f.routeFrame;
+        routeFrame={entry:get(r.entry),exit:get(r.exit),route:get(r.route),
+          exclusions:r.exclusions.map(get),controls:r.controls.map(get)};
+      }
+      return {claimNo:f.claimNo,basis:[basis],meaning:decoded,bindings,operators,routeFrame};
+    });
+    for(const [at,claim]of expected.entries()){
+      const own=s.facts.filter(f=>f.claimNo===claim.claimNo),unresolved=s.coverage[at].unresolved;
+      if(own.length){if(unresolved!==null)throw invalid();}
+      else{
+        if(!unresolved||!unresolved.reason.trim())throw invalid();
+        resolvePropositionQuote(claim.segments.map(p=>p.text).join(""),unresolved.quote,unresolved.occurrence);
+      }
+      const loops=source.recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===claim.claimNo);
+      if(own.filter(f=>typeof f.routeFrame==="number").length!==loops.length||
+        loops.some((r,n)=>own[n]?.routeFrame!==r.id))throw invalid();
+    }
+    return {sourceDigest:s.sourceDigest,facts};
+  })}));
+  return jsonSchema(model.jsonSchema,{validate:async value=>{
+    try{
+      if(Buffer.byteLength(JSON.stringify(value),"utf8")>32_000||!model.validate)throw invalid();
+      return await model.validate(value);
+    }catch{return {success:false,error:invalid()};}
+  }});
+}

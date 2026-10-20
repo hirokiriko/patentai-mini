@@ -4,23 +4,28 @@ export const SOURCE_WORKED_PARTS = [
   "補助ヒータを備える。前記分岐器から出た気体を、前記冷却器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記加熱器に流し、",
   "前記分岐器から前記バイパス配管を通って前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。第１の運転モードでは、温度が五度を下回ると補助ヒータを発熱させる。",
 ];
-export const SOURCE_WORKED_CLAIM = {
-  cn:1,rr:[{
-    bb:{fp:0,lp:1},
-    ll:[{q:"第１の運転モード",o:0},{q:"送出器",o:0},{q:"送出器",o:1},
-      {q:"加熱器",o:0},{q:"分岐器",o:1},{q:"バイパス配管",o:0},{q:"蓄積器",o:1},{q:"冷却器",o:0}],
-    mm:{su:[0],cx:"operation",gr:"unconditional",gc:[],po:"positive",ki:"path",
-      or:[1],de:[2],vi:[[3],[4],[5],[6]],by:[[7]],ex:"whole",re:"route"},
-    op:{se:null,ex:null,po:null,gu:null,cx:null},rf:0,
-  }],ff:[{
-    bb:{fp:1,lp:1},
-    ll:[{q:"第１の運転モード",o:1},{q:"温度が五度を下回る",o:0},{q:"補助ヒータ",o:0}],
-    mm:{su:[0],cx:"operation",gr:"when",gc:[[1]],po:"positive",ki:"relation",pr:"generates_heat",ob:[[2]]},
-    op:{se:null,ex:null,po:null,gu:1,cx:null},rf:null,
-  }],
-};
-export const SOURCE_WORKED_GUIDE =
-  `Fictional fragment, not answer data/exhaustive reading. Claim1 parts=${
-    JSON.stringify(SOURCE_WORKED_PARTS.map((text,id)=>({id,text})))
-  }; catalog id0 covers parts0..1. Output=${JSON.stringify(SOURCE_WORKED_CLAIM)}.
-Loop return o1 differs from inlet o0; pipe is via, cooler by. Heat uses part1: mode o1 selects its action clause, heater o0 ignores the earlier occurrence outside bb. No unused ll.`;
+const q=(quote:string,occurrence=0)=>({quote,occurrence});
+const neutral={selection:null,extent:null,polarity:null,guard:null,context:null};
+export const SOURCE_WORKED_FACTS = [{
+  claimNo:1,basis:{firstPart:0,lastPart:1},
+  meaning:{subject:[q("第１の運転モード")],context:"operation",guardRelation:"unconditional",guardConditions:[],
+    polarity:"positive",kind:"path",origin:[q("送出器")],destination:[q("送出器",1)],
+    via:[[q("加熱器")],[q("分岐器",1)],[q("バイパス配管")],[q("蓄積器",1)]],bypass:[[q("冷却器")]],extent:"whole",relation:"route"},
+  operators:{...neutral},routeFrame:0,
+},{
+  claimNo:1,basis:{firstPart:1,lastPart:1},
+  meaning:{subject:[q("第１の運転モード",1)],context:"operation",guardRelation:"when",guardConditions:[[q("温度が五度を下回る")]],
+    polarity:"positive",kind:"relation",predicate:"generates_heat",objects:[[q("補助ヒータ")]]},
+  operators:{...neutral,guard:q("温度が五度を下回る")},routeFrame:null,
+}];
+export const SOURCE_ACTION_TEXT="制御器は、温度が七度を超える場合、赤色弁を開き、青色弁を閉じる。";
+export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
+  claimNo:1,basis:{firstPart:0,lastPart:0},
+  meaning:{subject:["制御器"],context:"operation",guardRelation:"when",guardConditions:[["温度が七度を超える場合"]],
+    polarity:"positive",kind:"relation",predicate,objects:[[i===0?"赤色弁":"青色弁"]]},
+  operators:{...neutral,guard:"温度が七度を超える場合"},routeFrame:null,
+}));
+export const SOURCE_WORKED_GUIDE=
+  `Fictional action example, not answer data. Claim1 part0=${JSON.stringify(SOURCE_ACTION_TEXT)}.
+coverage=[{"claimNo":1,"unresolved":null}]; facts=${JSON.stringify(SOURCE_ACTION_FACTS)}.
+Opening and closing are separate POSITIVE actions under the same guard, not a member set or a negated action. Read every original claim independently.`;

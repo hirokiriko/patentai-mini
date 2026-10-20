@@ -8,7 +8,7 @@ import { propositionPlanSizes } from "./proposition-plan";
 import type { Span } from "./propositions";
 import { sourcePropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
 import { sourceCitationParts,sourceCitationRange } from "./source-citation-parts";
-import { fixturePropositionWire, fixtureCompactSource, fixtureExpandSource } from "./proposition-fixtures.test-support";
+import { fixturePropositionWire } from "./proposition-fixtures.test-support";
 
 const loop=(name="送出器")=>`前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記${name}から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記${name}に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。`;
 function setup(text=loop()){
@@ -89,23 +89,14 @@ it.each(["has_mode","changed_selection","ordinary_has"])("preserves a literal mo
 });
 
 function indexedWire(f:ReturnType<typeof setup>){
-  const wire=fixtureExpandSource(fixturePropositionWire(f.raw,propositionSourceTransport(f.input))),row=wire.sources[0];
-  for(const claim of row.claims){
-    const loops=f.input.sources[0].recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===claim.claimNo);
-    claim.requiredLoops=claim.facts.map((fact:Record<string,unknown>,i:number)=>{
-      const locators:unknown[]=[],ids=new Map<number,number>(),old=fact.locators as unknown[];
-      const ref=(id:number)=>{if(!ids.has(id)){ids.set(id,locators.length);locators.push(old[id]);}return ids.get(id)!;};
-      const refs=(v:unknown):unknown=>Array.isArray(v)?v.map(refs):typeof v==="number"?ref(v):
-        v&&typeof v==="object"?Object.fromEntries(Object.entries(v).map(([k,v])=>[k,refs(v)])):v;
-      return {...fact,meaning:refs(fact.meaning),operators:refs(fact.operators),routeFrame:loops[i].id,locators};
-    });
-    claim.facts=[];
-  }return wire;
+  const wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input));
+  wire.sources[0].facts.forEach((fact:{routeFrame:unknown},i:number)=>{fact.routeFrame=i;});
+  return wire;
 }
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
-  const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(fixtureCompactSource(wire));
+  const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
-  expect(wire.sources[0].claims.flatMap((c:{requiredLoops:{routeFrame:number}[]})=>c.requiredLoops.map(f=>f.routeFrame))).toEqual([0,1]);
+  expect(wire.sources[0].facts.map((f:{routeFrame:number})=>f.routeFrame)).toEqual([0,1]);
   if(result.success){
     expect(result.value).toEqual(f.raw);
     expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
@@ -113,7 +104,7 @@ it("selects immutable loop evidence while retaining independently extracted mean
   }
 });
 it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destination","partial","precedes","non_path","basis_missing"])("rejects each incorrectly assigned catalog frame: %s",async mode=>{
-  const f=setup(),wire=indexedWire(f),row=wire.sources[0].claims[0],fact=row.requiredLoops[0];
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0],fact=row.facts[0];
   if(mode==="other_claim")fact.routeFrame=1;
   if(mode==="out_of_range")fact.routeFrame=2;
   if(mode==="wrong_mode")fact.meaning.subject=fact.meaning.origin;
@@ -123,20 +114,19 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="precedes")fact.meaning.relation="precedes";
   if(mode==="non_path"){const m=fact.meaning;fact.meaning={kind:"relation",subject:m.subject,context:m.context,guardRelation:m.guardRelation,guardConditions:m.guardConditions,polarity:m.polarity,predicate:"has",objects:[m.origin]};}
   if(mode==="basis_missing")fact.basis={firstPart:0,lastPart:0};
-  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(fixtureCompactSource(wire))).success).toBe(false);
+  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
 });
-it.each(["missing", "duplicate", "reordered", "in_facts", "numeric_extra", "combined_limit", "unexpected", "legacy_v5"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
-  const f=setup(),wire=indexedWire(f),row=wire.sources[0].claims[0];
-  if(mode==="missing")row.requiredLoops.pop();
-  if(mode==="duplicate")row.requiredLoops.push(structuredClone(row.requiredLoops[0]));
-  if(mode==="reordered")wire.sources[0].claims.reverse();
-  if(mode==="in_facts")row.facts.push(row.requiredLoops.pop());
-  if(mode==="numeric_extra")row.facts.push(structuredClone(row.requiredLoops[0]));
-  if(mode==="combined_limit")row.facts=Array.from({length:47},()=>({...structuredClone(row.requiredLoops[0]),routeFrame:null}));
-  if(mode==="unexpected")wire.sources[1].claims[0].requiredLoops.push(structuredClone(row.requiredLoops[0]));
-  if(mode==="legacy_v5")wire.locatorVersion=5;
+it.each(["missing","duplicate","reordered","numeric_extra","combined_limit","unexpected","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
+  const f=setup(),wire=indexedWire(f),row=wire.sources[0];
+  if(mode==="missing")row.facts.pop();
+  if(mode==="duplicate")row.facts.splice(1,0,structuredClone(row.facts[0]));
+  if(mode==="reordered")row.facts.reverse();
+  if(mode==="numeric_extra")row.facts.push(structuredClone(row.facts[0]));
+  if(mode==="combined_limit")row.facts.splice(1,0,...Array.from({length:47},()=>({...structuredClone(row.facts[0]),routeFrame:null})));
+  if(mode==="unexpected"){wire.sources[1].facts.push(structuredClone(row.facts[0]));wire.sources[1].coverage[0].unresolved=null;}
+  if(mode==="legacy_v8")wire.locatorVersion=8;
   const before=JSON.stringify(wire);
-  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(fixtureCompactSource(wire))).success).toBe(false);
+  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
   expect(JSON.stringify(wire)).toBe(before);
 });
 it("keeps original claim parts and gives each required loop its own source-scoped evidence index",()=>{

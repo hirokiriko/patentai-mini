@@ -30,8 +30,8 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(value.locatorVersion===8)return fixtureCompactSource(value);
-  if(!input||[1,2,3,4,5,6,7].includes(value.locatorVersion))return flattenGuards(value);
+  if(value.locatorVersion===9)return flattenGuards(value);
+  if(!input||[1,2,3,4,5,6,7,8].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
     const locators=[];
     const add=(range,claimNo)=>{
@@ -59,7 +59,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return fixtureCompactSource({locatorVersion:8,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:9,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
@@ -105,9 +105,20 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         {...common,origin:m.origin===null?null:term(m.origin),destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term)}:
         {...common,objects:m.objects.map(term)};
       if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
-      delete encoded.bindings;delete encoded.claimNo;return {...encoded,basis,locators,meaning};
-    });return {claimNo:c.claimNo,requiredLoops:[],facts};
-    });return {sourceDigest:s.sourceDigest,claims};
+      const direct=i=>{
+        const q=locators[i],anchor=text.slice(...selected),at=anchor.indexOf(q.quote);
+        return anchor.indexOf(q.quote,at+1)<0?q.quote:q;
+      };
+      const dereference=v=>v===null?null:typeof v==="number"?direct(v):
+        Array.isArray(v)?v.map(dereference):v&&typeof v==="object"?
+          Object.fromEntries(Object.entries(v).map(([k,x])=>[k,dereference(x)])):v;
+      delete encoded.bindings;
+      return {...encoded,basis,meaning:dereference(meaning),
+        operators:dereference(encoded.operators),routeFrame:dereference(encoded.routeFrame)};
+    });return {claimNo:c.claimNo,facts,unresolved:facts.length?null:
+      {quote:parts(c.claimNo).join(""),occurrence:0,reason:"Fictional fixture supplies no expressible additional fact."}};
+    });return {sourceDigest:s.sourceDigest,coverage:claims.map(({claimNo,unresolved})=>({claimNo,unresolved})),
+      facts:claims.flatMap(c=>c.facts)};
   })});
   if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
     const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);

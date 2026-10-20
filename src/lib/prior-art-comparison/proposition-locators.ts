@@ -1,11 +1,11 @@
 import { z } from "zod";
-import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { comparisonModelSchema } from "./model-schema";
-import { extractionSchema, targetAtomSchema, targetPartSchema, propositionSourceInput,
-  sourcePropositionSchemaFor, targetPropositionSchemaFor, type PropositionTargetInput } from "./proposition-extraction";
-import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
-import { sourceCitationParts, sourceCitationRange } from "./source-citation-parts";
-import { sourceWireSchema } from "./source-wire-schema";
+import { extractionSchema, targetAtomSchema, targetPartSchema,
+  targetPropositionSchemaFor, type PropositionTargetInput } from "./proposition-extraction";
+import type { Span } from "./propositions";
+import { resolvePropositionQuote } from "./proposition-quotes";
+export { resolvePropositionQuote } from "./proposition-quotes";
+export { directSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-direct-quotes";
 
 // Quotes live at a shallow level. Nested propositions refer to this table;
 // adding a locator object at every span would exceed Azure's five levels.
@@ -20,33 +20,6 @@ const spans = {
   routeFrame: z.object({ entry:index, exit:index, route:index,
     exclusions:z.array(index).max(6), controls:z.array(index).max(6) }).strict().nullable(),
 };
-const wireExtraction = extractionSchema.extend(spans);
-// Source terms are quoted once. The model selects their locators for semantic
-// roles instead of independently repeating a term and a purported binding.
-const termRefs=z.array(index).min(1).max(4).meta({id:"PriorArtSourceTerm"}),termLists=z.array(termRefs).max(12);
-const boundCommon={
-  subject:termRefs.nullable().describe("Catalog rr uses its MODE, not its inlet. Other paths/actions use their printed subject, else null."),
-  context:meaningSchema.options[0].shape.context,
-  guard:z.object({relation:guardSchema.shape.relation,conditions:termLists}).strict().meta({id:"PriorArtGuard"}),
-  polarity:meaningSchema.options[0].shape.polarity,
-};
-const boundMeaning=z.discriminatedUnion("kind",[
-  meaningSchema.options[0].extend({...boundCommon,members:termLists.min(1)}),
-  meaningSchema.options[1].extend({...boundCommon,origin:termRefs.nullable(),destination:termRefs.nullable(),
-    via:termLists.describe("Ordered traversed components, including a bypass PIPE when traversed."),
-    bypass:termLists.describe("Excluded components, not the traversed bypass pipe. A node visited elsewhere is not excluded from the whole route.")}),
-  meaningSchema.options[2].extend({...boundCommon,objects:termLists.min(1).describe("Component nouns for valve/thermal actions; not action clauses. Other relations retain their actual operands.")}),
-]);
-const boundSourceExtraction=wireExtraction.omit({bindings:true}).extend({meaning:boundMeaning,
-  routeFrame:z.union([index,spans.routeFrame.unwrap().extend({
-    route:index.describe("Complete route clause through the final explicit endpoint (return only if printed), not a mode name."),
-  })]).nullable()});
-const sourceLocator=z.object({
-  quote:locator.shape.quote.nullable(),
-  occurrence:index.describe("Zero-based exact-match count within THIS fact's bb, not the full claim. null quote requires 0."),
-}).strict();
-const sourceBasis=z.object({firstPart:index,lastPart:index}).strict()
-  .describe("One inclusive part range containing ALL evidence, including the named mode and complete guard/control.");
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
 const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
   reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
@@ -54,23 +27,7 @@ export const SOURCE_LOCATOR_MAX_BYTES = 32_000;
 export const TARGET_LOCATOR_MAX_BYTES = 64_000;
 const invalid = () => new Error("comparison_locator_invalid");
 
-/** Exact matching only. Count every match start (including overlaps), starting
- * at zero, within this one frozen claim or target. Never normalize or search a
- * different claim, infer a first occurrence, or widen a basis. */
-export function resolvePropositionQuote(text:string, quote:string, occurrence:number):Span {
-  if (!quote.length || !Number.isSafeInteger(occurrence) || occurrence < 0) throw invalid();
-  let start = -1;
-  for (let i=0;i<=occurrence;i++) {
-    start = text.indexOf(quote,start+1);
-    if (start < 0) throw invalid();
-  }
-  const end=start+quote.length;
-  const splits=(at:number)=>/[\uD800-\uDBFF]/u.test(text[at-1]??"")&&/[\uDC00-\uDFFF]/u.test(text[at]??"");
-  if (splits(start)||splits(end)||text.slice(start,end)!==quote) throw invalid();
-  return [start,end];
-}
-
-function expandExtraction(raw:z.infer<typeof wireExtraction>, get:(index:number)=>Span) {
+function expandExtraction(raw:Pick<z.infer<typeof wireAtom>,keyof z.infer<typeof extractionSchema>>, get:(index:number)=>Span) {
   const frame=raw.routeFrame;
   return {...raw, basis:raw.basis.map(get), bindings:raw.bindings.map(b=>({...b,spans:b.spans.map(get)})),
     operators:{selection:raw.operators.selection===null?null:get(raw.operators.selection),
@@ -92,95 +49,6 @@ function tableReader<T extends z.infer<typeof locator>>(table:T[], text:(entry:T
     if(!Number.isSafeInteger(at)||at<0||at>=table.length)throw invalid();
     used.add(at);return [...resolved[at]] as Span;
   }, complete:()=>{if(used.size!==table.length)throw invalid();}};
-}
-
-function expandSource(raw:Omit<z.infer<typeof boundSourceExtraction>,"routeFrame">&{routeFrame:z.infer<typeof spans.routeFrame>},get:(at:number)=>Span,text:string,basis:Span[]) {
-  const bindings:z.infer<typeof extractionSchema>["bindings"]=[];
-  const term=(refs:number[]):string=>{
-    const positions=refs.map(get);
-    // Check every role before coalescing identical terms. A second occurrence
-    // outside the basis must not disappear behind an earlier valid binding.
-    if(positions.some(s=>!basis.some(([a,b])=>s[0]>=a&&s[1]<=b)))throw invalid();
-    const value=positions.map(([a,b])=>text.slice(a,b)).join("");
-    if(!bindings.some(b=>b.term===value))bindings.push({term:value,spans:positions});
-    return value;
-  };
-  const m=raw.meaning,common={subject:m.subject===null?null:term(m.subject),context:m.context,
-    guard:{relation:m.guard.relation,conditions:m.guard.conditions.map(term)},polarity:m.polarity};
-  const meaning:Meaning=m.kind==="set"?{...common,kind:m.kind,selection:m.selection,extent:m.extent,members:m.members.map(term)}:
-    m.kind==="path"?{...common,kind:m.kind,origin:m.origin===null?null:term(m.origin),
-      destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term),extent:m.extent,relation:m.relation}:
-    {...common,kind:m.kind,predicate:m.predicate,objects:m.objects.map(term)};
-  return {...expandExtraction({...raw,basis:[],meaning,bindings:[]},get),basis,bindings};
-}
-
-/** The wire result is converted once to the unchanged internal span schema.
- * The domain decoder still checks containment, scope, terms and semantics. */
-export function sourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
-  const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const fact=z.object({basis:sourceBasis,
-    locators:z.array(sourceLocator).max(512).describe("Referenced locations only; bb holds prose, numeric rf supplies its frame."),
-    meaning:boundSourceExtraction.shape.meaning,
-    operators:boundSourceExtraction.shape.operators,routeFrame:boundSourceExtraction.shape.routeFrame,
-  }).strict().meta({id:"PriorArtSourceFact"});
-  const reading=z.object({claimNo:z.number().int().positive(),
-    requiredLoops:z.array(fact).max(48).describe("One independent whole path per this claim's catalog entry, in order. rf=id, subject=MODE, bb covers all basisParts."),
-    facts:z.array(fact).max(48).describe("Other literal routes/actions/conditions beyond identical canonical sets. rf explicit or null, never numeric. No substitute predicates."),
-  }).strict();
-  const schema=z.object({locatorVersion:z.literal(8),sources:z.array(z.object({
-    sourceDigest:local.shape.sources.element.shape.sourceDigest,
-    claims:z.array(reading).describe("Every input claim once in order, ancestors included. Fact indexes never cross facts."),
-  }).strict()).length(input.sources.length)}).strict();
-  const originals=input.sources.map(s=>new Map(s.source.claims.map(c=>[c.claimNo,{text:c.segments.map(p=>p.text).join(""),parts:sourceCitationParts(c.segments.map(p=>p.text))}])));
-  return sourceWireSchema(comparisonModelSchema(schema,raw=>{
-    return local.parse({sources:raw.sources.map((s,i)=>{
-      if(s.sourceDigest!==input.sources[i].sourceDigest)throw invalid();
-      const expected=input.sources[i].source.claims;
-      if(s.claims.length!==expected.length||s.claims.some((c,n)=>c.claimNo!==expected[n].claimNo)||
-        s.claims.reduce((n,c)=>n+[...c.requiredLoops,...c.facts].reduce((n,f)=>n+f.locators.length,0),0)>512||
-        s.claims.reduce((n,c)=>n+c.requiredLoops.length+c.facts.length,0)>48)throw invalid();
-      const facts=s.claims.flatMap(c=>{
-      const claim=originals[i].get(c.claimNo)!;
-      const loops=input.sources[i].recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===c.claimNo);
-      if(c.requiredLoops.length!==loops.length||c.requiredLoops.some((f,n)=>f.routeFrame!==loops[n].id)||
-        c.facts.some(f=>typeof f.routeFrame==="number"))throw invalid();
-      const facts=[...c.requiredLoops,...c.facts].map(f=>{
-        // The model chooses one complete contiguous range. No second address
-        // space, union across gaps, or automatic expansion after a failed quote.
-        const range=sourceCitationRange(claim.parts,f.basis.firstPart,f.basis.lastPart);
-        const basis=[range];
-        const seen=new Set<string>(),used=new Set<number>();
-        const resolved=f.locators.map(l=>{
-          const [a,b]=range;
-          if(l.quote===null&&l.occurrence!==0)throw invalid();
-          const position:Span=l.quote===null?[a,b]:resolvePropositionQuote(claim.text.slice(a,b),l.quote,l.occurrence).map(n=>n+a) as Span;
-          const key=JSON.stringify(position);if(seen.has(key))throw invalid();seen.add(key);
-          return position;
-        });
-        const get=(at:number):Span=>{
-          const entry=resolved[at];
-          if(!Number.isSafeInteger(at)||!entry)throw invalid();used.add(at);return [...entry];
-        };
-        const indexed=typeof f.routeFrame==="number",r=indexed?input.sources[i].recognizedLoopRoutes[f.routeFrame as number]:undefined;
-        // The model explicitly selects complete part ranges. Never derive or
-        // enlarge its basis from a role, a frame, or a failed quote lookup.
-        const {locators,...semantic}=f;void locators;
-        const expanded=expandSource({...semantic,basis:[],routeFrame:indexed?null:f.routeFrame as z.infer<typeof spans.routeFrame>},get,claim.text,basis);
-        if(indexed){
-          const m=expanded.meaning,same=(t:string|null,span:Span)=>t!==null&&propositionKey(t)===propositionKey(claim.text.slice(...span));
-          if(!r||r.claimNo!==c.claimNo||m.kind!=="path"||m.extent!=="whole"||m.relation!=="route"||
-            !same(m.subject,r.mode)||!same(m.origin,r.entry)||!same(m.destination,r.exit))throw invalid();
-          const frame={entry:r.entry,exit:r.exit,route:r.route,exclusions:[r.definition],controls:[r.control]};
-          if([r.mode,r.entry,r.exit,r.route,r.definition,r.control].some(span=>!expanded.basis.some(([a,b])=>span[0]>=a&&span[1]<=b)))throw invalid();
-          expanded.routeFrame=structuredClone(frame);
-        }
-        if(used.size!==f.locators.length)throw invalid();
-        return {...expanded,claimNo:c.claimNo};
-      });
-      return facts;
-      });return {sourceDigest:s.sourceDigest,facts};
-    })});
-  }));
 }
 
 export function targetPropositionModelSchemaFor(input:PropositionTargetInput) {
