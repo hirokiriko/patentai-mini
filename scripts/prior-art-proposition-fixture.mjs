@@ -2,6 +2,21 @@
 // plumbing only and must never be reported as real-model extraction quality.
 const fixtureInputs = new WeakMap();
 const withInput = (value,input) => { fixtureInputs.set(value,input);return value; };
+// Independent test spelling of source v7; production codecs are not imported.
+const sourceNames={locatorVersion:"v",sources:"ss",sourceDigest:"sd",claims:"cc",claimNo:"cn",
+  requiredLoops:"rr",facts:"ff",basis:"bb",firstPart:"fp",lastPart:"lp",locators:"ll",basisIndex:"bi",
+  quote:"q",occurrence:"o",meaning:"mm",operators:"op",routeFrame:"rf",subject:"su",context:"cx",
+  guardRelation:"gr",guardConditions:"gc",polarity:"po",kind:"ki",selection:"se",extent:"ex",
+  members:"me",origin:"or",destination:"de",via:"vi",bypass:"by",relation:"re",predicate:"pr",
+  objects:"ob",guard:"gu",entry:"en",exit:"et",route:"rt",exclusions:"ec",controls:"ct"};
+const sourceReverse=Object.fromEntries(Object.entries(sourceNames).map(([a,b])=>[b,a]));
+function rename(value,names){
+  if(Array.isArray(value))return value.map(v=>rename(v,names));
+  if(!value||typeof value!=="object")return value;
+  return Object.fromEntries(Object.entries(value).map(([k,v])=>[names[k]??k,rename(v,names)]));
+}
+export const fixtureCompactSource = value => rename(flattenGuards(value),sourceNames);
+export const fixtureExpandSource = value => rename(value,sourceReverse);
 function flattenGuards(value) {
   if (Array.isArray(value)) return value.map(flattenGuards);
   if (!value || typeof value !== "object") return value;
@@ -15,6 +30,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
+  if(value.locatorVersion===7)return fixtureCompactSource(value);
   if(!input||[1,2,3,4,5,6].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
     const locators=[];
@@ -43,17 +59,30 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     operators:Object.fromEntries(Object.entries(f.operators).map(([k,s])=>[k,s===null?null:add(s)])),
     routeFrame:f.routeFrame?{entry:add(f.routeFrame.entry),exit:add(f.routeFrame.exit),route:add(f.routeFrame.route),
       exclusions:f.routeFrame.exclusions.map(add),controls:f.routeFrame.controls.map(add)}:null});
-  if(input.task==="extract_source_propositions")return flattenGuards({locatorVersion:6,sources:value.sources.map(s=>{
+  if(input.task==="extract_source_propositions")return fixtureCompactSource({locatorVersion:7,sources:value.sources.map(s=>{
     // Preserve deliberately invalid digests in negative tests; use the fixture
     // row's original source only to encode its unchanged quote positions.
     const source=(input.sources.find(x=>x.sourceDigest===s.sourceDigest)??input.sources[value.sources.indexOf(s)]).source;
     const parts=no=>{const c=source.claims.find(c=>c.claimNo===no);return c.parts?c.parts.map(p=>p.text):c.segments?c.segments.map(s=>Array.isArray(s)?s[1]:s.text):[c.text];};
     if(s.facts.some(f=>!source.claims.some(c=>c.claimNo===f.claimNo)))throw Error("fictional_locator_invalid");
     const claims=source.claims.map(c=>{
-    const t=table(no=>parts(no).join(""),parts);
     let at=0;const ranges=parts(c.claimNo).map(text=>{const start=at;at+=text.length;return[start,at];});
     const facts=s.facts.filter(f=>f.claimNo===c.claimNo).map(f=>{
-      const add=r=>t.add(r,f.claimNo),encoded=fact({...f,basis:[],bindings:[]},add),m=f.meaning;
+      const text=parts(c.claimNo).join(""),locators=[],positions=[];
+      const add=range=>{
+        if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||
+          range[0]<0||range[1]<=range[0]||range[1]>text.length)throw Error("fictional_locator_invalid");
+        const prior=positions.findIndex(r=>r[0]===range[0]&&r[1]===range[1]);if(prior>=0)return prior;
+        const basisIndex=f.basis.findIndex(([a,b])=>range[0]>=a&&range[1]<=b);
+        if(basisIndex<0)throw Error("fictional_locator_outside_basis");
+        const [a,b]=f.basis[basisIndex],quote=text.slice(...range),anchor=text.slice(a,b);
+        if(!quote.length)throw Error("fictional_locator_invalid");
+        let occurrence=0,p=anchor.indexOf(quote);
+        while(p>=0&&p<range[0]-a){occurrence++;p=anchor.indexOf(quote,p+1);}
+        if(p!==range[0]-a)throw Error("fictional_locator_invalid");
+        positions.push(range);locators.push({basisIndex,quote,occurrence});return locators.length-1;
+      };
+      const encoded=fact({...f,basis:[],bindings:[]},add),m=f.meaning;
       const basis=f.basis.map(range=>{
         if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||range[0]<0||range[1]<=range[0]||range[1]>at)throw Error("fictional_locator_invalid");
         const firstPart=ranges.findIndex(r=>r[0]===range[0]),lastPart=ranges.findIndex(r=>r[1]===range[1]);
@@ -66,7 +95,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         const binding=f.bindings.find(b=>b.term===value);
         if(!binding)throw Error("fictional_binding_missing");
         const refs=binding.spans.map(add);
-        if(refs.map(i=>t.locators[i].quote).join("")!==value)throw Error("fictional_binding_changed");
+        if(refs.map(i=>locators[i].quote).join("")!==value)throw Error("fictional_binding_changed");
         usedTerms.add(value);return refs;
       };
       const common={...m,subject:m.subject===null?null:term(m.subject),
@@ -75,8 +104,8 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         {...common,origin:m.origin===null?null:term(m.origin),destination:m.destination===null?null:term(m.destination),via:m.via.map(term),bypass:m.bypass.map(term)}:
         {...common,objects:m.objects.map(term)};
       if(usedTerms.size!==f.bindings.length)throw Error("fictional_binding_unused");
-      delete encoded.bindings;delete encoded.claimNo;return {...encoded,basis,meaning};
-    });return {claimNo:c.claimNo,locators:t.locators.map(({claimNo,...l},id)=>{void claimNo;return{id,...l};}),requiredLoops:[],facts};
+      delete encoded.bindings;delete encoded.claimNo;return {...encoded,basis,locators,meaning};
+    });return {claimNo:c.claimNo,requiredLoops:[],facts};
     });return {sourceDigest:s.sourceDigest,claims};
   })});
   if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
@@ -129,6 +158,7 @@ export function fixturePropositionGeneration(input){
   return {results:input.documents.flatMap(d=>d.pairs.map(p=>result(d,p)))};
 }
 export function fixturePropositionTarget(input){
+  if(input.factColumns)input={...input,facts:input.facts.map(row=>Object.fromEntries(input.factColumns.map((name,i)=>[name,row[i]])))};
   if(input.textParts){
     const expand=source=>({...source,claims:source.claims.map(c=>({...c,text:c.segments.map(([,i])=>input.textParts[i]).join("")}))});
     input={...input,originals:{...input.originals,base:expand(input.originals.base),documents:input.originals.documents.map(d=>({...d,source:expand(d.source)}))}};

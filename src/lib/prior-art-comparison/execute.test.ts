@@ -95,8 +95,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
-      if (mode === "blank") wire.sources[0].claims[0].locators[0].quote = "";
-      if (mode === "overlong") wire.sources[0].claims[0].locators[0].quote = "甲".repeat(12001);
+      if (mode === "blank") wire.ss[0].cc[0].ff[0].ll[0].q = "";
+      if (mode === "overlong") wire.ss[0].cc[0].ff[0].ll[0].q = "甲".repeat(12001);
       return response(wire);
     });
     vi.stubGlobal("fetch", transport);

@@ -33,7 +33,8 @@ it("keeps generation and target extraction independent of the first extractor's 
       expect(input).not.toHaveProperty("sourceAnalysis");
       expect(input).not.toHaveProperty("sourcePropositions");
       expect(input.facts.length).toBeGreaterThan(0);
-      for(const fact of input.facts)expect(Object.keys(fact).sort()).toEqual(["basis","claimNo","id","kind","subject"]);
+      expect(input.factColumns).toEqual(["id","claimNo","basis","kind","subject"]);
+      for(const fact of input.facts){expect(Array.isArray(fact)).toBe(true);expect(fact).toHaveLength(5);}
       expect(input.originals.base.claims[0].segments.map(([,i]:[number,number])=>input.textParts[i]).join("")).toBe(fixture.inputs.draft.source.claims[0].text);
       answer=fictionalPropositionTarget(input);
     }

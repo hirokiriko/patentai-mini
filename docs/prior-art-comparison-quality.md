@@ -997,3 +997,44 @@ release時AI上界は5363.42790円（切上げ5364円）、非AI150円・配備1
 （切上げ6914円）となり、既存V3の5421/6971円以内に収まる。
 未精算・UNKNOWN・ACK不明ではGOにならず、この成功経路計算を送信前の予約解放には使わない。
 通常releaseは実精算後の保守exposureと最終headを正規署名へ束縛し、V3上限変更は不要である。
+
+## 承認済みprogramの第2診断へ向けた引用構造の修正（2026-10-20）
+
+上記1322円有限案はOWNERが承認済み。初回の原文抽出119はHTTP200/completed・usage確定後に
+local検証で品質FAILとなった。全22原文請求項・入力19請求項65parts・145引用・76命題を
+root＋独立Local2名で照合し、引用の不在、自己basis外参照、条件・否定の証拠不足、
+動作の集合/保有への置換、停止条件や必要な熱作用の欠落を確認した。
+対象120と正常段階は未送信。52.00415円を精算し、新UNKNOWNはない。
+正常終端・usage/STOP ACK・所有process回収・隔離DB cleanupを確認した。
+旧回答を補修せず、凍結validatorの無送信再現と全件QAを第2枠の前提にする。
+
+source wire7では命題ごとにAIがbasisを選び、その一つの範囲内だけで各引用を解決する。
+生成順はbasis、locator配列、meaning、operators、routeFrame。locatorはfact内の配列indexで、
+別factの同名語を参照しない。複数basisの隙間を連結して検索せず、自動拡張もしない。
+requiredLoopsの原文inventory照合、全claim順序、位置・意味・条件の厳格検証を維持する。
+schema fieldの短い綴りはsourceだけに適用し、termや意味値は省略・要約しない。
+
+受理後に実際に保持するrawは、正確なtermとclaim付きspanの辞書、および固定tupleへ
+可逆変換する。全fieldを復元できることを確認し、この実表現へ16KB上限を適用する。
+対象入力のdescriptorもfactColumns付きtupleへ変換し、実6KB上限を維持する。
+原文wire32KB、source当たり48命題/512locator、target1、保存v1、API/DBは維持する。
+guard/polarityはAIが明示した証拠だけを使い、受信側で補わない。
+停止・実行をset/hasへ置換しない指示、停止中条件、熱作用と経路の区別を明確にした。
+これは実AI品質改善の証明ではなく、別headの無課金検証・全件QAが必要な具体修正である。
+
+現固定単価による既知usageは1273.66965円、旧UNKNOWN2832円を全保持。
+残る条件付きLocal予約926円＋本番AI650円を加えたAI上界5681.66965円、
+本番非AI150円＋配備/rollback1400円込み総7231.66965円で、承認上限6026/7576円以内。
+第2枠は診断124/125、合格時のみ正常126–128。今回119と合わせ最大6送信、
+同じprogramの最大7送信を超えず、未使用120–123は使わない。
+第2診断FAIL・UNKNOWN・incomplete・timeout・ACK/write不明・正常予約後の失敗では全停止する。
+期限、通常枠、配備/rollback・Job0、本番確認800円の範囲は変更しない。
+
+修正の無課金検証では80命題を全field往復一致で保持し、wire23693 B、
+従来展開形33919 B、新witness8927 B、descriptor3071 Bを確認した。
+小数・余分要素・逆順等の座標は架空fixtureでも補修せず拒否する。
+96文字のAND条件は30文字の条件3つと全長guard証拠をそのまま保持する。
+lint/type-check/build、実Next・隔離空PG・架空AI9/9、保存・再表示・再起動、
+PDF11頁全文21026文字・CSV33行66セル・再取得一致/AI0・cleanupを確認した。
+新SDKの無通信保守入力上界は52718/70668/52718/54828/87629 Bで、既承認枠内。
+新headのCI・独立レビュー・初回FAIL証拠を束縛した第2枠封筒の確認後にのみ送信する。

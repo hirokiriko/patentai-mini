@@ -57,7 +57,7 @@ describe("literal structure on the product path, with fictional SDK transport", 
         if (failure === "reason") Object.assign(answer.targets[0].parts[0].atoms[0],{verdict:"consistent",reason:wrong});
       }
       const wire=fixturePropositionWire(answer);
-      if(failure==="reading"&&input.task==="extract_source_propositions")wire.sources[0].claims[0].locators[0].quote="原文に存在しない語";
+      if(failure==="reading"&&input.task==="extract_source_propositions")wire.ss[0].cc[0].ff[0].ll[0].q="原文に存在しない語";
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
           content: [{ type: "output_text", text: JSON.stringify(wire), annotations: [] }] }], usage: { input_tokens: 100, output_tokens: 100 } });
