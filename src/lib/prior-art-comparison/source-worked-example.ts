@@ -28,4 +28,7 @@ export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
 }));
 export const SOURCE_WORKED_GUIDE=
   `Fictional example, not an answer. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
-Place that fact in loop0, not facts. Other actions go in facts. In 非通電状態…通電状態, the latter 通電状態 has occurrence1 within that same basis. A smaller basis may reset it to 0. Opposite open/close actions remain separate positive facts with their full shared guard.`;
+Place that fact in loop0, not facts. The closed 第１の開閉弁 is a control, the omitted 冷却器 is bypass, and the traversed バイパス配管 is via. A separate action is ${JSON.stringify(SOURCE_WORKED_FACTS[1])}.
+That action selects ONLY part1: 補助ヒータ has occurrence0 there, although it is occurrence1 in the complete claim. Never carry a complete-claim occurrence into a smaller basis. Recount every role after choosing the basis.
+Another fictional claim has one part: ${SOURCE_ACTION_TEXT}; facts=${JSON.stringify(SOURCE_ACTION_FACTS)}.
+Here 通電状態 occurrence0 is embedded in 非通電状態 and is NOT the affirmative condition. The affirmative occurrence1 belongs in guardConditions; objects are the affected valves. Opposite open/close actions remain separate positive facts with the full shared guard.`;
