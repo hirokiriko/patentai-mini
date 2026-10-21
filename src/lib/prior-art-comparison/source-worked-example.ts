@@ -1,3 +1,4 @@
+import { compactSourceWire } from "./source-wire-compact";
 // Fictional instruction data only. Tests run this exact fragment through the
 // production source schema/domain decoder; it never supplies application facts.
 export const SOURCE_WORKED_PARTS = [
@@ -28,6 +29,6 @@ export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
   operators:{...neutral,guard:q("前記通電状態で温度が七度を超える場合")},routeFrame:null,
 }));
 export const SOURCE_WORKED_GUIDE=
-  `Fictional. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
-c1=[${JSON.stringify(SOURCE_WORKED_FACTS[1])}], not loop0. Quote the heat action, not the heater definition.
+  `Fictional. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(compactSourceWire(SOURCE_WORKED_FACTS[0]))}.
+c1=[${JSON.stringify(compactSourceWire(SOURCE_WORKED_FACTS[1]))}], not loop0. Quote the heat action, not the heater definition.
 '青弁は非通電状態で閉じ、赤弁は通電状態で開く': 通電状態 with before赤弁は/afterで開く belongs to 赤弁. Keep 非; location is not meaning proof.`;

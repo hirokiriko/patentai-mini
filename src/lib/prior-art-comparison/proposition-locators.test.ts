@@ -99,7 +99,7 @@ it("keeps complete source/target wire schemas within five object levels",()=>{
         ...(s.anyOf??[]).map(v=>depth(v as JSONSchema7,d)),...(s.items?[depth(s.items as JSONSchema7,own)]:[]));
     };
     expect(depth(root)).toBeLessThanOrEqual(5);
-    expect(root.properties).toHaveProperty("locatorVersion");
+    expect(root.properties).toHaveProperty(schema===f.sourceSchema?"v":"locatorVersion");
     expect(JSON.stringify(root)).not.toContain("oneOf");
   }
 });

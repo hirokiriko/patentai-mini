@@ -3,8 +3,8 @@ import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { parseComparisonSource } from "./source";
 import { decodeSourcePropositions, propositionSourceInput, propositionSourceTransport } from "./proposition-extraction";
-import { sourcePropositionModelSchemaFor } from "./proposition-locators";
-import { resolveSourceContextQuote } from "./source-direct-quotes";
+import { directSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-direct-quotes";
+import { resolveSourceContextQuote,resolveSourcePartQuote } from "./source-direct-quotes";
 import { compareProposition } from "./propositions";
 import { SOURCE_ACTION_TEXT,SOURCE_ACTION_FACTS } from "./source-worked-example";
 import { fixtureRequiredSourceWire,fixturePropositionWire } from "../../../scripts/prior-art-proposition-fixture.mjs";
@@ -374,4 +374,34 @@ it.each(["legacy_context","null_before","missing_edge","invalid_edge"])("rejects
 
 it("rejects an empty direct quote before searching an edge-bound context",()=>{
   expect(()=>resolveSourceContextQuote("あああ",{quote:"",before:"",after:"",edge:"start"})).toThrow("comparison_locator_invalid");
+});
+it("uses the supplied part without guessing another repeated occurrence",()=>{
+  const parts=["赤弁を開く。","赤弁を閉じる。"];
+  expect(resolveSourcePartQuote(parts,{part:1,quote:"赤弁"})).toEqual([6,8]);
+  expect(()=>resolveSourcePartQuote(parts,{part:0,quote:"閉じる"})).toThrow();
+  expect(()=>resolveSourcePartQuote(parts,{part:0,quote:"開く。赤弁"})).toThrow();
+  expect(()=>resolveSourcePartQuote(parts,{part:2,quote:"赤弁"})).toThrow();
+  expect(()=>resolveSourcePartQuote(["赤弁と赤弁"],{part:0,quote:"赤弁"})).toThrow();
+  expect(()=>resolveSourcePartQuote(["\ud83d","\ude00"],{part:0,quote:"\ud83d"})).toThrow();
+});
+it("preserves distinct parts for a postposed subject and its earlier action",async()=>{
+  const f=setup("赤色弁を開く。"+"甲".repeat(125)+"、これを行う装置である。");
+  const parts=f.input.sources[0].source.claims[0].segments.map(p=>p.text);
+  Object.assign(f.fact.meaning,{subject:[{part:parts.findIndex(t=>t.includes("装置")),quote:"装置"}],predicate:"opens",
+    objects:[[{part:0,quote:"赤色弁"}]]});
+  const before=JSON.stringify(f.wire),r=await f.model.validate!(f.wire);
+  expect(r.success).toBe(true);expect(JSON.stringify(f.wire)).toBe(before);if(!r.success)return;
+  expect(r.value.sources[0].facts[0].basis).toEqual([[0,parts.join("").length]]);
+  expect(()=>decodeSourcePropositions(f.plan,r.value)).not.toThrow();
+});
+it.each(["negative_prefix","outside_guard","over80","wrong_part","mixed_context"])("retains guard and term constraints with part quotes: %s",async mode=>{
+  const f=setup("装置は非通電状態で青色弁を閉じる。"+"甲".repeat(81)+"。");
+  Object.assign(f.fact.meaning,{predicate:"closes",guardRelation:"when",guardConditions:[[{part:0,quote:"非通電状態"}]]});
+  Object.assign(f.fact.operators,{guard:{part:0,quote:"非通電状態"}});
+  if(mode==="negative_prefix")Object.assign(f.fact.meaning,{guardConditions:[[{part:0,quote:"通電状態"}]]});
+  if(mode==="outside_guard")Object.assign(f.fact.operators,{guard:{part:0,quote:"青色弁"}});
+  if(mode==="over80")Object.assign(f.fact.meaning,{objects:[[{part:0,quote:"甲".repeat(81)}]]});
+  if(mode==="wrong_part")Object.assign(f.fact.meaning,{guardConditions:[[{part:99,quote:"非通電状態"}]]});
+  if(mode==="mixed_context")Object.assign(f.fact.meaning.guardConditions[0][0],{before:"",after:"",edge:"none"});
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
 });

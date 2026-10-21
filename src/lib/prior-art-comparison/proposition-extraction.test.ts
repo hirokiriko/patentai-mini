@@ -9,6 +9,7 @@ import type { Meaning } from "./propositions";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
+import { compactSourceWire } from "./source-wire-compact";
 
 function setup(){
   const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection);
@@ -221,7 +222,7 @@ async function semanticConnection(name:string,changedSource?:Pick<SemanticExampl
           ...(m.kind==="set"?{members:m.members.map(term)}:m.kind==="relation"?{objects:m.objects.map(term)}:{})},
         operators:{selection:null,extent:null,polarity:null,guard:guard.relation==="when"?q(guard.conditions.join("かつ")):null,context:null},routeFrame:null};
     })}))};
-  const sourceAnswer=await sourcePropositionModelSchemaFor(plan).validate!(sourceWire);
+  const sourceAnswer=await sourcePropositionModelSchemaFor(plan).validate!(compactSourceWire(sourceWire));
   if(!sourceAnswer.success)throw sourceAnswer.error;
   const sources=decodeSourcePropositions(plan,sourceAnswer.value),observation=example.target.map(t=>t.text).join("");
   const sides=example.target.flatMap(t=>["基準側の"+t.text,"候補側の"+t.text]).join("");

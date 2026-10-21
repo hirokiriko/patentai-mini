@@ -8,7 +8,8 @@ import { propositionPlanSizes } from "./proposition-plan";
 import type { Span } from "./propositions";
 import { sourcePropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
 import { sourceCitationParts,sourceCitationRange } from "./source-citation-parts";
-import { fixturePropositionWire } from "./proposition-fixtures.test-support";
+import { fixturePropositionWire } from "../../../scripts/prior-art-proposition-fixture.mjs";
+import { compactSourceWire } from "./source-wire-compact";
 
 const loop=(name="送出器")=>`前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記${name}から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記${name}に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。`;
 function setup(text=loop()){
@@ -97,8 +98,12 @@ function indexedWire(f:ReturnType<typeof setup>){
   }
   return wire;
 }
+async function validateWire(f:ReturnType<typeof setup>,wire:unknown){
+  try{return await sourcePropositionModelSchemaFor(f.plan).validate!(compactSourceWire(wire));}
+  catch{return {success:false as const,error:new Error("fixture_encoding_invalid")};}
+}
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
-  const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
+  const f=setup(),wire=indexedWire(f),before=JSON.stringify(wire),result=await validateWire(f,wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
   expect([wire.sources[0].loop0.routeFrame,wire.sources[0].loop1.routeFrame]).toEqual([0,1]);
   if(result.success){
@@ -118,7 +123,7 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="precedes")fact.meaning.relation="precedes";
   if(mode==="non_path"){const m=fact.meaning;fact.meaning={kind:"relation",subject:m.subject,context:m.context,guardRelation:m.guardRelation,guardConditions:m.guardConditions,polarity:m.polarity,predicate:"has",objects:[m.origin]};}
   if(mode==="basis_missing")fact.basis={firstPart:0,lastPart:0};
-  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
+  expect((await validateWire(f,wire)).success).toBe(false);
 });
 it.each(["missing","null","duplicate","reordered","numeric_extra","combined_limit","unexpected","loop_unresolved","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
   const f=setup(),wire=indexedWire(f),row=wire.sources[0];
@@ -135,7 +140,7 @@ it.each(["missing","null","duplicate","reordered","numeric_extra","combined_limi
   if(mode==="loop_unresolved")row.c1={quote:"第１の運転モード",occurrence:0,reason:"Not extracted"};
   if(mode==="legacy_v8")wire.locatorVersion=8;
   const before=JSON.stringify(wire);
-  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
+  expect((await validateWire(f,wire)).success).toBe(false);
   expect(JSON.stringify(wire)).toBe(before);
 });
 it("keeps original claim parts and gives each required loop its own source-scoped evidence index",()=>{
@@ -169,9 +174,9 @@ it("shares the complete-claim loop basis without losing a postposed condition or
   const transport=propositionSourceTransport(f.input),r=transport.sources[0].recognizedLoopRoutes[0];
   expect(r.entryLocator.occurrence).toBe(1);expect(r.exitLocator.occurrence).toBe(2);
   expect(r.basisParts).toEqual([0,transport.sources[0].source.claims[0].parts.length-1]);
-  const wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
+  const wire=indexedWire(f),before=JSON.stringify(wire),result=await validateWire(f,wire);
   expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
   if(result.success)expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
   wire.sources[0].loop0.basis.firstPart=1;
-  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
+  expect((await validateWire(f,wire)).success).toBe(false);
 });

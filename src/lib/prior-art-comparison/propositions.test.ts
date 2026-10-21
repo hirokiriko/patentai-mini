@@ -3,6 +3,20 @@ import { compareProposition, explainProposition, meaningSchema, type Meaning, ty
 import { renderMeaning } from "./proposition-result";
 
 const guard = { relation: "unconditional" as const, conditions: [] };
+it.each(["opens_one","opens_together","executes","stops","power_ends"] as const)("keeps the specific action %s separate from generic predicates",predicate=>{
+  const action:Meaning={kind:"relation",subject:predicate==="power_ends"?null:"制御器",context:"operation",guard,polarity:"positive",predicate,objects:["赤弁","青弁"]};
+  const own=[source("s1",action)];
+  expect(compareProposition(target(action),own).relation).toBe("entailed");
+  for(const other of ["has","opens","closes"] as const)
+    expect(compareProposition(target({...action,predicate:other}),own).relation).toBe("unresolved");
+  const rendered=renderMeaning(action);
+  if(predicate==="opens_one")expect(rendered).toContain("何れか一つ");
+  if(predicate==="opens_together")expect(rendered).toContain("同時に");
+  if(predicate==="power_ends"){
+    expect(rendered).toContain("赤弁・青弁への給電が断たれる");expect(rendered).not.toContain("装置は");
+    expect(()=>renderMeaning({...action,subject:"制御器"})).toThrow();
+  }
+});
 const set = (subject: string | null, members: string[], selection: "required" | "nonempty" | "one" = "nonempty"): Meaning =>
   ({ kind:"set",subject,context:"capability",guard,polarity:"positive",selection,extent:"closed",members });
 const source = (id: string, meaning: Meaning): SourceProposition =>

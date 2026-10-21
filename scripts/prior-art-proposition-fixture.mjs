@@ -204,6 +204,8 @@ export function fixturePropositionGeneration(input){
   return {results:input.documents.flatMap(d=>d.pairs.map(p=>result(d,p)))};
 }
 export function fixturePropositionTarget(input){
+  if(input.facts?.version===2){const table=input.facts;input={...input,facts:table.rows.map(([id,claimNo,basis,kind,subject])=>
+    ({id,claimNo,basis:table.bases[basis],kind:["set","path","relation"][kind],subject:subject===null?null:table.subjects[subject]}))};}
   if(input.factColumns)input={...input,facts:input.facts.map(row=>Object.fromEntries(input.factColumns.map((name,i)=>[name,row[i]])))};
   if(input.textParts){
     const expand=source=>({...source,claims:source.claims.map(c=>({...c,text:c.segments.map(([,i])=>input.textParts[i]).join("")}))});

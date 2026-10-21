@@ -5,17 +5,22 @@ import { comparisonModelSchema } from "./model-schema";
 import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } from "./proposition-extraction";
 import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
 import { ComparisonError } from "./source";
+import { sourceWireSchema } from "./source-wire-compact";
 
 const index=z.number().int().nonnegative();
-const quote=z.object({
+const contextQuote=z.object({
   quote:z.string().min(1).max(12_000),
   before:z.string().max(12_000),after:z.string().max(12_000),edge:z.enum(["none","start","end","both"]),
 }).strict().meta({id:"PriorArtSourceQuote"});
+const partQuote=z.object({part:index,quote:z.string().min(1).max(12_000)}).strict()
+  .meta({id:"PriorArtSourcePartQuote"});
+const quote=z.union([partQuote,contextQuote]);
 const evidence=z.union([quote,
   z.object({quote:z.null(),before:z.literal(""),after:z.literal(""),edge:z.literal("both")}).strict()])
   .meta({id:"PriorArtSourceEvidence"});
-const term=z.array(
-  quote.extend({quote:z.string().min(1).max(80)}).meta({id:"PriorArtSourceTermQuote"})).min(1).max(4)
+// The decoder enforces the same 80-character limit on the concatenated term.
+// Reuse the quote definition to stay within the provider's property budget.
+const term=z.array(quote).min(1).max(4)
   .describe("Exact noun/condition quotes concatenated in this order, at most 80 characters in total.")
   .meta({id:"PriorArtSourceTerm"});
 const terms=z.array(term).max(12);
@@ -62,6 +67,16 @@ export function resolveSourceContextQuote(text:string,q:{quote:string;before:str
     if(/[\uD800-\uDBFF]/u.test(text[p-1]??"")&&/[\uDC00-\uDFFF]/u.test(text[p]??""))throw invalid();
   return [start,end];
 }
+/** A part is an input coordinate, never a semantic boundary or inferred role.
+ * Require the model's exact quote to be unique inside that exact part. */
+export function resolveSourcePartQuote(parts:readonly string[],q:{part:number;quote:string}):Span {
+  if(!Number.isSafeInteger(q.part)||q.part<0||q.part>=parts.length)throw invalid();
+  const offset=parts.slice(0,q.part).join("").length,text=parts.join("");
+  const span=resolveSourceContextQuote(parts[q.part],{quote:q.quote,before:"",after:"",edge:"none"})
+    .map(n=>n+offset) as Span;
+  for(const p of span)if(/[\uD800-\uDBFF]/u.test(text[p-1]??"")&&/[\uDC00-\uDFFF]/u.test(text[p]??""))throw invalid();
+  return span;
+}
 /** Conditions may omit a demonstrative, not part of a Han word such as its
  * negative prefix. Adjacent fragments are checked as one intact quotation. */
 function assertConditionBoundaries(text:string,positions:Span[]) {
@@ -92,9 +107,9 @@ function propertyCount(value:unknown):number {
 /** Source-only v12. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
-export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
+function directSourceModel(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const unresolved=quote.extend({reason:z.string().min(1).max(400)})
+  const unresolved=contextQuote.extend({reason:z.string().min(1).max(400)})
     .meta({id:"PriorArtSourceUnresolved"});
   const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
     .meta({id:"PriorArtSourceAdditionalFact"});
@@ -163,7 +178,8 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
           return [...basis];
         }
         const anchor=text.slice(...basis);
-        const span=resolveSourceContextQuote(anchor,q).map(n=>n+basis[0]) as Span;
+        const span="part"in q?resolveSourcePartQuote(claim.segments.map(p=>p.text),q):
+          resolveSourceContextQuote(anchor,q).map(n=>n+basis[0]) as Span;
         const key=JSON.stringify(span);
         if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
         return span;
@@ -222,6 +238,13 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
   // Dynamic claim keys must fit the documented Azure schema budget too.
   // Reject the complete plan before sending; never omit claims to fit it.
   if(propertyCount(model.jsonSchema)>100)throw new ComparisonError("plan_limit");
+  return model;
+}
+export function compactDirectSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
+  return sourceWireSchema(directSourceModel(chunks));
+}
+export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
+  const model=directSourceModel(chunks);
   return jsonSchema(model.jsonSchema,{validate:async value=>{
     try{
       if(Buffer.byteLength(JSON.stringify(value),"utf8")>32_000||!model.validate)throw invalid();
