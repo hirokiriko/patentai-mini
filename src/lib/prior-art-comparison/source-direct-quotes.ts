@@ -4,16 +4,15 @@ import { jsonSchema } from "ai";
 import { comparisonModelSchema } from "./model-schema";
 import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } from "./proposition-extraction";
 import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
-import { resolvePropositionQuote } from "./proposition-quotes";
 import { ComparisonError } from "./source";
 
 const index=z.number().int().nonnegative();
 const quote=z.object({
   quote:z.string().min(1).max(12_000),
-  occurrence:index.describe("Exact-match starts, zero-based in the COMPLETE claim. Count embedded matches too; select the occurrence supporting this meaning."),
+  before:z.string().max(12_000),after:z.string().max(12_000),edge:z.enum(["none","start","end","both"]),
 }).strict().meta({id:"PriorArtSourceQuote"});
 const evidence=z.union([quote,
-  z.object({quote:z.null(),occurrence:z.literal(0)}).strict()])
+  z.object({quote:z.null(),before:z.literal(""),after:z.literal(""),edge:z.literal("both")}).strict()])
   .meta({id:"PriorArtSourceEvidence"});
 const term=z.array(
   quote.extend({quote:z.string().min(1).max(80)}).meta({id:"PriorArtSourceTermQuote"})).min(1).max(4)
@@ -46,6 +45,42 @@ const fact=z.object({
   routeFrame:z.union([index,frame]).nullable(),
 }).strict();
 const invalid=()=>new Error("comparison_locator_invalid");
+/** Resolve only the supplied context. Never choose another repeated occurrence,
+ * normalize text or repair an answer. A location is not semantic proof. */
+export function resolveSourceContextQuote(text:string,q:{quote:string;before:string;after:string;edge:"none"|"start"|"end"|"both"}):Span {
+  if(!q.quote.length)throw invalid();
+  const {before,after}=q,context=before+q.quote+after;
+  let found=-1;
+  for(let at=text.indexOf(context);at>=0;at=text.indexOf(context,at+1)){
+    if(["start","both"].includes(q.edge)&&at!==0||["end","both"].includes(q.edge)&&at+context.length!==text.length)continue;
+    if(found!==-1)throw invalid();found=at;
+  }
+  if(found<0)throw invalid();
+  const start=found+before.length,end=start+q.quote.length;
+  // Check both enclosing and inner boundaries against the complete original.
+  for(const p of [found,start,end,found+context.length])
+    if(/[\uD800-\uDBFF]/u.test(text[p-1]??"")&&/[\uDC00-\uDFFF]/u.test(text[p]??""))throw invalid();
+  return [start,end];
+}
+/** Conditions may omit a demonstrative, not part of a Han word such as its
+ * negative prefix. Adjacent fragments are checked as one intact quotation. */
+function assertConditionBoundaries(text:string,positions:Span[]) {
+  const ranges:Span[]=[];
+  for(const [a,b] of positions){
+    const last=ranges.at(-1);
+    if(last?.[1]===a)last[1]=b;else ranges.push([a,b]);
+  }
+  for(const [a,b] of ranges){
+    const han=(s:string)=>/\p{Script=Han}/u.test(s);
+    const next=(p:number)=>p<text.length?String.fromCodePoint(text.codePointAt(p)!):"";
+    const previous=(p:number)=>text.slice(0,p).match(/[\s\S]$/u)?.[0]??"";
+    if(han(next(a))&&han(previous(a))){
+      const prefix=text.slice(0,a).match(/\p{Script=Han}+$/u)?.[0];
+      if(!["前記","当該","該"].includes(prefix??""))throw invalid();
+    }
+    if(han(previous(b))&&han(next(b)))throw invalid();
+  }
+}
 function propertyCount(value:unknown):number {
   if(!value||typeof value!=="object")return 0;
   if(Array.isArray(value))return value.reduce((n,v)=>n+propertyCount(v),0);
@@ -54,7 +89,7 @@ function propertyCount(value:unknown):number {
     Object.values(record).reduce<number>((n,v)=>n+propertyCount(v),0);
 }
 
-/** Source-only v11. Each semantic role carries its own exact quotation, avoiding
+/** Source-only v12. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
 export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
@@ -90,9 +125,9 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
     })])),
   }).strict());
-  const schema=z.object({locatorVersion:z.literal(11),sources:z.array(
+  const schema=z.object({locatorVersion:z.literal(12),sources:z.array(
     z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
-  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:11;sources:RawSource[]}>;
+  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:12;sources:RawSource[]}>;
   const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
     const source=input.sources[i],expected=source.source.claims;
     if(s.sourceDigest!==source.sourceDigest)throw invalid();
@@ -102,7 +137,7 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       const answer=s[`c${c.claimNo}`] as z.infer<typeof claimAnswer>,text=c.segments.map(p=>p.text).join("");
       if(!Array.isArray(answer)){
         if(!answer.reason.trim())throw invalid();
-        resolvePropositionQuote(text,answer.quote,answer.occurrence);
+        resolveSourceContextQuote(text,answer);
       }
       return [
         ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?[s[`loop${id}`] as RawFact]:[]),
@@ -128,7 +163,7 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
           return [...basis];
         }
         const anchor=text.slice(...basis);
-        const span=resolvePropositionQuote(anchor,q.quote,q.occurrence).map(n=>n+basis[0]) as Span;
+        const span=resolveSourceContextQuote(anchor,q).map(n=>n+basis[0]) as Span;
         const key=JSON.stringify(span);
         if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
         return span;
@@ -153,6 +188,14 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       const operators={selection:op.selection===null?null:get(op.selection),
         extent:op.extent===null?null:get(op.extent),polarity:op.polarity===null?null:get(op.polarity),
         guard:op.guard===null?null:get(op.guard),context:op.context===null?null:get(op.context)};
+      // Check each guard role before coalesced bindings can hide a different
+      // position. A broad whole-claim proof does not waive lexical boundaries.
+      for(const condition of m.guard.conditions){
+        const positions=condition.map(get);
+        assertConditionBoundaries(text,positions);
+        if(operators.guard&&positions.some(([a,b])=>a<operators.guard![0]||b>operators.guard![1]))throw invalid();
+      }
+      if(operators.guard)assertConditionBoundaries(text,[operators.guard]);
       let routeFrame:z.infer<typeof extractionSchema>["routeFrame"]=null;
       if(typeof f.routeFrame==="number"){
         const r=source.recognizedLoopRoutes[f.routeFrame],same=(t:string|null,p:Span)=>

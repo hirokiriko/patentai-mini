@@ -207,10 +207,16 @@ async function semanticConnection(name:string,changedSource?:Pick<SemanticExampl
   f.inputs.draft=parseComparisonSource("【請求項1】"+base.sourceText,11,"架空基準");
   f.inputs.documents=[parseComparisonSource("【請求項1】"+example.sourceText,21,"架空候補")];
   f.selection.documents=f.selection.documents.slice(0,1);
-  const plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceInput(plan),q=(quote:string)=>({quote,occurrence:0});
-  const sourceWire={locatorVersion:11,sources:sourceInput.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
-    c1:(i===0?base:example).sourceFacts.map(m=>{
-      const {guard,...rest}=m,term=(v:string)=>[q(v)];
+  const plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceInput(plan),q=(quote:string,context:string|null=null)=>{
+    const at=context?.indexOf(quote)??0;
+    return {quote,before:context?.slice(0,at)??"",after:context?.slice(at+quote.length)??"",edge:"none" as const};
+  };
+  const sourceWire={locatorVersion:12,sources:sourceInput.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
+    c1:(i===0?base:example).sourceFacts.map((m,at)=>{
+      // These two heat assertions deliberately mention the same component.
+      // Their hand-authored readings select their own original clause.
+      const context=name==="heat"?(i===0?base:example).sourceText.split("。")[at]:null;
+      const {guard,...rest}=m,term=(v:string)=>[q(v,context)];
       return {meaning:{...rest,subject:m.subject===null?null:term(m.subject),guardRelation:guard.relation,guardConditions:guard.conditions.map(term),
           ...(m.kind==="set"?{members:m.members.map(term)}:m.kind==="relation"?{objects:m.objects.map(term)}:{})},
         operators:{selection:null,extent:null,polarity:null,guard:guard.relation==="when"?q(guard.conditions.join("かつ")):null,context:null},routeFrame:null};

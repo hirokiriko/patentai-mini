@@ -20,7 +20,7 @@ export const fixtureExpandSource = value => rename(value,sourceReverse);
 // Independent wire spelling only; never fills a missing coverage row or loop.
 // The caller explicitly supplies every numeric loop fact before conversion.
 export function fixtureRequiredSourceWire(wire) {
-  return {...wire,locatorVersion:11,sources:wire.sources.map(s=>{
+  return {...wire,locatorVersion:12,sources:wire.sources.map(s=>{
     const coverage=Object.fromEntries(s.coverage.map(c=>[`c${c.claimNo}`,c.unresolved]));
     if(Object.keys(coverage).length!==s.coverage.length)throw Error("fictional_duplicate_coverage");
     if(s.facts.some(f=>!Object.hasOwn(coverage,`c${f.claimNo}`)))throw Error("fictional_foreign_claim");
@@ -52,7 +52,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(value.locatorVersion===11||value.locatorVersion===10)return flattenGuards(value);
+  if(value.locatorVersion===12||value.locatorVersion===11||value.locatorVersion===10)return flattenGuards(value);
   if(value.locatorVersion===9)return flattenGuards(value);
   if(!input||[1,2,3,4,5,6,7,8].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
@@ -108,10 +108,22 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         if(range[0]<a||range[1]>b)throw Error("fictional_locator_outside_basis");
         const quote=text.slice(...range),anchor=text.slice(a,b);
         if(!quote.length)throw Error("fictional_locator_invalid");
-        let occurrence=0,p=anchor.indexOf(quote);
-        while(p>=0&&p<range[0]-a){occurrence++;p=anchor.indexOf(quote,p+1);}
-        if(p!==range[0]-a)throw Error("fictional_locator_invalid");
-        positions.push(range);locators.push({quote,occurrence});return locators.length-1;
+        const boundary=p=>!(/[\uD800-\uDBFF]/u.test(anchor[p-1]??"")&&/[\uDC00-\uDFFF]/u.test(anchor[p]??""));
+        let left=range[0]-a,right=range[1]-a,before="",after="",edge="none";
+        const unique=(l,r)=>{const x=anchor.slice(l,r);return boundary(l)&&boundary(r)&&anchor.indexOf(x)===l&&anchor.indexOf(x,l+1)<0;};
+        if(!unique(left,right)){
+          // Only an explicitly selected edge constrains the first/last match.
+          // This inverse consumes hand-authored spans, never a real response.
+          if(left<=32){before=anchor.slice(0,left);edge="start";}
+          else if(anchor.length-right<=32){after=anchor.slice(right);edge="end";}
+          else{
+            while(!unique(left,right)){if(left>0)left--;if(right<anchor.length)right++;}
+            while(left<range[0]-a&&unique(left+1,right))left++;
+            while(right>range[1]-a&&unique(left,right-1))right--;
+            before=anchor.slice(left,range[0]-a);after=anchor.slice(range[1]-a,right);
+          }
+        }
+        positions.push(range);locators.push({quote,before,after,edge});return locators.length-1;
       };
       const encoded=fact({...f,basis:[],bindings:[]},add),m=f.meaning;
       const usedTerms=new Set();
@@ -138,7 +150,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         operators:Object.values(encoded.operators).every(v=>v===null)?null:dereference(encoded.operators),
         routeFrame:dereference(encoded.routeFrame)};
     });return {claimNo:c.claimNo,facts,unresolved:facts.length?null:
-      {quote:parts(c.claimNo).join(""),occurrence:0,reason:"Fictional fixture supplies no expressible additional fact."}};
+      {quote:parts(c.claimNo).join(""),before:"",after:"",edge:"none",reason:"Fictional fixture supplies no expressible additional fact."}};
     });return {sourceDigest:s.sourceDigest,coverage:claims.map(({claimNo,unresolved})=>({claimNo,unresolved})),
       facts:claims.flatMap(c=>c.facts)};
   })}));

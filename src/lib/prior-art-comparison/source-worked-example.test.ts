@@ -17,7 +17,7 @@ function setup() {
   const rows=structuredClone(SOURCE_WORKED_FACTS).map(f=>({claimNo:1,basis:{firstPart:0,lastPart:1},...f}));
   const wire={locatorVersion:9,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
     coverage:s.source.claims.map(c=>({claimNo:c.claimNo,unresolved:i===0?null:
-      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture has no additional fact."}})),facts:i===0?rows:[]}))};
+      {quote:c.segments.map(p=>p.text).join(""),before:"",after:"",edge:"none",reason:"Fixture has no additional fact."}})),facts:i===0?rows:[]}))};
   return {plan,input,rows,get wire(){return fixtureRequiredSourceWire(wire);},model:sourcePropositionModelSchemaFor(plan)};
 }
 it("decodes the actual instruction example, preserving loop roles, exact endpoints and a separate guarded heat action",async()=>{
@@ -43,10 +43,10 @@ it("decodes the actual instruction example, preserving loop roles, exact endpoin
   // A valid loop does not prove the separately printed thermal action.
   expect(compareProposition(target,parsed.facts.filter(p=>p.id!==heat.id)).relation).toBe("unresolved");
 });
-it.each(["mode_subject","occurrence","basis","legacy_table","missing_guard","traversed_pipe_excluded","nonpath_frame","duplicate_loop"])("rejects the worked example with %s evidence corrupted, without repairing raw",async kind=>{
+it.each(["mode_subject","context","basis","legacy_table","missing_guard","traversed_pipe_excluded","nonpath_frame","duplicate_loop"])("rejects the worked example with %s evidence corrupted, without repairing raw",async kind=>{
   const f=setup(),loop=f.rows[0],heat=f.rows[1];
   if(kind==="mode_subject")loop.meaning.subject=loop.meaning.origin!;
-  if(kind==="occurrence")heat.meaning.objects![0][0].occurrence=2;
+  if(kind==="context")heat.meaning.objects![0][0].after="別の原文";
   if(kind==="basis")loop.basis.lastPart=0;
   if(kind==="legacy_table")Object.assign(heat,{locators:[]});
   if(kind==="missing_guard")Object.assign(heat.operators!,{guard:null});
@@ -60,6 +60,7 @@ it.each(["mode_subject","occurrence","basis","legacy_table","missing_guard","tra
 });
 it("accepts prefixed names at the SAME catalog component without changing exact locations",async()=>{
   const f=setup();f.rows[0].meaning.origin![0].quote="前記送出器";f.rows[0].meaning.destination![0].quote="前記送出器";
+  f.rows[0].meaning.origin![0].before="";f.rows[0].meaning.destination![0].before="";
   const r=await f.model.validate!(f.wire);expect(r.success).toBe(true);
   if(r.success){expect(()=>decodeSourcePropositions(f.plan,r.value)).not.toThrow();
     expect(r.value.sources[0].facts[0].routeFrame!.entry).toEqual([83,86]);}
