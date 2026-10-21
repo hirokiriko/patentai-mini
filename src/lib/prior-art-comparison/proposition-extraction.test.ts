@@ -1,3 +1,4 @@
+import { fixtureGridText } from "../../../scripts/prior-art-grid-fixture.mjs";
 import { expect, it } from "vitest";
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan, validateAnswer } from "./comparison";
@@ -8,7 +9,8 @@ import { assessPropositions, assertPropositionTargetCoverage, renderMeaning, ren
 import type { Meaning } from "./propositions";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { parseComparisonSource } from "./source";
-import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
+import { targetPropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
+import { compactDirectSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-direct-quotes";
 import { compactSourceWire } from "./source-wire-compact";
 
 function setup(){
@@ -62,15 +64,16 @@ it("matches corresponding assertions before considering their presentation order
 it("retains every original occurrence with explicit local source IDs and unchanged target dictionary",()=>{
   const f=setup();
   for(const [i,source] of f.wire.sources.entries())for(const [j,c] of source.source.claims.entries()){
-    expect(c.parts.map(p=>p.text).join("")).toBe(f.source.sources[i].source.claims[j].segments.map(s=>s.text).join(""));
-    expect(c.parts.map(p=>p.id)).toEqual(c.parts.map((_,index)=>index));
+    expect(fixtureGridText(c)).toBe(f.source.sources[i].source.claims[j].segments.map(s=>s.text).join(""));
+    expect(c.grid.flatMap(row=>row.split("|")[0].split(",").map(Number)).sort((a,b)=>a-b)).toEqual(
+      Array.from({length:Math.ceil(Array.from(fixtureGridText(c)).length/10)},(_,n)=>n));
   }
   for(const [i,s] of [f.targetWire.originals.base,...f.targetWire.originals.documents.map(d=>d.source)].entries())
     for(const [j,c] of s.claims.entries()){
       const original=[f.input.originals.base,...f.input.originals.documents.map(d=>d.source)][i].claims[j];
       expect(c.segments.map(([id,index])=>[id,f.targetWire.textParts[index]])).toEqual(original.segments);
     }
-  expect(f.wire.sources[0].source.claims[0].parts.map(p=>p.text).join("").indexOf("末尾条件")).toBeGreaterThan(15000);
+  expect(fixtureGridText(f.wire.sources[0].source.claims[0]).indexOf("末尾条件")).toBeGreaterThan(15000);
 });
 
 it.each(["gap","missing_assertion","false_reservation","wrong_scope","wrong_claim","wrong_binding","source_id","old_verdict","empty_only_when"])("rejects a malformed target projection: %s",mode=>{

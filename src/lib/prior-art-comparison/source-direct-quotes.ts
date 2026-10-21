@@ -6,6 +6,7 @@ import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } 
 import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
 import { ComparisonError } from "./source";
 import { sourceWireSchema } from "./source-wire-compact";
+import { sourceCitationGrid, resolveSourceCellRef } from "./source-citation-grid";
 
 const index=z.number().int().nonnegative();
 const contextQuote=z.object({
@@ -14,7 +15,9 @@ const contextQuote=z.object({
 }).strict().meta({id:"PriorArtSourceQuote"});
 const partQuote=z.object({part:index,quote:z.string().min(1).max(12_000)}).strict()
   .meta({id:"PriorArtSourcePartQuote"});
-const quote=z.union([partQuote,contextQuote]);
+const cellQuote=z.object({cells:z.array(index).length(4)}).strict().meta({id:"PriorArtSourceCellQuote"});
+function directShapes(mode:"quotes"|"cells") {
+const quote=mode==="cells"?cellQuote:z.union([partQuote,contextQuote]);
 const evidence=z.union([quote,
   z.object({quote:z.null(),before:z.literal(""),after:z.literal(""),edge:z.literal("both")}).strict()])
   .meta({id:"PriorArtSourceEvidence"});
@@ -49,6 +52,8 @@ const fact=z.object({
     .meta({id:"PriorArtSourceOperators"}),
   routeFrame:z.union([index,frame]).nullable(),
 }).strict();
+return {term,evidence,frame,fact};
+}
 const invalid=()=>new Error("comparison_locator_invalid");
 /** Resolve only the supplied context. Never choose another repeated occurrence,
  * normalize text or repair an answer. A location is not semantic proof. */
@@ -107,9 +112,11 @@ function propertyCount(value:unknown):number {
 /** Source-only v12. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
-function directSourceModel(chunks:readonly ManagedComparisonChunk[]) {
+export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:"quotes"|"cells"="quotes") {
+  const {frame,fact}=directShapes(mode);
+  type Shapes=ReturnType<typeof directShapes>;
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const unresolved=contextQuote.extend({reason:z.string().min(1).max(400)})
+  const unresolved=(mode==="cells"?cellQuote:contextQuote).extend({reason:z.string().min(1).max(400)})
     .meta({id:"PriorArtSourceUnresolved"});
   const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
     .meta({id:"PriorArtSourceAdditionalFact"});
@@ -140,9 +147,9 @@ function directSourceModel(chunks:readonly ManagedComparisonChunk[]) {
       claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
     })])),
   }).strict());
-  const schema=z.object({locatorVersion:z.literal(12),sources:z.array(
+  const schema=z.object({locatorVersion:z.literal(mode==="cells"?14:12),sources:z.array(
     z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
-  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:12;sources:RawSource[]}>;
+  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:12|14;sources:RawSource[]}>;
   const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
     const source=input.sources[i],expected=source.source.claims;
     if(s.sourceDigest!==source.sourceDigest)throw invalid();
@@ -152,7 +159,8 @@ function directSourceModel(chunks:readonly ManagedComparisonChunk[]) {
       const answer=s[`c${c.claimNo}`] as z.infer<typeof claimAnswer>,text=c.segments.map(p=>p.text).join("");
       if(!Array.isArray(answer)){
         if(!answer.reason.trim())throw invalid();
-        resolveSourceContextQuote(text,answer);
+        if("cells"in answer)resolveSourceCellRef(sourceCitationGrid(text),answer.cells);
+        else resolveSourceContextQuote(text,answer);
       }
       return [
         ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?[s[`loop${id}`] as RawFact]:[]),
@@ -166,26 +174,28 @@ function directSourceModel(chunks:readonly ManagedComparisonChunk[]) {
       const at=order.get(f.claimNo);
       if(at===undefined||at<previous)throw invalid();previous=at;
       const claim=expected[at],text=claim.segments.map(p=>p.text).join("");
+      const grid=mode==="cells"?sourceCitationGrid(text):null;
       // One coordinate space for every role, including postposed subjects and
       // guards. This selects only a claim boundary, never its semantic facts.
       if(f.basis.firstPart!==0||f.basis.lastPart!==claim.segments.length-1)throw invalid();
       const basis:Span=[0,text.length];
       const seen=new Set<string>();
-      const get=(q:z.infer<typeof evidence>):Span=>{
-        if(q.quote===null){
+      const get=(q:z.infer<Shapes["evidence"]>):Span=>{
+        if("quote"in q&&q.quote===null){
           const key=JSON.stringify(basis);
           if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
           return [...basis];
         }
         const anchor=text.slice(...basis);
-        const span="part"in q?resolveSourcePartQuote(claim.segments.map(p=>p.text),q):
+        const span="cells"in q?(grid?resolveSourceCellRef(grid,q.cells):(()=>{throw invalid();})()):
+          "part"in q?resolveSourcePartQuote(claim.segments.map(p=>p.text),q):
           resolveSourceContextQuote(anchor,q).map(n=>n+basis[0]) as Span;
         const key=JSON.stringify(span);
         if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
         return span;
       };
       const bindings:z.infer<typeof extractionSchema>["bindings"]=[];
-      const readTerm=(items:z.infer<typeof term>):string=>{
+      const readTerm=(items:z.infer<Shapes["term"]>):string=>{
         // Resolve EVERY role before coalescing equal strings. A repeated term
         // at a wrong location must never hide behind an earlier valid binding.
         const positions=items.map(get),value=positions.map(p=>text.slice(...p)).join("");

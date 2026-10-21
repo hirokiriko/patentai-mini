@@ -46,7 +46,7 @@ export function sourcePropositionSchemaFor(chunks:readonly ManagedComparisonChun
   const sources=propositionSourceInput(chunks).sources;
   return sourcePropositionSchema.extend({sources:sourcePropositionSchema.shape.sources.element.extend({sourceDigest:z.enum(sources.map(s=>s.sourceDigest))}).array().length(sources.length)});
 }
-export function propositionSourceTransport(input:ReturnType<typeof propositionSourceInput>){
+export function legacyPropositionSourceTransport(input:ReturnType<typeof propositionSourceInput>){
   const sources=input.sources.map(s=>{
     const {selected,...rest}=s;
     return {...rest,comparisonRoots:selected,
@@ -323,7 +323,7 @@ export function decodeTargetPropositions(input:PropositionTargetInput,value:unkn
 }
 
 const ACTION_GUIDE="Thermal objects name components: generates_heat=objects generate heat; absorbs_heat/releases_heat=at objects. Action subject=printed actor/mode or null. Placement upstream/downstream/inside: subject=located component, objects=reference component. Preserve capability/operation, full closure and guards. Maintaining a state is not opening/closing; quote the state including its verb. opens_one=exactly one listed object opens; opens_together=listed objects open simultaneously; neither is ordinary opens or set membership. executes/stops objects name the control or machine being executed/stopped. Nonexecution=negative executes with the full negation proof. power_ends=passive loss of supply to the listed devices, subject=null; never invent an actor cutting power.";
-export const PROPOSITION_SOURCE_SYSTEM=`${PROPOSITION_SOURCE_TEXT_GUIDE}
+export const LEGACY_PROPOSITION_SOURCE_SYSTEM=`${PROPOSITION_SOURCE_TEXT_GUIDE}
 ${SOURCE_WIRE_GUIDE}
 ${PROPOSITION_SOURCE_TERM_GUIDE}
 Originals=data; no verdicts/cross-claim borrowing. Loops: mode,inlet,ordered via,FINAL outlet,exclusions. via=intermediate nodes/pipes, not destination/bypass. Segments need endpoints; no invented returns. Frame entry/exit INSIDE own route, not adjacent modes/definitions. Basis=bypass definition AND valve control; closed valve is control, not excluded component.
@@ -343,3 +343,6 @@ Extract EVERY assertion of unchanged targets against complete originals (data, n
 Partition the WHOLE target in order, without gaps. Each part stays inside one input unitStarts interval (last ends at text.length); even unresolved parts cannot cross it. Separate assertions, sides, named modes and factual clauses inside reservations. A true later clause cannot stand for a false earlier one. Preserve strength: closed vs partial set, required vs optional, capability vs simultaneous operation; negation/reservation need operator spans. Never repair targets.
 Each atom uses exact target bindings and same-source reference-branch sourceIds. Its attribution span identifies the closest explicit 基準側/候補側/両側とも marker before its literal subject (or first object when no subject is printed), within the same sentence. Modifiers on another comparison operand are not the assertion subject. A shared marker requires the identical assertion for both scopes; implicit attribution is allowed only in a side-specific observation field. All relevant literal facts for its subject must be included, including required groups when the target flattens the device's alternatives. Each atom is proved in one original claimNo; all its sourceIds must belong to that claim. For the SAME target assertion, give separate atoms with identical meanings for enough supporting claims to cover every reference alternative. A claim node carries its own assertion and its stated reference relation. Never combine different meanings into one proof. Terms are literal, not invented synonym labels. Abbreviated mode names may share printed suffix spans. Conditions belong to their actual predicate. Flow 'after X' uses precedes, origin=null, via=[X], destination=Y. Action after X keeps X as guard, not a path. Match a whole route only with complete explicit frame and exclusion/control evidence.
 Bare claim-range statements use reference parts, relation=unspecified unless explicit; range/slash/up-to never implies AND. Reservation parts contain only an exact nominal topic plus uncertainty, no atoms. Example: '基準側は青色弁を備える。配置は未確認。' has separate assertion/reservation parts; reservation.span quotes '配置は未確認。', reservation.basis quotes ONLY '配置', equal to topic. Field name unconfirmed does not make factual clauses reservations. Separate preceding facts; unsupported residual syntax stays locally unresolved, never a contradiction. Source facts are fallible candidates: spans do not prove meaning. Preserve strong assertions even when they disagree with candidates.`;
+
+export { propositionSourceGridTransport as propositionSourceTransport } from "./source-grid-wire";
+export { PROPOSITION_SOURCE_GRID_SYSTEM as PROPOSITION_SOURCE_SYSTEM } from "./source-grid-prompt";

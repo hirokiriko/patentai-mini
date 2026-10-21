@@ -1,12 +1,13 @@
 import { expect, it } from "vitest";
 import { recognizedLoopRoutes, assertRecognizedLoopCoverage } from "./recognized-loop-routes";
-import { canonicalPropositionSources, decodeSourcePropositions, propositionSourceInput, propositionSourceTransport, type SourceExtraction } from "./proposition-extraction";
+import { canonicalPropositionSources, decodeSourcePropositions, propositionSourceInput, legacyPropositionSourceTransport as propositionSourceTransport, type SourceExtraction } from "./proposition-extraction";
 import { makePlan } from "./comparison";
 import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { propositionPlanSizes } from "./proposition-plan";
 import type { Span } from "./propositions";
-import { sourcePropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
+import { resolvePropositionQuote } from "./proposition-locators";
+import { compactDirectSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-direct-quotes";
 import { sourceCitationParts,sourceCitationRange } from "./source-citation-parts";
 import { fixturePropositionWire } from "../../../scripts/prior-art-proposition-fixture.mjs";
 import { compactSourceWire } from "./source-wire-compact";

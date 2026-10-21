@@ -1,3 +1,4 @@
+import { fixtureGridText } from "../../../scripts/prior-art-grid-fixture.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
@@ -43,8 +44,10 @@ describe("literal structure on the product path, with fictional SDK transport", 
       tasks.push(input.task);
       let answer;
       if (input.task === "extract_source_propositions") {
-        expect(input.sources[0].source.literalStructure).toEqual(expected);
-        expect(input.sources[0].source.claims[0].parts.map((part:{text:string})=>part.text).join("")).toBe(inputs.draft.source.claims[0].text);
+        expect(input.sources[0].source.claims[0].canonicalModeSets).toEqual(expected.modes.map(([,subject,kind,members])=>({
+          subject:inputs.draft.source.claims[0].text.slice(...subject),selection:kind==="fixed"?"required":"nonempty",extent:"closed",
+          members:members.map(span=>inputs.draft.source.claims[0].text.slice(...span))})));
+        expect(fixtureGridText(input.sources[0].source.claims[0])).toBe(inputs.draft.source.claims[0].text);
         answer = fictionalPropositionSource(input);
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);

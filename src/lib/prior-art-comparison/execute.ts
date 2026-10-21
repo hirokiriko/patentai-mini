@@ -51,6 +51,13 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
             answer.usage.inputTokens! > 150_000 || answer.usage.outputTokens! > outputTokens) throw new ComparisonExecutionError(stage, "usage_invalid");
         if (options?.azure?.serviceTier === "default" && answer.providerMetadata?.azure?.serviceTier !== "default")
           throw new ComparisonError("ai_incomplete");
+        // Correlate reconciled usage with the saved operation without logging
+        // source text, prompts, results, case identity or provider credentials.
+        // Missing logs never justify treating an unknown send as zero cost.
+        try {
+          console.info("prior_art_comparison_usage", JSON.stringify({ operationId: selection.operationId,
+            phase, inputTokens: answer.usage.inputTokens, outputTokens: answer.usage.outputTokens, status: "reconciled" }));
+        } catch { /* Optional observation must not change the comparison. */ }
         return answer.object;
       };
       const readingSchema = sourcePropositionModelSchemaFor(batch);

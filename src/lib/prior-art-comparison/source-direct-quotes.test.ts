@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { parseComparisonSource } from "./source";
-import { decodeSourcePropositions, propositionSourceInput, propositionSourceTransport } from "./proposition-extraction";
+import { decodeSourcePropositions, propositionSourceInput, legacyPropositionSourceTransport as propositionSourceTransport } from "./proposition-extraction";
 import { directSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-direct-quotes";
 import { resolveSourceContextQuote,resolveSourcePartQuote } from "./source-direct-quotes";
 import { compareProposition } from "./propositions";

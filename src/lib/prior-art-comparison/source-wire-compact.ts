@@ -10,7 +10,7 @@ const names: Record<string, string> = {
   polarity:"p", kind:"k", selection:"S", extent:"e", members:"M", origin:"i",
   destination:"j", via:"V", bypass:"B", relation:"r", predicate:"P", objects:"J",
   guard:"h", entry:"E", exit:"X", route:"T", exclusions:"C", controls:"D",
-  part:"t", before:"A", after:"Z", edge:"H", reason:"N",
+  part:"t", before:"A", after:"Z", edge:"H", reason:"N", cells:"K",
 };
 const enums: Record<string, readonly string[]> = {
   context:["capability","operation","unresolved"],
@@ -99,7 +99,11 @@ export function expandSourceWire(value:unknown,key?:string):unknown {
     return [full,expandSourceWire(v,full)];
   }));
 }
-export const SOURCE_WIRE_GUIDE=`Output v13 only. In explanations below semantic names denote these wire keys: ${Object.entries(names).map(([a,b])=>`${a}=${b}`).join(",")}. cN/loopN unchanged. Enums are numeric: ${Object.entries(enums).map(([k,v])=>`${k}(${v.map((s,i)=>`${i}:${s}`).join(",")})`).join("; ")}.
+const enumGuide=Object.entries(enums).map(([k,v])=>`${k}(${v.map((s,i)=>`${i}:${s}`).join(",")})`).join("; ");
+export const SOURCE_COMPACT_KEY_GUIDE=`Semantic names denote these wire keys: ${Object.entries(names).map(([a,b])=>`${a}=${b}`).join(",")}. cN/loopN unchanged. Enums are numeric: ${enumGuide}.`;
+const cellUnused=new Set(["claims","requiredLoops","facts","locators","quote","occurrence","part","before","after","edge"]);
+export const SOURCE_CELL_KEY_GUIDE=`Keys: ${Object.entries(names).filter(([k])=>!cellUnused.has(k)).map(([a,b])=>`${a}=${b}`).join(",")}. Numeric enums: ${enumGuide}.`;
+export const SOURCE_WIRE_GUIDE=`Output v13 only. ${SOURCE_COMPACT_KEY_GUIDE}
 Quote {part,quote} is the string p<part>:<quote>, e.g. "p3:赤弁". Context {quote,before,after,edge} is ["q",quote,before,after,edge]. operators is null OR exactly [selection,extent,polarity,guard,context] proofs. No implicit defaults or inherited roles. Other arrays keep order. Exact original text is never coded as an enum.`;
 export function sourceWireSchema<T>(base:Schema<T>):Schema<T>{
   return jsonSchema<T>(schemaSpelling(base.jsonSchema) as JSONSchema7,{validate:async value=>{

@@ -60,6 +60,9 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(payloads).toHaveLength(3);
     expect(payloads.at(-1)).toContain("下回ると青色弁を開く");
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+    const usage=vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage").map(row=>JSON.parse(row[1]));
+    expect(usage).toEqual(["source","generation","review"].map(phase=>({operationId:saved.operationId,phase,
+      inputTokens:100,outputTokens:30,status:"reconciled"})));
   });
   it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
     const { inputs, selection } = fictionalInputs(); const answer = fictionalBatch(batchInput(generationBatches(makePlan(inputs, selection), SYSTEM)[0]));
@@ -76,6 +79,20 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
     expect(transport).toHaveBeenCalledTimes(["quote", "missing_pair", "protocol_metadata"].includes(mode) ? 2 : 1);
+    if(["unknown_usage","excess_usage","http","secret_error"].includes(mode))
+      expect(vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage")).toHaveLength(0);
+  });
+  it("keeps a successful comparison unchanged when optional usage logging fails",async()=>{
+    const {inputs,selection}=compactFour();
+    vi.mocked(console.info).mockImplementation(()=>{throw Error("fictional_logger_failure");});
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      return response(stageAnswer(input));
+    });
+    vi.stubGlobal("fetch",transport);
+    const saved=await executeComparison(inputs,selection);
+    expect(saved.status).toBe("complete");expect(saved.operationId).toBe(selection.operationId);
+    expect(transport).toHaveBeenCalledTimes(3);
   });
   it("does not send oversized plans", async () => {
     const { inputs, selection } = fictionalInputs();
@@ -84,7 +101,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     await expect(executeComparison(inputs, selection)).rejects.toThrow("plan_limit");
     expect(transport).not.toHaveBeenCalled();
   });
-  it.each(["missing", "reordered", "duplicate", "foreign", "blank", "overlong"])("stops malformed source reading before generation: %s", async mode => {
+  it.each(["missing", "reordered", "duplicate", "foreign", "blank", "overlong", "missing_reading", "unrelated_evidence"])("stops malformed source reading before generation: %s", async mode => {
     const { inputs, selection } = fictionalInputs();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
@@ -95,6 +112,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
+      if(mode==="missing_reading")delete wire.s[0].Y;
+      if(mode==="unrelated_evidence")wire.s[0].c1[0].W=[[0,0,0,0]];
       if (mode === "blank" || mode === "overlong") {
         expect(wire.s[0].c1[0].m.J[0]).toHaveLength(1);
         wire.s[0].c1[0].m.J[0][0] = mode === "blank" ? "" : "甲".repeat(12001);

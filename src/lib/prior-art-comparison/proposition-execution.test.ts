@@ -1,3 +1,4 @@
+import { fixtureGridText } from "../../../scripts/prior-art-grid-fixture.mjs";
 import { afterEach, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
 import { fictionalInputs } from "./fixtures.test-support";
@@ -22,7 +23,7 @@ it.each([false,true])("connects source extraction, full generation, computed tar
     const source=propositionSourceInput(makePlan(inputs,selection)),wire=propositionSourceTransport(source);
     expect(wire).not.toHaveProperty("textParts");
     for(const [i,s] of wire.sources.entries())for(const [j,c] of s.source.claims.entries())
-      expect(c.parts.map(p=>p.text).join("")).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
+      expect(fixtureGridText(c)).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
   }
   const sizes=propositionPlanSizes(makePlan(inputs,selection));
   vi.stubGlobal("fetch",vi.fn<typeof fetch>().mockImplementation(async(url,init)=>{

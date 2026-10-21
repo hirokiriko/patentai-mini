@@ -3,7 +3,7 @@ import {fictionalInputs} from "./fixtures.test-support";
 import {makePlan} from "./comparison";
 import {parseComparisonSource} from "./source";
 import {propositionSourceInput,decodeSourcePropositions} from "./proposition-extraction";
-import {sourcePropositionModelSchemaFor} from "./proposition-locators";
+import {compactDirectSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor} from "./source-direct-quotes";
 import {compactSourceWire,expandSourceWire} from "./source-wire-compact";
 
 function setup(text="装置は赤色弁を備える。"){
