@@ -27,8 +27,7 @@ export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
   operators:{...neutral,guard:q("前記通電状態で温度が七度を超える場合")},routeFrame:null,
 }));
 export const SOURCE_WORKED_GUIDE=
-  `Fictional example, not an answer. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
-Place that fact in loop0, not facts. The closed 第１の開閉弁 is a control, the omitted 冷却器 is bypass, and the traversed バイパス配管 is via. A separate action is ${JSON.stringify(SOURCE_WORKED_FACTS[1])}.
-That action selects ONLY part1: 補助ヒータ has occurrence0 there, although it is occurrence1 in the complete claim. Never carry a complete-claim occurrence into a smaller basis. Recount every role after choosing the basis.
-Another fictional claim has one part: ${SOURCE_ACTION_TEXT}; facts=${JSON.stringify(SOURCE_ACTION_FACTS)}.
-Here 通電状態 occurrence0 is embedded in 非通電状態 and is NOT the affirmative condition. The affirmative occurrence1 belongs in guardConditions; objects are the affected valves. Opposite open/close actions remain separate positive facts with the full shared guard.`;
+  `Fictional. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
+facts has action=${JSON.stringify(SOURCE_WORKED_FACTS[1])}, not loop0.
+part1 ONLY: 補助ヒータ#0, but #1 in full claim. Recount ALL roles.
+'非通電状態...通電状態で弁を開く': 通電状態#0 is embedded/negative; #1=affirmative guard, objects=valve.`;
