@@ -96,8 +96,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
       if (mode === "blank" || mode === "overlong") {
-        expect(wire.sources[0].facts[0].meaning.objects[0]).toHaveLength(1);
-        wire.sources[0].facts[0].meaning.objects[0][0] = mode === "blank" ? "" : "甲".repeat(12001);
+        expect(wire.sources[0].c1[0].meaning.objects[0]).toHaveLength(1);
+        wire.sources[0].c1[0].meaning.objects[0][0] = mode === "blank" ? "" : "甲".repeat(12001);
       }
       return response(wire);
     });

@@ -4,14 +4,13 @@ import { jsonSchema } from "ai";
 import { comparisonModelSchema } from "./model-schema";
 import { extractionSchema, propositionSourceInput, sourcePropositionSchemaFor } from "./proposition-extraction";
 import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } from "./propositions";
-import { sourceCitationParts, sourceCitationRange } from "./source-citation-parts";
 import { resolvePropositionQuote } from "./proposition-quotes";
 import { ComparisonError } from "./source";
 
 const index=z.number().int().nonnegative();
 const quote=z.object({
   quote:z.string().min(1).max(12_000),
-  occurrence:index.describe("Exact-match starts, zero-based within this fact's single basis. Count embedded matches too."),
+  occurrence:index.describe("Exact-match starts, zero-based in the COMPLETE claim. Count embedded matches too; select the occurrence supporting this meaning."),
 }).strict().meta({id:"PriorArtSourceQuote"});
 const evidence=z.union([quote,
   z.object({quote:z.null(),occurrence:z.literal(0)}).strict()])
@@ -55,18 +54,20 @@ function propertyCount(value:unknown):number {
     Object.values(record).reduce<number>((n,v)=>n+propertyCount(v),0);
 }
 
-/** Source-only v10. Each semantic role carries its own exact quotation, avoiding
+/** Source-only v11. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
 export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const unresolved=quote.extend({reason:z.string().min(1).max(400)}).nullable()
+  const unresolved=quote.extend({reason:z.string().min(1).max(400)})
     .meta({id:"PriorArtSourceUnresolved"});
-  const additional=fact.extend({routeFrame:frame.nullable()}).meta({id:"PriorArtSourceAdditionalFact"});
-  const additionalFacts=z.array(additional).max(48).meta({id:"PriorArtSourceAdditionalFacts"});
+  const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
+    .meta({id:"PriorArtSourceAdditionalFact"});
+  const additionalFacts=z.array(additional).min(1).max(48).meta({id:"PriorArtSourceAdditionalFacts"});
+  const loopAdditionalFacts=z.array(additional).max(48).meta({id:"PriorArtSourceLoopAdditionalFacts"});
+  const claimAnswer=z.union([additionalFacts,unresolved]).meta({id:"PriorArtSourceClaimAnswer"});
   type RawFact=z.infer<typeof fact>;
-  type RawSource={sourceDigest:string;coverage:Record<string,z.infer<typeof unresolved>>;
-    facts:RawFact[]} & Record<string,unknown>;
+  type RawSource={sourceDigest:string} & Record<string,unknown>;
   // Required keys make omissions a provider schema violation, not merely a
   // prose instruction. Catalog IDs constrain identity only: every loop's
   // meaning and role quotations still come from the model. Its basis shares
@@ -80,35 +81,45 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
   };
   const sourceSchemas=input.sources.map(source=>z.object({
     sourceDigest:z.literal(source.sourceDigest),
-    coverage:z.object(Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,unresolved]))).strict(),
+    // A claim has facts OR an unresolved explanation, never two independently
+    // generated answers. Required loops already answer their own claims, so
+    // only those claims may explicitly return no additional facts.
+    ...Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,
+      source.recognizedLoopRoutes.some(r=>r.claimNo===c.claimNo)?loopAdditionalFacts:claimAnswer])),
     ...Object.fromEntries(source.recognizedLoopRoutes.map((r,id)=>[`loop${id}`,fact.extend({
       claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
     })])),
-    facts:additionalFacts,
   }).strict());
-  const schema=z.object({locatorVersion:z.literal(10),sources:z.array(
+  const schema=z.object({locatorVersion:z.literal(11),sources:z.array(
     z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
-  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:10;sources:RawSource[]}>;
+  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:11;sources:RawSource[]}>;
   const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
     const source=input.sources[i],expected=source.source.claims;
     if(s.sourceDigest!==source.sourceDigest)throw invalid();
     const order=new Map(expected.map((c,n)=>[c.claimNo,n]));
     let previous=-1,quotes=0;
-    for(const f of s.facts){
-      const at=order.get(f.claimNo);
-      if(at===undefined||at<previous)throw invalid();previous=at;
-    }
-    const allFacts=expected.flatMap(c=>[
-      ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?[s[`loop${id}`] as RawFact]:[]),
-      ...s.facts.filter(f=>f.claimNo===c.claimNo),
-    ]);
+    const allFacts=expected.flatMap(c=>{
+      const answer=s[`c${c.claimNo}`] as z.infer<typeof claimAnswer>,text=c.segments.map(p=>p.text).join("");
+      if(!Array.isArray(answer)){
+        if(!answer.reason.trim())throw invalid();
+        resolvePropositionQuote(text,answer.quote,answer.occurrence);
+      }
+      return [
+        ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?[s[`loop${id}`] as RawFact]:[]),
+        ...(Array.isArray(answer)?answer.map(f=>({...f,claimNo:c.claimNo,
+          basis:{firstPart:0,lastPart:c.segments.length-1}})):[]),
+      ];
+    });
     if(allFacts.length>48)throw invalid();
     previous=-1;
     const facts=allFacts.map(f=>{
       const at=order.get(f.claimNo);
       if(at===undefined||at<previous)throw invalid();previous=at;
       const claim=expected[at],text=claim.segments.map(p=>p.text).join("");
-      const basis=sourceCitationRange(sourceCitationParts(claim.segments.map(p=>p.text)),f.basis.firstPart,f.basis.lastPart);
+      // One coordinate space for every role, including postposed subjects and
+      // guards. This selects only a claim boundary, never its semantic facts.
+      if(f.basis.firstPart!==0||f.basis.lastPart!==claim.segments.length-1)throw invalid();
+      const basis:Span=[0,text.length];
       const seen=new Set<string>();
       const get=(q:z.infer<typeof evidence>):Span=>{
         if(q.quote===null){
@@ -158,12 +169,7 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
       return {claimNo:f.claimNo,basis:[basis],meaning:decoded,bindings,operators,routeFrame};
     });
     for(const claim of expected){
-      const own=allFacts.filter(f=>f.claimNo===claim.claimNo),unresolved=s.coverage[`c${claim.claimNo}`];
-      if(own.length){if(unresolved!==null)throw invalid();}
-      else{
-        if(!unresolved||!unresolved.reason.trim())throw invalid();
-        resolvePropositionQuote(claim.segments.map(p=>p.text).join(""),unresolved.quote,unresolved.occurrence);
-      }
+      const own=allFacts.filter(f=>f.claimNo===claim.claimNo);
       const loops=source.recognizedLoopRoutes.map((r,id)=>({...r,id})).filter(r=>r.claimNo===claim.claimNo);
       if(own.filter(f=>typeof f.routeFrame==="number").length!==loops.length||
         loops.some((r,n)=>own[n]?.routeFrame!==r.id))throw invalid();

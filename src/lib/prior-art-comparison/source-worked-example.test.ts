@@ -14,7 +14,7 @@ function setup() {
   f.selection.draftClaimNos=[1];
   f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource("【請求項1】装置は信号を保持する。",d.id,d.label));
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const rows=structuredClone(SOURCE_WORKED_FACTS);
+  const rows=structuredClone(SOURCE_WORKED_FACTS).map(f=>({claimNo:1,basis:{firstPart:0,lastPart:1},...f}));
   const wire={locatorVersion:9,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
     coverage:s.source.claims.map(c=>({claimNo:c.claimNo,unresolved:i===0?null:
       {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture has no additional fact."}})),facts:i===0?rows:[]}))};
@@ -34,7 +34,7 @@ it("decodes the actual instruction example, preserving loop roles, exact endpoin
     via:["加熱器","分岐器","バイパス配管","蓄積器"],bypass:["冷却器"],extent:"whole",relation:"route"});
   expect(facts[0].routeFrame!.entry).toEqual([83,86]);
   expect(facts[0].routeFrame!.exit).toEqual([135,138]);
-  expect(facts[1].basis).toEqual([[105,211]]);
+  expect(facts[1].basis).toEqual([[0,211]]);
   expect(facts[1].meaning).toEqual({kind:"relation",subject:"第１の運転モード",context:"operation",
     guard:{relation:"when",conditions:["温度が五度を下回る"]},polarity:"positive",predicate:"generates_heat",objects:["補助ヒータ"]});
   const heat=parsed.facts.find(p=>p.meaning.kind==="relation"&&p.meaning.predicate==="generates_heat")!;
@@ -46,7 +46,7 @@ it("decodes the actual instruction example, preserving loop roles, exact endpoin
 it.each(["mode_subject","occurrence","basis","legacy_table","missing_guard","traversed_pipe_excluded","nonpath_frame","duplicate_loop"])("rejects the worked example with %s evidence corrupted, without repairing raw",async kind=>{
   const f=setup(),loop=f.rows[0],heat=f.rows[1];
   if(kind==="mode_subject")loop.meaning.subject=loop.meaning.origin!;
-  if(kind==="occurrence")heat.meaning.objects![0][0].occurrence=1;
+  if(kind==="occurrence")heat.meaning.objects![0][0].occurrence=2;
   if(kind==="basis")loop.basis.lastPart=0;
   if(kind==="legacy_table")Object.assign(heat,{locators:[]});
   if(kind==="missing_guard")Object.assign(heat.operators!,{guard:null});

@@ -90,8 +90,11 @@ it.each(["has_mode","changed_selection","ordinary_has"])("preserves a literal mo
 
 function indexedWire(f:ReturnType<typeof setup>){
   const wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input));
-  wire.sources[0].facts.forEach((fact:{routeFrame:unknown},i:number)=>{fact.routeFrame=i;wire.sources[0][`loop${i}`]=fact;});
-  wire.sources[0].facts=[];
+  for(const [i,c]of f.input.sources[0].source.claims.entries()){
+    const fact=wire.sources[0][`c${c.claimNo}`][0];
+    wire.sources[0][`loop${i}`]={...fact,claimNo:c.claimNo,basis:{firstPart:0,lastPart:c.segments.length-1},routeFrame:i};
+    wire.sources[0][`c${c.claimNo}`]=[];
+  }
   return wire;
 }
 it("selects immutable loop evidence while retaining independently extracted meaning and distinct endpoints",async()=>{
@@ -117,15 +120,19 @@ it.each(["other_claim","out_of_range","wrong_mode","wrong_origin","wrong_destina
   if(mode==="basis_missing")fact.basis={firstPart:0,lastPart:0};
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
 });
-it.each(["missing","null","duplicate","reordered","numeric_extra","combined_limit","unexpected","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
+it.each(["missing","null","duplicate","reordered","numeric_extra","combined_limit","unexpected","loop_unresolved","legacy_v8"])("refuses lost or misplaced mandatory loop extraction: %s",async mode=>{
   const f=setup(),wire=indexedWire(f),row=wire.sources[0];
   if(mode==="missing")delete row.loop1;
   if(mode==="null")row.loop1=null;
   if(mode==="duplicate")row.loop1=structuredClone(row.loop0);
   if(mode==="reordered")[row.loop0,row.loop1]=[row.loop1,row.loop0];
-  if(mode==="numeric_extra")row.facts.push(structuredClone(row.loop0));
-  if(mode==="combined_limit")row.facts.push(...Array.from({length:47},()=>({...structuredClone(row.loop0),routeFrame:null})));
-  if(mode==="unexpected"){wire.sources[1].loop0=structuredClone(row.loop0);wire.sources[1].coverage.c1=null;}
+  if(mode==="numeric_extra")row.c1.push(structuredClone(row.loop0));
+  if(mode==="combined_limit"){
+    const {claimNo,basis,...fact}=structuredClone(row.loop0);void claimNo;void basis;
+    row.c1.push(...Array.from({length:47},()=>({...fact,routeFrame:null})));
+  }
+  if(mode==="unexpected"){wire.sources[1].loop0=structuredClone(row.loop0);wire.sources[1].c1=[];}
+  if(mode==="loop_unresolved")row.c1={quote:"第１の運転モード",occurrence:0,reason:"Not extracted"};
   if(mode==="legacy_v8")wire.locatorVersion=8;
   const before=JSON.stringify(wire);
   expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);

@@ -505,7 +505,8 @@ export class ManagedServiceBudgetStorage {
       ISSUE150_INTEGRATION_V2: "ISSUE150_INTEGRATION_PREFLIGHT_V2", ISSUE150_INTEGRATION_V3: "ISSUE150_INTEGRATION_PREFLIGHT_V3",
       ISSUE150_INTEGRATION_V4: "ISSUE150_INTEGRATION_PREFLIGHT_V4", ISSUE150_INTEGRATION_V5: "ISSUE150_INTEGRATION_PREFLIGHT_V5",
       ISSUE150_INTEGRATION_V6: "ISSUE150_INTEGRATION_PREFLIGHT_V6",
-      ISSUE150_INTEGRATION_V7: "ISSUE150_INTEGRATION_PREFLIGHT_V7" } as const;
+      ISSUE150_INTEGRATION_V7: "ISSUE150_INTEGRATION_PREFLIGHT_V7",
+      ISSUE150_INTEGRATION_V8: "ISSUE150_INTEGRATION_PREFLIGHT_V8" } as const;
     check(scopes[approval!.scope] === preflight.scope);
     check(preflight.ownerApprovalDigest === approval!.ownerApprovalDigest &&
       Date.parse(review.issuedAt) >= Date.parse(approval!.approvedAt) &&
@@ -563,15 +564,16 @@ export class ManagedServiceBudgetStorage {
     const legacy = approval.scope === "ISSUE150_INTEGRATION_V1", v3 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V3",
       v4 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V4", v5 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V5",
       v6 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V6",
-      v7 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V7";
-    check(v3 || v4 || v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V3"));
-    check(v4 || v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V4"));
-    check(v5 || v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V5"));
-    check(v6 || v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V6"));
-    check(v7 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V7"));
-    const nonAi = v3 || v4 || v5 || v6 || v7 ? preflight.productionNonAiReserveYen : 0;
+      v7 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V7", v8 = preflight.scope === "ISSUE150_INTEGRATION_PREFLIGHT_V8";
+    check(v3 || v4 || v5 || v6 || v7 || v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V3"));
+    check(v4 || v5 || v6 || v7 || v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V4"));
+    check(v5 || v6 || v7 || v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V5"));
+    check(v6 || v7 || v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V6"));
+    check(v7 || v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V7"));
+    check(v8 || history.every(r => r.preflight.scope !== "ISSUE150_INTEGRATION_PREFLIGHT_V8"));
+    const nonAi = v3 || v4 || v5 || v6 || v7 || v8 ? preflight.productionNonAiReserveYen : 0;
     check(Number.isSafeInteger(forecast) && exposure <= (legacy ? 2000 : 1400) && forecast <= (legacy ? 1600 : 1400) &&
-      forecast + preflight.aiExposureYen + nonAi <= (v7 ? 7235 : v6 ? 7138 : v5 ? 7059 : v4 ? 6987 : v3 ? 6971 : legacy ? 5000 : 6243) &&
+      forecast + preflight.aiExposureYen + nonAi <= (v8 ? 7312 : v7 ? 7235 : v6 ? 7138 : v5 ? 7059 : v4 ? 6987 : v3 ? 6971 : legacy ? 5000 : 6243) &&
       history.every(r => preflight.aiExposureYen >= r.preflight.aiExposureYen));
     const month = new Date(at + 9 * 60 * 60_000).toISOString().slice(0, 7), plan = state.plans.find(p => p.month === month); check(plan);
     const recoveryUsed = state.operations.filter(o => o.processingMonth === month && (o.kind === "recovery" || o.units.rollback > 0))

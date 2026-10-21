@@ -13,14 +13,12 @@ export const SOURCE_WORKED_FACTS = [{
     via:[[q("加熱器")],[q("分岐器",1)],[q("バイパス配管")],[q("蓄積器",1)]],bypass:[[q("冷却器")]],extent:"whole",relation:"route"},
   operators:null,routeFrame:0,
 },{
-  claimNo:1,basis:{firstPart:1,lastPart:1},
   meaning:{subject:[q("第１の運転モード",1)],context:"operation",guardRelation:"when",guardConditions:[[q("温度が五度を下回る")]],
-    polarity:"positive",kind:"relation",predicate:"generates_heat",objects:[[q("補助ヒータ")]]},
+    polarity:"positive",kind:"relation",predicate:"generates_heat",objects:[[q("補助ヒータ",1)]]},
   operators:{...neutral,guard:q("温度が五度を下回る")},routeFrame:null,
 }];
 export const SOURCE_ACTION_TEXT="制御器は非通電状態を記録し、前記制御器は、前記通電状態で温度が七度を超える場合、赤色弁を開き、青色弁を閉じる。";
 export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
-  claimNo:1,basis:{firstPart:0,lastPart:0},
     meaning:{subject:[q("制御器",1)],context:"operation",guardRelation:"when",
       guardConditions:[[q("通電状態",1)],[q("温度が七度を超える場合")]],
     polarity:"positive",kind:"relation",predicate,objects:[[q(i===0?"赤色弁":"青色弁")]]},
@@ -28,6 +26,5 @@ export const SOURCE_ACTION_FACTS=["opens","closes"].map((predicate,i)=>({
 }));
 export const SOURCE_WORKED_GUIDE=
   `Fictional. Claim1 parts=${JSON.stringify(SOURCE_WORKED_PARTS)}; loop0=${JSON.stringify(SOURCE_WORKED_FACTS[0])}.
-facts has action=${JSON.stringify(SOURCE_WORKED_FACTS[1])}, not loop0.
-part1 ONLY: 補助ヒータ#0, but #1 in full claim. Recount ALL roles.
+c1=[${JSON.stringify(SOURCE_WORKED_FACTS[1])}], not loop0. All quotes use the full claim: action 補助ヒータ#1.
 '非通電状態...通電状態で弁を開く': 通電状態#0 is embedded/negative; #1=affirmative guard, objects=valve.`;

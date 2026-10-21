@@ -20,16 +20,23 @@ export const fixtureExpandSource = value => rename(value,sourceReverse);
 // Independent wire spelling only; never fills a missing coverage row or loop.
 // The caller explicitly supplies every numeric loop fact before conversion.
 export function fixtureRequiredSourceWire(wire) {
-  return {...wire,locatorVersion:10,sources:wire.sources.map(s=>{
+  return {...wire,locatorVersion:11,sources:wire.sources.map(s=>{
     const coverage=Object.fromEntries(s.coverage.map(c=>[`c${c.claimNo}`,c.unresolved]));
     if(Object.keys(coverage).length!==s.coverage.length)throw Error("fictional_duplicate_coverage");
+    if(s.facts.some(f=>!Object.hasOwn(coverage,`c${f.claimNo}`)))throw Error("fictional_foreign_claim");
     const loops={},facts=[];
     for(const fact of s.facts){
       const key=`loop${fact.routeFrame}`;
       if(typeof fact.routeFrame==="number"&&!(key in loops))loops[key]=fact;
       else facts.push(fact);
     }
-    return {sourceDigest:s.sourceDigest,coverage,...loops,facts};
+    const claims=Object.fromEntries(s.coverage.map(c=>{
+      const own=facts.filter(f=>f.claimNo===c.claimNo).map(({claimNo,basis,...f})=>f);
+      const hasLoop=Object.values(loops).some(f=>f.claimNo===c.claimNo);
+      if((own.length||hasLoop)&&c.unresolved!==null)throw Error("fictional_conflicting_claim_answer");
+      return [`c${c.claimNo}`,own.length||hasLoop?own:c.unresolved];
+    }));
+    return {sourceDigest:s.sourceDigest,...claims,...loops};
   })};
 }
 function flattenGuards(value) {
@@ -45,7 +52,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
-  if(value.locatorVersion===10)return flattenGuards(value);
+  if(value.locatorVersion===11||value.locatorVersion===10)return flattenGuards(value);
   if(value.locatorVersion===9)return flattenGuards(value);
   if(!input||[1,2,3,4,5,6,7,8].includes(value.locatorVersion))return flattenGuards(value);
   const table = (textFor,partsFor) => {
@@ -96,7 +103,8 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         if(!Array.isArray(range)||range.length!==2||range.some(n=>!Number.isSafeInteger(n))||
           range[0]<0||range[1]<=range[0]||range[1]>text.length)throw Error("fictional_locator_invalid");
         const prior=positions.findIndex(r=>r[0]===range[0]&&r[1]===range[1]);if(prior>=0)return prior;
-        const [a,b]=selected;
+        const [a,b]=[0,text.length];
+        if(range[0]<selected[0]||range[1]>selected[1])throw Error("fictional_locator_outside_basis");
         if(range[0]<a||range[1]>b)throw Error("fictional_locator_outside_basis");
         const quote=text.slice(...range),anchor=text.slice(a,b);
         if(!quote.length)throw Error("fictional_locator_invalid");

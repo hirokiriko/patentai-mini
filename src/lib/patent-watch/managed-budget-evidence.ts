@@ -51,7 +51,12 @@ const managedIssue150IntegrationV7Schema = managedIssue150IntegrationV1Schema.ex
   scope: z.literal("ISSUE150_INTEGRATION_V7"), approvedAt: z.iso.datetime(),
   validUntil: z.literal("2026-10-23T14:59:00Z"),
 }).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-20T15:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
-export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema, managedIssue150IntegrationV6Schema, managedIssue150IntegrationV7Schema]);
+// Pending finite continuation; no authority without its new owner signature.
+const managedIssue150IntegrationV8Schema = managedIssue150IntegrationV1Schema.extend({
+  scope: z.literal("ISSUE150_INTEGRATION_V8"), approvedAt: z.iso.datetime(),
+  validUntil: z.literal("2026-10-23T14:59:00Z"),
+}).refine(a => Date.parse(a.approvedAt) >= Date.parse("2026-10-21T00:00:00Z") && Date.parse(a.approvedAt) < Date.parse(a.validUntil));
+export const managedIssue150IntegrationSchema = z.discriminatedUnion("scope", [managedIssue150IntegrationV1Schema, managedIssue150IntegrationV2Schema, managedIssue150IntegrationV3Schema, managedIssue150IntegrationV4Schema, managedIssue150IntegrationV5Schema, managedIssue150IntegrationV6Schema, managedIssue150IntegrationV7Schema, managedIssue150IntegrationV8Schema]);
 export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [managedIssue150PreflightV1Schema,
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V2"),
     aiExposureYen: yen.max(4843), rollbackReserveYen: yen.max(1400) }),
@@ -64,7 +69,9 @@ export const managedIssue150PreflightSchema = z.discriminatedUnion("scope", [man
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V6"),
     aiExposureYen: yen.max(5588), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
   managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V7"),
-    aiExposureYen: yen.max(5685), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
+    aiExposureYen: yen.max(5685), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) }),
+  managedIssue150PreflightV1Schema.extend({ scope: z.literal("ISSUE150_INTEGRATION_PREFLIGHT_V8"),
+    aiExposureYen: yen.max(5762), rollbackReserveYen: yen.max(1400), productionNonAiReserveYen: z.literal(150) })]);
 export const managedIssue150ForwardResultSchema = z.object({ scope: z.literal("ISSUE150_FORWARD_RESULT_V1"),
   forwardOperationId: z.uuidv4(), forwardRequestDigest: hash, prNumber: z.number().int().positive(),
   prHeadSha: commit, baseSha: commit, mergeSha: commit, mergeTreeSha: commit, mergeParentSha: commit,
@@ -222,7 +229,7 @@ function replacementPins(pins: ManagedBudgetEvidencePins, review: ManagedAdminis
   if ("action" in review) {
     const a = review.action;
     if (a.kind === "release-start") check(a.step.issue === 150 &&
-      a.step.issue150Integration?.scope === "ISSUE150_INTEGRATION_V7" &&
+      (a.step.issue150Integration?.scope === "ISSUE150_INTEGRATION_V7" || a.step.issue150Integration?.scope === "ISSUE150_INTEGRATION_V8") &&
       a.step.issue150Integration.ownerApprovalDigest === p.ownerApprovalDigest &&
       p.operationIds.includes(a.step.operationId));
     else if (a.kind === "month") check(a.processingMonth === "2026-10" &&

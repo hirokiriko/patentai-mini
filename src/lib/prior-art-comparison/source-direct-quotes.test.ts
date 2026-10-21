@@ -2,10 +2,11 @@ import { expect, it } from "vitest";
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { parseComparisonSource } from "./source";
-import { decodeSourcePropositions, propositionSourceInput } from "./proposition-extraction";
+import { decodeSourcePropositions, propositionSourceInput, propositionSourceTransport } from "./proposition-extraction";
 import { sourcePropositionModelSchemaFor } from "./proposition-locators";
 import { compareProposition } from "./propositions";
 import { SOURCE_ACTION_TEXT,SOURCE_ACTION_FACTS } from "./source-worked-example";
+import { fixtureRequiredSourceWire,fixturePropositionWire } from "../../../scripts/prior-art-proposition-fixture.mjs";
 
 const q=(quote:string,occurrence=0)=>({quote,occurrence});
 function setup(text="装置は青色弁を備える。",second?:string) {
@@ -13,15 +14,15 @@ function setup(text="装置は青色弁を備える。",second?:string) {
   f.inputs.draft=parseComparisonSource("【請求項1】"+text+(second?"\n【請求項2】"+second:""),11,"架空");
   f.selection.draftClaimNos=second?[1,2]:[1];
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const wire=JSON.parse(JSON.stringify({locatorVersion:10,sources:input.sources.map(s=>({
-    sourceDigest:s.sourceDigest,coverage:Object.fromEntries(s.source.claims.map(c=>[`c${c.claimNo}`,
-      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"No additional fact supplied in this fictional test."}])),facts:[],
+  const wire=JSON.parse(JSON.stringify({locatorVersion:11,sources:input.sources.map(s=>({
+    sourceDigest:s.sourceDigest,...Object.fromEntries(s.source.claims.map(c=>[`c${c.claimNo}`,
+      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"No additional fact supplied in this fictional test."}])),
   }))}));
-  const fact={claimNo:1,basis:{firstPart:0,lastPart:0},
+  const fact={
     meaning:{kind:"relation",subject:[q("装置")],context:"capability",guardRelation:"unconditional",guardConditions:[],
       polarity:"positive",predicate:"has",objects:[[q("青色弁")]]},
     operators:{selection:null,extent:null,polarity:null,guard:null,context:null},routeFrame:null};
-  wire.sources[0].facts=[fact];wire.sources[0].coverage.c1=null;
+  wire.sources[0].c1=[fact];
   return {plan,input,wire,fact,model:sourcePropositionModelSchemaFor(plan)};
 }
 it("binds every direct role without altering raw or adding source facts from coverage",async()=>{
@@ -33,18 +34,46 @@ it("binds every direct role without altering raw or adding source facts from cov
     expect(()=>decodeSourcePropositions(f.plan,r.value)).not.toThrow();
   }
 });
-it.each(["missing","foreign","legacy_array","empty_reason","whitespace_reason","missing_quote","absent_quote",
+it("does not let the fictional encoder discard a foreign claim",()=>{
+  const f=setup();
+  expect(()=>fixtureRequiredSourceWire({sources:[{sourceDigest:f.wire.sources[0].sourceDigest,
+    coverage:[{claimNo:1,unresolved:null}],facts:[{...f.fact,claimNo:99}]}]})).toThrow("fictional_foreign_claim");
+});
+it.each(["binding","operator","frame"])("does not widen invalid fictional internal evidence: %s",async kind=>{
+  const f=setup("装置は青色弁を備える。"+"甲".repeat(125)+"、赤色弁を備える。"),r=await f.model.validate!(f.wire);
+  expect(r.success).toBe(true);if(!r.success)return;
+  const claim=f.input.sources[0].source.claims[0],text=claim.segments.map(p=>p.text).join("");
+  const at=text.indexOf("赤色弁"),outside:[number,number]=[at,at+3],fact=r.value.sources[0].facts[0];
+  fact.basis=[[0,claim.segments[0].text.length]];
+  if(kind==="binding"){fact.meaning={...fact.meaning,kind:"relation",predicate:"has",objects:["赤色弁"]};fact.bindings=[{term:"装置",spans:[[0,2]]},{term:"赤色弁",spans:[outside]}];}
+  if(kind==="operator")fact.operators.guard=outside;
+  if(kind==="frame")fact.routeFrame={entry:outside,exit:outside,route:outside,exclusions:[],controls:[]};
+  const before=JSON.stringify(r.value);
+  expect(()=>fixturePropositionWire(r.value,propositionSourceTransport(f.input))).toThrow("fictional_locator_outside_basis");
+  expect(JSON.stringify(r.value)).toBe(before);
+});
+it.each(["missing","foreign","legacy_array","empty_array","old_v10","empty_reason","whitespace_reason","missing_quote","absent_quote",
   "zero_without_reason","fact_with_reason"])("rejects incomplete claim accounting: %s",async mode=>{
-  const f=setup("装置は青色弁を備える。","機器は赤色弁を備える。"),c=f.wire.sources[0].coverage;
+  const f=setup("装置は青色弁を備える。","機器は赤色弁を備える。"),c=f.wire.sources[0];
   if(mode==="missing")delete c.c2;
   if(mode==="foreign"){c.c3=c.c2;delete c.c2;}
   if(mode==="legacy_array")f.wire.sources[0].coverage=[{claimNo:1,unresolved:null},{claimNo:2,unresolved:c.c2}];
+  if(mode==="empty_array")c.c2=[];
+  if(mode==="old_v10")f.wire.locatorVersion=10;
   if(mode==="empty_reason")c.c2.reason="";
   if(mode==="whitespace_reason")c.c2.reason=" \n ";
   if(mode==="missing_quote")delete c.c2.quote;
   if(mode==="absent_quote")c.c2.quote="別の原文";
   if(mode==="zero_without_reason")c.c2=null;
-  if(mode==="fact_with_reason")c.c1=structuredClone(c.c2);
+  if(mode==="fact_with_reason")c.c1={facts:c.c1,...structuredClone(c.c2)};
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
+});
+it("enforces the source total across separate claim answers",async()=>{
+  const f=setup("装置は青色弁を備える。","装置は青色弁を備える。");
+  f.wire.sources[0].c1=Array.from({length:24},()=>structuredClone(f.fact));
+  f.wire.sources[0].c2=Array.from({length:24},()=>structuredClone(f.fact));
+  expect((await f.model.validate!(f.wire)).success).toBe(true);
+  f.wire.sources[0].c2.push(structuredClone(f.fact));
   expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
 it.each(["absent","negative","fraction","exhausted","old_index","old_table","old_version","other_source","foreign_claim",
@@ -58,11 +87,11 @@ it.each(["absent","negative","fraction","exhausted","old_index","old_table","old
   if(mode==="old_table")Object.assign(a,{locators:[q("青色弁")]});
   if(mode==="old_version")f.wire.locatorVersion=9;
   if(mode==="other_source")f.wire.sources[0].sourceDigest=f.wire.sources[1].sourceDigest;
-  if(mode==="foreign_claim")a.claimNo=2;
-  if(mode==="wrong_basis")a.basis.lastPart=99;
-  if(mode==="split_basis")Object.assign(a,{basis:[a.basis,a.basis]});
-  if(mode==="reverse_basis"){a.basis.firstPart=1;a.basis.lastPart=0;}
-  if(mode==="extra_basis")Object.assign(a.basis,{quote:"装置"});
+  if(mode==="foreign_claim")Object.assign(a,{claimNo:2});
+  if(mode==="wrong_basis")Object.assign(a,{basis:{firstPart:0,lastPart:99}});
+  if(mode==="split_basis")Object.assign(a,{basis:[{firstPart:0,lastPart:0}]});
+  if(mode==="reverse_basis")Object.assign(a,{basis:{firstPart:1,lastPart:0}});
+  if(mode==="extra_basis")Object.assign(a,{basis:{quote:"装置"}});
   if(mode==="too_long_term"||mode==="term_fragments_over80"){
     const g=setup("甲".repeat(81)+"。");Object.assign(g.fact.meaning,{subject:null,objects:
       mode==="too_long_term"?[[q("甲".repeat(81))]]:[[q("甲".repeat(41)),q("甲".repeat(40))]]});
@@ -77,13 +106,13 @@ it("validates a repeated term at every role before coalescing identical binding 
   f.fact.meaning.objects[0][0].occurrence=9;
   expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
-it("resolves occurrence inside the chosen range without searching a different part",async()=>{
+it("uses whole-claim occurrences across storage parts without shifting an old part-local count",async()=>{
   const f=setup("甲".repeat(125)+"、装置は甲を備える。"),parts=f.input.sources[0].source.claims[0].segments,last=parts.length-1;
-  f.fact.basis={firstPart:last,lastPart:last};f.fact.meaning.objects=[[q("甲")]];
+  f.fact.meaning.objects=[[q("甲",125)]];
   const r=await f.model.validate!(f.wire);expect(r.success).toBe(true);
   if(r.success)expect(r.value.sources[0].facts[0].bindings.find(b=>b.term==="甲")!.spans[0][0])
-    .toBe(parts.slice(0,last).reduce((n,p)=>n+p.text.length,0)+parts[last].text.indexOf("甲"));
-  f.fact.basis={firstPart:0,lastPart:0};
+    .toBe(parts.map(p=>p.text).join("").lastIndexOf("甲"));
+  Object.assign(f.fact,{basis:{firstPart:last,lastPart:last}});
   expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
 it("composes exact printed fragments, including a shared suffix",async()=>{
@@ -106,14 +135,13 @@ it("keeps the full long AND guard while each condition term is bounded",async()=
     "第二圧力計が示す圧力が制御開始時に記録した基準圧力よりも低い",
     "第三流量計が示す流量が制御開始時に記録した基準流量よりも多い"];
   const trigger=cs.join("かつ")+"場合",f=setup(`装置は${trigger}に青色弁を開く。`);
-  f.fact.basis.lastPart=f.input.sources[0].source.claims[0].segments.length-1;
   Object.assign(f.fact.meaning,{predicate:"opens",context:"operation",guardRelation:"when",guardConditions:cs.map(c=>[q(c)])});
   Object.assign(f.fact.operators,{guard:q(trigger)});
   const r=await f.model.validate!(f.wire);expect(r.success).toBe(true);
   if(r.success){expect(()=>decodeSourcePropositions(f.plan,r.value)).not.toThrow();expect(r.value.sources[0].facts[0].meaning.guard.conditions).toEqual(cs);}
 });
 it("decodes guarded opposite actions without replacing them by a set",async()=>{
-  const f=setup(SOURCE_ACTION_TEXT);f.wire.sources[0].facts=structuredClone(SOURCE_ACTION_FACTS);
+  const f=setup(SOURCE_ACTION_TEXT);f.wire.sources[0].c1=structuredClone(SOURCE_ACTION_FACTS);
   const r=await f.model.validate!(f.wire);expect(r.success).toBe(true);if(!r.success)return;
   const result=decodeSourcePropositions(f.plan,r.value),own=result.facts.filter(s=>s.id.startsWith("s0."));
   expect(own.map(p=>p.meaning)).toMatchObject([
@@ -126,7 +154,7 @@ it("decodes guarded opposite actions without replacing them by a set",async()=>{
 it("does not turn explicit unresolved coverage into evidence for an omitted action",async()=>{
   const f=setup(),r=await f.model.validate!(f.wire);expect(r.success).toBe(true);if(!r.success)return;
   const prior=decodeSourcePropositions(f.plan,r.value),p=prior.facts.find(s=>s.id.startsWith("s0."))!;
-  f.wire.sources[0].facts=[];f.wire.sources[0].coverage.c1={quote:"装置は青色弁を備える。",occurrence:0,reason:"Fixture intentionally withholds the extraction."};
+  f.wire.sources[0].c1={quote:"装置は青色弁を備える。",occurrence:0,reason:"Fixture intentionally withholds the extraction."};
   const empty=await f.model.validate!(f.wire);expect(empty.success).toBe(true);if(!empty.success)return;
   const target={id:"t",targetId:"t",span:[0,1]as [number,number],scope:p.scope,claimNo:1,sourceIds:[p.id],meaning:p.meaning};
   expect(compareProposition(target,decodeSourcePropositions(f.plan,empty.value).facts).relation).toBe("unresolved");
@@ -136,12 +164,11 @@ it("extracts an own-clause placement under alternative parents without merging t
   f.inputs.draft=parseComparisonSource("【請求項1】装置は赤弁を備える。\n【請求項2】装置は青弁を備える。\n【請求項3】ヒータは筐体内にある請求項1又は2に記載の装置。",11,"架空");
   f.selection.draftClaimNos=[3];
   const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
-  const wire={locatorVersion:10,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
-    coverage:Object.fromEntries(s.source.claims.map(c=>[`c${c.claimNo}`,i===0&&c.claimNo===3?null:
-      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture withholds this independent context reading."}])),
-    facts:i===0?[{claimNo:3,basis:{firstPart:0,lastPart:s.source.claims.find(c=>c.claimNo===3)!.segments.length-1},
+  const wire={locatorVersion:11,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
+    ...Object.fromEntries(s.source.claims.map(c=>[`c${c.claimNo}`,i===0&&c.claimNo===3?[{
       meaning:{kind:"relation",subject:[q("ヒータ")],context:"capability",guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"inside",objects:[[q("筐体")]]},
-      operators:null,routeFrame:null}]:[],
+      operators:null,routeFrame:null}]:
+      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture withholds this independent context reading."}])),
   }))};
   const before=JSON.stringify(wire),decoded=await sourcePropositionModelSchemaFor(plan).validate!(wire);
   expect(decoded.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);if(!decoded.success)return;
@@ -151,15 +178,14 @@ it("extracts an own-clause placement under alternative parents without merging t
   expect(node.guaranteed).not.toContain(1);expect(node.guaranteed).not.toContain(2);
   expect(compareProposition({id:"t",targetId:"t",span:[0,1],scope:own[0].scope,claimNo:3,sourceIds:[own[0].id],meaning:own[0].meaning},own).relation).toBe("entailed");
 });
-it("enforces 32000 UTF8 bytes on otherwise valid v10 facts",async()=>{
+it("enforces 32000 UTF8 bytes on otherwise valid v11 facts",async()=>{
   const f=setup("装置は青色弁を備える。"+"x".repeat(6_000)+"。");
-  f.fact.basis.lastPart=f.input.sources[0].source.claims[0].segments.length-1;
   const row={...f.fact,operators:{...f.fact.operators,guard:q("x".repeat(200))}};
   const bytes=()=>Buffer.byteLength(JSON.stringify(f.wire));
   let found=false;
   for(let n=1;n<=48;n++){
-    f.wire.sources[0].facts=Array.from({length:n},()=>structuredClone(row));
-    const last=f.wire.sources[0].facts[n-1];
+    f.wire.sources[0].c1=Array.from({length:n},()=>structuredClone(row));
+    const last=f.wire.sources[0].c1[n-1];
     last.operators.guard=q("x");
     const remaining=31_999-bytes();
     if(remaining>=0&&remaining+3<=6_000){
@@ -168,7 +194,7 @@ it("enforces 32000 UTF8 bytes on otherwise valid v10 facts",async()=>{
   }
   expect(found).toBe(true);expect(bytes()).toBe(31_999);
   expect((await f.model.validate!(f.wire)).success).toBe(true);
-  const last=f.wire.sources[0].facts.at(-1);
+  const last=f.wire.sources[0].c1.at(-1);
   last.operators.guard.quote+="x";
   expect(bytes()).toBe(32_000);expect((await f.model.validate!(f.wire)).success).toBe(true);
   last.operators.guard.quote+="x";
@@ -199,8 +225,8 @@ it("round-trips null operators as five nulls without changing meaning or accepti
   }
 });
 it.each(["operator_string","missing_key","extra_key","composed_guard"])("rejects incomplete or synthesized evidence: %s",async mode=>{
-  const f=setup(SOURCE_ACTION_TEXT);f.wire.sources[0].facts=structuredClone(SOURCE_ACTION_FACTS);
-  const a=f.wire.sources[0].facts[0];
+  const f=setup(SOURCE_ACTION_TEXT);f.wire.sources[0].c1=structuredClone(SOURCE_ACTION_FACTS);
+  const a=f.wire.sources[0].c1[0];
   if(mode==="operator_string")a.operators.guard="前記通電状態で温度が七度を超える場合";
   if(mode==="missing_key")delete a.operators.context;
   if(mode==="extra_key")a.operators.invented=null;
@@ -209,15 +235,14 @@ it.each(["operator_string","missing_key","extra_key","composed_guard"])("rejects
   expect((await f.model.validate!(f.wire)).success).toBe(false);
   expect(JSON.stringify(f.wire)).toBe(before);
 });
-it("rejects a subject outside a valid selected part even when its object is within that part",async()=>{
+it("binds a subject and object across parts in the same complete claim, rejecting foreign text",async()=>{
   const f=setup("装置は"+"甲".repeat(125)+"、青色弁を備える。");
   const parts=f.input.sources[0].source.claims[0].segments,last=parts.length-1;
   expect(last).toBeGreaterThan(0);
   expect(parts[last].text).toContain("青色弁");expect(parts[last].text).not.toContain("装置");
-  f.fact.basis={firstPart:last,lastPart:last};
-  expect((await f.model.validate!(f.wire)).success).toBe(false);
-  Object.assign(f.fact.meaning,{subject:null});
   expect((await f.model.validate!(f.wire)).success).toBe(true);
+  f.fact.meaning.subject[0].quote="他請求項の装置";
+  expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
 it("allows only operator/frame evidence to name the already selected whole basis",async()=>{
   const f=setup();Object.assign(f.fact.operators,{guard:{quote:null,occurrence:0}});
