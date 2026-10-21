@@ -49,6 +49,32 @@ it("converts all frame/operator/attribution fields without rewriting selection o
   // Wire validity alone never makes the intentionally inconsistent fact valid.
   expect(()=>decodeTargetPropositions(f.targetInput,f.target)).toThrow();
 });
+it("decodes the instructed sentence partition and exact nominal topic without absorbing a fact",async()=>{
+  const f=setup(),t=f.targetInput.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!;
+  const first="基準側は青色弁を備える。",topic="配置",last=topic+"は未確認。";
+  t.text=first+last;t.unitStarts=[0,first.length];
+  const proof=f.targetInput.sourcePropositions.find(p=>p.scope==="base:1"&&p.meaning.kind==="relation"&&p.meaning.predicate==="has")!;
+  const answer=f.target.targets.find(a=>a.id===t.id)!;
+  answer.parts=[{span:[0,first.length],form:"assertion",reference:null,reservation:null,atoms:[{
+    basis:[[0,first.length]],bindings:[{term:"青色弁",spans:[[4,7]]}],
+    meaning:{kind:"relation",subject:null,context:"capability",guard:{relation:"unconditional",conditions:[]},polarity:"positive",predicate:"has",objects:["青色弁"]},
+    operators:{selection:null,extent:null,polarity:null,guard:null,context:null},routeFrame:null,
+    scope:"base:1",claimNo:1,sourceIds:[proof.id],attribution:[0,3],
+  }]},{span:[first.length,t.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[first.length,first.length+topic.length]}}];
+  const transport=propositionTargetTransport(f.targetInput),model=targetPropositionModelSchemaFor(f.targetInput);
+  expect(transport.originals.targets.find(x=>x.id===t.id)!.unitStarts).toEqual([0,first.length]);
+  const wire=fixturePropositionWire(f.target,transport),before=JSON.stringify(wire),result=await model.validate!(wire);
+  expect(JSON.stringify(wire)).toBe(before);expect(result.success).toBe(true);
+  if(!result.success)return;
+  expect(decodeTargetPropositions(f.targetInput,result.value).atoms.some(a=>a.targetId===t.id)).toBe(true);
+  const wrongTopic=structuredClone(result.value),wrong=wrongTopic.targets.find(x=>x.id===t.id)!.parts[1];
+  wrong.reservation!.basis=wrong.span;
+  expect(()=>decodeTargetPropositions(f.targetInput,wrongTopic)).toThrow("ai_incomplete");
+  const crossing=structuredClone(result.value),parts=crossing.targets.find(x=>x.id===t.id)!;
+  parts.parts=[{span:[0,t.text.length],form:"unresolved",atoms:[],reference:null,reservation:null}];
+  expect(()=>decodeTargetPropositions(f.targetInput,crossing)).toThrow("ai_incomplete");
+});
 it.each(["legacy","other_target","gap","basis_outside","sentence_crossing"])("retains target boundary checks after resolving %s",async mode=>{
   const f=setup();
   if(mode==="legacy"){expect((await f.targetSchema.validate!(f.target)).success).toBe(false);return;}

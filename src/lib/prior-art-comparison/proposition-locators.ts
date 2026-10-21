@@ -21,8 +21,9 @@ const spans = {
     exclusions:z.array(index).max(6), controls:z.array(index).max(6) }).strict().nullable(),
 };
 const wireAtom = targetAtomSchema.extend({...spans, attribution:index.nullable()});
-const wirePart = targetPartSchema.extend({span:index, atoms:z.array(wireAtom).max(12),
-  reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,basis:index}).strict().nullable()});
+const wirePart = targetPartSchema.extend({span:index.describe("Quote wholly inside one input unitStarts interval; multiple sentences require multiple parts."), atoms:z.array(wireAtom).max(12),
+  reservation:z.object({topic:targetPartSchema.shape.reservation.unwrap().shape.topic,
+    basis:index.describe("Quote exactly topic, excluding uncertainty suffix; factual clauses are separate parts.")}).strict().nullable()});
 export const SOURCE_LOCATOR_MAX_BYTES = 32_000;
 export const TARGET_LOCATOR_MAX_BYTES = 64_000;
 const invalid = () => new Error("comparison_locator_invalid");

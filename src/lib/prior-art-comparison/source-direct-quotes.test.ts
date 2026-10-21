@@ -131,6 +131,26 @@ it("does not turn explicit unresolved coverage into evidence for an omitted acti
   const target={id:"t",targetId:"t",span:[0,1]as [number,number],scope:p.scope,claimNo:1,sourceIds:[p.id],meaning:p.meaning};
   expect(compareProposition(target,decodeSourcePropositions(f.plan,empty.value).facts).relation).toBe("unresolved");
 });
+it("extracts an own-clause placement under alternative parents without merging their facts",async()=>{
+  const f=fictionalInputs();
+  f.inputs.draft=parseComparisonSource("【請求項1】装置は赤弁を備える。\n【請求項2】装置は青弁を備える。\n【請求項3】ヒータは筐体内にある請求項1又は2に記載の装置。",11,"架空");
+  f.selection.draftClaimNos=[3];
+  const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
+  const wire={locatorVersion:10,sources:input.sources.map((s,i)=>({sourceDigest:s.sourceDigest,
+    coverage:Object.fromEntries(s.source.claims.map(c=>[`c${c.claimNo}`,i===0&&c.claimNo===3?null:
+      {quote:c.segments.map(p=>p.text).join(""),occurrence:0,reason:"Fixture withholds this independent context reading."}])),
+    facts:i===0?[{claimNo:3,basis:{firstPart:0,lastPart:s.source.claims.find(c=>c.claimNo===3)!.segments.length-1},
+      meaning:{kind:"relation",subject:[q("ヒータ")],context:"capability",guardRelation:"unconditional",guardConditions:[],polarity:"positive",predicate:"inside",objects:[[q("筐体")]]},
+      operators:null,routeFrame:null}]:[],
+  }))};
+  const before=JSON.stringify(wire),decoded=await sourcePropositionModelSchemaFor(plan).validate!(wire);
+  expect(decoded.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);if(!decoded.success)return;
+  const result=decodeSourcePropositions(plan,decoded.value),own=result.facts.filter(p=>p.authority==="extracted");
+  expect(own).toHaveLength(1);expect(own[0]).toMatchObject({claimNo:3,meaning:{predicate:"inside",subject:"ヒータ",objects:["筐体"]}});
+  const node=result.input.sources[0].scopes[0].nodes.find(n=>n.claimNo===3)!;
+  expect(node.guaranteed).not.toContain(1);expect(node.guaranteed).not.toContain(2);
+  expect(compareProposition({id:"t",targetId:"t",span:[0,1],scope:own[0].scope,claimNo:3,sourceIds:[own[0].id],meaning:own[0].meaning},own).relation).toBe("entailed");
+});
 it("enforces 32000 UTF8 bytes on otherwise valid v10 facts",async()=>{
   const f=setup("装置は青色弁を備える。"+"x".repeat(6_000)+"。");
   f.fact.basis.lastPart=f.input.sources[0].source.claims[0].segments.length-1;
