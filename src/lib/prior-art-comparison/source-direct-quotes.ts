@@ -69,12 +69,20 @@ export function directSourcePropositionModelSchemaFor(chunks:readonly ManagedCom
     facts:RawFact[]} & Record<string,unknown>;
   // Required keys make omissions a provider schema violation, not merely a
   // prose instruction. Catalog IDs constrain identity only: every loop's
-  // meaning, role quotations and basis still come from the model.
+  // meaning and role quotations still come from the model. Its basis shares
+  // the input locator coordinate space; no role is inferred or repaired.
+  const loopBases=new Map<string,z.ZodType<{firstPart:number;lastPart:number}>>();
+  const loopBasis=([firstPart,lastPart]:readonly [number,number])=>{
+    const key=`${firstPart}_${lastPart}`;
+    if(!loopBases.has(key))loopBases.set(key,z.object({firstPart:z.literal(firstPart),lastPart:z.literal(lastPart)}).strict()
+      .meta({id:`PriorArtSourceLoopBasis_${key}`}));
+    return loopBases.get(key)!;
+  };
   const sourceSchemas=input.sources.map(source=>z.object({
     sourceDigest:z.literal(source.sourceDigest),
     coverage:z.object(Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,unresolved]))).strict(),
     ...Object.fromEntries(source.recognizedLoopRoutes.map((r,id)=>[`loop${id}`,fact.extend({
-      claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),
+      claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
     })])),
     facts:additionalFacts,
   }).strict());

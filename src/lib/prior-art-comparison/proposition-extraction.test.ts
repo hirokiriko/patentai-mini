@@ -6,7 +6,9 @@ import { decodeGeneration } from "./generation";
 import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceInput, propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { assessPropositions, assertPropositionTargetCoverage, renderMeaning, renderPropositionDrafts } from "./proposition-result";
 import type { Meaning } from "./propositions";
-import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget } from "./proposition-fixtures.test-support";
+import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
+import { parseComparisonSource } from "./source";
+import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor, resolvePropositionQuote } from "./proposition-locators";
 
 function setup(){
   const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection);
@@ -166,4 +168,112 @@ it.each(["reduced_numbers","other_side"])("does not silently change a bare refer
     part.span[1]=f.input.originals.targets[0].text.length;
   }else part.reference.side="candidate";
   expect(()=>decodeTargetPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+});
+
+// Independently written source and target readings. The fixture helper below
+// only encodes target coordinates; it does not generate either meaning.
+const plain={context:"capability" as const,guard:{relation:"unconditional" as const,conditions:[]},polarity:"positive" as const};
+type SemanticExample={sourceText:string;sourceFacts:Meaning[];target:{text:string;meaning:Meaning}[]};
+const semanticExamples:Record<string,SemanticExample>={
+  valves:{sourceText:"青モードでは高温かつ通電の場合、赤弁を開き、青弁を閉じる。",sourceFacts:[
+    {...plain,kind:"relation",subject:"青モード",context:"operation",guard:{relation:"when",conditions:["高温","通電"]},predicate:"opens",objects:["赤弁"]},
+    {...plain,kind:"relation",subject:"青モード",context:"operation",guard:{relation:"when",conditions:["高温","通電"]},predicate:"closes",objects:["青弁"]},
+  ],target:[
+    {text:"青モードは通電かつ高温の場合、赤弁を開く。",meaning:{...plain,kind:"relation",subject:"青モード",context:"operation",guard:{relation:"when",conditions:["通電","高温"]},predicate:"opens",objects:["赤弁"]}},
+    {text:"青モードは通電かつ高温の場合、青弁を閉じる。",meaning:{...plain,kind:"relation",subject:"青モード",context:"operation",guard:{relation:"when",conditions:["通電","高温"]},predicate:"closes",objects:["青弁"]}},
+  ]},
+  heat:{sourceText:"青モードでヒータを発熱させる。ヒータは筐体内に配置される。",sourceFacts:[
+    {...plain,kind:"relation",subject:"青モード",context:"operation",predicate:"generates_heat",objects:["ヒータ"]},
+    {...plain,kind:"relation",subject:"ヒータ",predicate:"inside",objects:["筐体"]},
+  ],target:[
+    {text:"青モードはヒータを発熱させる。",meaning:{...plain,kind:"relation",subject:"青モード",context:"operation",predicate:"generates_heat",objects:["ヒータ"]}},
+    {text:"ヒータは筐体内にある。",meaning:{...plain,kind:"relation",subject:"ヒータ",predicate:"inside",objects:["筐体"]}},
+  ]},
+  fixed:{sourceText:"第２の運転モードは紫色モードであり、分岐点は赤弁の上流にある。",sourceFacts:[
+    {...plain,kind:"set",subject:"第２の運転モード",selection:"required",extent:"closed",members:["紫色モード"]},
+    {...plain,kind:"relation",subject:"分岐点",predicate:"upstream",objects:["赤弁"]},
+  ],target:[
+    {text:"第2の運転モードは紫色モードである。",meaning:{...plain,kind:"set",subject:"第2の運転モード",selection:"required",extent:"closed",members:["紫色モード"]}},
+    {text:"分岐点は赤弁の上流に位置する。",meaning:{...plain,kind:"relation",subject:"分岐点",predicate:"upstream",objects:["赤弁"]}},
+  ]},
+};
+async function semanticConnection(name:string,changedSource?:Pick<SemanticExample,"sourceText"|"sourceFacts">){
+  const example=semanticExamples[name],base=changedSource??example,f=fictionalInputs();
+  f.inputs.draft=parseComparisonSource("【請求項1】"+base.sourceText,11,"架空基準");
+  f.inputs.documents=[parseComparisonSource("【請求項1】"+example.sourceText,21,"架空候補")];
+  f.selection.documents=f.selection.documents.slice(0,1);
+  const plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceInput(plan),q=(quote:string)=>({quote,occurrence:0});
+  const sourceWire={locatorVersion:10,sources:sourceInput.sources.map((s,i)=>({sourceDigest:s.sourceDigest,coverage:{c1:null},
+    facts:(i===0?base:example).sourceFacts.map(m=>{
+      const {guard,...rest}=m,term=(v:string)=>[q(v)];
+      return {claimNo:1,basis:{firstPart:0,lastPart:s.source.claims[0].segments.length-1},
+        meaning:{...rest,subject:m.subject===null?null:term(m.subject),guardRelation:guard.relation,guardConditions:guard.conditions.map(term),
+          ...(m.kind==="set"?{members:m.members.map(term)}:m.kind==="relation"?{objects:m.objects.map(term)}:{})},
+        operators:{selection:null,extent:null,polarity:null,guard:guard.relation==="when"?q(guard.conditions.join("かつ")):null,context:null},routeFrame:null};
+    })}))};
+  const sourceAnswer=await sourcePropositionModelSchemaFor(plan).validate!(sourceWire);
+  if(!sourceAnswer.success)throw sourceAnswer.error;
+  const sources=decodeSourcePropositions(plan,sourceAnswer.value),observation=example.target.map(t=>t.text).join("");
+  const sides=example.target.flatMap(t=>["基準側の"+t.text,"候補側の"+t.text]).join("");
+  const fields={baseObservation:observation,candidateObservation:observation,common:sides,differences:sides,unconfirmed:"図面は未確認。"};
+  const pairs=validateAnswer(plan[0],{results:[{...plan[0].pairs[0],common:fields.common,differences:fields.differences,unconfirmed:fields.unconfirmed,
+    baseEvidence:{claimNo:1,quote:base.sourceText},candidateEvidence:{claimNo:1,quote:example.sourceText}}]});
+  const drafts=pairs.map(p=>({...p,...fields})),input=propositionTargetInput(plan,drafts,sources);
+  const raw={draftDigest:input.draftDigest,targets:input.originals.targets.map(t=>{
+    if(t.id.endsWith(":unconfirmed"))return {id:t.id,parts:[{span:[0,t.text.length],form:"reservation",atoms:[],reference:null,reservation:{topic:"図面",basis:[0,2]}}]};
+    const both=t.id.endsWith(":common")||t.id.endsWith(":differences"),entries=example.target.flatMap(row=>
+      (both?["base","candidate"]:[t.id.endsWith(":baseObservation")?"base":"candidate"]).map(side=>({row,side})));
+    let cursor=0;
+    return {id:t.id,parts:entries.map(({row,side})=>{
+      const prefix=both?(side==="base"?"基準側の":"候補側の"):"",text=prefix+row.text,start=cursor;cursor+=text.length;
+      const m=row.meaning,span=(quote:string)=>resolvePropositionQuote(text,quote,0).map(n=>n+start),scope=side==="base"?"base:1":"candidate:21:1";
+      const terms=[m.subject,...m.guard.conditions,...(m.kind==="set"?m.members:m.kind==="relation"?m.objects:[])].filter((v):v is string=>v!==null);
+      const own=input.sourcePropositions.filter(p=>p.scope===scope&&p.claimNo===1);
+      // On a missing-predicate negative, retain a valid source ID and compare
+      // against the remaining meaning instead of testing an invalid ID alone.
+      const proof=own.find(p=>p.authority==="extracted"&&p.meaning.kind===m.kind&&
+        (m.kind!=="relation"||p.meaning.kind==="relation"&&p.meaning.predicate===m.predicate))??own[0];
+      return {span:[start,cursor],form:"assertion",reference:null,reservation:null,atoms:[{
+        basis:[[start,cursor]],meaning:m,bindings:terms.map(term=>({term,spans:[span(term)]})),
+        operators:{selection:null,extent:null,polarity:null,guard:m.guard.relation==="when"?span(m.guard.conditions.join("かつ")):null,context:null},
+        routeFrame:null,scope,claimNo:1,attribution:both?[start,start+3]:null,sourceIds:[proof.id],
+      }]};
+    })};
+  })};
+  const wire=fixturePropositionWire(raw,propositionTargetTransport(input)),before=JSON.stringify(wire);
+  const answer=await targetPropositionModelSchemaFor(input).validate!(wire);
+  expect(JSON.stringify(wire)).toBe(before);if(!answer.success)throw answer.error;
+  const assessment=assessPropositions(input,answer.value);
+  return {input,drafts,raw:answer.value,assessment};
+}
+it.each(["valves","heat","fixed"])("connects independent source and target readings through comparison and display: %s",async name=>{
+  const f=await semanticConnection(name);assertPropositionTargetCoverage(f.input,f.assessment);
+  expect(f.assessment.records.every(r=>r.relation==="entailed")).toBe(true);
+  const result=renderPropositionDrafts(f.input,f.assessment,f.drafts)[0];
+  expect(result.baseObservation.length).toBeLessThanOrEqual(120);
+  expect(result.common.length).toBeLessThanOrEqual(200);
+  for(const row of semanticExamples[name].target)expect(result.baseObservation).toContain(renderMeaning(row.meaning));
+  // A candidate's valid location/operation cannot prove a base assertion.
+  const changed=structuredClone(f.raw),atom=changed.targets[0].parts[0].atoms[0];
+  atom.scope="candidate:21:1";atom.sourceIds=[f.input.sourcePropositions.find(p=>p.scope===atom.scope)!.id];
+  expect(()=>assessPropositions(f.input,changed)).toThrow("ai_incomplete");
+});
+it.each(["missing_close","guard","mode","possession","outside","other_fixed"])("does not erase an independent target assertion when source proof changes: %s",async change=>{
+  const name=["missing_close","guard","mode"].includes(change)?"valves":["possession","outside"].includes(change)?"heat":"fixed";
+  const base=structuredClone(semanticExamples[name]);
+  if(change==="missing_close"){base.sourceText=base.sourceText.replace("、青弁を閉じる","");base.sourceFacts.pop();}
+  if(change==="guard"){base.sourceText=base.sourceText.replace("高温","低温");base.sourceFacts.forEach(m=>m.guard.conditions=["低温","通電"]);}
+  if(change==="mode"){base.sourceText=base.sourceText.replace("青モード","白モード");base.sourceFacts.forEach(m=>m.subject="白モード");}
+  if(change==="possession"){base.sourceText=base.sourceText.replace("発熱させる","備える");if(base.sourceFacts[0].kind==="relation")base.sourceFacts[0].predicate="has";}
+  if(change==="outside"){base.sourceText=base.sourceText.replace("筐体内に配置される","筐体の上流にある");if(base.sourceFacts[1].kind==="relation")base.sourceFacts[1].predicate="upstream";}
+  if(change==="other_fixed"){base.sourceText=base.sourceText.replace("紫色モード","白色モード");if(base.sourceFacts[0].kind==="set")base.sourceFacts[0].members=["白色モード"];}
+  const f=await semanticConnection(name,base),baseRecords=f.assessment.records.filter(r=>r.target.scope==="base:1");
+  const affected=baseRecords.filter(r=>change==="missing_close"?r.target.meaning.kind==="relation"&&r.target.meaning.predicate==="closes":
+    change==="possession"?r.target.meaning.kind==="relation"&&r.target.meaning.predicate==="generates_heat":
+    change==="outside"?r.target.meaning.kind==="relation"&&r.target.meaning.predicate==="inside":
+    change==="other_fixed"?r.target.meaning.kind==="set":true);
+  expect(affected.length).toBeGreaterThan(0);expect(affected.every(r=>r.relation!=="entailed")).toBe(true);
+  expect(f.assessment.records.filter(r=>r.target.scope==="candidate:21:1").every(r=>r.relation==="entailed")).toBe(true);
+  expect(()=>renderPropositionDrafts(f.input,f.assessment,f.drafts)).toThrow("ai_incomplete");
+  expect(f.drafts[0].baseObservation).toBe(semanticExamples[name].target.map(t=>t.text).join(""));
 });

@@ -145,6 +145,26 @@ it("keeps original claim parts and gives each required loop its own source-scope
     expect(resolve(r.entryLocator)).toEqual(original.entry);
     expect(resolve(r.exitLocator)).toEqual(original.exit);
     expect(r.entryLocator.quote).toBe(r.exitLocator.quote);
+    expect([r.entryLocator.firstPart,r.entryLocator.lastPart]).toEqual(r.basisParts);
+    expect([r.exitLocator.firstPart,r.exitLocator.lastPart]).toEqual(r.basisParts);
+    expect(r.basisParts).toEqual([0,c.parts.length-1]);
     expect(resolve(r.entryLocator)).not.toEqual(resolve(r.exitLocator));
   }
+});
+it("shares the complete-claim loop basis without losing a postposed condition or repeated endpoint",async()=>{
+  const text="送出器を備える。"+loop().replace("を切り換える。","を切り換えて実行する架空装置において、温度が六度を下回る場合、前記第１の運転モードを実行する。"),f=setup(text);
+  for(const row of f.raw.sources[0].facts){
+    const condition="温度が六度を下回る場合",start=text.indexOf(condition);
+    row.meaning.guard={relation:"when",conditions:[condition]};
+    row.bindings.push({term:condition,spans:[[start,start+condition.length]]});
+    row.operators.guard=[start,start+condition.length];
+  }
+  const transport=propositionSourceTransport(f.input),r=transport.sources[0].recognizedLoopRoutes[0];
+  expect(r.entryLocator.occurrence).toBe(1);expect(r.exitLocator.occurrence).toBe(2);
+  expect(r.basisParts).toEqual([0,transport.sources[0].source.claims[0].parts.length-1]);
+  const wire=indexedWire(f),before=JSON.stringify(wire),result=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);
+  expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
+  if(result.success)expect(()=>decodeSourcePropositions(f.plan,result.value)).not.toThrow();
+  wire.sources[0].loop0.basis.firstPart=1;
+  expect((await sourcePropositionModelSchemaFor(f.plan).validate!(wire)).success).toBe(false);
 });

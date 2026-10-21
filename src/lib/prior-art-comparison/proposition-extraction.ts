@@ -35,7 +35,10 @@ export function propositionSourceInput(chunks:readonly ManagedComparisonChunk[])
   return {...input,task:"extract_source_propositions" as const,
     sources:input.sources.map(s=>{const joined={publicationNumber:s.source.publicationNumber,version:s.source.version,
       claims:s.source.claims.map(({segments,...c})=>({...c,text:segments.map(p=>p.text).join("")}))};
-      return {...s,recognizedLoopRoutes:recognizedLoopRoutes(joined),
+      return {...s,recognizedLoopRoutes:recognizedLoopRoutes(joined).map(r=>({...r,
+        // Required loops use one complete claim as the shared coordinate
+        // space. A guard outside the route's minimal parts must remain usable.
+        basisParts:[0,s.source.claims.find(c=>c.claimNo===r.claimNo)!.segments.length-1] as [number,number]})),
         scopes:s.selected.map(no=>propositionScope(joined,no,s.side==="base"?`base:${no}`:`candidate:${s.docId}:${no}`))};})};
 }
 export function sourcePropositionSchemaFor(chunks:readonly ManagedComparisonChunk[]) {
@@ -51,8 +54,8 @@ export function propositionSourceTransport(input:ReturnType<typeof propositionSo
     recognizedLoopRoutes:s.recognizedLoopRoutes.map((r,id)=>{
       const claim=s.source.claims.find(c=>c.claimNo===r.claimNo)!,text=claim.segments.map(p=>p.text).join("");
       const parts=sourceCitationParts(claim.segments.map(p=>p.text)),ids=(span:Span)=>sourceCitationPartIds(parts,span);
-      return {id,claimNo:r.claimNo,mode:text.slice(...r.mode),entryLocator:sourceCitationLocator(text,parts,r.entry),exitLocator:sourceCitationLocator(text,parts,r.exit),
-        basisParts:ids([Math.min(r.definition[0],r.control[0],r.route[0],r.mode[0]),Math.max(r.definition[1],r.control[1],r.route[1],r.mode[1])]),
+      return {id,claimNo:r.claimNo,mode:text.slice(...r.mode),entryLocator:sourceCitationLocator(text,parts,r.entry,r.basisParts),exitLocator:sourceCitationLocator(text,parts,r.exit,r.basisParts),
+        basisParts:r.basisParts,
         routeParts:ids(r.route),exclusionParts:ids(r.definition),controlParts:ids(r.control)};
     }),source:{...s.source,claims:s.source.claims.map(({segments,...c})=>
     // Keep citation IDs beside their exact text. Source extraction must not

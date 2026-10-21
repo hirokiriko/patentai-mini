@@ -28,3 +28,15 @@ it.each([[-1,1],[1,1],[0,20],[0.5,2],[1,2],[2,3]])("rejects an invalid or split-
   const text="青😀赤";
   expect(()=>sourceCitationLocator(text,sourceCitationParts([text]),[start,end])).toThrow();
 });
+it("counts within the explicitly selected basis, retaining embedded and overlapping occurrences",()=>{
+  const texts=["送出器を備える。","非通電と通電。送出","器から送出器へ戻る。aaaaa"],text=texts.join(""),parts=sourceCitationParts(texts);
+  const entry=text.indexOf("送出器",1),exit=text.indexOf("送出器",entry+1);
+  expect(sourceCitationLocator(text,parts,[entry,entry+3],[0,2])).toEqual({firstPart:0,lastPart:2,quote:"送出器",occurrence:1});
+  expect(sourceCitationLocator(text,parts,[exit,exit+3],[0,2]).occurrence).toBe(2);
+  expect(sourceCitationLocator(text,parts,[exit,exit+3],[1,2]).occurrence).toBe(1);
+  const powered=text.indexOf("通電",text.indexOf("通電")+1),overlap=text.indexOf("aaaaa")+2;
+  expect(sourceCitationLocator(text,parts,[powered,powered+2],[0,2]).occurrence).toBe(1);
+  expect(sourceCitationLocator(text,parts,[overlap,overlap+3],[0,2]).occurrence).toBe(2);
+  expect(()=>sourceCitationLocator(text,parts,[entry,entry+3],[2,2])).toThrow("comparison_locator_invalid");
+  expect(()=>sourceCitationLocator(text,parts,[0,3],[1,2])).toThrow("comparison_locator_invalid");
+});

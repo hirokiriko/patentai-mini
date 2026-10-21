@@ -22,12 +22,13 @@ export function sourceCitationPartIds(parts:readonly Span[],span:Span):[number,n
 /** Encode an existing evidence span, without selecting a semantic role or
  * searching another claim. Repeated/overlapping matches retain their exact
  * occurrence within the selected parts, including a return to the same noun. */
-export function sourceCitationLocator(text:string,parts:readonly Span[],span:Span) {
+export function sourceCitationLocator(text:string,parts:readonly Span[],span:Span,selectedParts?:readonly [number,number]) {
   const [start,end]=span;
   const splits=(at:number)=>/[\uD800-\uDBFF]/u.test(text[at-1]??"")&&/[\uDC00-\uDFFF]/u.test(text[at]??"");
   if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||end<=start||end>text.length||splits(start)||splits(end))
     throw new Error("comparison_locator_invalid");
-  const [firstPart,lastPart]=sourceCitationPartIds(parts,span),[a,b]=sourceCitationRange(parts,firstPart,lastPart);
+  const [firstPart,lastPart]=selectedParts??sourceCitationPartIds(parts,span),[a,b]=sourceCitationRange(parts,firstPart,lastPart);
+  if(a<0||b>text.length||start<a||end>b||splits(a)||splits(b))throw new Error("comparison_locator_invalid");
   const selected=text.slice(a,b),quote=text.slice(start,end),relative=start-a;
   let position=-1,occurrence=-1;
   do {position=selected.indexOf(quote,position+1);occurrence++;}while(position>=0&&position<relative);
