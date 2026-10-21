@@ -104,6 +104,17 @@ const releaseStepSchemaBase = z.object({ issue: z.union([z.literal(129), z.liter
 });
 export const managedReleaseStepSchema = releaseStepSchemaBase.safeExtend({ issue: z.union([z.literal(129), z.literal(140), z.literal(150)]) });
 const historicalIssue139ReleaseStepSchema = releaseStepSchemaBase.safeExtend({ issue: z.literal(139) });
+// PR146's signed historical forward retained the Issue140 allowance. Decode
+// that exact old release shape only; the active schema still excludes Issue139.
+const historicalIssue139Pr146StepSchema = z.object({ ...releaseStepSchemaBase.shape,
+  issue: z.literal(139), issue150Integration: z.never().optional(),
+  completionAllowance: managedCompletionAllowanceSchema.refine(a => a.monthlyCapYen === 45000 && a.cumulativeUnits.forward === 15),
+  kind: z.literal("forward"), trigger: z.literal("squash-merge"), prNumber: z.literal(146), targetRef: z.literal("refs/heads/main"),
+  headSha: z.literal("5ed2d92474aa417c30fa5d7b83946795c7bf3120"),
+  baseSha: z.literal("62491ef671ae47ffe190800b254bcb62a4404ed3"),
+  remoteBeforeSha: z.literal("62491ef671ae47ffe190800b254bcb62a4404ed3"),
+  reservationYen: z.literal(255),
+}).strict();
 export type ManagedReleaseStep = z.infer<typeof managedReleaseStepSchema>;
 export function managedReleaseBudgetRequest(value: unknown, targetBindingHash: string, ownerBindingHash: string) {
   const step = managedReleaseStepSchema.parse(value);
@@ -155,6 +166,7 @@ const historicalSignedAdministrationSchema = managedSignedAdministrationSchema.e
   review: managedAdministrationReviewSchema.extend({ action: z.union([
     managedAdministrationReviewSchema.shape.action,
     z.object({ kind: z.literal("release-start"), step: historicalIssue139ReleaseStepSchema }).strict(),
+    z.object({ kind: z.literal("release-start"), step: historicalIssue139Pr146StepSchema }).strict(),
   ]) }),
 });
 export type ManagedAdministrationReview = z.infer<typeof managedAdministrationReviewSchema>;
@@ -270,6 +282,14 @@ export function verifyManagedAdministrationHistory(value: unknown, expectedDiges
       else selected = replacementPins(pins, managedAdministrationReviewSchema.parse(r), "administration", at, true);
     }
     verifyReview(envelope, expectedDigest, selected, at, false);
+    if (envelope.review.action.kind === "release-start" && envelope.review.action.step.issue === 139 &&
+      envelope.review.action.step.completionAllowance) {
+      const r = envelope.review, step = envelope.review.action.step, allowance = step.completionAllowance!, sources = new Set(r.sources.map(s => s.digest));
+      check(r.expectedStateDigest !== null && sources.has("88953f0020b0a1187474de4a1f4dd65d389230b8fc6a69a546b666c19acaf0cc") &&
+        sources.has(allowance.ownerApprovalDigest) && sources.has(step.pricingDigest) && sources.has(step.preflightDigest) &&
+        new Date(Date.parse(r.issuedAt) + 9 * 60 * 60_000).toISOString().slice(0, 7) === allowance.month &&
+        Date.parse(r.validUntil) <= Date.parse(allowance.validUntil) && Date.parse(r.validUntil) - Date.parse(r.issuedAt) <= 15 * 60_000);
+    }
     if (envelope.review.action.kind === "release-start" && envelope.review.action.step.issue === 150)
       checkAdministrationReview(managedAdministrationReviewSchema.parse(envelope.review), pins);
     return envelope;

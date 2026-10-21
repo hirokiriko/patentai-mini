@@ -46,6 +46,57 @@ it("authenticates signed Issue139 history without adding active release authorit
   expect(() => managedReleaseStepSchema.parse(f.review.action.step)).toThrow();
   expect(() => managedReleaseBudgetRequest(f.review.action.step, f.pins.targetBindingHash, f.pins.ownerBindingHash)).toThrow();
 });
+function history139Pr146Fixture() {
+  const f = history139Fixture(), review = { ...f.review,
+    issuedAt: "2026-10-06T13:29:25Z", validUntil: "2026-10-06T13:44:25Z",
+    sources: [...f.review.sources, { digest: hash(12), bytes: 80 },
+      { digest: "88953f0020b0a1187474de4a1f4dd65d389230b8fc6a69a546b666c19acaf0cc", bytes: 80 }],
+    action: { ...f.review.action, step: { ...f.review.action.step, prNumber: 146, reservationYen: 255,
+      headSha: "5ed2d92474aa417c30fa5d7b83946795c7bf3120", baseSha: "62491ef671ae47ffe190800b254bcb62a4404ed3",
+      remoteBeforeSha: "62491ef671ae47ffe190800b254bcb62a4404ed3",
+      completionAllowance: managedCompletionAllowanceSchema.parse({ scope: "ISSUE140_COMPLETION_V2", issue: 140,
+        month: "2026-10", ownerApprovalDigest: hash(12), profileDigest: hash(13), monthlyCapYen: 45000,
+        cumulativeUnits: { ...emptyManagedBudgetUnits(), forward: 15 }, validUntil: "2026-10-31T15:00:00Z" }) } } };
+  const canonical = managedAdministrationReviewSchema.parse({ ...review,
+    action: { ...review.action, step: { ...review.action.step, issue: 140 } } });
+  if (canonical.action.kind !== "release-start") throw new Error("fixture");
+  return { ...f, review: { ...canonical, action: { kind: "release-start" as const, step: {
+    ...canonical.action.step, issue: 139, completionAllowance: review.action.step.completionAllowance } } } };
+}
+it("reads the historical PR146 allowance without allowing apply or reconciliation", () => {
+  const f = history139Pr146Fixture(), envelope = f.signedReview(f.review), digest = managedDigest(envelope);
+  const at = new Date("2026-10-21T00:00:00Z");
+  expect(verifyManagedAdministrationHistory(envelope, digest, f.pins, at)).toEqual(envelope);
+  for (const fresh of [true, false]) expect(() => verifyManagedAdministrationReview(envelope, digest, f.pins, at, fresh)).toThrow();
+  expect(() => managedReleaseStepSchema.parse(f.review.action.step)).toThrow();
+  expect(() => managedReleaseBudgetRequest(f.review.action.step, f.pins.targetBindingHash, f.pins.ownerBindingHash)).toThrow();
+});
+it.each(["pr", "head", "base", "remote", "reservation", "cap", "forward", "kind", "trigger", "ref", "expectedState",
+  "owner-source", "pricing-source", "preflight-source", "approval-source", "month", "expiry", "duration", "integration150"])(
+  "rejects a re-signed incompatible PR146 history: %s", reason => {
+    const f = history139Pr146Fixture(), r = f.review, s = r.action.step;
+    if (reason === "pr") s.prNumber = 147;
+    if (reason === "head") s.headSha = "d".repeat(40);
+    if (reason === "base") s.baseSha = "d".repeat(40);
+    if (reason === "remote") s.remoteBeforeSha = "d".repeat(40);
+    if (reason === "reservation") s.reservationYen = 256;
+    if (reason === "cap") s.completionAllowance.monthlyCapYen = 45001;
+    if (reason === "forward") s.completionAllowance.cumulativeUnits.forward = 16;
+    if (reason === "kind") s.kind = "rollback";
+    if (reason === "trigger") s.trigger = "workflow-dispatch";
+    if (reason === "ref") s.targetRef = "refs/heads/codex/other";
+    if (reason === "expectedState") Object.assign(r, { expectedStateDigest: null });
+    const missing = reason === "owner-source" ? hash(12) : reason === "pricing-source" ? hash(9) :
+      reason === "preflight-source" ? hash(8) : reason === "approval-source" ?
+        "88953f0020b0a1187474de4a1f4dd65d389230b8fc6a69a546b666c19acaf0cc" : null;
+    if (missing) r.sources = r.sources.filter(x => x.digest !== missing);
+    if (reason === "month") { r.issuedAt = "2026-09-30T14:40:00Z"; r.validUntil = "2026-09-30T14:50:00Z"; }
+    if (reason === "expiry") s.completionAllowance.validUntil = "2026-10-06T13:35:00Z";
+    if (reason === "duration") r.validUntil = "2026-10-06T13:44:26Z";
+    if (reason === "integration150") Object.assign(s, { issue150Integration: {} });
+    const envelope = f.signedReview(r);
+    expect(() => verifyManagedAdministrationHistory(envelope, managedDigest(envelope), f.pins, new Date("2026-10-21T00:00:00Z"))).toThrow();
+  });
 it.each(["content", "signature", "key", "owner", "target", "digest", "future"])(
   "rejects invalid historical Issue139 authentication: %s", reason => {
     const f = history139Fixture(), envelope = f.signedReview(f.review);
@@ -107,6 +158,16 @@ function replacementFixture() {
   } };
   return { old, fresh, oldEnvelope, envelope, digest, pins, at: new Date("2026-10-21T00:05:00Z") };
 }
+it("binds PR146 history to the exact old-key prefix during replacement", () => {
+  const f = replacementFixture(), old = history139Pr146Fixture(), envelope = old.signedReview(old.review), digest = managedDigest(envelope);
+  const pins: ManagedBudgetEvidencePins = { ...old.pins, issue150Replacement: { ...f.pins.issue150Replacement!,
+    historicalAdministration: [{ sequence: 1, digest: hash(1) }, { sequence: 2, digest }] } };
+  expect(verifyManagedAdministrationHistory(envelope, digest, pins, f.at)).toEqual(envelope);
+  pins.issue150Replacement!.historicalAdministration[1].digest = hash(91);
+  expect(() => verifyManagedAdministrationHistory(envelope, digest, pins, f.at)).toThrow();
+  pins.issue150Replacement!.historicalAdministration.pop();
+  expect(() => verifyManagedAdministrationHistory(envelope, digest, pins, f.at)).toThrow();
+});
 it("separates exact old history from new Issue150 authority, without changing the default pin loader", () => {
   const f = replacementFixture(), original = JSON.stringify(f.oldEnvelope);
   expect(verifyManagedAdministrationHistory(f.oldEnvelope, managedDigest(f.oldEnvelope), f.pins, f.at)).toEqual(f.oldEnvelope);
