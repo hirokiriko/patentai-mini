@@ -12,7 +12,7 @@ const names: Record<string, string> = {
   guard:"h", entry:"E", exit:"X", route:"T", exclusions:"C", controls:"D",
   part:"t", before:"A", after:"Z", edge:"H", reason:"N", cells:"K",
 };
-const enums: Record<string, readonly string[]> = {
+export const SOURCE_MEANING_ENUMS: Record<string, readonly string[]> = {
   context:["capability","operation","unresolved"],
   guardRelation:["unconditional","when","only_when","unresolved"],
   polarity:["positive","negative","reserved"],kind:["set","path","relation"],
@@ -22,6 +22,7 @@ const enums: Record<string, readonly string[]> = {
     "generates_heat","absorbs_heat","releases_heat","maintains","at_least","at_most","greater_than","less_than",
     "opens_one","opens_together","executes","stops","power_ends"],
 };
+const enums=SOURCE_MEANING_ENUMS;
 const operatorKeys=["selection","extent","polarity","guard","context"];
 const reverse=new Map(Object.entries(names).map(([full,short])=>[short,full]));
 const dynamic=(name:string)=>/^(?:c[1-9]\d*|loop(?:0|[1-9]\d*))$/.test(name);

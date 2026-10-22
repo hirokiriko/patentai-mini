@@ -7,6 +7,7 @@ import { guardSchema, meaningSchema, propositionKey, type Meaning, type Span } f
 import { ComparisonError } from "./source";
 import { sourceWireSchema } from "./source-wire-compact";
 import { sourceCitationGrid, resolveSourceCellRef } from "./source-citation-grid";
+import { LEGACY_SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 
 const index=z.number().int().nonnegative();
 const contextQuote=z.object({
@@ -112,7 +113,7 @@ function propertyCount(value:unknown):number {
 /** Source-only v12. Each semantic role carries its own exact quotation, avoiding
  * a model-generated locator table and a second address space of role indexes.
  * Flat facts keep quote objects within Azure's five object levels. */
-export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:"quotes"|"cells"="quotes") {
+export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:"quotes"|"cells"="quotes",capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
   const {frame,fact}=directShapes(mode);
   type Shapes=ReturnType<typeof directShapes>;
   const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
@@ -120,8 +121,8 @@ export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:
     .meta({id:"PriorArtSourceUnresolved"});
   const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
     .meta({id:"PriorArtSourceAdditionalFact"});
-  const additionalFacts=z.array(additional).min(1).max(48).meta({id:"PriorArtSourceAdditionalFacts"});
-  const loopAdditionalFacts=z.array(additional).max(48).meta({id:"PriorArtSourceLoopAdditionalFacts"});
+  const additionalFacts=z.array(additional).min(1).max(capacity.facts).meta({id:"PriorArtSourceAdditionalFacts"});
+  const loopAdditionalFacts=z.array(additional).max(capacity.facts).meta({id:"PriorArtSourceLoopAdditionalFacts"});
   const claimAnswer=z.union([additionalFacts,unresolved]).meta({id:"PriorArtSourceClaimAnswer"});
   type RawFact=z.infer<typeof fact>;
   type RawSource={sourceDigest:string} & Record<string,unknown>;
@@ -168,7 +169,7 @@ export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:
           basis:{firstPart:0,lastPart:c.segments.length-1}})):[]),
       ];
     });
-    if(allFacts.length>48)throw invalid();
+    if(allFacts.length>capacity.facts)throw invalid();
     previous=-1;
     const facts=allFacts.map(f=>{
       const at=order.get(f.claimNo);
@@ -183,7 +184,7 @@ export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:
       const get=(q:z.infer<Shapes["evidence"]>):Span=>{
         if("quote"in q&&q.quote===null){
           const key=JSON.stringify(basis);
-          if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
+          if(!seen.has(key)){seen.add(key);if(++quotes>capacity.quotes)throw invalid();}
           return [...basis];
         }
         const anchor=text.slice(...basis);
@@ -191,7 +192,7 @@ export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:
           "part"in q?resolveSourcePartQuote(claim.segments.map(p=>p.text),q):
           resolveSourceContextQuote(anchor,q).map(n=>n+basis[0]) as Span;
         const key=JSON.stringify(span);
-        if(!seen.has(key)){seen.add(key);if(++quotes>512)throw invalid();}
+        if(!seen.has(key)){seen.add(key);if(++quotes>capacity.quotes)throw invalid();}
         return span;
       };
       const bindings:z.infer<typeof extractionSchema>["bindings"]=[];

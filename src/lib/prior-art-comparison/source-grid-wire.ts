@@ -7,6 +7,7 @@ import { sourceCitationGrid, compactSourceGridRows, resolveSourceCellRef, source
 import { sourceReadingClaim, sourceFactEvidence, assertSourceClauseCoverage,assertEvidenceContains } from "./source-clause-coverage";
 import type { Span } from "./propositions";
 import {ComparisonError} from "./source";
+import { LEGACY_SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 
 const invalid = () => new Error("comparison_source_wire_invalid");
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -54,8 +55,8 @@ export function propositionSourceGridTransport(input: ReturnType<typeof proposit
 
 /** Source v14 changes only evidence coordinates. Domain validation still
  * receives the exact original terms/spans and all existing strict guards. */
-export function sourceGridPropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
-  const domain = directSourceModel(chunks,"cells"), input = propositionSourceInput(chunks);
+export function sourceGridPropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
+  const domain = directSourceModel(chunks,"cells",capacity), input = propositionSourceInput(chunks);
   const schema = structuredClone(sourceWireSchema(domain).jsonSchema) as JSONSchema7;
   if (!schema.definitions || !schema.properties?.v) throw invalid();
   schema.properties.v = { type: "integer", enum: [14] };
@@ -127,7 +128,7 @@ export function sourceGridPropositionModelSchemaFor(chunks: readonly ManagedComp
   return jsonSchema(schema, { validate: async raw => {
     try {
       if (!isRecord(raw) || raw.v !== 14 || !Array.isArray(raw.s) ||
-          raw.s.length !== sourceGrids.length || Buffer.byteLength(JSON.stringify(raw), "utf8") > 32_000 || !domain.validate) throw invalid();
+          raw.s.length !== sourceGrids.length || Buffer.byteLength(JSON.stringify(raw), "utf8") > capacity.wireBytes || !domain.validate) throw invalid();
       const value = { ...raw, v: 13, s: raw.s.map((source, i) => {
         if (!isRecord(source)) throw invalid();
         const claims=input.sources[i].source.claims.map(c=>sourceReadingClaim(c.claimNo,c.segments.map(p=>p.text).join("")));

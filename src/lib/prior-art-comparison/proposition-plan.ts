@@ -5,6 +5,7 @@ import { ComparisonError } from "./source";
 import { canonicalPropositionSources, PROPOSITION_DESCRIPTOR_MAX_BYTES, PROPOSITION_SOURCE_SYSTEM, PROPOSITION_TARGET_SYSTEM,
   propositionSourceInput, propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
+import { SOURCE_CAPACITY } from "./source-capacity";
 
 /** Reject the complete plan before any reservation/send. The extraction is
  * serialized once, never once per alternative branch. Twice its JSON byte cap
@@ -21,7 +22,7 @@ export function propositionPlanSizes(plan:readonly ManagedComparisonChunk[]){
   // Additional fact IDs in scope tables and field/sentence framing are bounded
   // independently of their (not duplicated) meanings.
   const scopeCount=source.sources.reduce((n,s)=>n+s.scopes.length,0);
-  const metadata=scopeCount*48*16+drafts.length*5*16;
+  const metadata=scopeCount*SOURCE_CAPACITY.facts*16+drafts.length*5*16;
   return {sourceBytes,targetBaseBytes:base,descriptorAllowance:2*PROPOSITION_DESCRIPTOR_MAX_BYTES,metadataAllowance:metadata,
     targetBytes:base+2*PROPOSITION_DESCRIPTOR_MAX_BYTES+metadata};
 }

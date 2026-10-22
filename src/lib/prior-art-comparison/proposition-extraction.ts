@@ -14,6 +14,7 @@ import { sourceCitationParts, sourceCitationPartIds, sourceCitationLocator } fro
 import { compactRuntimeSourceWitness, compactSourceDescriptorTable, type RuntimeSourceWitness } from "./proposition-witness";
 import { SOURCE_WORKED_GUIDE } from "./source-worked-example";
 import { SOURCE_WIRE_GUIDE } from "./source-wire-compact";
+import { SOURCE_CAPACITY } from "./source-capacity";
 
 const bindingSchema = z.object({ term: z.string().min(1).max(80), spans: z.array(spanSchema).min(1).max(4) }).strict();
 const operatorsSchema = z.object({ selection: spanSchema.nullable(), extent: spanSchema.nullable(),
@@ -24,11 +25,11 @@ export const extractionSchema = z.object({ basis:z.array(spanSchema).min(1).max(
   bindings:z.array(bindingSchema).max(48),operators:operatorsSchema,routeFrame:routeFrameSchema.nullable() }).strict();
 export const sourcePropositionSchema = z.object({ sources:z.array(z.object({
   sourceDigest:z.string().regex(/^[a-f0-9]{64}$/),
-  facts:z.array(extractionSchema.extend({claimNo:z.number().int().positive()})).max(48),
+  facts:z.array(extractionSchema.extend({claimNo:z.number().int().positive()})).max(SOURCE_CAPACITY.facts),
 }).strict()).min(2).max(4) }).strict();
 export type SourceExtraction = z.infer<typeof sourcePropositionSchema>;
-export const PROPOSITION_SOURCE_MAX_BYTES = 16_000;
-export const PROPOSITION_DESCRIPTOR_MAX_BYTES = 6_000;
+export const PROPOSITION_SOURCE_MAX_BYTES = SOURCE_CAPACITY.witnessBytes;
+export const PROPOSITION_DESCRIPTOR_MAX_BYTES = SOURCE_CAPACITY.descriptorBytes;
 export const PROPOSITION_TARGET_MAX_ATOMS = 96;
 
 export function propositionSourceInput(chunks:readonly ManagedComparisonChunk[]) {
@@ -344,5 +345,5 @@ Partition the WHOLE target in order, without gaps. Each part stays inside one in
 Each atom uses exact target bindings and same-source reference-branch sourceIds. Its attribution span identifies the closest explicit 基準側/候補側/両側とも marker before its literal subject (or first object when no subject is printed), within the same sentence. Modifiers on another comparison operand are not the assertion subject. A shared marker requires the identical assertion for both scopes; implicit attribution is allowed only in a side-specific observation field. All relevant literal facts for its subject must be included, including required groups when the target flattens the device's alternatives. Each atom is proved in one original claimNo; all its sourceIds must belong to that claim. For the SAME target assertion, give separate atoms with identical meanings for enough supporting claims to cover every reference alternative. A claim node carries its own assertion and its stated reference relation. Never combine different meanings into one proof. Terms are literal, not invented synonym labels. Abbreviated mode names may share printed suffix spans. Conditions belong to their actual predicate. Flow 'after X' uses precedes, origin=null, via=[X], destination=Y. Action after X keeps X as guard, not a path. Match a whole route only with complete explicit frame and exclusion/control evidence.
 Bare claim-range statements use reference parts, relation=unspecified unless explicit; range/slash/up-to never implies AND. Reservation parts contain only an exact nominal topic plus uncertainty, no atoms. Example: '基準側は青色弁を備える。配置は未確認。' has separate assertion/reservation parts; reservation.span quotes '配置は未確認。', reservation.basis quotes ONLY '配置', equal to topic. Field name unconfirmed does not make factual clauses reservations. Separate preceding facts; unsupported residual syntax stays locally unresolved, never a contradiction. Source facts are fallible candidates: spans do not prove meaning. Preserve strong assertions even when they disagree with candidates.`;
 
-export { propositionSourceClauseTransport as propositionSourceTransport } from "./source-clause-wire";
-export { PROPOSITION_SOURCE_CLAUSE_SYSTEM as PROPOSITION_SOURCE_SYSTEM } from "./source-clause-prompt";
+export { propositionSourceSemanticTransport as propositionSourceTransport } from "./source-semantic-wire";
+export { PROPOSITION_SOURCE_SEMANTIC_SYSTEM as PROPOSITION_SOURCE_SYSTEM } from "./source-semantic-prompt";

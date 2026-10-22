@@ -6,6 +6,7 @@ import { resolveSourceContextQuote } from "./source-direct-quotes";
 import { sourceCellRef } from "./source-citation-grid";
 import { sourceGridPropositionModelSchemaFor, assertSourceGridProviderSchema } from "./source-grid-wire";
 import type { Span } from "./propositions";
+import { LEGACY_SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 
 const invalid = () => new Error("comparison_source_clause_invalid");
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -93,8 +94,8 @@ export function resolveSourceEvidenceQuote(c: SourceReadingClaim, value: unknown
 /** v15 removes generated coordinates and the redundant positional Y table.
  * It does not create facts: every clause must be cited by an actual fact, and
  * the existing v14/domain validators still check all supplied roles/proofs. */
-export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], version: 15 | 16 = 16) {
-  const old = sourceGridPropositionModelSchemaFor(chunks), input = propositionSourceInput(chunks);
+export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], version: 15 | 16 = 16, capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
+  const old = sourceGridPropositionModelSchemaFor(chunks,capacity), input = propositionSourceInput(chunks);
   const schema = structuredClone(old.jsonSchema) as JSONSchema7;
   schema.properties!.v = {type:"integer",enum:[version]};
   const exactQuote: JSONSchema7 = { anyOf: [
@@ -136,7 +137,7 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
   return jsonSchema(schema, { validate: async raw => {
     try {
       if (!record(raw) || raw.v !== version || !Array.isArray(raw.s) || raw.s.length !== input.sources.length ||
-          Buffer.byteLength(JSON.stringify(raw),"utf8") > 32_000 || !old.validate) throw invalid();
+          Buffer.byteLength(JSON.stringify(raw),"utf8") > capacity.wireBytes || !old.validate) throw invalid();
       const converted = { ...raw, v:14, s:raw.s.map((s,i) => {
         if (!record(s) || Object.hasOwn(s,"Y")) throw invalid();
         const claims = input.sources[i].source.claims.map(c => sourceReadingClaim(c.claimNo,c.segments.map(p=>p.text).join("")));
