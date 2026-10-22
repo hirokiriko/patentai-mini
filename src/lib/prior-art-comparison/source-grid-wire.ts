@@ -49,7 +49,7 @@ export function propositionSourceGridTransport(input: ReturnType<typeof proposit
       claims: s.source.claims.map(({ parts,canonicalModeSets, ...c }) => ({ ...c,
       ...(canonicalModeSets.length?{canonicalModeSets}:{}),
       ...(()=>{const reading=sourceReadingClaim(c.claimNo,parts.map(p=>p.text).join(""));
-        return {grid:compactSourceGridRows(reading.grid),clauseEnds:reading.clauses.map(span=>sourceCellRef(reading.grid,span).slice(2))};})() })) } })) };
+        return {grid:compactSourceGridRows(reading.grid),clauseRefs:reading.clauses.map(span=>sourceCellRef(reading.grid,span))};})() })) } })) };
 }
 
 /** Source v14 changes only evidence coordinates. Domain validation still

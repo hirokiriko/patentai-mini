@@ -44,7 +44,9 @@ export function fixtureGridWire(value, input) {
         return [Math.floor(first / 10), first % 10, Math.floor(last / 10), last % 10];
       };
       let start = 0;
-      const clauses = c.clauseEnds.map(([row, col]) => {
+      const clauses = c.clauseRefs.map(([firstRow, firstCol, row, col]) => {
+        if ([firstRow,firstCol,row,col].some(n => !Number.isSafeInteger(n) || n < 0) ||
+            firstCol > 9 || col > 9 || points[firstRow * 10 + firstCol] !== start) throw Error("fictional_grid_invalid");
         const end = points[row * 10 + col + 1], range = span([start, end]); start = end; return range;
       });
       if (start !== text.length) throw Error("fictional_grid_invalid");

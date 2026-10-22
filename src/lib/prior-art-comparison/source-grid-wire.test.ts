@@ -7,6 +7,8 @@ import { directSourcePropositionModelSchemaFor } from "./source-direct-quotes";
 import { sourceGridPropositionModelSchemaFor, propositionSourceGridTransport,assertSourceGridProviderSchema } from "./source-grid-wire";
 import { fixtureSourceGridWire,fixtureSourceGridReading } from "./source-grid-fixtures.test-support";
 import { sourceCitationGrid,sourceCellRef } from "./source-citation-grid";
+import { SOURCE_GRID_ACTION_EXAMPLE } from "./source-grid-prompt";
+import { fixtureGridWire } from "../../../scripts/prior-art-grid-fixture.mjs";
 
 function setup(text="装置は赤色弁を備える。装置は赤色弁を開く。") {
   const f=fictionalInputs();
@@ -30,6 +32,22 @@ it("resolves supplied occurrence IDs to the identical domain result without quot
   const transport=propositionSourceGridTransport(f.input);
   expect(transport.sources[0].source.claims[0].grid).toEqual(sourceCitationGrid("装置は赤色弁を備える。装置は赤色弁を開く。").rows);
   expect(transport.sources[0].source.claims[0]).not.toHaveProperty("parts");
+  expect(transport.sources[0].source.claims[0].clauseRefs).toEqual([[0,0,1,0],[1,1,2,0]]);
+});
+it("validates the fictional conditional action example with separate exact clauses",async()=>{
+  const f=fictionalInputs(),text="【請求項1】"+SOURCE_GRID_ACTION_EXAMPLE.text;
+  f.inputs.draft=parseComparisonSource(text,11,"架空");
+  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(text,d.id,"架空"));
+  const plan=makePlan(f.inputs,f.selection),input=propositionSourceInput(plan);
+  const wire={v:14,s:input.sources.map(s=>({d:s.sourceDigest,c1:[SOURCE_GRID_ACTION_EXAMPLE.fact],Y:SOURCE_GRID_ACTION_EXAMPLE.Y}))};
+  const result=await sourceGridPropositionModelSchemaFor(plan).validate!(wire);
+  expect(result.success).toBe(true);
+  if(result.success){
+    expect(()=>decodeSourcePropositions(plan,result.value)).not.toThrow();
+    const scripted=fixtureGridWire(result.value,propositionSourceGridTransport(input));
+    expect(scripted).toEqual(wire);
+  }
+  expect(propositionSourceGridTransport(input).sources[0].source.claims[0].clauseRefs).toEqual(SOURCE_GRID_ACTION_EXAMPLE.fact.W);
 });
 it.each(["nearly_whole_claim","punctuation","unrelated_clause"])("rejects reading evidence unrelated to actual fact roles: %s",async mode=>{
   const f=setup(),s=(f.wire.s as Record<string,unknown>[])[0],fact=(s.c1 as Record<string,unknown>[])[0];
