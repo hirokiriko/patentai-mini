@@ -1,7 +1,7 @@
 import { jsonSchema, type JSONSchema7 } from "ai";
 import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { propositionSourceInput, legacyPropositionSourceTransport } from "./proposition-extraction";
-import { sourceReadingClaim, type SourceReadingClaim } from "./source-clause-coverage";
+import { assertEvidenceContains, sourceReadingClaim, type SourceReadingClaim } from "./source-clause-coverage";
 import { resolveSourceContextQuote } from "./source-direct-quotes";
 import { sourceCellRef } from "./source-citation-grid";
 import { sourceGridPropositionModelSchemaFor, assertSourceGridProviderSchema } from "./source-grid-wire";
@@ -62,15 +62,54 @@ function clauseIds(c: SourceReadingClaim, value: unknown): number[] {
   return value;
 }
 
+/** v16 selects an exact occurrence inside the fact's declared evidence. The
+ * clause IDs already occur in W; asking the model to repeat them for every
+ * term introduced contradictory locations. No other claim is searched. */
+export function resolveSourceEvidenceQuote(c: SourceReadingClaim, value: unknown, ids: readonly number[]): Span {
+  let quote: string, before = "", after = "";
+  if (typeof value === "string") quote = value;
+  else {
+    if (!Array.isArray(value) || value.length !== 3 || value.some(v => typeof v !== "string")) throw invalid();
+    [quote,before,after] = value;
+  }
+  if (!quote.length) throw invalid();
+  const evidence = clauseIds(c, [...ids]).map(id => c.clauses[id]);
+  const context = before + quote + after, matches: Span[] = [];
+  for (let at = c.grid.text.indexOf(context); at >= 0; at = c.grid.text.indexOf(context, at + 1)) {
+    const span: Span = [at + before.length, at + before.length + quote.length];
+    try { assertEvidenceContains(evidence,span); } catch { continue; }
+    // Context identifies an occurrence; it is never additional fact evidence.
+    // It may extend beyond W, but must remain exact and scalar-aligned.
+    sourceCellRef(c.grid,[at,at + context.length]);
+    const resolved = resolveSourceContextQuote(c.grid.text.slice(at,at + context.length), {quote,before,after,edge:"both"});
+    matches.push([at + resolved[0],at + resolved[1]]);
+  }
+  if (matches.length !== 1) throw invalid();
+  // Retain scalar-boundary validation before accepting the exact occurrence.
+  sourceCellRef(c.grid,matches[0]);
+  return matches[0];
+}
+
 /** v15 removes generated coordinates and the redundant positional Y table.
  * It does not create facts: every clause must be cited by an actual fact, and
  * the existing v14/domain validators still check all supplied roles/proofs. */
-export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
+export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], version: 15 | 16 = 16) {
   const old = sourceGridPropositionModelSchemaFor(chunks), input = propositionSourceInput(chunks);
   const schema = structuredClone(old.jsonSchema) as JSONSchema7;
-  schema.properties!.v = {type:"integer",enum:[15]};
-  schema.definitions!.PriorArtSourceCellQuote = quoteSchema;
-  schema.definitions!.PriorArtSourceEvidence = proofSchema;
+  schema.properties!.v = {type:"integer",enum:[version]};
+  const exactQuote: JSONSchema7 = { anyOf: [
+    {type:"string",description:"Exact quote, unique within this fact's W. No clause-ID prefix."},
+    {type:"array",items:{type:"string"},description:"Exactly [quote,before,after]; exact adjacent context identifies one occurrence in W."},
+  ] };
+  schema.definitions!.PriorArtSourceCellQuote = version === 15 ? quoteSchema : exactQuote;
+  schema.definitions!.PriorArtSourceEvidence = version === 15 ? proofSchema : {anyOf:[
+    {type:"array",items:{type:"integer"},description:"Nonempty consecutive ascending clause IDs containing the complete operator evidence. Must be within W."},
+    ...exactQuote.anyOf!,
+  ]};
+  if (version === 16) schema.definitions!.PriorArtSourceOperators = {
+    type:"array",items:{anyOf:[{$ref:"#/definitions/PriorArtSourceEvidence"},{type:"null"}]},
+    description:"Exactly five proofs [selection,extent,polarity,guard,context]. Guard required for g=1/2; polarity required for p=1. Quote complete conditions.",
+  };
   // Zod emits cN as a shared $ref, not an inline union.
   if (schema.definitions!.PriorArtSourceClaimAnswer)
     schema.definitions!.PriorArtSourceClaimAnswer = { $ref:"#/definitions/PriorArtSourceAdditionalFacts" };
@@ -78,6 +117,7 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
   const change = (node: unknown): void => {
     if (!record(node)) return;
     if (record(node.properties) && Array.isArray(node.required)) {
+      if (version === 16 && Object.hasOwn(node.properties,"O")) node.properties.O = {$ref:"#/definitions/PriorArtSourceOperators"};
       if (Object.hasOwn(node.properties,"W")) node.properties.W = {type:"array",items:{type:"integer"},description:"1..12 distinct complete clause IDs supporting this fact; include postposed actor, full conditions and dependency reference."};
       if (Object.hasOwn(node.properties,"Y")) { delete node.properties.Y; node.required = node.required.filter(k => k !== "Y"); }
       if (Object.hasOwn(node.properties,"k")) for (const [key, excluded] of Object.entries({x:2,g:3,p:2,e:4,S:4})) {
@@ -95,7 +135,7 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
   change(schema); assertSourceGridProviderSchema(schema);
   return jsonSchema(schema, { validate: async raw => {
     try {
-      if (!record(raw) || raw.v !== 15 || !Array.isArray(raw.s) || raw.s.length !== input.sources.length ||
+      if (!record(raw) || raw.v !== version || !Array.isArray(raw.s) || raw.s.length !== input.sources.length ||
           Buffer.byteLength(JSON.stringify(raw),"utf8") > 32_000 || !old.validate) throw invalid();
       const converted = { ...raw, v:14, s:raw.s.map((s,i) => {
         if (!record(s) || Object.hasOwn(s,"Y")) throw invalid();
@@ -109,11 +149,12 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
           for (const id of ids) coverage.get(c.claimNo)![id].push(address);
           const term = (v:unknown) => {
             if (!Array.isArray(v) || !v.length || v.length > 4) throw invalid();
-            return v.map(q => sourceCellRef(c.grid,resolveSourceClauseQuote(c,q)));
+            return v.map(q => sourceCellRef(c.grid,version === 15 ? resolveSourceClauseQuote(c,q) : resolveSourceEvidenceQuote(c,q,ids)));
           };
           const proof = (v:unknown) => {
-            if (Array.isArray(v) && !v.length) return [];
+            if (Array.isArray(v) && !v.length) { if (version === 16) throw invalid(); return []; }
             if (typeof v === "string" || Array.isArray(v) && typeof v[0] === "string") {
+              if (version === 16) return sourceCellRef(c.grid,resolveSourceEvidenceQuote(c,v,ids));
               if (Array.isArray(v) && v.length === 5 && v.every(x=>typeof x==="string")) {
                 const [first,last,quote,before,after] = v;
                 if (![first,last].every(id=>/^(0|[1-9]\d*)$/.test(id) && Number.isSafeInteger(Number(id))) || Number(first)>Number(last)) throw invalid();
@@ -135,6 +176,10 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
             m[k] = m[k].map(term);
           }
           let O = f.O, F = f.F;
+          if (version === 16 && O === null) throw invalid();
+          if (version === 16 && (!Array.isArray(O) ||
+              ([1,2].includes(m.g as number) && O[3] === null) || (m.p === 1 && O[2] === null) ||
+              (m.k === 0 && m.e === 1 && O[1] === null))) throw invalid();
           if (O !== null) { if (!Array.isArray(O) || O.length !== 5) throw invalid(); O = O.map(v=>v===null?null:proof(v)); }
           if (record(F)) {
             const fields = {...F};

@@ -15,7 +15,7 @@ export function fixtureDeclareClauseReading(value,input) {
 
 // Fictional SDK plumbing ONLY. Starts from hand-authored semantic facts and
 // spans, never an actual model response. Does not invent uncovered meanings.
-export function fixtureClauseWire(value,input) {
+export function fixtureClauseWire(value,input,version=16) {
   const readings = input.sources.map(s=>s.source.claims.map(c=>{
     let at=0;
     const clauses=c.clauses.map(([id,text],i)=>{
@@ -34,7 +34,7 @@ export function fixtureClauseWire(value,input) {
   const gridInput={...input,sources:input.sources.map((s,i)=>({...s,source:{...s.source,
     claims:readings[i].map(r=>({...r.c,grid:r.grid,clauseRefs:r.clauses.map(r.ref)}))}}))};
   const gridWire=fixtureGridWire(value,gridInput);
-  return {v:15,s:gridWire.s.map((s,i)=>{
+  return {v:version,s:gridWire.s.map((s,i)=>{
     const out={d:s.d};
     for(const r of readings[i]){
       const key=`c${r.c.claimNo}`,facts=s[key];
@@ -44,6 +44,10 @@ export function fixtureClauseWire(value,input) {
       const ids=([a,b])=>r.clauses.flatMap(([x,y],id)=>x<b&&y>a?[id]:[]);
       const quote=ref=>{
         const [a,b]=span(ref);
+        if(version===16){
+          const q=r.text.slice(a,b);
+          return [r.text.indexOf(q)===r.text.lastIndexOf(q)?q:[q,r.text.slice(0,a),r.text.slice(b)]];
+        }
         return ids([a,b]).map(id=>{
           const [x,y]=r.clauses[id],lo=Math.max(a,x),hi=Math.min(b,y),q=r.text.slice(lo,hi),whole=r.text.slice(x,y);
           if(whole.indexOf(q)===whole.lastIndexOf(q))return `${id}:${q}`;
@@ -61,19 +65,19 @@ export function fixtureClauseWire(value,input) {
         const W=new Set(declared??f.W.flatMap(v=>ids(span(v)))),term=v=>v.flatMap(quote);
         const proof=v=>{
           const [a,b]=v.length?span(v):[0,r.text.length];
-          if(a===0&&b===r.text.length)return [];
+          if(version===15&&a===0&&b===r.text.length)return [];
           const selected=ids([a,b]);selected.forEach(id=>W.add(id));
           const first=selected[0],last=selected.at(-1),[x]=r.clauses[first],[,y]=r.clauses[last];
           // Whole clauses already preserve the original proof exactly. A
           // partial cross-clause proof keeps its exact text and own context.
           if(a===x&&b===y)return selected;
-          if(first===last)return quote(v)[0];
+          if(version===16||first===last)return quote(v)[0];
           return [String(first),String(last),r.text.slice(a,b),r.text.slice(x,a),r.text.slice(b,y)];
         };
         const m={...f.m};
         for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=term(m[k]);
         for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k))m[k]=m[k].map(term);
-        const O=f.O===null?null:f.O.map(v=>v===null?null:proof(v));
+        const O=f.O===null?(version===16?[null,null,null,null,null]:null):f.O.map(v=>v===null?null:proof(v));
         const F=f.F===null?null:{E:proof(f.F.E),X:proof(f.F.X),T:proof(f.F.T),C:f.F.C.map(proof),D:f.F.D.map(proof)};
         return {...f,m,O,F,W:[...W].sort((a,b)=>a-b)};
       });

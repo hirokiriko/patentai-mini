@@ -14,7 +14,7 @@ function setup(text = SOURCE_CLAUSE_ACTION_EXAMPLE.clauses.map(c => c[1]).join("
   f.inputs.documents = f.inputs.documents.map(d => parseComparisonSource(source, d.id, "架空"));
   const plan = makePlan(f.inputs, f.selection), input = propositionSourceInput(plan);
   const wire = { v: 15, s: input.sources.map(s => ({ d: s.sourceDigest, c1: [structuredClone(fact)] })) };
-  return { plan, input, wire, model: sourceClausePropositionModelSchemaFor(plan) };
+  return { plan, input, wire, model: sourceClausePropositionModelSchemaFor(plan,15) };
 }
 const firstFact = (wire: ReturnType<typeof setup>["wire"]) => wire.s[0].c1[0] as Record<string, unknown>;
 
@@ -139,7 +139,7 @@ it("keeps exact cross-clause operator spans through the independent fictional fi
   const before = JSON.stringify(initial.value), input = propositionSourceClauseTransport(f.input);
   fixtureDeclareClauseReading(initial.value, input);
   expect(JSON.stringify(initial.value)).toBe(before);
-  const wire = fixtureClauseWire(initial.value, input);
+  const wire = fixtureClauseWire(initial.value, input,15);
   expect(wire.s[0].c1[0].O[3]).toEqual(["1", "2", "前記非通電状態で、温度が七度を超える場合", "", "、"]);
   expect(wire.s[0].c1[0].O[4]).toEqual([]);
   const restored = await f.model.validate!(wire);
