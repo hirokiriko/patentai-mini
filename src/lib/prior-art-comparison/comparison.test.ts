@@ -83,7 +83,7 @@ describe("original-text comparison", () => {
     const saved = fictionalSaved();
     const [first, second] = saved.inputs.draft.source.claims;
     // A larger, previously saved original; existing quotes retain their offsets.
-    saved.inputs.draft = parseComparisonSource(`【請求項1】\n${first.text}${"補".repeat(7800)}。\n【請求項2】\n${second.text}`, 11, "draft-11");
+    saved.inputs.draft = parseComparisonSource(`【請求項1】\n${first.text}${"補".repeat(10000)}。\n【請求項2】\n${second.text}`, 11, "draft-11");
     saved.snapshotDigest = savedDigest(saved);
     expect(() => makePlan(saved.inputs, saved.selection)).toThrow("plan_limit");
     expect(validateSaved(saved)).toEqual(saved);

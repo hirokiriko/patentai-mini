@@ -344,7 +344,7 @@ describe("complete original-text contrast review before saving", () => {
     const {plan,drafts}=example();expect(()=>assertReviewPlan(plan)).not.toThrow();
     drafts[0].common="。a".repeat(100);const input=reviewInput(plan,drafts),answer=fictionalReview(input);
     expect(answer.checks[2].unitChecks).toHaveLength(101);expect(()=>validateReview(input,answer)).not.toThrow();
-    input.base={...input.base,claims:[{...input.base.claims[0],segments:[[0,"大".repeat(30000)]]}]};
+    input.base={...input.base,claims:[{...input.base.claims[0],segments:[[0,"大".repeat(Math.ceil(LIMITS.inputBytes/3)+1)]]}]};
     expect(()=>assertReviewSize(input)).toThrow("plan_limit");
   });
   it("reserves lone-surrogate escaping before any draft is generated",()=>{
