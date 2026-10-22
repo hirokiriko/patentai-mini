@@ -46,7 +46,15 @@ export function fixtureClauseWire(value,input,version=16) {
         const [a,b]=span(ref);
         if(version===16){
           const q=r.text.slice(a,b);
-          return [r.text.indexOf(q)===r.text.lastIndexOf(q)?q:[q,r.text.slice(0,a),r.text.slice(b)]];
+          if(r.text.indexOf(q)===r.text.lastIndexOf(q))return [q];
+          // Fictional known spans need only enough scalar-aligned context to
+          // retain their occurrence, not another copy of the entire claim.
+          const left=[...r.text.slice(0,a)],right=[...r.text.slice(b)];
+          for(let n=1;n<=Math.max(left.length,right.length);n++){
+            const before=left.slice(Math.max(0,left.length-n)).join(""),after=right.slice(0,n).join(""),context=before+q+after;
+            if(r.text.indexOf(context)===r.text.lastIndexOf(context))return [[q,before,after]];
+          }
+          throw Error("fictional_clause_ambiguous");
         }
         return ids([a,b]).map(id=>{
           const [x,y]=r.clauses[id],lo=Math.max(a,x),hi=Math.min(b,y),q=r.text.slice(lo,hi),whole=r.text.slice(x,y);
