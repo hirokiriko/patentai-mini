@@ -1,5 +1,24 @@
 # 指定文献の根拠付き比較（Issue #150）
 
+現状（2026-10-23）：v17の新有限実証は初回source送信にHTTP400が返り、
+AI回答・usageを取得できず終了した。新UNKNOWNの全額留保・後続停止を維持し、
+確定品質FAIL専用の再検証枠には移らない。固定QA・正常比較・実保存帳票・
+本番一巡は未評価、TECHNICAL_GOは未成立である。以下の旧承認は再利用しない。
+
+非成功HTTP本文を既存Local bridgeが破棄しており、具体的な拒否理由は不明。
+今後の診断では最大16KiB・1秒・元requestのabort内で読み、定義済みの
+error code/type/paramと完全本文hashのみを保存する。任意message・秘密・URLは
+保存せず、usageが書かれていても精算や再送を許可しない。stop ACKは受領後だけ記録する。
+今回失われたエラー本文やACK receiptを後から生成しない。
+
+送信schemaに動作引用aの `$ref` とdescriptionの併置が1件あった。
+[公式SDKのstrict schema処理](https://github.com/openai/openai-python/blob/main/src/openai/lib/_pydantic.py)
+に沿ってその参照先unionだけを展開し、送信前にref兄弟keywordを拒否する。
+動作引用の必須性・意味・引用・原文QAは変えない。この互換性修正は無通信検証であり、
+今回HTTP400の確定原因や実サービスの受理成功を証明するものではない。
+
+以下は過去の実装・検証記録である。
+
 現状（2026-10-21）：旧169はUNKNOWN、179はcompleted回答の引用検証FAILで終了。
 旧未使用枠・原回答・費用台帳は保持する。今回のOWNER指示は179の証拠に基づく
 引用位置の最小修正と無課金検証のみで、追加実AI送信・次の承認案を含まない。

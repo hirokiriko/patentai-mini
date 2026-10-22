@@ -49,7 +49,9 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
         }
       }
       if(Object.hasOwn(node.properties,"P")){
-        node.properties.a={...quoteRef,description:"Exact action words for this predicate in this claim, not a whole-clause default. Includes maintained state when maintains proves it."};
+        // Strict provider schemas require a $ref to stand alone. Inline this
+        // small union so the action description does not become a ref sibling.
+        node.properties.a={...(structuredClone(schema.definitions!.PriorArtSourceCellQuote) as JSONSchema7),description:"Exact action words for this predicate in this claim, not a whole-clause default. Includes maintained state when maintains proves it."};
         node.required=[...(node.required as string[]),"a"];
       }
     }

@@ -56,6 +56,11 @@ it.each(["nearly_whole_claim","punctuation","unrelated_clause"])("rejects readin
   fact.W=[sourceCellRef(grid,span)];s.Y=mode==="unrelated_clause"?[["?unrepresented"],["c1:0"]]:[["c1:0"],["c1:0"]];
   expect((await f.model.validate!(f.wire)).success).toBe(false);
 });
+it("rejects ref siblings instead of silently ignoring them during provider validation",()=>{
+  const schema={type:"object" as const,properties:{quote:{$ref:"#/definitions/quote"}},definitions:{quote:{type:"string" as const}}};
+  expect(()=>assertSourceGridProviderSchema(schema)).not.toThrow();
+  expect(()=>assertSourceGridProviderSchema({...schema,properties:{quote:{...schema.properties.quote,description:"Action quote"}}})).toThrow("plan_limit");
+});
 it("checks final provider property and nesting limits after reading fields are added",()=>{
   const flat=(n:number)=>({type:"object" as const,properties:Object.fromEntries(Array.from({length:n},(_,i)=>[`k${i}`,{type:"string" as const}]))});
   expect(()=>assertSourceGridProviderSchema(flat(100))).not.toThrow();

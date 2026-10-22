@@ -1,5 +1,6 @@
 import { createRevalidationGuard, revalidationPlan, revalidationHash,
   type RevalidationDependencies } from "./prior-art-revalidation-guard";
+import { providerFailureMetadata } from "./prior-art-provider-failure";
 
 /** Local harness adapter. The protected parent owns approval, the exclusive
  * ledger, and process cleanup. No environment switch or native fetch here. */
@@ -25,7 +26,12 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
         if (!response || revalidationHash(response) !== event.responseHash) throw Error("bridge_response_changed");
         await deps.parent("reconcile", event);
       },
-      stop: event => deps.parent("stop", event),
+      stop: async event => {
+        await deps.parent("stop", event);
+        await deps.record(`stop-ack-${event.ordinal}.json`, Buffer.from(JSON.stringify({
+          ordinal: event.ordinal, eventSHA256: revalidationHash(JSON.stringify(event)), stopAckReceived: true,
+        })));
+      },
     },
     transport: async (url, init) => {
       const stage = plan.stages[guard.snapshot().completed];
@@ -48,7 +54,8 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
         })));
       } catch (error) { void received.body?.cancel().catch(() => undefined); throw error; }
       if (!received.ok) {
-        void received.body?.cancel().catch(() => undefined);
+        const failure = await providerFailureMetadata(received, init?.signal);
+        await deps.record(`provider-failure-${stage.ordinal}.json`, Buffer.from(JSON.stringify(failure)));
         return new Response(null, { status: received.status, headers: received.headers });
       }
       // Tee to disk as the guard consumes the response; do not pre-buffer an

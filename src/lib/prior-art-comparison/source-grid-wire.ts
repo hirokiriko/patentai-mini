@@ -21,7 +21,7 @@ export function assertSourceGridProviderSchema(schema:JSONSchema7):void {
   const depth=(v:unknown,n=0,refs:readonly string[]=[]):number=>{
     if(!isRecord(v))return n;
     if(typeof v.$ref==="string"){
-      if(!v.$ref.startsWith("#/definitions/")||refs.includes(v.$ref))throw new ComparisonError("plan_limit");
+      if(Object.keys(v).length!==1||!v.$ref.startsWith("#/definitions/")||refs.includes(v.$ref))throw new ComparisonError("plan_limit");
       const child=schema.definitions?.[v.$ref.slice("#/definitions/".length)];
       if(!child)throw new ComparisonError("plan_limit");
       return depth(child,n,[...refs,v.$ref]);

@@ -95,6 +95,40 @@ describe("protected-parent revalidation adapter", () => {
     expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
     await expect(f.send()).rejects.toThrow(); expect(f.transport).toHaveBeenCalledOnce();
   });
+  it("retains allowlisted failure fields and a body hash without accepting usage or echoing secrets", async () => {
+    const f=fixture(),raw=JSON.stringify({error:{code:"invalid_json_schema",type:"invalid_request_error",param:"text.format.schema",message:"FICTIONAL_SECRET"},usage:{input_tokens:1,output_tokens:0}});
+    f.transport.mockResolvedValue(new Response(raw,{status:400}));
+    await expect(f.send()).rejects.toThrow();
+    expect(JSON.parse(Buffer.from(f.records.get("provider-failure-44.json")!).toString())).toEqual({status:400,bodyState:"complete",bodyBytes:Buffer.byteLength(raw),bodySHA256:revalidationHash(raw),code:"invalid_json_schema",type:"invalid_request_error",param:"text.format.schema",usageKnown:false});
+    expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_SECRET");
+    expect(f.calls.indexOf("provider-metadata-44.json")).toBeLessThan(f.calls.indexOf("provider-failure-44.json"));
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+    expect(JSON.parse(Buffer.from(f.records.get("stop-ack-44.json")!).toString())).toMatchObject({ordinal:44,stopAckReceived:true});
+    await expect(f.send()).rejects.toThrow();expect(f.transport).toHaveBeenCalledOnce();
+  });
+  it("redacts unknown provider fields and never writes an ACK receipt before acknowledgement", async()=>{
+    const f=fixture();f.transport.mockResolvedValue(Response.json({error:{code:"FICTIONAL_SECRET_CODE",type:"FICTIONAL_SECRET_TYPE",param:"FICTIONAL_SECRET_PARAM",message:"FICTIONAL_SECRET_MESSAGE"}},{status:400}));
+    f.parent.mockImplementation(async command=>{if(command==="stop")throw Error("FICTIONAL_SECRET_ACK");});
+    await expect(f.send()).rejects.toThrow();
+    expect(JSON.parse(Buffer.from(f.records.get("provider-failure-44.json")!).toString())).toMatchObject({code:null,type:null,param:null,usageKnown:false});
+    expect(f.records.has("stop-ack-44.json")).toBe(false);
+    expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_SECRET");
+  });
+  it("bounds failed bodies and keeps partial data out of diagnostic records",async()=>{
+    const f=fixture(),cancel=vi.fn();
+    f.transport.mockResolvedValue(new Response(new ReadableStream({start(c){c.enqueue(new TextEncoder().encode("FICTIONAL_SECRET".repeat(2000)));},cancel}),{status:400}));
+    await expect(f.send()).rejects.toThrow();expect(cancel).toHaveBeenCalledOnce();
+    expect(JSON.parse(Buffer.from(f.records.get("provider-failure-44.json")!).toString())).toMatchObject({bodyState:"over_limit",bodySHA256:null,code:null,usageKnown:false});
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+  });
+  it("cancels failed body diagnostics on product abort without reconciling",async()=>{
+    const f=fixture(),ctrl=new AbortController(),cancel=vi.fn();let entered!:()=>void;
+    const started=new Promise<void>(r=>{entered=r;});
+    f.transport.mockImplementation(async()=>{entered();return new Response(new ReadableStream({cancel}),{status:400});});
+    const pending=expect(f.send(ctrl.signal)).rejects.toThrow();await started;ctrl.abort();await pending;
+    expect(cancel).toHaveBeenCalledOnce();expect(f.bridge.snapshot().stopped).toBe(true);
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+  });
   it("drops malformed request IDs and never serializes transport exceptions", async () => {
     const f = fixture();
     f.transport.mockResolvedValue(new Response(null,{status:400,headers:{"x-request-id":"FICTIONAL_SECRET"}}));

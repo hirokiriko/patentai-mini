@@ -50,6 +50,11 @@ it("uses provider-enforced object structure and named predicate enums",async()=>
   expect(def("PriorArtSourceCellQuote").anyOf!.some(s=>typeof s!=="boolean"&&s.type==="array")).toBe(false);
   const relations=def("PriorArtSourceMeaning").anyOf!.find(s=>typeof s!=="boolean"&&s.properties?.P)!;
   expect(typeof relations!=="boolean"&&relations.properties!.P).toMatchObject({type:"string",enum:expect.arrayContaining(["closes","stops","releases_heat","absorbs_heat"])});
+  if(typeof relations==="boolean")throw Error("relation_schema_required");
+  const action=relations.properties!.a;
+  expect(action).toMatchObject({anyOf:def("PriorArtSourceCellQuote").anyOf,description:expect.any(String)});
+  expect(action).not.toHaveProperty("$ref");
+  expect(relations.required).toContain("a");
 });
 it("does not reinterpret a stopping condition as the closing predicate",async()=>{
   const text="圧縮機を停止した後、赤弁を閉じる。";
