@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalInputs } from "./fixtures.test-support";
-import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs, fictionalClauseSource as fictionalPropositionSource } from "./source-clause-fixtures.test-support";
+import { fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { LIMITS } from "./limits";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
