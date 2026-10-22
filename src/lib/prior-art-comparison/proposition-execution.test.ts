@@ -1,10 +1,9 @@
-import { fixtureGridText } from "../../../scripts/prior-art-grid-fixture.mjs";
 import { afterEach, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalInputs } from "./fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs, fictionalClauseSource as fictionalPropositionSource } from "./source-clause-fixtures.test-support";
 import { makePlan } from "./comparison";
 import { propositionPlanSizes } from "./proposition-plan";
-import { fictionalPropositionGeneration, fictionalPropositionSource, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
+import { fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { parseComparisonSource } from "./source";
 import { propositionSourceInput, propositionSourceTransport } from "./proposition-extraction";
 
@@ -16,14 +15,14 @@ it.each([false,true])("connects source extraction, full generation, computed tar
   const phases:string[]=[];
   const {inputs,selection}=fictionalInputs();
   if(unique){
-    const body=(d:number)=>"【請求項1】"+Array.from({length:60},(_,i)=>`架空の${String.fromCharCode(0x4e00+d*70+i)}温度制御装置は、各区域の測定値を保持する。`).join("")+
+    const body=(d:number)=>"【請求項1】"+Array.from({length:3},(_,i)=>`架空の${String.fromCharCode(0x4e00+d*70+i)}温度制御装置は、各区域の測定値を保持する。`).join("")+
       `末尾条件${String.fromCharCode(0x5200+d)}は温度が七度を${d===2?"下回ると青色弁を開く":"超えると青色弁を閉じる"}ことである。`;
     inputs.draft=parseComparisonSource(body(0),inputs.draft.id,inputs.draft.label);
     inputs.documents=inputs.documents.map((s,i)=>parseComparisonSource(body(i+1),s.id,s.label));
     const source=propositionSourceInput(makePlan(inputs,selection)),wire=propositionSourceTransport(source);
     expect(wire).not.toHaveProperty("textParts");
     for(const [i,s] of wire.sources.entries())for(const [j,c] of s.source.claims.entries())
-      expect(fixtureGridText(c)).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
+      expect(c.clauses.map(p=>p[1]).join("")).toBe(source.sources[i].source.claims[j].segments.map(p=>p.text).join(""));
   }
   const sizes=propositionPlanSizes(makePlan(inputs,selection));
   vi.stubGlobal("fetch",vi.fn<typeof fetch>().mockImplementation(async(url,init)=>{

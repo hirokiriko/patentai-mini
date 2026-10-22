@@ -1,4 +1,3 @@
-import { fixtureGridText } from "../../../scripts/prior-art-grid-fixture.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
@@ -9,6 +8,7 @@ import { batchInput } from "./generation-batch";
 import { decodeGeneration } from "./generation";
 import { inspectReviewCoverage, reviewInput, validateReview } from "./semantic-review";
 import { compileLiteralStructure } from "./literal-structure";
+import { fixtureDeclareClauseReading } from "../../../scripts/prior-art-proposition-fixture.mjs";
 
 const text = "前記第１の運転モードは光モードであり、前記第２の運転モードは、音モードと、振動モードと、表示モードのうちの何れか、又は、それらの組み合わせ、若しくは、それらの全てである。";
 const wrong = "基準側は光・音・振動・表示のいずれか/組合せ/全てを対象とする。";
@@ -47,8 +47,11 @@ describe("literal structure on the product path, with fictional SDK transport", 
         expect(input.sources[0].source.claims[0].canonicalModeSets).toEqual(expected.modes.map(([,subject,kind,members])=>({
           subject:inputs.draft.source.claims[0].text.slice(...subject),selection:kind==="fixed"?"required":"nonempty",extent:"closed",
           members:members.map(span=>inputs.draft.source.claims[0].text.slice(...span))})));
-        expect(fixtureGridText(input.sources[0].source.claims[0])).toBe(inputs.draft.source.claims[0].text);
+        expect(input.sources[0].source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(inputs.draft.source.claims[0].text);
         answer = fictionalPropositionSource(input);
+        // This hand-authored mock explicitly reads the full claim, including
+        // canonical mode/reference clauses; it supplies no new semantic facts.
+        fixtureDeclareClauseReading(answer,input);
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);
         answer = fictionalPropositionGeneration(input);
@@ -62,7 +65,7 @@ describe("literal structure on the product path, with fictional SDK transport", 
       const wire=fixturePropositionWire(answer);
       if(failure==="reading"&&input.task==="extract_source_propositions"){
         expect(wire.s[0].c1[0].m.J[0]).toHaveLength(1);
-        wire.s[0].c1[0].m.J[0][0][1]="原文に存在しない語";
+        wire.s[0].c1[0].m.J[0][0]="0:原文に存在しない語";
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",

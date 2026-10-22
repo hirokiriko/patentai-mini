@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { JSONSchema7 } from "ai";
-import { fictionalInputs } from "./fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { makePlan, validateAnswer } from "./comparison";
 import { batchInput } from "./generation-batch";
 import { decodeGeneration } from "./generation";

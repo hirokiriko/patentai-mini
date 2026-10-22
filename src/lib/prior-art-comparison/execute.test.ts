@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalInputs } from "./fixtures.test-support";
-import { fictionalPropositionSource as fictionalSourceAnalysis, fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs, fictionalClauseSource as fictionalSourceAnalysis } from "./source-clause-fixtures.test-support";
+import { fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
 import type { propositionTargetTransport, propositionSourceTransport } from "./proposition-extraction";
 import { parseComparisonSource } from "./source";
+import { fictionalInputs as longFictionalInputs } from "./fixtures.test-support";
 
 function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | ReturnType<typeof propositionSourceTransport>) {
   return input.task === "extract_source_propositions" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
@@ -95,7 +96,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(3);
   });
   it("does not send oversized plans", async () => {
-    const { inputs, selection } = fictionalInputs();
+    const { inputs, selection } = longFictionalInputs();
     selection.draftClaimNos = [1,2]; selection.documents.forEach(d => { d.claimNos = [1,2]; });
     const transport = vi.fn(); vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("plan_limit");
@@ -112,7 +113,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
-      if(mode==="missing_reading")delete wire.s[0].Y;
+      if(mode==="missing_reading")delete wire.s[0].c1[0].W;
       if(mode==="unrelated_evidence")wire.s[0].c1[0].W=[[0,0,0,0]];
       if (mode === "blank" || mode === "overlong") {
         expect(wire.s[0].c1[0].m.J[0]).toHaveLength(1);

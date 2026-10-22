@@ -1,4 +1,6 @@
 import { fixtureGridText, fixtureGridWire } from "./prior-art-grid-fixture.mjs";
+import { fixtureClauseWire } from "./prior-art-clause-fixture.mjs";
+export { fixtureDeclareClauseReading } from "./prior-art-clause-fixture.mjs";
 // Fully fictional SDK responses. Hand-authored semantic extraction is test
 // plumbing only and must never be reported as real-model extraction quality.
 const fixtureInputs = new WeakMap();
@@ -53,6 +55,7 @@ function flattenGuards(value) {
 // Independent inverse used only for fictional responses. A WeakMap retains
 // the originating fictional input across tests that mutate an answer in place.
 export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
+  if(input?.citationClauses)return fixtureClauseWire(value,input);
   if(input?.citationGrid)return fixtureGridWire(value,input);
   if(value.locatorVersion===12||value.locatorVersion===11||value.locatorVersion===10)return flattenGuards(value);
   if(value.locatorVersion===9)return flattenGuards(value);
@@ -184,7 +187,7 @@ function extraction(text,m,basis=[0,text.length]){
 }
 const sentence = m => `${m.guard.conditions.length?`${m.guard.conditions.join("・")}場合、`:""}${m.subject??"装置"}は${m.objects.join("・")}${m.predicate==="has"?"を備える":m.predicate==="opens"?"を開く":"を閉じる"}`;
 export function fixturePropositionSource(input){
-  input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>c.grid?{...c,text:fixtureGridText(c)}:c.parts?{...c,text:c.parts.map(p=>p.text).join("")}:c)}}))};
+  input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>c.clauses?{...c,text:c.clauses.map(p=>p[1]).join("")}:c.grid?{...c,text:fixtureGridText(c)}:c.parts?{...c,text:c.parts.map(p=>p.text).join("")}:c)}}))};
   return withInput({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>{
     const text=textOf(c),f=extraction(text,m);
     // The fictional model explicitly selects the complete claim's part range.
