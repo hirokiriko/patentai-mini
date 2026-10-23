@@ -377,4 +377,32 @@ describe("real installed SDK, guarded fictional transport", () => {
     await vi.advanceTimersByTimeAsync((sourceCallCount(inputs,selection)+1)*80000+210001);await rejected;
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
+  it("commits all unchanged source objects before generation and stops on audit ACK uncertainty",async()=>{
+    const {inputs,selection}=fictionalInputs();
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      expect(input.task).toBe("extract_source_propositions");
+      return response(stageAnswer(input));
+    });
+    vi.stubGlobal("fetch",transport);
+    const sink=vi.fn(async audit=>{
+      expect(audit.answers).toHaveLength(sourceCallCount(inputs,selection));
+      expect(audit.tasks.map((t:{id:string})=>t.id)).toEqual(audit.answers.map((a:{taskId:string})=>a.taskId));
+      throw Error("uncertain persistence ACK");
+    });
+    await expect(executeComparison(inputs,selection,sink)).rejects.toMatchObject({stage:"source_reading",kind:"transport_unknown"});
+    expect(sink).toHaveBeenCalledOnce();
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection));
+  });
+  it("persists rejected source model text once without retrying the request",async()=>{
+    const {inputs,selection}=fictionalInputs();
+    const transport=vi.fn<typeof fetch>().mockResolvedValue(response({invalid:"原文のまま"}));
+    vi.stubGlobal("fetch",transport);
+    const sink=vi.fn(async(audit: import("./source-audit").SourceAudit)=>{ void audit; });
+    await expect(executeComparison(inputs,selection,sink)).rejects.toMatchObject({stage:"source_reading",kind:"protocol_invalid"});
+    expect(sink).toHaveBeenCalledOnce();
+    expect(sink.mock.calls[0]?.[0]).toMatchObject({answers:[],failure:{text:JSON.stringify({invalid:"原文のまま"})}});
+    expect(transport).toHaveBeenCalledOnce();
+  });
+
 });

@@ -5,6 +5,8 @@ import {parseComparisonSource} from "./source";
 import {decodeSourcePropositions,propositionSourceInput} from "./proposition-extraction";
 import {sourceIdentifiedPropositionModelSchemaFor} from "./source-semantic-wire";
 import {sourceClaimExtractionPlan,assembleSourceClaims} from "./source-claim-extraction";
+import {fictionalCoordinateClaim} from "./source-claim-fixtures.test-support";
+import {sourceReadingClaim} from "./source-clause-coverage";
 
 // Only hand-authored fictional output is split here. Never use this adapter to
 // repair, reassign or accept a provider response.
@@ -16,7 +18,7 @@ function setup(actor="制御器"){
  const claim=()=>({Q:[`q91|0-0:${actor}`,"q4|1-1:非通電状態の場合","q73|2-2:赤弁","q8|2-2:閉じる"],facts:[{R:2,m:{u:["q91"],x:"operation",g:"when",G:[["q4"]],p:"positive",k:"relation",P:"closes",J:[["q73"]],a:"q8"},O:[null,null,null,"q4",null],F:null}]});
  const wire={v:22,s:input.sources.map(s=>({d:s.sourceDigest,c1:claim()}))};
  const plan=sourceClaimExtractionPlan(chunks);
- const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:23,sourceDigest:task.sourceDigest,claimNo:task.claimNo,answer:structuredClone(wire.s[task.sourceIndex])}}));
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:24,sourceDigest:task.sourceDigest,claimNo:task.claimNo,answer:{d:task.sourceDigest,c1:fictionalCoordinateClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1))}}}));
  return {chunks,input,wire,plan,answers};
 }
 it("assembles exactly once in original source order and is equivalent to the existing strict decoder",async()=>{
@@ -38,7 +40,7 @@ it.each(["missing","duplicate","foreign_task","wrong_source","wrong_claim","fore
  if(mode==="wrong_claim")first.value.claimNo=2;
  if(mode==="foreign_key")Object.assign(first.value.answer,{c2:structuredClone(first.value.answer.c1)});
  if(mode==="undeclared_quote")first.value.answer.c1.facts[0].m.a="q404";
- if(mode==="invalid_quote")first.value.answer.c1.Q[2]="q73|2-2:青弁";
+ if(mode==="invalid_quote")first.value.answer.c1.Q[2].K=[99999,0,99999,1];
  if(mode==="old_version")first.value.v=22;
  const raw=JSON.stringify(f.answers);
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
@@ -98,13 +100,61 @@ it.each(["invalid_context","reserved_context","extra_meaning_key","bypass_role_c
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
 });
 
-it("states the exact existing ID grammar in v23 system and schema without unsupported keywords or changing v22",()=>{
+it("states exact ID grammar and coordinate-only declarations in v24 without changing v22",()=>{
  const f=setup(),before=structuredClone(sourceIdentifiedPropositionModelSchemaFor(f.chunks).jsonSchema);
  const plan=sourceClaimExtractionPlan(f.chunks),schema=plan.tasks[0].schema.jsonSchema as {definitions:Record<string,{description?:string;properties?:Record<string,{description?:string}>;anyOf?:{type?:string;description?:string;properties?:Record<string,{description?:string}>}[]}>};
- const descriptions=[schema.definitions.PriorArtSourceCellQuote.description,schema.definitions.PriorArtSourceQuoteContext.properties!.id.description,schema.definitions.PriorArtSourceDictionaryClaim.properties!.Q.description,...schema.definitions.PriorArtSourceDictionaryQuote.anyOf!.filter(b=>b.type==="string"||b.type==="object").map(b=>b.type==="string"?b.description:b.properties!.id.description)];
+ const descriptions=[schema.definitions.PriorArtSourceCellQuote.description,schema.definitions.PriorArtSourceDictionaryClaim.properties!.Q.description,schema.definitions.PriorArtSourceDictionaryQuote.properties!.id.description];
  for(const text of [plan.tasks[0].system,...descriptions]){expect(text).toContain("q[0-9]{1,4}");expect(text).toContain("q0a");expect(text).toMatch(/forbidden/);}
  const unsupported=["pattern","minLength","maxLength","format"];
  function entries(v:unknown):string[]{if(!v||typeof v!=="object")return [];if(Array.isArray(v))return v.flatMap(entries);return Object.entries(v).flatMap(([k,x])=>[...(unsupported.includes(k)?[k]:[]),...entries(x)]);}
- expect(entries(schema)).toEqual(entries(before));
+ expect(entries(schema)).toEqual([]);
  expect(sourceIdentifiedPropositionModelSchemaFor(f.chunks).jsonSchema).toEqual(before);
+});
+
+it.each(["missing","negative","out_of_range","quote_instead_of_fact"])("requires every literal action to reference an existing fact: %s",async mode=>{
+ const f=setup(),claim=f.answers[0].value.answer.c1 as Record<string,unknown>;
+ if(mode==="missing")delete claim.t0;
+ if(mode==="negative")claim.t0=-1;
+ if(mode==="out_of_range")claim.t0=1;
+ if(mode==="quote_instead_of_fact")claim.t0="q8";
+ const before=JSON.stringify(f.answers[0].value);
+ expect((await f.plan.tasks[0].schema.validate!(f.answers[0].value)).success).toBe(false);
+ expect(JSON.stringify(f.answers[0].value)).toBe(before);
+});
+
+it("rejects a different occurrence or long evidence quote as the required independent heat action",async()=>{
+ const f=fictionalInputs(),text="制御器は、青放熱器にて放熱させ、白吸熱器にて吸熱させる。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const plan=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)),task=plan.tasks[0];
+ const fact=(R:number,P:string,J:string,a:string)=>({R,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P,J:[[J]],a},O:[null,null,null,null,null],F:null});
+ const claim=fictionalCoordinateClaim(sourceReadingClaim(1,text),{
+  Q:["q0|0-0:制御器","q1|1-1:青放熱器","q2|1-1:放熱させ","q3|2-2:白吸熱器","q4|2-2:吸熱させる"],
+  facts:[fact(1,"releases_heat","q1","q2"),fact(2,"absorbs_heat","q3","q4")],
+ });
+ const raw={v:24,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const wrong=structuredClone(raw);Object.assign(wrong.answer.c1,{t1:0});
+ expect((await task.schema.validate!(wrong)).success).toBe(false);
+ const absent=structuredClone(raw);absent.answer.c1.facts.pop();Object.assign(absent.answer.c1,{t1:0});
+ const before=JSON.stringify(absent);
+ expect((await task.schema.validate!(absent)).success).toBe(false);
+ expect(JSON.stringify(absent)).toBe(before);
+});
+
+it("requires the maintained state and verb together in both action and object",async()=>{
+ const f=fictionalInputs(),text="制御器は、青弁の開度を所定の値に維持する。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const full="青弁の開度を所定の値に維持する";
+ const original={Q:["q0|0-0:制御器",`q1|1-1:${full}`],facts:[{R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"maintains",J:[["q1"]],a:"q1"},O:[null,null,null,null,null],F:null}]};
+ const reading=sourceReadingClaim(1,text),claim=fictionalCoordinateClaim(reading,original);
+ const raw={v:24,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const split=structuredClone(original);split.Q.push("q2|1-1:維持する");split.facts[0].m.a="q2";
+ const bad={...raw,answer:{...raw.answer,c1:fictionalCoordinateClaim(reading,split)}};
+ const before=JSON.stringify(bad);
+ expect((await task.schema.validate!(bad)).success).toBe(false);
+ expect(JSON.stringify(bad)).toBe(before);
 });

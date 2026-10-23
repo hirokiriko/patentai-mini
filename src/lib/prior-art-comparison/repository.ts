@@ -8,6 +8,9 @@ import { ComparisonExecutionError, type ComparisonStage } from "./failure";
 import { separatedGenerationPlan } from "./source-separation";
 import { assertPropositionPlan } from "./proposition-plan";
 
+import { validateSourceAudit, type SourceAudit } from "./source-audit";
+import { sourceClaimExtractionPlan } from "./source-claim-extraction";
+
 type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
 const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string }>();
 function knownFailure(error: unknown): KnownFailure | null {
@@ -171,7 +174,10 @@ export async function completeReservedComparison(caseId: number, selection: Sele
   let saveStarted = false;
   try {
     const { inputs, ids } = reservation;
-    const saved = await executeComparison(inputs!, selection);
+    const tasks = sourceClaimExtractionPlan(separatedGenerationPlan(makePlan(inputs!, selection), PROPOSITION_GENERATION_SYSTEM)).tasks;
+    const saved = await executeComparison(inputs!, selection, async audit => {
+      await recordSourceAudit(caseId, selection, ids!, validateSourceAudit(audit, selection.operationId, inputs!.inputDigest, tasks.map(({ id, sourceIndex, sourceDigest, claimNo }) => ({ id, sourceIndex, sourceDigest, claimNo }))));
+    });
     saveStarted = true;
     return await db.transaction(async tx => {
       await tx.execute(sql`set local lock_timeout = '3s'`);
@@ -183,6 +189,7 @@ export async function completeReservedComparison(caseId: number, selection: Sele
         const marker = envelope(r) as { operationId?: unknown } | null;
         return marker?.operationId === selection.operationId;
       });
+      if (new Set(ownRows.map(row => digest(auditProperty(row)))).size !== 1) throw new ComparisonError("save_unconfirmed");
       const expectedKeys = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
       if (ownRows.length !== ids!.length || ownRows.some(r => !ids!.includes(r.resultId) ||
           digest(envelope(r)) !== digest({ version: 1, status: "reserved", operationId: selection.operationId, selection }) ||
@@ -194,7 +201,7 @@ export async function completeReservedComparison(caseId: number, selection: Sele
       await tx.insert(comparisonResults).values(removed.map(row => ({ ...row,
         matchedElementsJson: JSON.stringify({ matched: [], unmatched: [],
           explanation: `保存時点 ${saved.generatedAt} の指定比較です。原文・版・根拠は「根拠付き比較」で確認してください。現在の入力に対する結果とは限りません。`,
-          priorArtComparison: saved }),
+          priorArtComparison: saved, ...auditProperty(row) }),
       })));
       return saved;
     });
@@ -226,12 +233,13 @@ async function recordReservedFailure(caseId: number, selection: Selection, ids: 
     const own = rows.filter(row => (envelope(row) as { operationId?: string } | null)?.operationId === selection.operationId);
     const expected = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
     const marker = { version: 1, status: "reserved", operationId: selection.operationId, selection };
+    if (new Set(own.map(row => digest(auditProperty(row)))).size !== 1) throw new ComparisonError("save_unconfirmed");
     if (own.length !== ids.length || own.some(row => !ids.includes(row.resultId) || digest(envelope(row)) !== digest(marker) ||
         !expected.delete(`${row.draftClaimId}:${row.priorDocId}`)) || expected.size) throw new ComparisonError("save_unconfirmed");
     const removed = await tx.delete(comparisonResults).where(and(eq(comparisonResults.caseId, caseId), inArray(comparisonResults.resultId, ids))).returning();
     if (removed.length !== ids.length || digest([...removed].sort((a,b)=>a.resultId-b.resultId)) !== digest([...own].sort((a,b)=>a.resultId-b.resultId))) throw new ComparisonError("save_unconfirmed");
     await tx.insert(comparisonResults).values(removed.map(row => ({ ...row,
-      matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "品質検証で停止しました。予約を保持し、自動再送しません。", priorArtComparison: { ...marker, failure } }),
+      matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "品質検証で停止しました。予約を保持し、自動再送しません。", priorArtComparison: { ...marker, failure }, ...auditProperty(row) }),
     })));
   });
 }
@@ -239,4 +247,55 @@ async function recordReservedFailure(caseId: number, selection: Selection, ids: 
 /** Synchronous adapter retained for isolated diagnostics; HTTP uses after(). */
 export async function runAndSaveComparison(caseId: number, selection: Selection) {
   return completeReservedComparison(caseId, selection, await reserveComparison(caseId, selection));
+}
+
+// Private sidecar is outside saved-v1, so report formats and snapshot digests stay unchanged.
+function auditProperty(row: ResultRow): { priorArtComparisonSourceAudit?: SourceAudit } {
+  const outer = JSON.parse(row.matchedElementsJson ?? "null");
+  const value = outer?.priorArtComparisonSourceAudit;
+  if (value === undefined) return {};
+  const marker = outer.priorArtComparison;
+  return { priorArtComparisonSourceAudit: validateSourceAudit(value, marker.operationId,
+    marker.status === "reserved" ? marker.selection.inputDigest : marker.inputs.inputDigest) };
+}
+async function recordSourceAudit(caseId: number, selection: Selection, ids: number[], audit: SourceAudit) {
+  await db.transaction(async tx => {
+    await tx.execute(sql`set local lock_timeout = '3s'`);
+    await lockManagedCase(tx, caseId);
+    const rows = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+    const own = rows.filter(row => (envelope(row) as { operationId?: string } | null)?.operationId === selection.operationId);
+    const expected = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
+    const marker = { version: 1, status: "reserved", operationId: selection.operationId, selection };
+    if (new Set(own.map(row => digest(auditProperty(row)))).size !== 1) throw new ComparisonError("save_unconfirmed");
+    if (own.length !== ids.length || own.some(row => !ids.includes(row.resultId) || digest(envelope(row)) !== digest(marker) ||
+        Object.keys(auditProperty(row)).length || !expected.delete(`${row.draftClaimId}:${row.priorDocId}`)) || expected.size) throw new ComparisonError("save_unconfirmed");
+    const removed = await tx.delete(comparisonResults).where(and(eq(comparisonResults.caseId, caseId), inArray(comparisonResults.resultId, ids))).returning();
+    if (removed.length !== ids.length || digest([...removed].sort((a,b)=>a.resultId-b.resultId)) !== digest([...own].sort((a,b)=>a.resultId-b.resultId))) throw new ComparisonError("save_unconfirmed");
+    await tx.insert(comparisonResults).values(removed.map(row => ({ ...row,
+      matchedElementsJson: JSON.stringify({ ...JSON.parse(row.matchedElementsJson!), priorArtComparisonSourceAudit: audit }),
+    })));
+  });
+}
+export async function getComparisonSourceAudit(caseId: number, operationId: string) {
+  const rows = await db.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+  const own = rows.filter(row => (envelope(row) as { operationId?: string } | null)?.operationId === operationId);
+  if (!own.length) throw new ComparisonError("not_found");
+  const first = envelope(own[0]) as { status: string; selection: Selection };
+  const selection = first.selection;
+  if (!selection || selection.operationId !== operationId) throw new ComparisonError("result_invalid");
+  const expected = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
+  const audit = auditProperty(own[0]).priorArtComparisonSourceAudit;
+  if (!audit) throw new ComparisonError("not_found");
+  if (first.status === "complete") {
+    const saved = validateSaved(first);
+    if (saved.inputs.caseId !== caseId) throw new ComparisonError("result_invalid");
+    const tasks = sourceClaimExtractionPlan(separatedGenerationPlan(makePlan(saved.inputs, saved.selection), PROPOSITION_GENERATION_SYSTEM)).tasks;
+    validateSourceAudit(audit, operationId, saved.inputs.inputDigest, tasks.map(({id,sourceIndex,sourceDigest,claimNo}) => ({id,sourceIndex,sourceDigest,claimNo})));
+  } else if (first.status !== "reserved") throw new ComparisonError("result_invalid");
+  // Pending markers contain no original snapshot. Their roster is checked at
+  // the write boundary; reads enforce identity grammar/digest/exact owned rows.
+  if (own.length !== expected.size || own.some(row => row.caseId !== caseId || digest(envelope(row)) !== digest(first) ||
+      digest(auditProperty(row)) !== digest({ priorArtComparisonSourceAudit: audit }) ||
+      !expected.delete(`${row.draftClaimId}:${row.priorDocId ?? JSON.parse(row.matchedElementsJson!).detachedPriorDocId}`)) || expected.size) throw new ComparisonError("result_invalid");
+  return audit;
 }

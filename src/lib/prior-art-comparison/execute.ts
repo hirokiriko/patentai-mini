@@ -1,4 +1,4 @@
-import { generateObject, type Schema } from "ai";
+import { generateObject, NoObjectGeneratedError, type Schema } from "ai";
 import { getModel } from "../ai-model";
 import { aiOperationDeadline, withPriorArtClaimComparisonBudget } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
@@ -18,10 +18,12 @@ import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonSt
 import { comparisonModelSchema } from "./model-schema";
 import { sourceClaimExtractionPlan, assembleSourceClaims } from "./source-claim-extraction";
 
+import { sourceAudit, type SourceAuditSink } from "./source-audit";
+
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+"\n各断定では基準側・候補側・両側の帰属を明示し、側が変わる断定を分ける。事実を含む文を未確認の一語で留保扱いにしない。純粋な未確認事項は対象となる名詞句と未確認状態を分けて述べる。これは条件の省略や断定の弱化を許可しない。";
 
 /** One finite serial operation. No fallback and no partial successful save. */
-export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
+export async function executeComparison(inputs: ComparisonInputs, selection: Selection, auditSink?: SourceAuditSink): Promise<SavedComparison> {
   const plan = makePlan(inputs, selection); // Entire scope must fit before any send.
   const batch = separatedGenerationPlan(plan, PROPOSITION_GENERATION_SYSTEM);
   assertPropositionPlan(batch);
@@ -62,10 +64,26 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         return answer.object;
       };
       const pieces: { taskId: string; value: unknown }[] = [];
+      const persistAudit = async (failure?: { taskId: string; text: string }) => {
+        if (!auditSink) return;
+        try { await auditSink(sourceAudit(selection.operationId, inputs.inputDigest, sourcePlan.tasks, pieces, failure)); }
+        catch { throw new ComparisonExecutionError("source_reading", "transport_unknown"); }
+      };
       for (const task of sourcePlan.tasks) {
-        const value = await generate(task.system, task.prompt, task.schema, "source", task.id);
-        pieces.push({ taskId: task.id, value });
+        try {
+          const value = await generate(task.system, task.prompt, task.schema, "source", task.id);
+          pieces.push({ taskId: task.id, value });
+        } catch (error) {
+          // Retain completed prefix and bounded model text only; never transport
+          // headers, credentials, error messages or inferred/repaired answers.
+          await persistAudit(NoObjectGeneratedError.isInstance(error) && typeof error.text === "string"
+            ? { taskId: task.id, text: error.text } : undefined);
+          throw error;
+        }
       }
+      // Commit ACK is mandatory before generation. Assembly/domain rejection
+      // still leaves all original structured objects available to OWNER QA.
+      await persistAudit();
       const reading = await assembleSourceClaims(sourcePlan, pieces);
       const analyses = decodeSourcePropositions(batch, reading);
       stage = "generation";

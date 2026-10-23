@@ -7,7 +7,9 @@ vi.mock("@/repositories/managed-case-graph", () => ({ lockManagedCase: vi.fn() }
 vi.mock("./comparison", async () => ({ ...(await vi.importActual<typeof import("./comparison")>("./comparison")), makePlan: () => [] }));
 vi.mock("./proposition-plan", () => ({ assertPropositionPlan: seam.preflight }));
 vi.mock("./source-separation", () => ({ separatedGenerationPlan: () => [] }));
-import { reserveComparison, completeReservedComparison, listComparisons } from "./repository";
+vi.mock("./source-claim-extraction", () => ({ sourceClaimExtractionPlan: () => ({ tasks: [{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}] }) }));
+import { sourceAudit } from "./source-audit";
+import { reserveComparison, completeReservedComparison, listComparisons, getComparisonSourceAudit } from "./repository";
 import { ComparisonExecutionError } from "./failure";
 import { digest } from "./source";
 import type { Selection } from "./comparison";
@@ -109,4 +111,58 @@ it("a partial or extended failure marker cannot expose a known failure", async (
   const value = JSON.parse(first.matchedElementsJson); value.priorArtComparison.failure.extra = "not public";
   first.matchedElementsJson = JSON.stringify(value);
   expect((await listComparisons(1)).failedOperations).toEqual([]);
+});
+
+it("persists source evidence before a later quality failure and retrieves it without AI", async () => {
+  const { selected, reservation } = await freshReservation();
+  const audit = sourceAudit(selected.operationId, selected.inputDigest,[{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}], [{taskId:("b".repeat(64)+":1"),value:{v:999,original:"原文"}}]);
+  seam.executeAI.mockImplementation(async (_inputs,_selection,sink) => { await sink(audit); throw new ComparisonExecutionError("review","review_rejected"); });
+  await expect(completeReservedComparison(1,selected,reservation)).rejects.toThrow();
+  expect(seam.delete).toHaveBeenCalledTimes(2);
+  expect(await getComparisonSourceAudit(1,selected.operationId)).toEqual(audit);
+  expect((await listComparisons(1)).failedOperations).toHaveLength(1);
+  await getComparisonSourceAudit(1,selected.operationId);
+  expect(seam.executeAI).toHaveBeenCalledOnce();
+  seam.rows.pop();
+  await expect(getComparisonSourceAudit(1,selected.operationId)).rejects.toThrow();
+});
+it("an audit transaction unknown ACK stops before any continuation and never permits replay",async()=>{
+ const { selected,reservation }=await freshReservation();
+ const audit=sourceAudit(selected.operationId,selected.inputDigest,[{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],[]);
+ const continued=vi.fn();
+ seam.delete.mockImplementation(()=>{throw Error("unknown ACK");});
+ seam.executeAI.mockImplementation(async(_inputs,_selection,sink)=>{await sink(audit);continued();});
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toThrow();
+ expect(continued).not.toHaveBeenCalled();
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toThrow();
+ expect(seam.executeAI).toHaveBeenCalledOnce();
+});
+
+it("keeps the exact audit through completed-result replacement and later GETs",async()=>{
+ const {selected,reservation}=await freshReservation();
+ const audit=sourceAudit(selected.operationId,selected.inputDigest,[{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],[{taskId:("b".repeat(64)+":1"),value:{v:999}}]);
+ const saved={version:1,status:"complete",operationId:selected.operationId,selection:selected,inputs:reservation.inputs,generatedAt:"fictional"};
+ seam.executeAI.mockImplementation(async(_inputs,_selection,sink)=>{await sink(audit);seam.inputs=true;return saved;});
+ await expect(completeReservedComparison(1,selected,reservation)).resolves.toEqual(saved);
+ seam.inputs=false;
+ expect(JSON.parse((seam.rows[0] as {matchedElementsJson:string}).matchedElementsJson).priorArtComparisonSourceAudit).toEqual(audit);
+ expect(seam.executeAI).toHaveBeenCalledOnce();expect(seam.delete).toHaveBeenCalledTimes(2);
+ const first=seam.rows[0] as {matchedElementsJson:string};
+ const outer=JSON.parse(first.matchedElementsJson);outer.priorArtComparisonSourceAudit.answers[0].value={tampered:true};first.matchedElementsJson=JSON.stringify(outer);
+ await expect(getComparisonSourceAudit(1,selected.operationId)).rejects.toThrow();
+});
+
+it("revalidates complete snapshot and source-task roster before private readback",async()=>{
+ const {fictionalSaved,fictionalAnswer}=await import("./fixtures.test-support");
+ const saved=fictionalSaved();
+ const real=await vi.importActual<typeof import("./comparison")>("./comparison");
+ saved.pairs=real.makePlan(saved.inputs,saved.selection).flatMap(chunk=>real.validateAnswer(chunk,fictionalAnswer(chunk)));
+ saved.snapshotDigest=real.savedDigest(saved);
+ const audit=sourceAudit(saved.operationId,saved.inputs.inputDigest,[{id:"b".repeat(64)+":1",sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],[{taskId:"b".repeat(64)+":1",value:{v:999}}]);
+ seam.rows=saved.inputs.documents.map((doc,i)=>({resultId:i+1,caseId:saved.inputs.caseId,draftClaimId:"1",priorDocId:doc.id,matchedElementsJson:JSON.stringify({priorArtComparison:saved,priorArtComparisonSourceAudit:audit})}));
+ expect(await getComparisonSourceAudit(saved.inputs.caseId,saved.operationId)).toEqual(audit);
+ const altered=sourceAudit(saved.operationId,saved.inputs.inputDigest,[{id:"c".repeat(64)+":1",sourceIndex:0,sourceDigest:"c".repeat(64),claimNo:1}],[]);
+ seam.rows=seam.rows.map(row=>({...row as object,matchedElementsJson:JSON.stringify({priorArtComparison:saved,priorArtComparisonSourceAudit:altered})}));
+ await expect(getComparisonSourceAudit(saved.inputs.caseId,saved.operationId)).rejects.toThrow();
+ expect(seam.executeAI).not.toHaveBeenCalled();
 });
