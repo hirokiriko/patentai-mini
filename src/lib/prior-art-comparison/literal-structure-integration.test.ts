@@ -52,6 +52,10 @@ describe("literal structure on the product path, with fictional SDK transport", 
         // This hand-authored mock explicitly reads the full claim, including
         // canonical mode/reference clauses; it supplies no new semantic facts.
         fixtureDeclareClauseReading(answer,input);
+        // v19 records this explicit fictional reading in a context proof,
+        // rather than the removed duplicate W inventory.
+        for(const source of answer.sources)for(const fact of source.facts)
+          fact.operators.context=[...fact.basis[0]];
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);
         answer = fictionalPropositionGeneration(input);

@@ -4,7 +4,7 @@ import {makePlan} from "./comparison";
 import {parseComparisonSource} from "./source";
 import {propositionSourceInput,decodeSourcePropositions} from "./proposition-extraction";
 import {compactDirectSourcePropositionModelSchemaFor as sourcePropositionModelSchemaFor} from "./source-direct-quotes";
-import {compactSourceWire,expandSourceWire} from "./source-wire-compact";
+import {compactSourceWire,expandSourceWire,SOURCE_MEANING_ENUMS} from "./source-wire-compact";
 
 function setup(text="装置は赤色弁を備える。"){
   const f=fictionalInputs();
@@ -37,7 +37,7 @@ it.each(["version","full_key","unknown_key","enum_negative","enum_fraction","enu
   if(mode==="unknown_key")Object.assign(fact,{unexpected:null});
   if(mode==="enum_negative")fact.m.x=-1;
   if(mode==="enum_fraction")fact.m.x=0.5;
-  if(mode==="enum_range")fact.m.P=20;
+  if(mode==="enum_range")fact.m.P=SOURCE_MEANING_ENUMS.predicate.length;
   if(mode==="enum_string")Object.assign(fact.m,{P:"has"});
   if(mode==="foreign_claim")Object.assign(f.wire.s[0],{c99:f.wire.s[0].c1});
   if(mode==="missing_source")f.wire.s.pop();

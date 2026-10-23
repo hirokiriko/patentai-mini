@@ -113,7 +113,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
-      if(mode==="missing_reading")delete wire.s[0].c1[0].W;
+      // v19 derives W; omit the required action citation itself instead.
+      if(mode==="missing_reading")delete wire.s[0].c1[0].m.a;
       if(mode==="unrelated_evidence")wire.s[0].c1[0].W=[[0,0,0,0]];
       if (mode === "blank" || mode === "overlong") {
         expect(wire.s[0].c1[0].m.J[0]).toHaveLength(1);
