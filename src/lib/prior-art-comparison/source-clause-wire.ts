@@ -94,7 +94,8 @@ export function resolveSourceEvidenceQuote(c: SourceReadingClaim, value: unknown
 /** v15 removes generated coordinates and the redundant positional Y table.
  * It does not create facts: every clause must be cited by an actual fact, and
  * the existing v14/domain validators still check all supplied roles/proofs. */
-export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], version: 15 | 16 = 16, capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
+export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedComparisonChunk[], version: 15 | 16 = 16, capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY,
+  evidenceQuote:typeof resolveSourceEvidenceQuote=resolveSourceEvidenceQuote) {
   const old = sourceGridPropositionModelSchemaFor(chunks,capacity), input = propositionSourceInput(chunks);
   const schema = structuredClone(old.jsonSchema) as JSONSchema7;
   schema.properties!.v = {type:"integer",enum:[version]};
@@ -150,12 +151,12 @@ export function sourceClausePropositionModelSchemaFor(chunks: readonly ManagedCo
           for (const id of ids) coverage.get(c.claimNo)![id].push(address);
           const term = (v:unknown) => {
             if (!Array.isArray(v) || !v.length || v.length > 4) throw invalid();
-            return v.map(q => sourceCellRef(c.grid,version === 15 ? resolveSourceClauseQuote(c,q) : resolveSourceEvidenceQuote(c,q,ids)));
+            return v.map(q => sourceCellRef(c.grid,version === 15 ? resolveSourceClauseQuote(c,q) : evidenceQuote(c,q,ids)));
           };
           const proof = (v:unknown) => {
             if (Array.isArray(v) && !v.length) { if (version === 16) throw invalid(); return []; }
-            if (typeof v === "string" || Array.isArray(v) && typeof v[0] === "string") {
-              if (version === 16) return sourceCellRef(c.grid,resolveSourceEvidenceQuote(c,v,ids));
+            if (typeof v === "string" || record(v) || Array.isArray(v) && typeof v[0] === "string") {
+              if (version === 16) return sourceCellRef(c.grid,evidenceQuote(c,v,ids));
               if (Array.isArray(v) && v.length === 5 && v.every(x=>typeof x==="string")) {
                 const [first,last,quote,before,after] = v;
                 if (![first,last].every(id=>/^(0|[1-9]\d*)$/.test(id) && Number.isSafeInteger(Number(id))) || Number(first)>Number(last)) throw invalid();

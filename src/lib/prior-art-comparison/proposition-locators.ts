@@ -5,7 +5,7 @@ import { extractionSchema, targetAtomSchema, targetPartSchema,
 import type { Span } from "./propositions";
 import { resolvePropositionQuote } from "./proposition-quotes";
 export { resolvePropositionQuote } from "./proposition-quotes";
-export { sourceSemanticPropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-semantic-wire";
+export { sourceTaskPropositionModelSchemaFor as sourcePropositionModelSchemaFor } from "./source-semantic-wire";
 
 // Quotes live at a shallow level. Nested propositions refer to this table;
 // adding a locator object at every span would exceed Azure's five levels.

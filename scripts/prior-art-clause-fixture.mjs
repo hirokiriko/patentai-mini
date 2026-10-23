@@ -15,7 +15,7 @@ export function fixtureDeclareClauseReading(value,input) {
 
 // Fictional SDK plumbing ONLY. Starts from hand-authored semantic facts and
 // spans, never an actual model response. Does not invent uncovered meanings.
-export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===2?17:16) {
+export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
   const readings = input.sources.map(s=>s.source.claims.map(c=>{
     let at=0;
     const clauses=c.clauses.map(([id,text],i)=>{
@@ -44,6 +44,11 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
       const ids=([a,b])=>r.clauses.flatMap(([x,y],id)=>x<b&&y>a?[id]:[]);
       const quote=ref=>{
         const [a,b]=span(ref);
+        if(version===18){
+          const selected=ids([a,b]),first=selected[0],last=selected.at(-1),lo=r.clauses[first][0],hi=r.clauses[last][1],q=r.text.slice(a,b),whole=r.text.slice(lo,hi);
+          if(first===last&&whole.indexOf(q)===whole.lastIndexOf(q))return [`${first}:${q}`];
+          return [{first,last,quote:q,before:r.text.slice(lo,a),after:r.text.slice(b,hi)}];
+        }
         if(version>=16){
           const q=r.text.slice(a,b);
           if(r.text.indexOf(q)===r.text.lastIndexOf(q))return [q];
@@ -78,7 +83,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           const first=selected[0],last=selected.at(-1),[x]=r.clauses[first],[,y]=r.clauses[last];
           // Whole clauses already preserve the original proof exactly. A
           // partial cross-clause proof keeps its exact text and own context.
-          if(a===x&&b===y)return selected;
+          if(a===x&&b===y)return version===18?{first,last}:selected;
           if(version>=16||first===last)return quote(v)[0];
           return [String(first),String(last),r.text.slice(a,b),r.text.slice(x,a),r.text.slice(b,y)];
         };
@@ -87,8 +92,8 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
         for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k))m[k]=m[k].map(term);
         const O=f.O===null?(version>=16?[null,null,null,null,null]:null):f.O.map(v=>v===null?null:proof(v));
         const F=f.F===null?null:{E:proof(f.F.E),X:proof(f.F.X),T:proof(f.F.T),C:f.F.C.map(proof),D:f.F.D.map(proof)};
-        if(version===17){
-          const cq=q=>typeof q==="string"?q:Array.isArray(q)&&q.length===3&&q.every(x=>typeof x==="string")?
+        if(version>=17){
+          const cq=q=>version===18?q:typeof q==="string"?q:Array.isArray(q)&&q.length===3&&q.every(x=>typeof x==="string")?
             {quote:q[0],before:q[1],after:q[2]}:(()=>{throw Error("fictional_context_invalid")})();
           const cp=p=>p===null?p:Array.isArray(p)&&p.every(x=>typeof x==="number")?p:cq(p);
           for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=m[k].map(cq);
@@ -111,7 +116,8 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           }
           const named=Object.fromEntries(["selection","extent","polarity","guard","context"].map((k,i)=>[k,cp(O[i])]));
           const frame=F===null?null:{E:cp(F.E),X:cp(F.X),T:cp(F.T),C:F.C.map(cp),D:F.D.map(cp)};
-          return {...f,m,O:named,F:frame,W:[...W].sort((a,b)=>a-b)};
+          const T=version===18?(r.c.readingTasks??[]).flatMap(([clause,predicate],id)=>m.k==="relation"&&m.P===predicate&&W.has(clause)?[id]:[]):undefined;
+          return {...f,...(T?{T}:{}),m,O:named,F:frame,W:[...W].sort((a,b)=>a-b)};
         }
         return {...f,m,O,F,W:[...W].sort((a,b)=>a-b)};
       });

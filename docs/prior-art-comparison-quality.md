@@ -1352,3 +1352,20 @@ retained. The protected runner must encrypt this evidence before persistence.
 There is no default raw-body sink, no body in public metadata, and no response or
 usage reconciliation on this path. Private storage failure stops the operation.
 Evidence capture alone never grants another request or weakens original-source QA.
+
+## Explicit source citations and reading tasks
+
+Source v18 binds each quote to one declared clause or contiguous clause range.
+Only that exact original range is searched; the decoder maps the occurrence to
+the existing citation grid without rewriting text or filling missing roles.
+Operator ranges must include every intermediate clause in W. The v17 decoder
+remains available for historical response replay.
+
+Each fact also declares the literal reading tasks it fulfils. Heat and valve
+tasks bind to the exact action occurrence. A narrowly detected positive flow task
+requires a separate route fact with an endpoint or intermediate component quoted
+in that flow clause. Negated flow and component definitions do not automatically
+create positive route tasks. Tasks supply no actors, conditions or endpoints.
+Task coverage never replaces complete original-source QA: all component functions,
+mode routes, conditions, references, power transitions and independent thermal
+actions still need the existing semantic/domain checks and independent reading.
