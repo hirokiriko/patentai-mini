@@ -60,6 +60,30 @@ export function sourceCompleteActionCues(c:SourceReadingClaim):SourceActionCue[]
   return [...cues.filter(cue=>!allStates.some(s=>contains(s.span,cue.span))),...states].sort((a,b)=>a.span[0]-b.span[0]);
 }
 
+/** v20 also lists printed component functions missed by the earlier heat/valve
+ * checklist. It supplies occurrence locations only, never subjects, objects or
+ * completed meanings. Conditional premises and bare equipment nouns do not
+ * assert a new function. Original-source QA remains necessary. */
+export function sourceFullActionCues(c:SourceReadingClaim):SourceActionCue[]{
+  const cues=sourceCompleteActionCues(c),text=c.grid.text;
+  const pattern=/(?:圧縮|減圧|加熱|冷却|検出|出力|流通)(?:していなかった|していない|しなかった|しない|せず|する|して|した|し(?=[、，]))/gu;
+  for(const match of text.matchAll(pattern)){
+    const end=match.index+match[0].length;
+    const tail=textTail(text,end),span:Span=[match.index,end+tail.length];
+    const clause=c.clauses.findIndex(s=>contains(s,span));if(clause<0)throw invalid();
+    const rest=text.slice(span[1],c.clauses[clause][1]);
+    if(/^(?:(?:状態)?(?:の)?(?:場合|とき|時|際|なら|後)|と(?=[、，])|ても|たら|必要|こと(?:は|が|も|なく|を禁止)|ものでは|のであれば)/u.test(rest))continue;
+    const negative=tail.length>0||/(?:ない|なかった|ず)$/u.test(match[0]);
+    if(!negative&&/する$/u.test(match[0])&&!/^(?:[、，。]|$|ための|[\p{Script=Han}\p{Script=Katakana}ー]{0,40}(?:機|器|装置|通路|センサ)(?:と|を備|[、，。]|$))/u.test(rest))continue;
+    // An unmatched past/te-form alone is not an asserted function. Permit the
+    // explicit connecting forms and capability definitions actually printed.
+    if(/した$/u.test(match[0])&&!/^[、，。]/u.test(rest))continue;
+    if(/して$/u.test(match[0])&&(/^(?:い|お|から|は|も)/u.test(rest)||!/^[^、，。]*する(?:[\p{Script=Han}\p{Script=Katakana}ー]{0,40}(?:機|器|装置|通路|センサ)(?:と|を備))?[、，。]?$/u.test(rest)||/(?:場合|とき|なら|のであれば|禁止|必要|ではない)/u.test(rest)))continue;
+    cues.push({span,clause,predicate:"executes",polarity:negative?"negative":"positive"});
+  }
+  return cues.sort((a,b)=>a.span[0]-b.span[0]);
+}
+
 export type SourceOrGroup={branches:Span[];span:Span};
 /** Recognize only punctuation-delimited timing alternatives whose branch ends
  * are explicit. No guessed condition boundary or general Japanese parsing. */

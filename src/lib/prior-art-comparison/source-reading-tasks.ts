@@ -1,5 +1,5 @@
 import type {SourceReadingClaim} from "./source-clause-coverage";
-import {sourceActionCues,sourceCompleteActionCues} from "./source-semantic-check";
+import {sourceActionCues,sourceCompleteActionCues,sourceFullActionCues} from "./source-semantic-check";
 import {resolveSourceContextQuote} from "./source-direct-quotes";
 import {sourceCellRef} from "./source-citation-grid";
 import type {Span} from "./propositions";
@@ -11,8 +11,8 @@ export type SourceReadingTask={clause:number;kind:string;span:Span;polarity:stri
 
 /** Literal occurrences, never supplied propositions. In particular a component
  * definition, location or negative flow does not force an invented route. */
-export function sourceReadingTasks(c:SourceReadingClaim,complete=false):SourceReadingTask[]{
-  const tasks:SourceReadingTask[]=(complete?sourceCompleteActionCues(c):sourceActionCues(c)).map(t=>({...t,kind:t.predicate}));
+export function sourceReadingTasks(c:SourceReadingClaim,complete=false,functions=false):SourceReadingTask[]{
+  const tasks:SourceReadingTask[]=(functions?sourceFullActionCues(c):complete?sourceCompleteActionCues(c):sourceActionCues(c)).map(t=>({...t,kind:t.predicate}));
   c.clauses.forEach((span,clause)=>{
     const text=c.grid.text.slice(...span);
     // Conservatively leave any negated clause to full original QA. A reading
@@ -106,4 +106,59 @@ export function sourceDeclaredEvidence(c:SourceReadingClaim,f:Record<string,unkn
  * generated task numbers never adds a meaning or credits an unrelated fact. */
 export function sourceMatchedTasks(tasks:SourceReadingTask[],m:Record<string,unknown>,ids:readonly number[],action:Span|null,routePoints:readonly Span[]):number[]{
   return tasks.flatMap((_,id)=>{try{return assertSourceTaskBindings(tasks,[id],m,ids,action,routePoints);}catch{return [];}});
+}
+
+/** v20 names a contiguous original range even for a single-clause quote.
+ * Conversion records only the supplied location; no quote is searched elsewhere. */
+export function sourceOrderedQuote(value:unknown):Record<string,unknown>{
+  if(typeof value==="string"){
+    const m=/^(0|[1-9]\d*)-(0|[1-9]\d*):([\s\S]+)$/u.exec(value);
+    if(!m)throw invalid();
+    return {first:Number(m[1]),last:Number(m[2]),quote:m[3],before:"",after:""};
+  }
+  if(!exact(value,["first","last","quote","before","after"]))throw invalid();
+  return {...value};
+}
+export function resolveSourceOrderedQuote(c:SourceReadingClaim,value:unknown,ids:readonly number[]):Span{
+  return resolveSourceTaskQuote(c,sourceOrderedQuote(value),ids);
+}
+export function sourceDeclaredOrderedEvidence(c:SourceReadingClaim,f:Record<string,unknown>,fixed:readonly Span[]=[]):number[]{
+  if(!record(f.m)||!exact(f.O,["selection","extent","polarity","guard","context"]))throw invalid();
+  // Operators must quote their actual words, never a bare whole-claim range.
+  for(const value of Object.values(f.O))if(value!==null)sourceOrderedQuote(value);
+  const m={...f.m};
+  const term=(value:unknown)=>{if(!Array.isArray(value))throw invalid();return value.map(sourceOrderedQuote);};
+  for(const key of ["u","i","j"])if(Object.hasOwn(m,key)&&m[key]!==null)m[key]=term(m[key]);
+  for(const key of ["G","M","V","B","J"])if(Object.hasOwn(m,key)){
+    if(!Array.isArray(m[key]))throw invalid();m[key]=m[key].map(term);
+  }
+  if(Object.hasOwn(m,"a"))m.a=sourceOrderedQuote(m.a);
+  const O=Object.fromEntries(Object.entries(f.O).map(([key,value])=>[key,value===null?null:sourceOrderedQuote(value)]));
+  const proof=(value:unknown)=>value===null||exact(value,["first","last"])?value:sourceOrderedQuote(value);
+  let F=f.F;
+  if(record(F)){
+    if(!exact(F,["E","X","T","C","D"])||!Array.isArray(F.C)||!Array.isArray(F.D))throw invalid();
+    F={E:proof(F.E),X:proof(F.X),T:proof(F.T),C:F.C.map(proof),D:F.D.map(proof)};
+  }
+  return sourceDeclaredEvidence(c,{...f,m,O,F},fixed);
+}
+/** Rows are original reading units, not inferred meanings or coverage credit. */
+export function sourceOrderedFactRows(c:SourceReadingClaim,value:unknown):unknown[]{
+  if(!Array.isArray(value)||value.length!==c.clauses.length||value.some(row=>!Array.isArray(row)))throw invalid();
+  const all=c.clauses.map((_,id)=>id);
+  return value.flatMap((row,id)=>row.map((f:unknown)=>{
+    if(!record(f)||!record(f.m))throw invalid();
+    const quotes:unknown[]=[];
+    for(const key of ["u","i","j"])if(f.m[key]!==null&&Object.hasOwn(f.m,key)){
+      if(!Array.isArray(f.m[key]))throw invalid();quotes.push(...f.m[key]);
+    }
+    for(const key of ["G","M","V","B","J"])if(Object.hasOwn(f.m,key)){
+      if(!Array.isArray(f.m[key])||f.m[key].some((term:unknown)=>!Array.isArray(term)))throw invalid();
+      quotes.push(...f.m[key].flat());
+    }
+    if(Object.hasOwn(f.m,"a"))quotes.push(f.m.a);
+    const own=c.clauses[id];
+    if(!quotes.some(q=>{const span=resolveSourceOrderedQuote(c,q,all);return span[0]<own[1]&&span[1]>own[0];}))throw invalid();
+    return f;
+  }));
 }

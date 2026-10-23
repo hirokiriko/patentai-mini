@@ -6,9 +6,9 @@ import { assertSourceGridProviderSchema } from "./source-grid-wire";
 import { sourceReadingClaim, type SourceReadingClaim } from "./source-clause-coverage";
 import { SOURCE_MEANING_ENUMS } from "./source-wire-compact";
 import { SOURCE_CAPACITY } from "./source-capacity";
-import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
+import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceFullActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
 import type { Span } from "./propositions";
-import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks} from "./source-reading-tasks";
+import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks,sourceOrderedQuote,resolveSourceOrderedQuote,sourceDeclaredOrderedEvidence,sourceOrderedFactRows} from "./source-reading-tasks";
 
 const invalid=()=>new Error("comparison_source_semantic_wire_invalid");
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -45,12 +45,21 @@ export function propositionSourceCitedTransport(input:ReturnType<typeof proposit
   })}}))};
 }
 export const sourceCitedPropositionModelSchemaFor=(chunks:readonly ManagedComparisonChunk[])=>sourceSemanticPropositionModelSchemaFor(chunks,19);
+export function propositionSourceOrderedTransport(input:ReturnType<typeof propositionSourceInput>){
+  const old=propositionSourceCitedTransport(input);
+  return {...old,citationClauses:{version:5},sources:old.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>{
+    const reading=sourceReadingClaim(c.claimNo,c.clauses.map(([,text])=>text).join(""));
+    return {...c,readingTasks:sourceReadingTasks(reading,true,true).map(t=>[t.clause,t.kind,t.polarity])};
+  })}}))};
+}
+export const sourceOrderedPropositionModelSchemaFor=(chunks:readonly ManagedComparisonChunk[])=>sourceSemanticPropositionModelSchemaFor(chunks,20);
+
 
 /** New output contract, not a repair of v16 responses. Names replace numeric
  * meaning enums; strict context objects replace ambiguous string-array tuples.
  * The existing exact citation, domain, reference and route validators remain. */
-export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[],version:17|18|19=17){
-  const resolveQuote=version>=18?resolveSourceTaskQuote:resolveSourceEvidenceQuote;
+export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[],version:17|18|19|20=17){
+  const resolveQuote=version===20?resolveSourceOrderedQuote:version>=18?resolveSourceTaskQuote:resolveSourceEvidenceQuote;
   const old=sourceClausePropositionModelSchemaFor(chunks,16,SOURCE_CAPACITY,resolveQuote),input=propositionSourceInput(chunks);
   const schema=structuredClone(old.jsonSchema) as JSONSchema7;
   schema.properties!.v={type:"integer",enum:[version]};
@@ -62,9 +71,11 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
     schema.definitions!.PriorArtSourceCellQuote={anyOf:[{type:"string",description:"clauseID:exact unique quote, e.g. 2:赤弁; clause must be in W."},{$ref:"#/definitions/PriorArtSourceQuoteContext"}]};
     schema.definitions!.PriorArtSourceRange={type:"object",properties:{first:{type:"integer"},last:{type:"integer"}},required:["first","last"],additionalProperties:false};
     schema.definitions!.PriorArtSourceEvidence={anyOf:[{$ref:"#/definitions/PriorArtSourceRange"},quoteRef]};
-    if(version===19)schema.definitions!.PriorArtSourceCellQuote={anyOf:[{type:"string",description:"clauseID:exact unique quote, e.g. 2:赤弁."},{$ref:"#/definitions/PriorArtSourceQuoteContext"}]};
+    if(version>=19)schema.definitions!.PriorArtSourceCellQuote={anyOf:[{type:"string",description:"clauseID:exact unique quote, e.g. 2:赤弁."},{$ref:"#/definitions/PriorArtSourceQuoteContext"}]};
   }
-  schema.definitions!.PriorArtSourceOperators={type:"object",properties:Object.fromEntries(operatorKeys.map(k=>[k,{anyOf:[evidenceRef,{type:"null"}]}])),required:[...operatorKeys],additionalProperties:false};
+  if(version===20)schema.definitions!.PriorArtSourceCellQuote={anyOf:[{type:"string",description:"first-last:exact quote, including same-clause 2-2:赤弁; unique inside that explicit consecutive range."},{$ref:"#/definitions/PriorArtSourceQuoteContext"}]};
+  schema.definitions!.PriorArtSourceOperators={type:"object",properties:Object.fromEntries(operatorKeys.map(k=>[k,{anyOf:[version===20?quoteRef:evidenceRef,{type:"null"}]}])),required:[...operatorKeys],additionalProperties:false};
+  if(version===20)schema.definitions!.PriorArtSourceOrderedRows={type:"array",items:{type:"array",items:{$ref:"#/definitions/PriorArtSourceAdditionalFact"}},description:"Exactly one facts row per input clause, original order; [] allowed. Each fact quotes its own row inside m. All existing fact and claim coverage checks remain."};
   const change=(node:unknown):void=>{
     if(!record(node))return;
     if(record(node.properties)){
@@ -74,14 +85,17 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
         node.properties=properties;
         node.required=["T",...(node.required as string[])];
       }
-      if(version===19&&Object.hasOwn(properties,"W")){
+      if(version>=19&&Object.hasOwn(properties,"W")){
         delete properties.W;
         node.required=(node.required as string[]).filter(k=>k!=="W");
+      }
+      if(version===20)for(const key of Object.keys(properties))if(/^c[1-9]\d*$/u.test(key)){
+        properties[key]={$ref:"#/definitions/PriorArtSourceOrderedRows"};
       }
       for(const [key,full] of Object.entries(enumKeys)){
         const field=properties[key];
         if(record(field)&&Array.isArray(field.enum)){
-          const allowed=field.enum.map(n=>SOURCE_MEANING_ENUMS[full][n as number]).filter(v=>version===19||v!=="is_state");
+          const allowed=field.enum.map(n=>SOURCE_MEANING_ENUMS[full][n as number]).filter(v=>version>=19||v!=="is_state");
           if(allowed.some(x=>x===undefined))throw invalid();properties[key]={...field,type:"string",enum:allowed};
         }
       }
@@ -100,6 +114,7 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
       if(!exact(raw,["v","s"])||raw.v!==version||!Array.isArray(raw.s)||raw.s.length!==input.sources.length||
         Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_CAPACITY.wireBytes||!old.validate)throw invalid();
       const quote=(v:unknown):unknown=>{
+        if(version===20)return sourceOrderedQuote(v);
         if(version>=18){
           if(typeof v==="string"&&/^(0|[1-9]\d*):[\s\S]+$/u.test(v))return v;
           if(exact(v,["first","last","quote","before","after"]))return {...v};
@@ -122,14 +137,14 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
         if(!record(source)||source.d!==input.sources[i].sourceDigest)throw invalid();
         const claims=input.sources[i].source.claims.map(c=>sourceReadingClaim(c.claimNo,c.segments.map(p=>p.text).join("")));
         const checked=new Map(claims.map(c=>[c.claimNo,[] as CheckedSourceFact[]]));
-        const tasks=new Map(claims.map(c=>[c.claimNo,sourceReadingTasks(c,version===19)]));
+        const tasks=new Map(claims.map(c=>[c.claimNo,sourceReadingTasks(c,version>=19,version===20)]));
         const completed=new Map(claims.map(c=>[c.claimNo,new Set<number>()]));
         const fact=(c:SourceReadingClaim,f:unknown)=>{
           if(!record(f)||!record(f.m)||!exact(f.O,operatorKeys))throw invalid();
           const frame=Number.isSafeInteger(f.F)?input.sources[i].recognizedLoopRoutes[Number(f.F)]:undefined;
-          if(version===19&&frame&&frame.claimNo!==c.claimNo)throw invalid();
+          if(version>=19&&frame&&frame.claimNo!==c.claimNo)throw invalid();
           const fixed:Span[]=frame?[frame.mode,frame.entry,frame.exit,frame.route,frame.definition,frame.control]:[];
-          const ids=version===19?sourceDeclaredEvidence(c,f,fixed):f.W as number[];
+          const ids=version===20?sourceDeclaredOrderedEvidence(c,f,fixed):version===19?sourceDeclaredEvidence(c,f,fixed):f.W as number[];
           if(!Array.isArray(ids)||!ids.length||ids.length>12||ids.some(n=>!Number.isSafeInteger(n)||n<0||!c.clauses[n])||new Set(ids).size!==ids.length)throw invalid();
           const m={...f.m},termSpans=new Map<string,Span[][]>();
           const term=(v:unknown):{wire:unknown[];spans:Span[]}=>{
@@ -168,7 +183,7 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
             polarity:f.m.p as string,polarityProof:readProof(f.O.polarity),evidence:ids.map(id=>c.clauses[id]),objectSpans:termSpans.get("J")??[],guardSpans:termSpans.get("G")??[],guardProof:readProof(f.O.guard),identity});
           if(version>=18){
             const routePoints=["i","V","j"].flatMap(k=>(termSpans.get(k)??[]).flat());
-            const selected=version===19?sourceMatchedTasks(tasks.get(c.claimNo)!,f.m,ids,action,routePoints):assertSourceTaskBindings(tasks.get(c.claimNo)!,f.T,f.m,ids,action,routePoints);
+            const selected=version>=19?sourceMatchedTasks(tasks.get(c.claimNo)!,f.m,ids,action,routePoints):assertSourceTaskBindings(tasks.get(c.claimNo)!,f.T,f.m,ids,action,routePoints);
             selected.forEach(id=>completed.get(c.claimNo)!.add(id));
             const {T,...rest}=f;void T;return {...rest,W:ids,m,O,F};
           }
@@ -180,11 +195,11 @@ export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedC
           const no=own?Number(own[1]):loop?input.sources[i].recognizedLoopRoutes[Number(loop[1])]?.claimNo:undefined;
           const c=claims.find(c=>c.claimNo===no);if(!c)throw invalid();
           if(loop)return[key,fact(c,value)];
-          if(!Array.isArray(value))throw invalid();return[key,value.map(v=>fact(c,v))];
+          if(!Array.isArray(value))throw invalid();return[key,(version===20?sourceOrderedFactRows(c,value):value).map(v=>fact(c,v))];
         }));
         for(const c of claims){
           if(version>=18&&completed.get(c.claimNo)!.size!==tasks.get(c.claimNo)!.length)throw invalid();
-          assertSourceSemanticReading(c,checked.get(c.claimNo)!,version===19?sourceCompleteActionCues(c):sourceActionCues(c));
+          assertSourceSemanticReading(c,checked.get(c.claimNo)!,version===20?sourceFullActionCues(c):version===19?sourceCompleteActionCues(c):sourceActionCues(c));
         }
         return answer;
       })};
