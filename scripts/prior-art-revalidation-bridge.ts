@@ -8,6 +8,8 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
   "journal" | "assertAdmission" | "assertDiagnosticQa" | "transport"> & {
   parent(command: "admit" | "claim" | "reserve" | "reconcile" | "qa" | "stop", value: unknown): Promise<void>;
   record(name: string, bytes: Uint8Array): Promise<void>;
+  /** Explicit protected Local sink, separate from publishable metadata. */
+  recordPrivateFailureBody?(ordinal: number, bytes: Uint8Array): Promise<void>;
   transport: typeof fetch;
 }) {
   const plan = revalidationPlan(deps.propositionSlot);
@@ -44,7 +46,7 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
         throw Error("revalidation_transport_rejected");
       }
       // Headers are recorded before reading or discarding the body. Never save
-      // arbitrary error text/headers: upstream errors can contain input/secrets.
+      // arbitrary error text/headers in metadata: errors can contain input/secrets.
       const requestId = [received.headers.get("x-request-id"), received.headers.get("apim-request-id")]
         .find(id => id && /^(?:[a-f0-9]{32}|[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})$/i.test(id)) ?? null;
       try {
@@ -54,7 +56,8 @@ export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
         })));
       } catch (error) { void received.body?.cancel().catch(() => undefined); throw error; }
       if (!received.ok) {
-        const failure = await providerFailureMetadata(received, init?.signal);
+        const failure = await providerFailureMetadata(received, init?.signal,
+          deps.recordPrivateFailureBody && (bytes => deps.recordPrivateFailureBody!(stage.ordinal, bytes)));
         await deps.record(`provider-failure-${stage.ordinal}.json`, Buffer.from(JSON.stringify(failure)));
         return new Response(null, { status: received.status, headers: received.headers });
       }

@@ -13,20 +13,45 @@ const body = JSON.stringify({ model: binding.deployment, input: [{ role: "develo
   text: { format: { type: "json_schema", name: "response", strict: true, schema: packet.schema } }, reasoning: { effort: "low" }, service_tier: "default" });
 const response = () => Response.json({ id: "resp_fixture", object: "response", model: "gpt-5.4", service_tier: "default", status: "completed",
   output: [{ type: "message", content: [{ type: "output_text", text: "{}" }] }], usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } });
-function fixture() {
+function fixture(recordPrivateFailureBody?: (ordinal: number, bytes: Uint8Array) => Promise<void>) {
   const records = new Map<string, Uint8Array>(), calls: string[] = [];
   const parent = vi.fn(async (command: string) => { calls.push(command); });
   const record = vi.fn(async (name: string, bytes: Uint8Array) => { expect(records.has(name)).toBe(false); records.set(name, bytes); calls.push(name); });
   const transport = vi.fn(async () => { calls.push("transport"); return response(); });
   const validateAnswer = vi.fn(async () => { calls.push("validate"); });
   const bridge = createRevalidationBridge({ binding, decision, parent, record, transport, packet: () => packet,
-    validateAnswer });
+    validateAnswer, recordPrivateFailureBody });
   return { bridge, records, calls, parent, record, transport, validateAnswer,
     send: (signal = new AbortController().signal) => bridge.fetch(binding.endpoint, { method: "POST", body, signal }) };
 }
 beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-18T05:00:00Z")); });
 afterEach(() => vi.restoreAllMocks());
 describe("protected-parent revalidation adapter", () => {
+  it("preserves complete failure bytes only in an explicit private sink and never reconciles", async () => {
+    const privateSink = vi.fn(async (_ordinal: number, _bytes: Uint8Array) => {});
+    const f = fixture(privateSink), raw = JSON.stringify({error:{message:"FICTIONAL_PRIVATE schema field details"}});
+    f.transport.mockResolvedValue(new Response(raw,{status:400}));
+    await expect(f.send()).rejects.toThrow();
+    expect(privateSink).toHaveBeenCalledOnce();
+    expect(privateSink.mock.calls[0][0]).toBe(44);
+    expect(Buffer.from(privateSink.mock.calls[0][1]).toString()).toBe(raw);
+    expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_PRIVATE");
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+    await expect(f.send()).rejects.toThrow(); expect(f.transport).toHaveBeenCalledOnce();
+  });
+  it("does not preserve an over-limit or interrupted error body", async () => {
+    const sink = vi.fn(async (_ordinal: number, _bytes: Uint8Array) => {}), f=fixture(sink);
+    f.transport.mockResolvedValue(new Response("x".repeat(16385),{status:400}));
+    await expect(f.send()).rejects.toThrow(); expect(sink).not.toHaveBeenCalled();
+  });
+  it("keeps a failed private write unknown without exposing its error", async () => {
+    const f=fixture(async()=>{throw Error("FICTIONAL_PRIVATE_WRITE_ERROR");});
+    f.transport.mockResolvedValue(Response.json({error:{message:"FICTIONAL_PRIVATE"}},{status:400}));
+    await expect(f.send()).rejects.toThrow("revalidation_stopped");
+    expect(f.records.has("provider-failure-44.json")).toBe(false);
+    expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
+    expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_PRIVATE");
+  });
   it("records exact request before reservation ACK and exact response before reconciliation", async () => {
     const f = fixture(); await f.send();
     expect(f.calls).toEqual(["admit", "claim", "request-44.json", "reserve", "transport", "provider-metadata-44.json", "provider-response-44.json", "reconcile", "validate", "answer-44.json"]);

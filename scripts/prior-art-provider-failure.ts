@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 
 // Provider errors may echo input or credentials. Retain only fixed vocabulary
-// and a complete-body hash, never arbitrary messages, codes, parameters or URLs.
+// and a complete-body hash in metadata. An explicitly supplied protected Local
+// sink may preserve the bounded complete body separately; never return it.
 const codes = new Set(["invalid_json_schema", "invalid_request_error", "invalid_parameter", "unsupported_parameter",
   "unsupported_value", "context_length_exceeded", "rate_limit_exceeded", "insufficient_quota", "content_filter", "server_error"]);
 const types = new Set(["invalid_request_error", "rate_limit_error", "server_error", "authentication_error", "permission_error"]);
 const parameters = new Set(["text.format", "text.format.schema", "response_format", "max_output_tokens", "model", "input", "reasoning.effort", "service_tier"]);
 
 /** Diagnostic read only. It never establishes known usage or allows retry. */
-export async function providerFailureMetadata(response: Response, signal?: AbortSignal | null) {
+export async function providerFailureMetadata(response: Response, signal?: AbortSignal | null,
+  preservePrivateBody?: (bytes: Uint8Array) => Promise<void>) {
   const result: { status: number; bodyState: string; bodyBytes: number; bodySHA256: string | null;
     code: string | null; type: string | null; param: string | null; usageKnown: false } = {
     status: response.status, bodyState: "absent", bodyBytes: 0, bodySHA256: null,
@@ -16,6 +18,7 @@ export async function providerFailureMetadata(response: Response, signal?: Abort
   };
   if (!response.body) return result;
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let privateBody: Uint8Array | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined, complete = false;
   let abort: (() => void) | undefined;
   const stopped = new Promise<never>((_, reject) => {
@@ -35,6 +38,7 @@ export async function providerFailureMetadata(response: Response, signal?: Abort
     const raw = Buffer.concat(chunks);
     result.bodySHA256 = createHash("sha256").update(raw).digest("hex");
     result.bodyState = "complete";
+    if (response.status === 400 && preservePrivateBody) privateBody = raw;
     try {
       const body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
       const error = body?.error;
@@ -50,6 +54,15 @@ export async function providerFailureMetadata(response: Response, signal?: Abort
     clearTimeout(timer);
     if (abort) signal?.removeEventListener("abort", abort);
     if (!complete) void reader.cancel().catch(() => undefined);
+  }
+  if (privateBody && !signal?.aborted) {
+    let privateTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([preservePrivateBody!(privateBody), new Promise<never>((_, reject) => {
+        privateTimer = setTimeout(() => reject(Error("provider_failure_private_record_failed")), 1000);
+      })]);
+    } catch { throw Error("provider_failure_private_record_failed"); }
+    finally { clearTimeout(privateTimer); }
   }
   return result;
 }

@@ -1342,3 +1342,13 @@ wire28829B、witness8927B、descriptor3071Bで、原wireも不変。
 承認済み第2診断へ進む。新実AI品質、正常比較完走、TECHNICAL_GOは未証明。
 既存署名鍵の復元先不明による通常統合HOLD、既承認本番1回800円、
 配備1回＋rollback1回1400円/Job0、2026-10-20 23:59 JST期限を維持する。
+
+## Local provider failure evidence
+
+The Local bridge retains safe HTTP metadata separately from any provider error
+body. An explicitly configured private sink can preserve a complete HTTP400 body
+within the existing 16 KiB limit; partial, aborted and oversized bodies are not
+retained. The protected runner must encrypt this evidence before persistence.
+There is no default raw-body sink, no body in public metadata, and no response or
+usage reconciliation on this path. Private storage failure stops the operation.
+Evidence capture alone never grants another request or weakens original-source QA.
