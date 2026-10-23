@@ -1,6 +1,6 @@
 import { jsonSchema, type JSONSchema7 } from "ai";
 import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
-import { propositionSourceInput, decodeSourcePropositions } from "./proposition-extraction";
+import { propositionSourceInput, decodeSourcePropositions, validateSourceClaimFacts } from "./proposition-extraction";
 import { propositionSourceClauseTransport, resolveSourceEvidenceQuote, sourceClausePropositionModelSchemaFor } from "./source-clause-wire";
 import { assertSourceGridProviderSchema } from "./source-grid-wire";
 import { sourceReadingClaim, type SourceReadingClaim } from "./source-clause-coverage";
@@ -8,6 +8,9 @@ import { SOURCE_MEANING_ENUMS } from "./source-wire-compact";
 import { SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceFullActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
 import type { Span } from "./propositions";
+import {sourceCellRef} from "./source-citation-grid";
+import {expandSourceWire} from "./source-wire-compact";
+import {validateDirectSourceClaim} from "./source-direct-quotes";
 import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks,sourceOrderedQuote,resolveSourceOrderedQuote,sourceDeclaredOrderedEvidence,sourceOrderedFactRows,sourceQuoteDictionary,sourceDictionaryFact,sourceIdentifiedQuoteDictionary,sourceIdentifiedFact} from "./source-reading-tasks";
 
 const invalid=()=>new Error("comparison_source_semantic_wire_invalid");
@@ -334,4 +337,50 @@ export function sourceIdentifiedPropositionModelSchemaFor(chunks:readonly Manage
       return await old.validate(converted);
     }catch{return {success:false,error:invalid()};}
   }});
+}
+
+/** Resolve a single fresh v22-shaped claim answer through the existing strict
+ * direct-role and extraction-domain validators. Only citation spelling changes;
+ * the original full source, claim coordinates and frame IDs remain fixed. */
+export async function validateIdentifiedSourceClaim(source:ReturnType<typeof propositionSourceInput>["sources"][number],claimNo:number,answer:unknown){
+ const original=source.source.claims.find(c=>c.claimNo===claimNo);if(!original||!record(answer))throw invalid();
+ const c=sourceReadingClaim(claimNo,original.segments.map(p=>p.text).join(""));
+ const own=answer[`c${claimNo}`];if(!exact(own,["Q","facts"])||!Array.isArray(own.facts))throw invalid();
+ const labels=sourceIdentifiedQuoteDictionary(c,own.Q),dictionary=sourceQuoteDictionary(c,labels.quotes);
+ const loops=source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===claimNo?[id]:[]);
+ if(!exact(answer,["d",`c${claimNo}`,...loops.map(id=>`loop${id}`)])||answer.d!==source.sourceDigest)throw invalid();
+ const fact=(raw:unknown)=>{
+  const f=sourceDictionaryFact(c,sourceIdentifiedFact(raw,labels),dictionary).fact;
+  const frame=Number.isSafeInteger(f.F)?source.recognizedLoopRoutes[Number(f.F)]:undefined;
+  if(frame&&frame.claimNo!==claimNo)throw invalid();
+  const fixed:Span[]=frame?[frame.mode,frame.entry,frame.exit,frame.route,frame.definition,frame.control]:[];
+  const ids=sourceDeclaredOrderedEvidence(c,f,fixed),q=(v:unknown)=>({K:sourceCellRef(c.grid,resolveSourceOrderedQuote(c,v,ids))});
+  const m={...f.m};
+  for(const[key,full]of Object.entries(enumKeys))if(Object.hasOwn(m,key)){
+   const at=SOURCE_MEANING_ENUMS[full].indexOf(m[key] as string);
+   if(at<0||({x:2,g:3,p:2,e:4,S:4} as Record<string,number>)[key]===at)throw invalid();
+   m[key]=at;
+  }
+  const term=(v:unknown)=>{if(!Array.isArray(v)||!v.length||v.length>4)throw invalid();return v.map(q);};
+  for(const key of ["u","i","j"])if(Object.hasOwn(m,key)&&m[key]!==null)m[key]=term(m[key]);
+  for(const key of ["G","M","V","B","J"])if(Object.hasOwn(m,key)){
+   if(!Array.isArray(m[key]))throw invalid();m[key]=m[key].map(term);
+  }
+  if(f.m.k==="relation"){q(m.a);delete m.a;}
+  else if(Object.hasOwn(m,"a"))throw invalid();
+  const proof=(v:unknown)=>v===null?null:q(v);
+  const O=operatorKeys.map(key=>proof(f.O[key]));
+  let F=f.F;
+  if(record(F)){
+   if(!exact(F,["E","X","T","C","D"])||!Array.isArray(F.C)||!Array.isArray(F.D))throw invalid();
+   F={E:proof(F.E),X:proof(F.X),T:proof(F.T),C:F.C.map(proof),D:F.D.map(proof)};
+  }
+  return {...f,m,O,F};
+ };
+ const converted:Record<string,unknown>={d:source.sourceDigest,[`c${claimNo}`]:own.facts.map(fact)};
+ for(const id of loops)converted[`loop${id}`]=fact(answer[`loop${id}`]);
+ dictionary.assertAllUsed();
+ const expanded=expandSourceWire({v:13,s:[converted]}) as {sources:unknown[]};
+ const decoded=await validateDirectSourceClaim(source,claimNo,expanded.sources[0],SOURCE_CAPACITY);
+ validateSourceClaimFacts(source,claimNo,decoded.facts);
 }

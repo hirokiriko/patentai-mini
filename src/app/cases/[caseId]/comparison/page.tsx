@@ -15,12 +15,13 @@ export default async function ComparisonPage({ params }: { params: Promise<{ cas
   return <main className="mx-auto max-w-5xl space-y-7 p-6 text-slate-900">
     <Link href={`/cases/${caseId}`} className="text-blue-700 underline">案件に戻る</Link>
     <header className="space-y-3"><h1 className="text-2xl font-bold">根拠付き指定文献比較</h1><p className="text-lg">{catalog.title}</p><p>{SCOPE_NOTICE}</p></header>
-    <SelectionForm catalog={catalog} completedIds={saved.results.map(r => r.operationId)} blocked={saved.reservedCount > 0 || saved.invalidCount > 0} />
+    <SelectionForm catalog={catalog} completedIds={saved.results.map(r => r.operationId)} pendingIds={saved.pendingOperationIds} blocked={saved.reservedCount > 0 || saved.invalidCount > 0} />
     <section className="space-y-5" aria-label="保存済み比較結果">
       <h2 className="text-xl font-bold">保存済み比較結果</h2>
       {saved.legacyCount > 0 && <p>旧形式の比較結果が{saved.legacyCount}件あります。旧AI部分比較または単語一致fallbackであり、全文・根拠を再検証していません。案件画面で閲覧できます。</p>}
       {saved.invalidCount > 0 && <p role="alert">整合を確認できない保存結果があります。該当結果の表示・出力を停止しています。</p>}
-      {saved.reservedCount > 0 && <p role="alert">完了未確認の試行が{saved.reservedCount}件あります。同じ操作IDは再送しません。利用状況と保存結果の照合が必要です。</p>}
+      {saved.failedOperations.map(({ operationId, failure }) => <p key={operationId} role="alert">操作ID {operationId} は品質検証で停止しました（{{ source_reading: "原文の読取り", generation: "比較文の生成", review: "比較文の照合" }[failure.stage]}：{{ protocol_invalid: "回答形式・根拠の不備", review_rejected: "品質基準に不合格", output_incomplete: "回答の出力不足" }[failure.kind]}）。予約を保持し、AIは再送しません。</p>)}
+      {saved.reservedCount > saved.failedOperations.length && <p role="alert">完了未確認の試行が{saved.reservedCount - saved.failedOperations.length}件あります。同じ操作IDは再送しません。利用状況と保存結果の照合が必要です。</p>}
       {saved.results.length === 0 && <p>新形式で完了した比較はまだありません。失敗した試行や未比較を、正常0件として表示することはありません。</p>}
       {saved.results.map(result => <article key={result.operationId} className="space-y-4 rounded-xl border border-slate-300 p-5">
         <h3 className="text-lg font-bold">{result.generatedAt} の比較</h3>

@@ -2,17 +2,20 @@ import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { modelRequestBytes } from "./generation-batch";
 import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
-import { canonicalPropositionSources, PROPOSITION_DESCRIPTOR_MAX_BYTES, PROPOSITION_SOURCE_SYSTEM, PROPOSITION_TARGET_SYSTEM,
-  propositionSourceInput, propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
-import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
+import { canonicalPropositionSources, PROPOSITION_DESCRIPTOR_MAX_BYTES, PROPOSITION_TARGET_SYSTEM,
+  propositionSourceInput, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
+import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { SOURCE_CAPACITY } from "./source-capacity";
+import { sourceClaimExtractionPlan } from "./source-claim-extraction";
 
 /** Reject the complete plan before any reservation/send. The extraction is
  * serialized once, never once per alternative branch. Twice its JSON byte cap
  * covers escaping when the object becomes the SDK's prompt string. */
 export function propositionPlanSizes(plan:readonly ManagedComparisonChunk[]){
   const source=propositionSourceInput(plan);
-  const sourceBytes=modelRequestBytes(PROPOSITION_SOURCE_SYSTEM,JSON.stringify(propositionSourceTransport(source)),sourcePropositionModelSchemaFor(plan))+1024;
+  const claimPlan=sourceClaimExtractionPlan(plan);
+  const sourceRequests=claimPlan.tasks.map(task=>({id:task.id,bytes:modelRequestBytes(task.system,task.prompt,task.schema)+1024}));
+  const sourceBytes=Math.max(...sourceRequests.map(r=>r.bytes));
   const empty=canonicalPropositionSources(plan);
   const text=(n:number)=>"\ud800".repeat(n), evidence={claimNo:Number.MAX_SAFE_INTEGER,start:Number.MAX_SAFE_INTEGER,end:Number.MAX_SAFE_INTEGER,quote:text(120)};
   const drafts=plan.flatMap(c=>c.pairs.map(p=>({...p,docId:c.candidateId,baseObservation:text(120),candidateObservation:text(120),
@@ -23,7 +26,7 @@ export function propositionPlanSizes(plan:readonly ManagedComparisonChunk[]){
   // independently of their (not duplicated) meanings.
   const scopeCount=source.sources.reduce((n,s)=>n+s.scopes.length,0);
   const metadata=scopeCount*SOURCE_CAPACITY.facts*16+drafts.length*5*16;
-  return {sourceBytes,targetBaseBytes:base,descriptorAllowance:2*PROPOSITION_DESCRIPTOR_MAX_BYTES,metadataAllowance:metadata,
+  return {sourceBytes,sourceRequests,sourceCalls:sourceRequests.length,totalCalls:sourceRequests.length+2,targetBaseBytes:base,descriptorAllowance:2*PROPOSITION_DESCRIPTOR_MAX_BYTES,metadataAllowance:metadata,
     targetBytes:base+2*PROPOSITION_DESCRIPTOR_MAX_BYTES+metadata};
 }
 export function assertPropositionPlan(plan:readonly ManagedComparisonChunk[]):void{

@@ -110,54 +110,17 @@ function propertyCount(value:unknown):number {
     Object.values(record).reduce<number>((n,v)=>n+propertyCount(v),0);
 }
 
-/** Source-only v12. Each semantic role carries its own exact quotation, avoiding
- * a model-generated locator table and a second address space of role indexes.
- * Flat facts keep quote objects within Azure's five object levels. */
-export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:"quotes"|"cells"="quotes",capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
-  const {frame,fact}=directShapes(mode);
-  type Shapes=ReturnType<typeof directShapes>;
-  const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
-  const unresolved=(mode==="cells"?cellQuote:contextQuote).extend({reason:z.string().min(1).max(400)})
-    .meta({id:"PriorArtSourceUnresolved"});
-  const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
-    .meta({id:"PriorArtSourceAdditionalFact"});
-  const additionalFacts=z.array(additional).min(1).max(capacity.facts).meta({id:"PriorArtSourceAdditionalFacts"});
-  const loopAdditionalFacts=z.array(additional).max(capacity.facts).meta({id:"PriorArtSourceLoopAdditionalFacts"});
-  const claimAnswer=z.union([additionalFacts,unresolved]).meta({id:"PriorArtSourceClaimAnswer"});
-  type RawFact=z.infer<typeof fact>;
-  type RawSource={sourceDigest:string} & Record<string,unknown>;
-  // Required keys make omissions a provider schema violation, not merely a
-  // prose instruction. Catalog IDs constrain identity only: every loop's
-  // meaning and role quotations still come from the model. Its basis shares
-  // the input locator coordinate space; no role is inferred or repaired.
-  const loopBases=new Map<string,z.ZodType<{firstPart:number;lastPart:number}>>();
-  const loopBasis=([firstPart,lastPart]:readonly [number,number])=>{
-    const key=`${firstPart}_${lastPart}`;
-    if(!loopBases.has(key))loopBases.set(key,z.object({firstPart:z.literal(firstPart),lastPart:z.literal(lastPart)}).strict()
-      .meta({id:`PriorArtSourceLoopBasis_${key}`}));
-    return loopBases.get(key)!;
-  };
-  const sourceSchemas=input.sources.map(source=>z.object({
-    sourceDigest:z.literal(source.sourceDigest),
-    // A claim has facts OR an unresolved explanation, never two independently
-    // generated answers. Required loops already answer their own claims, so
-    // only those claims may explicitly return no additional facts.
-    ...Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,
-      source.recognizedLoopRoutes.some(r=>r.claimNo===c.claimNo)?loopAdditionalFacts:claimAnswer])),
-    ...Object.fromEntries(source.recognizedLoopRoutes.map((r,id)=>[`loop${id}`,fact.extend({
-      claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
-    })])),
-  }).strict());
-  const schema=z.object({locatorVersion:z.literal(mode==="cells"?14:12),sources:z.array(
-    z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
-  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:12|14;sources:RawSource[]}>;
-  const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
-    const source=input.sources[i],expected=source.source.claims;
-    if(s.sourceDigest!==source.sourceDigest)throw invalid();
+type DirectInputSource=ReturnType<typeof propositionSourceInput>["sources"][number];
+/** Shared original-coordinate decoder. The full source and claim-local gate
+ * execute the same term, guard-boundary and route-frame checks. */
+function decodeDirectSourceAnswer(source:DirectInputSource,s:{sourceDigest:string}&Record<string,unknown>,mode:"quotes"|"cells",capacity:SourceWireCapacity,
+ expected=source.source.claims){
+ type Shapes=ReturnType<typeof directShapes>;
+ type RawFact=z.infer<Shapes["fact"]>;
     const order=new Map(expected.map((c,n)=>[c.claimNo,n]));
     let previous=-1,quotes=0;
     const allFacts=expected.flatMap(c=>{
-      const answer=s[`c${c.claimNo}`] as z.infer<typeof claimAnswer>,text=c.segments.map(p=>p.text).join("");
+      const answer=s[`c${c.claimNo}`] as RawFact[] | (z.infer<typeof contextQuote> & {reason:string}) | (z.infer<typeof cellQuote> & {reason:string}),text=c.segments.map(p=>p.text).join("");
       if(!Array.isArray(answer)){
         if(!answer.reason.trim())throw invalid();
         if("cells"in answer)resolveSourceCellRef(sourceCitationGrid(text),answer.cells);
@@ -245,6 +208,65 @@ export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:
         loops.some((r,n)=>own[n]?.routeFrame!==r.id))throw invalid();
     }
     return {sourceDigest:s.sourceDigest,facts};
+}
+/** Strict one-claim gate only; original source identity/context is supplied by
+ * the fixed plan, never rebuilt from a subset or from a model response. */
+export async function validateDirectSourceClaim(source:DirectInputSource,claimNo:number,raw:unknown,capacity:SourceWireCapacity){
+ const claim=source.source.claims.find(c=>c.claimNo===claimNo);if(!claim)throw invalid();
+ const {fact,frame}=directShapes("cells"),additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()});
+ const loops=source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===claimNo?[{r,id}]:[]);
+ const schema=z.object({sourceDigest:z.literal(source.sourceDigest),
+  [`c${claimNo}`]:z.array(additional).min(loops.length?0:1).max(capacity.facts),
+  ...Object.fromEntries(loops.map(({r,id})=>[`loop${id}`,fact.extend({claimNo:z.literal(claimNo),routeFrame:z.literal(id),
+   basis:z.object({firstPart:z.literal(r.basisParts[0]),lastPart:z.literal(r.basisParts[1])}).strict()})])),
+ }).strict();
+ const model=comparisonModelSchema(schema,value=>decodeDirectSourceAnswer(source,value as {sourceDigest:string}&Record<string,unknown>,"cells",capacity,[claim]));
+ if(!model.validate)throw invalid();const result=await model.validate(raw);if(!result.success)throw invalid();return result.value;
+}
+
+/** Source-only v12. Each semantic role carries its own exact quotation, avoiding
+ * a model-generated locator table and a second address space of role indexes.
+ * Flat facts keep quote objects within Azure's five object levels. */
+export function directSourceModel(chunks:readonly ManagedComparisonChunk[],mode:"quotes"|"cells"="quotes",capacity:SourceWireCapacity=LEGACY_SOURCE_CAPACITY) {
+  const {frame,fact}=directShapes(mode);
+  const local=sourcePropositionSchemaFor(chunks),input=propositionSourceInput(chunks);
+  const unresolved=(mode==="cells"?cellQuote:contextQuote).extend({reason:z.string().min(1).max(400)})
+    .meta({id:"PriorArtSourceUnresolved"});
+  const additional=fact.omit({claimNo:true,basis:true}).extend({routeFrame:frame.nullable()})
+    .meta({id:"PriorArtSourceAdditionalFact"});
+  const additionalFacts=z.array(additional).min(1).max(capacity.facts).meta({id:"PriorArtSourceAdditionalFacts"});
+  const loopAdditionalFacts=z.array(additional).max(capacity.facts).meta({id:"PriorArtSourceLoopAdditionalFacts"});
+  const claimAnswer=z.union([additionalFacts,unresolved]).meta({id:"PriorArtSourceClaimAnswer"});
+  type RawSource={sourceDigest:string} & Record<string,unknown>;
+  // Required keys make omissions a provider schema violation, not merely a
+  // prose instruction. Catalog IDs constrain identity only: every loop's
+  // meaning and role quotations still come from the model. Its basis shares
+  // the input locator coordinate space; no role is inferred or repaired.
+  const loopBases=new Map<string,z.ZodType<{firstPart:number;lastPart:number}>>();
+  const loopBasis=([firstPart,lastPart]:readonly [number,number])=>{
+    const key=`${firstPart}_${lastPart}`;
+    if(!loopBases.has(key))loopBases.set(key,z.object({firstPart:z.literal(firstPart),lastPart:z.literal(lastPart)}).strict()
+      .meta({id:`PriorArtSourceLoopBasis_${key}`}));
+    return loopBases.get(key)!;
+  };
+  const sourceSchemas=input.sources.map(source=>z.object({
+    sourceDigest:z.literal(source.sourceDigest),
+    // A claim has facts OR an unresolved explanation, never two independently
+    // generated answers. Required loops already answer their own claims, so
+    // only those claims may explicitly return no additional facts.
+    ...Object.fromEntries(source.source.claims.map(c=>[`c${c.claimNo}`,
+      source.recognizedLoopRoutes.some(r=>r.claimNo===c.claimNo)?loopAdditionalFacts:claimAnswer])),
+    ...Object.fromEntries(source.recognizedLoopRoutes.map((r,id)=>[`loop${id}`,fact.extend({
+      claimNo:z.literal(r.claimNo),routeFrame:z.literal(id),basis:loopBasis(r.basisParts),
+    })])),
+  }).strict());
+  const schema=z.object({locatorVersion:z.literal(mode==="cells"?14:12),sources:z.array(
+    z.union(sourceSchemas as [typeof sourceSchemas[number],typeof sourceSchemas[number],...typeof sourceSchemas])
+  ).length(input.sources.length)}).strict() as z.ZodType<{locatorVersion:12|14;sources:RawSource[]}>;
+  const model=comparisonModelSchema(schema,raw=>local.parse({sources:raw.sources.map((s,i)=>{
+    const source=input.sources[i];
+    if(s.sourceDigest!==source.sourceDigest)throw invalid();
+    return decodeDirectSourceAnswer(source,s,mode,capacity);
   })}));
   // Dynamic claim keys must fit the documented Azure schema budget too.
   // Reject the complete plan before sending; never omit claims to fit it.

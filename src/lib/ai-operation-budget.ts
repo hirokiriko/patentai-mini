@@ -57,7 +57,7 @@ const comparisonCapability = Symbol("prior_art_comparison");
 
 /** Identify an exact comparison wire stage. This is a transport allowance;
  * the stage schema and semantic gates still validate its contents. */
-function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_propositions"): boolean {
+function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_propositions" | "compare"): boolean {
   if (!Array.isArray(input)) return false;
   const users = input.filter(message => message?.role === "user");
   if (users.length !== 1) return false;
@@ -70,6 +70,7 @@ function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_
 type ComparisonBudgetOptions = {
   capability: typeof comparisonCapability;
   deadline: AbortSignal;
+  claimPlan?: { sourceClaims: number; diagnostic: boolean };
 };
 export type ManagedWatchDispatchJournal = {
   /** Atomic durable reservation ACK is required before network dispatch. */
@@ -119,13 +120,16 @@ export class AiOperationBudget {
   }
   constructor(maximum: Record<Role, number>, private readonly managed?: ManagedWatchBudgetOptions,
     private readonly comparison?: ComparisonBudgetOptions) {
+    const claimPlan = comparison?.claimPlan;
+    const claimAllowed = !!claimPlan && Number.isSafeInteger(claimPlan.sourceClaims) && claimPlan.sourceClaims >= 1 &&
+      claimPlan.sourceClaims <= comparisonLimits.sourceClaims && maximum.normal === claimPlan.sourceClaims + (claimPlan.diagnostic ? 1 : 2);
     const comparisonAllowed = comparison?.capability === comparisonCapability && !managed &&
-      (maximum.normal === 1 || maximum.normal === comparisonLimits.calls) && maximum.fast === 0;
+      (claimPlan ? claimAllowed : maximum.normal === 1 || maximum.normal === comparisonLimits.calls) && maximum.fast === 0;
     if (comparison && !comparisonAllowed) throw new AiOperationStopped();
     const managedAllowed = managed?.capability === managedWatchCapability && maximum.normal === 41 && maximum.fast === 0 &&
       Number.isSafeInteger(managed.consumed) && managed.consumed >= 0 && managed.consumed <= 41;
     if (managed && !managedAllowed) throw new AiOperationStopped();
-    if (!Number.isInteger(maximum.normal) || maximum.normal < 0 || maximum.normal > (managedAllowed ? 41 : 12) ||
+    if (!Number.isInteger(maximum.normal) || maximum.normal < 0 || maximum.normal > (managedAllowed ? 41 : comparisonAllowed && claimPlan ? comparisonLimits.sourceClaims + 2 : 12) ||
         !Number.isInteger(maximum.fast) || maximum.fast < 0 || maximum.fast > 8) throw new AiOperationStopped();
     this.maximum = Object.freeze({ ...maximum });
     if (managedAllowed) this.consumed.normal = managed!.consumed;
@@ -162,6 +166,12 @@ export class AiOperationBudget {
         const target = new URL(String(url));
         if (target.protocol !== "https:" || !target.pathname.endsWith("/responses")) throw stop("request_rejected");
         const body = JSON.parse(init.body);
+        if (this.comparison?.claimPlan) {
+          const plan = this.comparison.claimPlan, at = this.consumed.normal;
+          const expected = at < plan.sourceClaims ? "extract_source_propositions" :
+            at === plan.sourceClaims && !plan.diagnostic ? "compare" : "review";
+          if (role !== "normal" || !isComparisonTaskInput(body.input, expected)) throw stop("request_rejected");
+        }
         const keys = new Set(["model", "input", "max_output_tokens", "temperature", "top_p", "text", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "include"]);
         if (this.comparison && role === "normal" && body?.service_tier === "default" &&
             comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "review") === comparisonLimits.azureReasoningOutputTokens)
@@ -198,6 +208,7 @@ export class AiOperationBudget {
       } catch { throw stop("request_rejected"); }
       // Capture this attempt before awaiting; concurrent sends cannot renumber it.
       const attempt = ++this.consumed[role];
+      if (this.comparison?.claimPlan) this.managedInFlight = true;
       if (this.managed) {
         this.managedInFlight = true;
         try {
@@ -285,6 +296,25 @@ export function withPriorArtComparisonBudget<T>(operation: (deadline: AbortSigna
   deadlines.add(deadline);
   const budget = new AiOperationBudget({ normal: maximumNormalCalls, fast: 0 }, undefined,
     Object.freeze({ capability: comparisonCapability, deadline }));
+  return active.run(budget, async () => {
+    try { return await operation(deadline); }
+    finally { budget.closeComparisonScope(); closing.abort(); }
+  });
+}
+/** Finite claim extraction scope. This does not change generic AI or watch
+ * allowances, and cannot be nested to restart a consumed comparison budget. */
+export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, operation: (deadline: AbortSignal) => Promise<T>, diagnostic = false): Promise<T> {
+  if (active.getStore() || !Number.isSafeInteger(sourceClaims) || sourceClaims < 1 || sourceClaims > comparisonLimits.sourceClaims)
+    throw new AiOperationStopped("request_rejected");
+  const calls = sourceClaims + (diagnostic ? 1 : 2), closing = new AbortController();
+  // A diagnostic may wait for the fixed independent source-QA gate before its
+  // final review. This adds time only, never a dispatch or a retry allowance.
+  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, calls * comparisonLimits.requestMilliseconds + 30_000)
+    + (diagnostic ? comparisonLimits.claimDiagnosticQaMilliseconds : 0);
+  const deadline = AbortSignal.any([aiOperationDeadline(milliseconds), closing.signal]);
+  deadlines.add(deadline);
+  const budget = new AiOperationBudget({ normal: calls, fast: 0 }, undefined,
+    Object.freeze({ capability: comparisonCapability, deadline, claimPlan: Object.freeze({ sourceClaims, diagnostic }) }));
   return active.run(budget, async () => {
     try { return await operation(deadline); }
     finally { budget.closeComparisonScope(); closing.abort(); }

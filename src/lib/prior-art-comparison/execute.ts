@@ -1,6 +1,6 @@
 import { generateObject, type Schema } from "ai";
 import { getModel } from "../ai-model";
-import { aiOperationDeadline, withPriorArtComparisonBudget } from "../ai-operation-budget";
+import { aiOperationDeadline, withPriorArtClaimComparisonBudget } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, SYSTEM, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
@@ -9,27 +9,28 @@ import { batchTransportInput, batchSchema, batchSchemaFor, requestBytes, modelRe
 import { type ReviewDraft } from "./semantic-review";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
-import { decodeSourcePropositions, PROPOSITION_SOURCE_SYSTEM, PROPOSITION_TARGET_SYSTEM, propositionSourceInput,
-  propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
-import { sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
+import { decodeSourcePropositions, PROPOSITION_TARGET_SYSTEM, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
+import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
 import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
 import { comparisonModelSchema } from "./model-schema";
+import { sourceClaimExtractionPlan, assembleSourceClaims } from "./source-claim-extraction";
 
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+"\n各断定では基準側・候補側・両側の帰属を明示し、側が変わる断定を分ける。事実を含む文を未確認の一語で留保扱いにしない。純粋な未確認事項は対象となる名詞句と未確認状態を分けて述べる。これは条件の省略や断定の弱化を許可しない。";
 
-/** One finite synchronous operation. No fallback and no partial successful save. */
+/** One finite serial operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection): Promise<SavedComparison> {
   const plan = makePlan(inputs, selection); // Entire scope must fit before any send.
   const batch = separatedGenerationPlan(plan, PROPOSITION_GENERATION_SYSTEM);
   assertPropositionPlan(batch);
-  return withPriorArtComparisonBudget(async absolute => {
+  const sourcePlan = sourceClaimExtractionPlan(batch);
+  return withPriorArtClaimComparisonBudget(sourcePlan.tasks.length, async absolute => {
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     try {
-      const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase) => {
+      const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
         const model = getModel();
         const options = comparisonProviderOptions(model, phase);
@@ -56,13 +57,16 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         // Missing logs never justify treating an unknown send as zero cost.
         try {
           console.info("prior_art_comparison_usage", JSON.stringify({ operationId: selection.operationId,
-            phase, inputTokens: answer.usage.inputTokens, outputTokens: answer.usage.outputTokens, status: "reconciled" }));
+            phase, ...(sourceTaskId ? { sourceTaskId } : {}), inputTokens: answer.usage.inputTokens, outputTokens: answer.usage.outputTokens, status: "reconciled" }));
         } catch { /* Optional observation must not change the comparison. */ }
         return answer.object;
       };
-      const readingSchema = sourcePropositionModelSchemaFor(batch);
-      const reading = await generate(PROPOSITION_SOURCE_SYSTEM,
-        JSON.stringify(propositionSourceTransport(propositionSourceInput(batch))), readingSchema, "source");
+      const pieces: { taskId: string; value: unknown }[] = [];
+      for (const task of sourcePlan.tasks) {
+        const value = await generate(task.system, task.prompt, task.schema, "source", task.id);
+        pieces.push({ taskId: task.id, value });
+      }
+      const reading = await assembleSourceClaims(sourcePlan, pieces);
       const analyses = decodeSourcePropositions(batch, reading);
       stage = "generation";
       const prompt = JSON.stringify(batchTransportInput(batch));

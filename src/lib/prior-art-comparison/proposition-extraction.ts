@@ -157,17 +157,14 @@ export function canonicalPropositionSources(chunks:readonly ManagedComparisonChu
   }
   return {input,facts,raw:compactRuntimeSourceWitness({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:[]}))})};
 }
-export function decodeSourcePropositions(chunks:readonly ManagedComparisonChunk[],value:unknown):DecodedSources {
-  try{
-    const raw=sourcePropositionSchemaFor(chunks).parse(value),canonical=canonicalPropositionSources(chunks),input=canonical.input,facts:SourceProposition[]=[];
-    const witness=compactRuntimeSourceWitness(raw);
-    if(Buffer.byteLength(JSON.stringify(witness),"utf8")>PROPOSITION_SOURCE_MAX_BYTES)throw Error();
-    for(const [index,answer] of raw.sources.entries()){
-      const source=input.sources[index];if(answer.sourceDigest!==source.sourceDigest)throw Error();
-      const claims=source.source.claims.map(({segments,...c})=>({...c,text:segments.map(s=>s.text).join("")}));
-      const literal=compileLiteralStructure({claims});
-      for(const [at,fact] of answer.facts.entries()){
-        const claim=claims.find(c=>c.claimNo===fact.claimNo);if(!claim)throw Error();
+/** The same claim-local domain checks run before the next claim request and
+ * again in the unchanged whole-source assembly. No missing fact is supplied. */
+export function validateSourceClaimFacts(source:ReturnType<typeof propositionSourceInput>["sources"][number],claimNo:number,value:unknown){
+ const facts=sourcePropositionSchema.shape.sources.element.shape.facts.parse(value);
+ const claims=source.source.claims.map(({segments,...c})=>({...c,text:segments.map(p=>p.text).join("")}));
+ const claim=claims.find(c=>c.claimNo===claimNo);if(!claim||facts.some(f=>f.claimNo!==claimNo))throw new ComparisonError("ai_incomplete");
+ const literal=compileLiteralStructure({claims});
+ for(const fact of facts){
         validateExtraction(claim.text,fact);
         // An AI projection may add supported relations; it cannot replace a
         // literal mode group by a weaker/different one on overlapping evidence.
@@ -184,6 +181,30 @@ export function decodeSourcePropositions(chunks:readonly ManagedComparisonChunk[
               JSON.stringify(fact.meaning.members.map(propositionKey).sort())!==JSON.stringify(expected))throw Error();
           }
         }
+
+ }
+ if(source.scopes.some(scope=>scope.nodes.some(n=>n.claimNo===claimNo)))for(const [no,mode,origin,excluded,destination] of literal.bypass){
+  if(no!==claimNo||!mode)continue;
+  for(const fact of facts){const m=fact.meaning;
+   if(m.kind!=="path"||propositionKey(m.subject??"")!==propositionKey(claim.text.slice(...mode)))continue;
+   if(m.origin&&m.destination&&propositionKey(m.origin)===propositionKey(claim.text.slice(...origin))&&propositionKey(m.destination)===propositionKey(claim.text.slice(...destination))&&
+    m.via.some(v=>propositionKey(v)===propositionKey(claim.text.slice(...excluded))))throw new ComparisonError("ai_incomplete");
+  }
+ }
+ assertRecognizedLoopCoverage({claims:[claim]},facts);
+}
+
+export function decodeSourcePropositions(chunks:readonly ManagedComparisonChunk[],value:unknown):DecodedSources {
+  try{
+    const raw=sourcePropositionSchemaFor(chunks).parse(value),canonical=canonicalPropositionSources(chunks),input=canonical.input,facts:SourceProposition[]=[];
+    const witness=compactRuntimeSourceWitness(raw);
+    if(Buffer.byteLength(JSON.stringify(witness),"utf8")>PROPOSITION_SOURCE_MAX_BYTES)throw Error();
+    for(const [index,answer] of raw.sources.entries()){
+      const source=input.sources[index];if(answer.sourceDigest!==source.sourceDigest)throw Error();
+      const claims=source.source.claims.map(({segments,...c})=>({...c,text:segments.map(s=>s.text).join("")}));
+      for(const claim of claims)validateSourceClaimFacts(source,claim.claimNo,answer.facts.filter(f=>f.claimNo===claim.claimNo));
+      for(const [at,fact] of answer.facts.entries()){
+        const claim=claims.find(c=>c.claimNo===fact.claimNo);if(!claim)throw Error();
         for(const scope of source.scopes.filter(s=>s.nodes.some(n=>n.claimNo===fact.claimNo)))facts.push({
           id:`s${index}.${at}`,scope:scope.id,claimNo:fact.claimNo,basis:fact.basis,meaning:fact.meaning,
           authority:"extracted",...(fact.routeFrame?{routeFrame:fact.routeFrame}:{})});
@@ -192,15 +213,6 @@ export function decodeSourcePropositions(chunks:readonly ManagedComparisonChunk[
       // never erase these constraints, and no AI response can edit them.
       const ownCanonical=canonical.facts.filter(f=>source.scopes.some(s=>s.id===f.scope));
       facts.push(...ownCanonical);
-      for(const {claimNo,meaning} of ownCanonical.filter(f=>f.meaning.kind==="path")){
-        if(meaning.kind!=="path")continue;
-        for(const fact of answer.facts.filter(f=>f.claimNo===claimNo)){
-          const m=fact.meaning;
-          if(m.kind!=="path"||propositionKey(m.subject??"")!==propositionKey(meaning.subject!))continue;
-          if(m.origin&&m.destination&&propositionKey(m.origin)===propositionKey(meaning.origin!)&&propositionKey(m.destination)===propositionKey(meaning.destination!)&&
-            m.via.some(v=>propositionKey(v)===propositionKey(meaning.bypass[0])))throw Error();
-        }
-      }
       assertRecognizedLoopCoverage({claims},answer.facts);
     }
     const extracted=[...new Map(facts.filter(f=>f.authority==="extracted").map(f=>[f.id,descriptor(f)])).values()];

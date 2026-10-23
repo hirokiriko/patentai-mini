@@ -3,7 +3,17 @@ import { db } from "@/db";
 import { cases, comparisonResults, draftPatents, priorArtDocuments } from "@/db/schema";
 import { lockManagedCase } from "@/repositories/managed-case-graph";
 import { ComparisonError, digest, parseComparisonSource, type SourceSnapshot } from "./source";
-import { executeComparison } from "./execute";
+import { executeComparison, PROPOSITION_GENERATION_SYSTEM } from "./execute";
+import { ComparisonExecutionError, type ComparisonStage } from "./failure";
+import { separatedGenerationPlan } from "./source-separation";
+import { assertPropositionPlan } from "./proposition-plan";
+
+type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
+const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string }>();
+function knownFailure(error: unknown): KnownFailure | null {
+  return error instanceof ComparisonExecutionError && ["protocol_invalid", "review_rejected", "output_incomplete"].includes(error.kind)
+    ? { stage: error.stage, kind: error.kind as KnownFailure["kind"] } : null;
+}
 import { makePlan, validateSaved, type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { hasSavedComparisonMarker } from "./marker";
 
@@ -66,7 +76,22 @@ function readGroups(rows: ResultRow[], caseId: number) {
     if (tainted.has(saved.operationId) || actual.length !== expected.size || new Set(actual).size !== expected.size || actual.some(k => !expected.has(k))) { invalidCount++; continue; }
     results.push(saved);
   }
-  return { results: results.sort((a,b) => b.generatedAt.localeCompare(a.generatedAt)), legacyCount, invalidCount, reservedCount: reserved.size };
+  const failedOperations: { operationId: string; failure: KnownFailure }[] = [];
+  for (const operationId of reserved) {
+    const own = rows.filter(row => (envelope(row) as { operationId?: string } | null)?.operationId === operationId);
+    const marker = envelope(own[0]) as { selection?: Selection; failure?: KnownFailure };
+    const rawFailure = marker.failure;
+    if (!rawFailure || !["source_reading", "generation", "review"].includes(rawFailure.stage) ||
+        !["protocol_invalid", "review_rejected", "output_incomplete"].includes(rawFailure.kind) || !marker.selection) continue;
+    const failure: KnownFailure = { stage: rawFailure.stage, kind: rawFailure.kind };
+    try {
+      const expected = new Set(marker.selection.documents.flatMap(d => marker.selection!.draftClaimNos.map(n => `${n}:${d.docId}`)));
+      const exact = { version: 1, status: "reserved", operationId, selection: marker.selection, failure };
+      if (own.length === expected.size && own.every(row => row.caseId === caseId && digest(envelope(row)) === digest(exact) &&
+          expected.delete(`${row.draftClaimId}:${row.priorDocId}`)) && !expected.size) failedOperations.push({ operationId, failure });
+    } catch { /* An inconsistent failure marker remains unconfirmed, never retried. */ }
+  }
+  return { results: results.sort((a,b) => b.generatedAt.localeCompare(a.generatedAt)), legacyCount, invalidCount, reservedCount: reserved.size, pendingOperationIds: [...reserved], failedOperations };
 }
 async function savedResults(database: Database, caseId: number) {
   return readGroups(await database.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId)).orderBy(asc(comparisonResults.resultId)), caseId);
@@ -85,9 +110,7 @@ export async function getComparison(caseId: number, operationId: string) {
 /** Commit a durable no-retry reservation BEFORE dispatch. A missing commit ACK
  * never permits a send. Failed/unknown attempts keep the reservation across
  * processes and restarts; only complete results are downloadable. */
-export async function runAndSaveComparison(caseId: number, selection: Selection) {
-  let saveStarted = false;
-  try {
+export async function reserveComparison(caseId: number, selection: Selection) {
     const reservation = await db.transaction(async tx => {
       await tx.execute(sql`set local lock_timeout = '3s'`);
       const locked = await tx.execute(sql`select pg_try_advisory_xact_lock(150, ${caseId}) as acquired`);
@@ -97,6 +120,15 @@ export async function runAndSaveComparison(caseId: number, selection: Selection)
       if (existing) {
         if (digest(existing.selection) !== digest(selection)) throw new ComparisonError("selection_invalid");
         return { existing };
+      }
+      const sameReservation = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+      const ownPending = sameReservation.filter(row => {
+        const value = envelope(row) as { status?: string; operationId?: string } | null;
+        return value?.status === "reserved" && value.operationId === selection.operationId;
+      });
+      if (ownPending.length) {
+        if (ownPending.some(row => digest((envelope(row) as { selection?: unknown }).selection) !== digest(selection))) throw new ComparisonError("selection_invalid");
+        return { pending: true as const };
       }
       if (stored.invalidCount) throw new ComparisonError("result_invalid");
       if (stored.reservedCount) throw new ComparisonError("save_unconfirmed");
@@ -116,7 +148,7 @@ export async function runAndSaveComparison(caseId: number, selection: Selection)
           if (!d) throw new ComparisonError("selection_invalid");
           return parseComparisonSource(d.claimsText, d.docId, d.publicationNo || `document-${d.docId}`);
         }) };
-      makePlan(inputs, selection);
+      assertPropositionPlan(separatedGenerationPlan(makePlan(inputs, selection), PROPOSITION_GENERATION_SYSTEM));
       const groups = selection.documents.flatMap(d => selection.draftClaimNos.map(claimNo => ({ docId: d.docId, claimNo })));
       const reservedRows = await tx.insert(comparisonResults).values(groups.map(p => ({ caseId, draftClaimId: String(p.claimNo), priorDocId: p.docId,
         matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "完了未確認の指定比較です。再実行せず保存結果を照合してください。",
@@ -124,7 +156,20 @@ export async function runAndSaveComparison(caseId: number, selection: Selection)
       }))).returning({ id: comparisonResults.resultId });
       return { inputs, ids: reservedRows.map(r => r.id) };
     });
-    if (reservation.existing) return reservation.existing;
+    if (reservation.inputs) reservationCapabilities.set(reservation, { caseId, selectionHash: digest(selection), reservationHash: digest(reservation) });
+    return reservation;
+}
+
+type Reservation = Awaited<ReturnType<typeof reserveComparison>>;
+/** Only the callback holding a newly committed reservation may dispatch. */
+export async function completeReservedComparison(caseId: number, selection: Selection, reservation: Reservation) {
+  if (reservation.existing) return reservation.existing;
+  if (reservation.pending) throw new ComparisonError("save_unconfirmed");
+  const capability = reservationCapabilities.get(reservation);
+  reservationCapabilities.delete(reservation);
+  if (!capability || capability.caseId !== caseId || capability.selectionHash !== digest(selection) || capability.reservationHash !== digest(reservation)) throw new ComparisonError("save_unconfirmed");
+  let saveStarted = false;
+  try {
     const { inputs, ids } = reservation;
     const saved = await executeComparison(inputs!, selection);
     saveStarted = true;
@@ -163,7 +208,35 @@ export async function runAndSaveComparison(caseId: number, selection: Selection)
       if (error instanceof ComparisonError && error.code === "stale_input") throw error;
       throw new ComparisonError("save_unconfirmed");
     }
+    const failure = knownFailure(error);
+    if (failure) {
+      try { await recordReservedFailure(caseId, selection, reservation.ids!, failure); }
+      catch { /* Unknown write ACK remains a durable unconfirmed reservation. */ }
+    }
     if (error instanceof ComparisonError) throw error;
     throw new ComparisonError("save_unconfirmed");
   }
+}
+
+async function recordReservedFailure(caseId: number, selection: Selection, ids: number[], failure: KnownFailure) {
+  await db.transaction(async tx => {
+    await tx.execute(sql`set local lock_timeout = '3s'`);
+    await lockManagedCase(tx, caseId);
+    const rows = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+    const own = rows.filter(row => (envelope(row) as { operationId?: string } | null)?.operationId === selection.operationId);
+    const expected = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
+    const marker = { version: 1, status: "reserved", operationId: selection.operationId, selection };
+    if (own.length !== ids.length || own.some(row => !ids.includes(row.resultId) || digest(envelope(row)) !== digest(marker) ||
+        !expected.delete(`${row.draftClaimId}:${row.priorDocId}`)) || expected.size) throw new ComparisonError("save_unconfirmed");
+    const removed = await tx.delete(comparisonResults).where(and(eq(comparisonResults.caseId, caseId), inArray(comparisonResults.resultId, ids))).returning();
+    if (removed.length !== ids.length || digest([...removed].sort((a,b)=>a.resultId-b.resultId)) !== digest([...own].sort((a,b)=>a.resultId-b.resultId))) throw new ComparisonError("save_unconfirmed");
+    await tx.insert(comparisonResults).values(removed.map(row => ({ ...row,
+      matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "品質検証で停止しました。予約を保持し、自動再送しません。", priorArtComparison: { ...marker, failure } }),
+    })));
+  });
+}
+
+/** Synchronous adapter retained for isolated diagnostics; HTTP uses after(). */
+export async function runAndSaveComparison(caseId: number, selection: Selection) {
+  return completeReservedComparison(caseId, selection, await reserveComparison(caseId, selection));
 }

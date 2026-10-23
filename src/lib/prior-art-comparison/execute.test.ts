@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalClauseInputs as fictionalInputs, fictionalClauseSource as fictionalSourceAnalysis } from "./source-clause-fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
 import { makePlan, validateSaved } from "./comparison";
 import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
-import type { propositionTargetTransport, propositionSourceTransport } from "./proposition-extraction";
+import type { propositionTargetTransport } from "./proposition-extraction";
+import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
+import {sourceClaimExtractionPlan} from "./source-claim-extraction";
 import { parseComparisonSource } from "./source";
 import { fictionalInputs as longFictionalInputs } from "./fixtures.test-support";
 
-function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | ReturnType<typeof propositionSourceTransport>) {
+const sourceCallCount=(inputs:Parameters<typeof makePlan>[0],selection:Parameters<typeof makePlan>[1])=>sourceClaimExtractionPlan(makePlan(inputs,selection)).tasks.length;
+
+function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | FictionalClaimRequest) {
   return input.task === "extract_source_propositions" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
 }
 
@@ -58,12 +62,11 @@ describe("real installed SDK, guarded fictional transport", () => {
       return response(fictionalBatch(chunk));
     }));
     const saved = await executeComparison(inputs, selection);
-    expect(payloads).toHaveLength(3);
+    expect(payloads).toHaveLength(sourceCallCount(inputs,selection)+2);
     expect(payloads.at(-1)).toContain("下回ると青色弁を開く");
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
     const usage=vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage").map(row=>JSON.parse(row[1]));
-    expect(usage).toEqual(["source","generation","review"].map(phase=>({operationId:saved.operationId,phase,
-      inputTokens:100,outputTokens:30,status:"reconciled"})));
+    expect(usage).toEqual([...sourceClaimExtractionPlan(makePlan(inputs,selection)).tasks.map(t=>({operationId:saved.operationId,phase:"source",sourceTaskId:t.id,inputTokens:100,outputTokens:30,status:"reconciled"})),...["generation","review"].map(phase=>({operationId:saved.operationId,phase,inputTokens:100,outputTokens:30,status:"reconciled"}))]);
   });
   it.each(["unknown_usage", "excess_usage", "http", "quote", "missing_pair", "protocol_metadata", "secret_error"])("fails closed without another send on %s", async mode => {
     const { inputs, selection } = fictionalInputs(); const answer = fictionalBatch(batchInput(generationBatches(makePlan(inputs, selection), SYSTEM)[0]));
@@ -79,7 +82,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(["quote", "missing_pair", "protocol_metadata"].includes(mode) ? 2 : 1);
+    expect(transport).toHaveBeenCalledTimes(["quote", "missing_pair", "protocol_metadata"].includes(mode) ? sourceCallCount(inputs,selection)+1 : 1);
     if(["unknown_usage","excess_usage","http","secret_error"].includes(mode))
       expect(vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage")).toHaveLength(0);
   });
@@ -93,7 +96,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.stubGlobal("fetch",transport);
     const saved=await executeComparison(inputs,selection);
     expect(saved.status).toBe("complete");expect(saved.operationId).toBe(selection.operationId);
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
   it("does not send oversized plans", async () => {
     const { inputs, selection } = longFictionalInputs();
@@ -107,27 +110,39 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       expect(input.task).toBe("extract_source_propositions");
-      const answer = fictionalSourceAnalysis(input), notes = answer.sources;
-      if (mode === "missing") notes.pop();
-      if (mode === "reordered") notes.reverse();
-      if (mode === "duplicate") notes[1] = { ...notes[0] };
-      if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
-      const wire=wireGuards(answer);
-      // v22 quotes have explicit claim-local IDs; corrupt the named declaration itself.
-      const firstFact=wire.s[0].c1.facts[0];
+      const wire = fictionalSourceAnalysis(input), claim=wire.answer[`c${input.target.claimNo}`];
+      if(mode==="missing")delete wire.answer[`c${input.target.claimNo}`];
+      if(mode==="reordered")wire.claimNo=input.target.claimNo+1;
+      if(mode==="duplicate")wire.answer.c999=structuredClone(claim);
+      if(mode==="foreign")wire.sourceDigest="f".repeat(64);
+      const firstFact=claim.facts[0];
       if(mode==="missing_reading")delete firstFact.m.a;
       if(mode==="unrelated_evidence")firstFact.W=[[0,0,0,0]];
-      if (mode === "blank" || mode === "overlong") {
-        expect(firstFact.m.J[0]).toHaveLength(1);
-        const id=firstFact.m.J[0][0],index=wire.s[0].c1.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
-        expect(index).toBeGreaterThanOrEqual(0);
-        wire.s[0].c1.Q[index] = mode === "blank" ? "" : "甲".repeat(12001);
+      if(mode==="blank"||mode==="overlong"){
+       const id=firstFact.m.J[0][0],index=claim.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
+       expect(index).toBeGreaterThanOrEqual(0);claim.Q[index]=mode==="blank"?"":"甲".repeat(12001);
       }
       return response(wire);
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toMatchObject({ message: "ai_incomplete", stage: "source_reading", kind: "protocol_invalid" });
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it.each(["quality", "missing_claim"])("stops a later source claim on %s with no remaining source/generation/review request",async mode=>{
+    const {inputs,selection}=compactFour(),phases:string[]=[];
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);phases.push(input.task);
+      expect(input.task).toBe("extract_source_propositions");
+      const answer=fictionalSourceAnalysis(input);
+      if(phases.length===3){
+        if(mode==="missing_claim")delete answer.answer[`c${input.target.claimNo}`];
+        else {const claim=answer.answer[`c${input.target.claimNo}`];claim.facts=[];}
+      }
+      return response(answer);
+    });
+    vi.stubGlobal("fetch",transport);
+    await expect(executeComparison(inputs,selection)).rejects.toMatchObject({stage:"source_reading",kind:"protocol_invalid"});
+    expect(transport).toHaveBeenCalledTimes(3);expect(phases).toEqual(Array(3).fill("extract_source_propositions"));
   });
   it.each(["http", "length", "coverage", "rejected"])("classifies a %s review without exposing raw errors or claiming semantic truth", async mode => {
     const { inputs, selection } = fictionalInputs();
@@ -147,7 +162,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(error).toMatchObject({ message: "ai_incomplete", stage: "review",
       kind: mode === "http" ? "transport_unknown" : mode === "length" ? "output_incomplete" : mode === "rejected" ? "review_rejected" : "protocol_invalid" });
     expect(JSON.stringify(error)).not.toContain(SECRET);
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
   it("keeps cross-document generated results attached to their own source", async()=>{
     const {inputs,selection}=fictionalInputs();
@@ -160,7 +175,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     const saved=await executeComparison(inputs,selection);
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
     expect(saved.pairs.map(p=>p.candidateEvidence.quote)).toEqual(inputs.documents.map(d=>d.source.claims[0].text));
   });
   it("sends all four complete pairs through source reading, one generation and one review", async () => {
@@ -180,7 +195,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     const saved = await executeComparison(inputs, selection);
-    expect(phases).toEqual(["extract_source_propositions", "compare", "review"]); expect(saved.pairs).toHaveLength(4);
+    expect(phases).toEqual([...Array(sourceCallCount(inputs,selection)).fill("extract_source_propositions"), "compare", "review"]); expect(saved.pairs).toHaveLength(4);
     expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 2], [21, 3], [22, 2], [22, 3]]);
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
@@ -201,7 +216,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       return response(answer);
     });
     vi.stubGlobal("fetch", transport);
-    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete"); expect(transport).toHaveBeenCalledTimes(2);
+    await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete"); expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+1);
   });
   it.each(["valid", "wrong-scope", "duplicate", "foreign-pair"])("preserves three-plus-one pairs through the existing decoder: %s", async mode => {
     const { inputs, selection } = compactFour();
@@ -220,10 +235,10 @@ describe("real installed SDK, guarded fictional transport", () => {
       const saved = await executeComparison(inputs, selection);
       expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 1], [21, 2], [21, 3], [22, 1]]);
       expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
-      expect(transport).toHaveBeenCalledTimes(3);
+      expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
     } else {
       await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-      expect(transport).toHaveBeenCalledTimes(2);
+      expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+1);
     }
   });
   it("completes a packed generation and 205-second review within one absolute deadline", async () => {
@@ -236,7 +251,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       return response(stageAnswer(input));
     });
     vi.stubGlobal("fetch", transport); const pending = executeComparison(inputs, selection);
-    await vi.advanceTimersByTimeAsync(225_001); expect((await pending).status).toBe("complete"); expect(transport).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync((sourceCallCount(inputs,selection)+1)*10_000+205_001); expect((await pending).status).toBe("complete"); expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
   it.each(["inconsistent", "uncertain", "missing", "duplicate", "wrong_digest", "missing_support", "wrong_side", "legacy_wire", "evidence_id", "anchor", "valid_negative", "http", "unknown_usage"])("never completes or retries a %s review", async mode => {
     const { inputs, selection } = fictionalInputs();
@@ -264,7 +279,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
 
   });
   it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends phase-specific reasoning and output through the actual guarded SDK on %s",async model=>{
@@ -283,7 +298,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     expect((await executeComparison(inputs,selection)).status).toBe("complete");
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
   it.each(["generation", "review"])("rejects missing or nonstandard %s tier without a later send", async phase => {
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
@@ -297,7 +312,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       });
       vi.stubGlobal("fetch", transport);
       await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-      expect(transport).toHaveBeenCalledTimes(phase === "generation" ? 1 : 3);
+      expect(transport).toHaveBeenCalledTimes(phase === "generation" ? 1 : sourceCallCount(inputs,selection)+2);
     }
   });
   it("preserves unidentified deployment tier behavior", async () => {
@@ -317,11 +332,11 @@ describe("real installed SDK, guarded fictional transport", () => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       const current=input.task==="extract_source_propositions"?"source":input.task==="review"?"review":"generation";
       return response(stageAnswer(input),
-        { input_tokens: 100, output_tokens: current===phase ? ({source:32769,generation:8193,review:22529})[phase] : 30 });
+        { input_tokens: 100, output_tokens: current===phase ? ({source:32401,generation:8193,review:22529})[phase] : 30 });
     });
     vi.stubGlobal("fetch", transport);
     await expect(executeComparison(inputs, selection)).rejects.toThrow("ai_incomplete");
-    expect(transport).toHaveBeenCalledTimes(({source:1,generation:2,review:3})[phase]);
+    expect(transport).toHaveBeenCalledTimes(({source:1,generation:sourceCallCount(inputs,selection)+1,review:sourceCallCount(inputs,selection)+2})[phase]);
   });
   it("can complete all SDK calls beyond 35 seconds without omitting review",async()=>{
     vi.useFakeTimers();
@@ -333,8 +348,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     const result=executeComparison(inputs,selection);
-    await vi.advanceTimersByTimeAsync(120001);
-    expect((await result).status).toBe("complete");expect(transport).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync((sourceCallCount(inputs,selection)+2)*40000+1);
+    expect((await result).status).toBe("complete");expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
   it("stops at the comparison-only per-send deadline and never starts a second call", async () => {
     vi.useFakeTimers();
@@ -348,7 +363,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     await rejected;
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("shares one absolute 230-second deadline with the final review",async()=>{
+  it("retains a finite claim-operation budget and stops a stalled final review",async()=>{
     vi.useFakeTimers();
     vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});
     const {inputs,selection}=fictionalInputs();
@@ -359,7 +374,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     const rejected=expect(executeComparison(inputs,selection)).rejects.toMatchObject({ message: "ai_incomplete", stage: "review", kind: "timeout" });
-    await vi.advanceTimersByTimeAsync(230001);await rejected;
-    expect(transport).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync((sourceCallCount(inputs,selection)+1)*80000+210001);await rejected;
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
   });
 });

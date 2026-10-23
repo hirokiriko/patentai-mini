@@ -6,7 +6,7 @@ import type { comparisonCatalog } from "@/lib/prior-art-comparison/repository";
 
 type Catalog = Awaited<ReturnType<typeof comparisonCatalog>>;
 const field = "rounded border border-slate-400 bg-white p-2 text-slate-900";
-export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Catalog; completedIds: string[]; blocked: boolean }) {
+export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { catalog: Catalog; completedIds: string[]; pendingIds: string[]; blocked: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
@@ -14,7 +14,7 @@ export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Cat
   const [operation, setOperation] = useState<string | null>(null);
   const pendingKey = `prior-art-comparison-pending-${catalog.caseId}`;
   useEffect(() => {
-    const pending = sessionStorage.getItem(pendingKey);
+    const pending = sessionStorage.getItem(pendingKey) || pendingIds[0];
     if (!pending) return;
     setOperation(pending);
     if (completedIds.includes(pending)) {
@@ -24,7 +24,44 @@ export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Cat
       setUncertain(true);
       setMessage("前回の操作が未照合です。再実行せず保存結果を再読込してください。表示されない場合は利用状況と保存状態の確認が必要です。");
     }
-  }, [pendingKey, completedIds]);
+  }, [pendingKey, completedIds, pendingIds]);
+  useEffect(() => {
+    if (busy || !operation || completedIds.includes(operation)) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const until = Date.now() + 75 * 60_000;
+    async function read() {
+      try {
+        const response = await fetch(`/api/cases/${catalog.caseId}/analyze?operationId=${encodeURIComponent(operation!)}`, { cache: "no-store" });
+        if (!response.ok) throw Error();
+        const value = await response.json();
+        if (disposed) return;
+        if (value.operationId === operation && value.status === "complete") {
+          sessionStorage.removeItem(pendingKey); setUncertain(false);
+          setMessage("比較結果を保存しました。PDF/CSVを取得できます。再取得でAIは実行されません。");
+          router.refresh(); return;
+        }
+        if (value.operationId === operation && value.status === "failed") {
+          setUncertain(true);
+          setMessage("品質検証で停止しました。保存予約を保持し、AIは再送しません。操作IDの停止段階と利用状況を照合してください。");
+          return;
+        }
+        if (value.operationId !== operation || value.status !== "reserved") {
+          setUncertain(true);
+          setMessage("この操作IDの予約・完了を確認できません。再送せず、利用量と保存状態を照合してください。");
+          return;
+        }
+        setUncertain(true);
+        setMessage("比較の完了を待っています。画面を閉じてもサーバー側の処理は続きます。中断・失敗時も自動再実行しません。");
+      } catch {
+        if (!disposed) setMessage("保存状態を確認できません。AIは再送せず、保存状態の確認だけを続けます。");
+      }
+      if (!disposed && Date.now() < until) timer = setTimeout(read, 5000);
+      else if (!disposed) setMessage("完了を確認できません。再実行せず、操作IDの利用状況と保存状態を照合してください。");
+    }
+    timer = setTimeout(read, 1000);
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [busy, operation, completedIds, catalog.caseId, pendingKey, router]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy || uncertain || blocked || sessionStorage.getItem(pendingKey)) return;
@@ -45,8 +82,13 @@ export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Cat
       if (!response.ok) {
         const pending = ["save_unconfirmed", "ai_incomplete", "result_invalid"].includes(result.code);
         setUncertain(pending);
-        if (!pending) sessionStorage.removeItem(pendingKey);
+        if (!pending) { sessionStorage.removeItem(pendingKey); setOperation(null); }
         setMessage(result.error || "比較を完了できませんでした。");
+        return;
+      }
+      if (response.status === 202) {
+        setUncertain(true);
+        setMessage("比較を受け付けました。サーバー側で処理し、保存状態を自動確認します。");
         return;
       }
       setMessage("根拠付き比較を保存しました。下の保存結果からPDF/CSVを取得できます。");
@@ -68,7 +110,7 @@ export function SelectionForm({ catalog, completedIds, blocked }: { catalog: Cat
       </div>
       {catalog.draft?.source ? <ClaimSelection name="draft-claims" source={catalog.draft.source} /> : <p role="alert">基準文献の原文を確認できません。案件画面で、請求項番号と全文を含む資料を取り込んでください。</p>}
       <h3 className="font-semibold">対象文献を2〜3件選択</h3>
-      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大4組です。保存前の原文照合を含む3回のAI呼出しに収まらない場合は送信前に停止します。</p>
+      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大4組です。原文を請求項ごとに抽出し、比較と照合を行います。対象は参照先を含め最大19請求項、AI呼出しは最大21回です。処理は最大75分で停止し、失敗・中断時の自動再送は行いません。</p>
       {catalog.documents.map(doc => <fieldset key={doc.id} className="space-y-3 rounded border border-slate-300 bg-white p-4">
         <legend className="px-2"><label><input type="checkbox" name={`doc-${doc.id}`} disabled={!doc.source} /> {doc.publicationNo || doc.title || `文献 ${doc.id}`}</label></legend>
         <div className="flex flex-wrap gap-3">
