@@ -5,7 +5,7 @@ import { sourceReadingTasks, type SourceReadingTask } from "./source-reading-tas
 // a prefix such as 特徴とする must not consume its subsequent negation/condition.
 function assertedEnding(tail: string): boolean {
   const rest = tail.replace(/^ことを特徴とする/u, "");
-  return /^(?:[、，。]|$)/u.test(rest) ||
+  return /^(?:[、，。]|$|と共に[、，])/u.test(rest) ||
     /^(?:請求項[^。]{1,100}に記載の)?[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ー]{0,80}(?:装置|機|器|方法|システム|回路)(?:[、，。]|$|において[、，]|であって[、，])/u.test(rest);
 }
 

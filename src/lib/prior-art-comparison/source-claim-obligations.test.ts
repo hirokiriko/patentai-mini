@@ -29,6 +29,6 @@ it.each([
 ])("does not force an affirmative fact from a condition/negation: %s", text => {
   expect(read(text).some(t=>["減圧した","維持する","切り換えて実行する"].includes(t.literal))).toBe(false);
 });
-it.each(["であることを特徴とする装置。","である。","であり、青弁を備える。"])("retains completed reduction in an asserted mode definition: %s",ending=>{
+it.each(["であることを特徴とする装置。","である。","であり、青弁を備える。","を実行すると共に、停止中は青弁を閉じる。"])("retains completed reduction in an asserted mode definition: %s",ending=>{
  expect(read(`気体を減圧した後、白吸熱器にて吸熱させる冷却モード${ending}`)).toContainEqual({kind:"executes",literal:"減圧した"});
 });
