@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fictionalBatch, fictionalInputs, fictionalReview } from "./fixtures.test-support";
-import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
+import { fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { executeComparison } from "./execute";
 import { makePlan, validateAnswer } from "./comparison";
 import { parseComparisonSource } from "./source";
@@ -8,7 +8,8 @@ import { batchInput } from "./generation-batch";
 import { decodeGeneration } from "./generation";
 import { inspectReviewCoverage, reviewInput, validateReview } from "./semantic-review";
 import { compileLiteralStructure } from "./literal-structure";
-import { fixtureDeclareClauseReading } from "../../../scripts/prior-art-proposition-fixture.mjs";
+import {fictionalClaimSource} from "./source-claim-fixtures.test-support";
+import {sourceClaimExtractionPlan} from "./source-claim-extraction";
 
 const text = "前記第１の運転モードは光モードであり、前記第２の運転モードは、音モードと、振動モードと、表示モードのうちの何れか、又は、それらの組み合わせ、若しくは、それらの全てである。";
 const wrong = "基準側は光・音・振動・表示のいずれか/組合せ/全てを対象とする。";
@@ -44,18 +45,16 @@ describe("literal structure on the product path, with fictional SDK transport", 
       tasks.push(input.task);
       let answer;
       if (input.task === "extract_source_propositions") {
-        expect(input.sources[0].source.claims[0].canonicalModeSets).toEqual(expected.modes.map(([,subject,kind,members])=>({
+        expect(input.sourceContext.source.claims[0].canonicalModeSets).toEqual(expected.modes.map(([,subject,kind,members])=>({
           subject:inputs.draft.source.claims[0].text.slice(...subject),selection:kind==="fixed"?"required":"nonempty",extent:"closed",
           members:members.map(span=>inputs.draft.source.claims[0].text.slice(...span))})));
-        expect(input.sources[0].source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(inputs.draft.source.claims[0].text);
-        answer = fictionalPropositionSource(input);
-        // This hand-authored mock explicitly reads the full claim, including
-        // canonical mode/reference clauses; it supplies no new semantic facts.
-        fixtureDeclareClauseReading(answer,input);
-        // v21 records this explicit fictional reading in an exact Q context quote,
-        // rather than the removed duplicate W inventory.
-        for(const source of answer.sources)for(const fact of source.facts)
-          fact.operators.context=[...fact.basis[0]];
+        expect(input.sourceContext.source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(inputs.draft.source.claims[0].text);
+        // The fictional fixture explicitly cites its complete own source.
+        // The adapter only projects the target claim into the new v23 reply.
+        answer=fictionalClaimSource(input,raw=>{
+          for(const source of raw.sources)for(const fact of source.facts)
+            fact.operators.context=[...fact.basis[0]];
+        });
       } else if (input.task === "compare") {
         expect(input.base.literalStructure).toEqual(expected);
         answer = fictionalPropositionGeneration(input);
@@ -68,10 +67,10 @@ describe("literal structure on the product path, with fictional SDK transport", 
       }
       const wire=fixturePropositionWire(answer);
       if(failure==="reading"&&input.task==="extract_source_propositions"){
-        const firstFact=wire.s[0].c1.facts[0];
+        const claim=wire.answer[`c${input.target.claimNo}`],firstFact=claim.facts[0];
         expect(firstFact.m.J[0]).toHaveLength(1);
-        const id=firstFact.m.J[0][0],index=wire.s[0].c1.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
-        expect(index).toBeGreaterThanOrEqual(0);wire.s[0].c1.Q[index]=id+"|0-0:原文に存在しない語";
+        const id=firstFact.m.J[0][0],index=claim.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
+        expect(index).toBeGreaterThanOrEqual(0);claim.Q[index]=id+"|0-0:原文に存在しない語";
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
@@ -81,7 +80,8 @@ describe("literal structure on the product path, with fictional SDK transport", 
     const execution=executeComparison(inputs, selection).catch(error=>{throw transportErrors[0]??error;});
     if (failure === "valid") expect((await execution).review).toBe("human_review_required");
     else await expect(execution).rejects.toThrow("ai_incomplete");
-    expect(tasks).toEqual(failure === "reading" ? ["extract_source_propositions"] : failure === "generation" ? ["extract_source_propositions", "compare"] : ["extract_source_propositions", "compare", "review"]);
+    const sourceTasks=Array(sourceClaimExtractionPlan(makePlan(inputs,selection)).tasks.length).fill("extract_source_propositions");
+    expect(tasks).toEqual(failure === "reading" ? ["extract_source_propositions"] : failure === "generation" ? [...sourceTasks, "compare"] : [...sourceTasks, "compare", "review"]);
   });
   it("does not promote a fictional C verdict over an original-derived counterexample or rewrite the response", () => {
     const { inputs, selection } = fixture(), plan = makePlan(inputs, selection), batch = generation(batchInput(plan));

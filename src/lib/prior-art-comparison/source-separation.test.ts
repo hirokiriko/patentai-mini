@@ -1,7 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { executeComparison } from "./execute";
-import { fictionalClauseInputs as fictionalInputs, fictionalClauseSource as fictionalPropositionSource } from "./source-clause-fixtures.test-support";
+import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
+import {fictionalClaimSource} from "./source-claim-fixtures.test-support";
+import {sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {makePlan} from "./comparison";
 import { LIMITS } from "./limits";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
@@ -21,7 +24,7 @@ it("keeps generation and target extraction independent of the first extractor's 
     let answer;
     if (input.task === "extract_source_propositions") {
       expect(JSON.stringify(input)).not.toMatch(/sourceAnalysis|verdict|differences|unconfirmed/);
-      answer=fictionalPropositionSource(input);
+      answer=fictionalClaimSource(input);
     } else if (input.task === "compare") {
       expect(input).not.toHaveProperty("sourcePropositions");
       expect(input.sourceAnalysis).toEqual([]);
@@ -46,5 +49,5 @@ it("keeps generation and target extraction independent of the first extractor's 
     }catch(error){transportErrors.push(error);throw error;}
   }));
   expect((await executeComparison(fixture.inputs, fixture.selection).catch(error=>{throw transportErrors[0]??error;})).review).toBe("human_review_required");
-  expect(tasks).toEqual(["extract_source_propositions", "compare", "review"]);
+  expect(tasks).toEqual([...Array(sourceClaimExtractionPlan(makePlan(fixture.inputs,fixture.selection)).tasks.length).fill("extract_source_propositions"), "compare", "review"]);
 });
