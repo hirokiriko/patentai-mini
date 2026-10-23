@@ -1369,3 +1369,22 @@ create positive route tasks. Tasks supply no actors, conditions or endpoints.
 Task coverage never replaces complete original-source QA: all component functions,
 mode routes, conditions, references, power transitions and independent thermal
 actions still need the existing semantic/domain checks and independent reading.
+
+## Source v19 citation accounting and literal states
+
+The active source contract retains clause-qualified exact quotes and explicit
+operator proofs. It derives the supporting clause inventory from those declared
+locations and the explicitly selected loop frame. Facts no longer repeat W or T;
+the decoder checks task coverage against each actual predicate, action occurrence
+and route point. It supplies no missing meaning or citation. The 12-clause limit,
+unrepresented-clause rejection and complete original-source QA remain in force.
+Historical v17/v18 decoders retain their own contracts and reject version changes.
+
+Literal opening occurrences extend the partial reading checklist. Conditional,
+negative and ambiguous prefixes do not create positive opening/state obligations.
+The bounded `is_state` predicate preserves a single printed passive state such as
+power being supplied, deenergization, connection or state restoration. It cannot
+stand in for active opening/closing, maintenance or supply loss. Source and target
+use the same meaning, quote validation and literal rendering; distinct state
+phrases do not become synonyms. Printed active action phrases remain `executes`.
+Fictional SDK fixtures demonstrate transport only, never real-AI quality.

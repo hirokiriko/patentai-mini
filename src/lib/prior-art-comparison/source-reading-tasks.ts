@@ -1,5 +1,5 @@
 import type {SourceReadingClaim} from "./source-clause-coverage";
-import {sourceActionCues} from "./source-semantic-check";
+import {sourceActionCues,sourceCompleteActionCues} from "./source-semantic-check";
 import {resolveSourceContextQuote} from "./source-direct-quotes";
 import {sourceCellRef} from "./source-citation-grid";
 import type {Span} from "./propositions";
@@ -11,8 +11,8 @@ export type SourceReadingTask={clause:number;kind:string;span:Span;polarity:stri
 
 /** Literal occurrences, never supplied propositions. In particular a component
  * definition, location or negative flow does not force an invented route. */
-export function sourceReadingTasks(c:SourceReadingClaim):SourceReadingTask[]{
-  const tasks:SourceReadingTask[]=sourceActionCues(c).map(t=>({...t,kind:t.predicate}));
+export function sourceReadingTasks(c:SourceReadingClaim,complete=false):SourceReadingTask[]{
+  const tasks:SourceReadingTask[]=(complete?sourceCompleteActionCues(c):sourceActionCues(c)).map(t=>({...t,kind:t.predicate}));
   c.clauses.forEach((span,clause)=>{
     const text=c.grid.text.slice(...span);
     // Conservatively leave any negated clause to full original QA. A reading
@@ -57,11 +57,53 @@ export function assertSourceTaskBindings(tasks:SourceReadingTask[],selected:unkn
     }
     else{
       if(m.k!=="relation"||!action||action[0]>t.span[0]||action[1]<t.span[1])throw invalid();
-      if(m.P!==t.kind&&!(m.P==="maintains"&&["closes","fully_closes"].includes(t.kind)))throw invalid();
+      if(m.P!==t.kind&&!(m.P==="maintains"&&["opens","closes","fully_closes"].includes(t.kind)))throw invalid();
       // The unchanged semantic checker further verifies maintained state,
       // polarity, heat objects and full guards, not just this task reference.
       if(m.p!==t.polarity)throw invalid();
     }
   }
   return selected as number[];
+}
+
+/** v19 records no second copy of the citation inventory. Only locations
+ * explicitly declared in the new answer become evidence; no text, actor,
+ * condition or missing fact is supplied. Old wire answers are never repaired. */
+export function sourceDeclaredEvidence(c:SourceReadingClaim,f:Record<string,unknown>,fixed:readonly Span[]=[]):number[]{
+  if(!record(f.m)||Object.hasOwn(f,"W")||Object.hasOwn(f,"T"))throw invalid();
+  const ids=new Set<number>();
+  const range=(first:unknown,last:unknown)=>{
+    if(!Number.isSafeInteger(first)||!Number.isSafeInteger(last)||Number(first)<0||Number(last)<Number(first)||!c.clauses[Number(last)]||Number(last)-Number(first)>=12)throw invalid();
+    for(let id=Number(first);id<=Number(last);id++)ids.add(id);
+  };
+  const quote=(v:unknown)=>{
+    if(typeof v==="string"){
+      const m=/^(0|[1-9]\d*):[\s\S]+$/u.exec(v);if(!m)throw invalid();range(Number(m[1]),Number(m[1]));
+    }else{
+      if(!exact(v,["first","last","quote","before","after"])||typeof v.quote!=="string"||!v.quote||typeof v.before!=="string"||typeof v.after!=="string")throw invalid();
+      range(v.first,v.last);
+    }
+  };
+  const term=(v:unknown)=>{if(!Array.isArray(v)||!v.length||v.length>4)throw invalid();v.forEach(quote);};
+  for(const k of ["u","i","j"])if(Object.hasOwn(f.m,k)&&f.m[k]!==null)term(f.m[k]);
+  for(const k of ["G","M","V","B","J"])if(Object.hasOwn(f.m,k)){
+    if(!Array.isArray(f.m[k]))throw invalid();f.m[k].forEach(term);
+  }
+  if(Object.hasOwn(f.m,"a"))quote(f.m.a);
+  const proof=(v:unknown)=>{if(v===null)return;if(exact(v,["first","last"]))range(v.first,v.last);else quote(v);};
+  if(!exact(f.O,["selection","extent","polarity","guard","context"]))throw invalid();Object.values(f.O).forEach(proof);
+  if(record(f.F)){
+    if(!exact(f.F,["E","X","T","C","D"])||!Array.isArray(f.F.C)||!Array.isArray(f.F.D))throw invalid();
+    [f.F.E,f.F.X,f.F.T,...f.F.C,...f.F.D].forEach(proof);
+  }else if(f.F!==null){
+    if(!Number.isSafeInteger(f.F)||!fixed.length)throw invalid();
+    for(const [a,b]of fixed)c.clauses.forEach(([x,y],id)=>{if(x<b&&y>a)ids.add(id);});
+  }
+  if(!ids.size||ids.size>12)throw invalid();return [...ids].sort((a,b)=>a-b);
+}
+
+/** Coverage is a relation between an actual fact and a literal task. Removing
+ * generated task numbers never adds a meaning or credits an unrelated fact. */
+export function sourceMatchedTasks(tasks:SourceReadingTask[],m:Record<string,unknown>,ids:readonly number[],action:Span|null,routePoints:readonly Span[]):number[]{
+  return tasks.flatMap((_,id)=>{try{return assertSourceTaskBindings(tasks,[id],m,ids,action,routePoints);}catch{return [];}});
 }

@@ -12,7 +12,7 @@ const extents = ["closed", "partial", "segment", "whole", "unresolved"] as const
 const relations = ["route", "precedes"] as const;
 const predicates = ["has", "upstream", "downstream", "inside", "opens", "closes", "fully_closes",
   "generates_heat", "absorbs_heat", "releases_heat", "maintains", "at_least", "at_most", "greater_than", "less_than",
-  "opens_one", "opens_together", "executes", "stops", "power_ends"] as const;
+  "opens_one", "opens_together", "executes", "stops", "power_ends", "is_state"] as const;
 type EncodedMeaning = [number, number | null, number, number, number[], number, ...unknown[]];
 type Frame = [number, number, number, number[], number[]];
 type Fact = [number, number[], EncodedMeaning, [number, number[]][], (number | null)[], Frame | null];

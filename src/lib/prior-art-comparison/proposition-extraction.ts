@@ -15,6 +15,7 @@ import { compactRuntimeSourceWitness, compactSourceDescriptorTable, type Runtime
 import { SOURCE_WORKED_GUIDE } from "./source-worked-example";
 import { SOURCE_WIRE_GUIDE } from "./source-wire-compact";
 import { SOURCE_CAPACITY } from "./source-capacity";
+import {isLiteralSourceState} from "./literal-source-state";
 
 const bindingSchema = z.object({ term: z.string().min(1).max(80), spans: z.array(spanSchema).min(1).max(4) }).strict();
 const operatorsSchema = z.object({ selection: spanSchema.nullable(), extent: spanSchema.nullable(),
@@ -87,6 +88,8 @@ function meaningTerms(m:Meaning):string[] {
 /** Every semantic term is tied to literal words. A composed mention can reuse
  * a shared suffix (e.g. first/second mode) but cannot add an unprinted name. */
 function validateExtraction(text:string,raw:z.infer<typeof extractionSchema>,range:Span=[0,text.length]) {
+  if(raw.meaning.kind==="relation"&&raw.meaning.predicate==="is_state"&&
+    (raw.meaning.objects.length!==1||!isLiteralSourceState(raw.meaning.objects[0])))throw new ComparisonError("ai_incomplete");
   if(raw.meaning.kind==="relation"&&raw.meaning.predicate==="power_ends"&&raw.meaning.subject!==null)
     throw new ComparisonError("ai_incomplete");
   const inside=([a,b]:Span)=>a>=range[0]&&b<=range[1];
@@ -323,7 +326,7 @@ export function decodeTargetPropositions(input:PropositionTargetInput,value:unkn
   }catch{throw new ComparisonError("ai_incomplete");}
 }
 
-const ACTION_GUIDE="Thermal objects name components: generates_heat=objects generate heat; absorbs_heat/releases_heat=at objects. Action subject=printed actor/mode or null. Placement upstream/downstream/inside: subject=located component, objects=reference component. Preserve capability/operation, full closure and guards. Maintaining a state is not opening/closing; quote the state including its verb. opens_one=exactly one listed object opens; opens_together=listed objects open simultaneously; neither is ordinary opens or set membership. executes/stops objects name the control or machine being executed/stopped. Nonexecution=negative executes with the full negation proof. power_ends=passive loss of supply to the listed devices, subject=null; never invent an actor cutting power.";
+const ACTION_GUIDE="Heat objects=components: generates_heat=their heat;absorbs_heat/releases_heat=at them. Subject=printed actor/mode|null. upstream/downstream/inside: subject=located component,objects=reference. Keep capability/operation,full closure,guards. maintains!=open/close;quote state+verb. opens_one=exactly one listed opens;opens_together=listed open simultaneously;neither=opens/set. executes=printed control/full literal ACTIVE phrase,not passive. stops objects=stopped control/machine. Nonexecution=negative executes+full negation proof. is_state: subject=printed|null;objects=[ONE verbatim passive/structural phrase];keep context/shared guards/all ORs;exclude active/maintenance/power-loss. Source=target;unequal!=same/opposite. power_ends=listed devices lose supply;passive,subject=null,no cutoff actor.";
 export const LEGACY_PROPOSITION_SOURCE_SYSTEM=`${PROPOSITION_SOURCE_TEXT_GUIDE}
 ${SOURCE_WIRE_GUIDE}
 ${PROPOSITION_SOURCE_TERM_GUIDE}
@@ -345,5 +348,5 @@ Partition the WHOLE target in order, without gaps. Each part stays inside one in
 Each atom uses exact target bindings and same-source reference-branch sourceIds. Its attribution span identifies the closest explicit 基準側/候補側/両側とも marker before its literal subject (or first object when no subject is printed), within the same sentence. Modifiers on another comparison operand are not the assertion subject. A shared marker requires the identical assertion for both scopes; implicit attribution is allowed only in a side-specific observation field. All relevant literal facts for its subject must be included, including required groups when the target flattens the device's alternatives. Each atom is proved in one original claimNo; all its sourceIds must belong to that claim. For the SAME target assertion, give separate atoms with identical meanings for enough supporting claims to cover every reference alternative. A claim node carries its own assertion and its stated reference relation. Never combine different meanings into one proof. Terms are literal, not invented synonym labels. Abbreviated mode names may share printed suffix spans. Conditions belong to their actual predicate. Flow 'after X' uses precedes, origin=null, via=[X], destination=Y. Action after X keeps X as guard, not a path. Match a whole route only with complete explicit frame and exclusion/control evidence.
 Bare claim-range statements use reference parts, relation=unspecified unless explicit; range/slash/up-to never implies AND. Reservation parts contain only an exact nominal topic plus uncertainty, no atoms. Example: '基準側は青色弁を備える。配置は未確認。' has separate assertion/reservation parts; reservation.span quotes '配置は未確認。', reservation.basis quotes ONLY '配置', equal to topic. Field name unconfirmed does not make factual clauses reservations. Separate preceding facts; unsupported residual syntax stays locally unresolved, never a contradiction. Source facts are fallible candidates: spans do not prove meaning. Preserve strong assertions even when they disagree with candidates.`;
 
-export { propositionSourceTaskTransport as propositionSourceTransport } from "./source-semantic-wire";
-export { PROPOSITION_SOURCE_TASK_SYSTEM as PROPOSITION_SOURCE_SYSTEM } from "./source-task-prompt";
+export { propositionSourceCitedTransport as propositionSourceTransport } from "./source-semantic-wire";
+export { PROPOSITION_SOURCE_CITED_SYSTEM as PROPOSITION_SOURCE_SYSTEM } from "./source-task-prompt";

@@ -32,6 +32,12 @@ it.each([false,true])("connects source extraction, full generation, computed tar
     if(input.task==="extract_source_propositions")expect(bytes+8192).toBeLessThanOrEqual(sizes.sourceBytes);
     if(input.task==="review")expect(bytes+8192).toBeLessThanOrEqual(sizes.targetBytes);
     const value=input.task==="extract_source_propositions"?fictionalPropositionSource(input):input.task==="compare"?fictionalPropositionGeneration(input):fictionalPropositionTarget(input);
+    if(unique&&input.task==="extract_source_propositions"){
+      // This partial, hand-authored transport mock explicitly cites its full
+      // context. It tests SDK plumbing, never complete semantic extraction.
+      for(const s of (value as ReturnType<typeof fictionalPropositionSource>).sources)
+        for(const fact of s.facts)fact.operators.context=[...fact.basis[0]];
+    }
     return Response.json({id:"resp_fixture",created_at:0,model:"fictional",status:"completed",service_tier:"default",
       output:[{type:"message",id:"msg_fixture",role:"assistant",status:"completed",content:[{type:"output_text",text:JSON.stringify(fixturePropositionWire(value)),annotations:[]}]}],
       usage:{input_tokens:100,output_tokens:100}});

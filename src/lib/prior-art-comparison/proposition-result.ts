@@ -4,6 +4,7 @@ import { compareProposition, explainProposition, propositionKey, meaningKey, typ
 import { coversReferenceScope } from "./proposition-references";
 import { decodeTargetPropositions, type PropositionTargetInput, type targetPropositionSchema } from "./proposition-extraction";
 import { REVIEW_FIELDS, reviewTargetIdentity, type ReviewDraft } from "./semantic-review";
+import { isLiteralSourceState } from "./literal-source-state";
 
 export type PropositionAssessment = ReturnType<typeof assessPropositions>;
 /** Returns all records, including failures. Diagnostic responses are never
@@ -51,6 +52,10 @@ export function renderMeaning(m:Meaning):string {
     return `${context}${condition}${subject}では${m.origin}から${m.via.length?`${list(m.via)}をこの順に経て` : ""}${m.bypass.length?`${list(m.bypass)}を経ず` : ""}${m.destination}へ流れる`;
   }
   const objects=list(m.objects);
+  if(m.predicate==="is_state"){
+    if(m.objects.length!==1||!isLiteralSourceState(m.objects[0]))throw new ComparisonError("ai_incomplete");
+    return `${context}${condition}${m.subject===null?"":`${m.subject}について、`}「${objects}」という状態である`;
+  }
   // A passive loss of supply does not name an actor who cuts it.
   if(m.predicate==="power_ends"){
     if(m.subject!==null)throw new ComparisonError("ai_incomplete");
@@ -59,7 +64,7 @@ export function renderMeaning(m:Meaning):string {
   const action={has:`${objects}を備える`,upstream:`${objects}の上流にある`,downstream:`${objects}の下流にある`,inside:`${objects}内にある`,
     opens:`${objects}を開く`,closes:`${objects}を閉じる`,fully_closes:`${objects}を全閉にする`,
     opens_one:`${objects}のうち何れか一つを開く`,opens_together:`${objects}を同時に開く`,
-    executes:`${objects}を実行する`,stops:`${objects}を停止する`,
+    executes:`「${objects}」という動作を行う`,stops:`${objects}を停止する`,
     generates_heat:`${objects}を発熱させる`,absorbs_heat:`${objects}で吸熱させる`,releases_heat:`${objects}で放熱させる`,
     maintains:`${objects}を維持する`,at_least:`${objects}以上である`,
     at_most:`${objects}以下である`,greater_than:`${objects}を超える`,less_than:`${objects}を下回る`}[m.predicate];

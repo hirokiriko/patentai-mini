@@ -20,7 +20,7 @@ export const SOURCE_MEANING_ENUMS: Record<string, readonly string[]> = {
   extent:["closed","partial","segment","whole","unresolved"],relation:["route","precedes"],
   predicate:["has","upstream","downstream","inside","opens","closes","fully_closes",
     "generates_heat","absorbs_heat","releases_heat","maintains","at_least","at_most","greater_than","less_than",
-    "opens_one","opens_together","executes","stops","power_ends"],
+    "opens_one","opens_together","executes","stops","power_ends","is_state"],
 };
 const enums=SOURCE_MEANING_ENUMS;
 const operatorKeys=["selection","extent","polarity","guard","context"];

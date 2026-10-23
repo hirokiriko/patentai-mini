@@ -1,5 +1,6 @@
 import type { Span } from "./propositions";
 import type { SourceReadingClaim } from "./source-clause-coverage";
+import {isLiteralSourceState,SOURCE_STATE_PATTERN} from "./literal-source-state";
 
 const invalid=()=>new Error("comparison_source_semantic_incomplete");
 const contains=([a,b]:Span,[x,y]:Span)=>a<=x&&b>=y;
@@ -33,6 +34,32 @@ function textTail(text:string,end:number):string{
   return /^(?:る)?こと(?:は|が|も)(?:なかった|ない)/u.exec(text.slice(end))?.[0]??"";
 }
 
+/** Additional v19 literal opening occurrences. A named valve or a temporal
+ * prerequisite (開いた後) is not a new opening. No actor/condition is inferred. */
+export function sourceCompleteActionCues(c:SourceReadingClaim):SourceActionCue[]{
+  const cues=sourceActionCues(c),text=c.grid.text;
+  // These literal tails describe a premise, negation or modality; they do not
+  // assert the matched state/action. Leave ambiguous prose to original QA.
+  const unasserted=(end:number,clause:number)=>/^(?:ない|なかった|ず|ていない|ていなかった|ません|な(?:[。！、]|$)|必要|と(?=[、，])|れば|ても|たら|こと(?:は|が|も|なく)|(?:状態)?(?:の)?(?:場合|とき|時|際|なら|後))/u.test(text.slice(end,c.clauses[clause][1]));
+  const allStates=[...text.matchAll(SOURCE_STATE_PATTERN)].map(m=>{
+    const span:Span=[m.index,m.index+m[0].length],clause=c.clauses.findIndex(s=>contains(s,span));if(clause<0)throw invalid();
+    return {span,clause,predicate:"is_state",polarity:"positive" as const};
+  });
+  // Recognize only clear assertion endings, plus a directly modified katakana
+  // component name. Unknown inflections/conditions remain original-QA work;
+  // they never force a positive state from an arbitrary matched prefix.
+  const states=allStates.filter(s=>/^(?:[、，。]|$|ことを特徴)/u.test(text.slice(s.span[1]))||
+    /接続された$/u.test(text.slice(...s.span))&&/^[\p{Script=Katakana}ー]+(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(s.span[1],c.clauses[s.clause][1])));
+  const pattern=/(?:同時に|(?:何れか|いずれか)?一方を)?開(?:いていなかった|いていない|かなかった|かない|かず|きません|くこと(?:は|が|も)(?:なかった|ない)|くことなく|く|き(?=[、，])|いた(?=状態を維持))/gu;
+  for(const m of text.matchAll(pattern)){
+    const span:Span=[m.index,m.index+m[0].length],clause=c.clauses.findIndex(s=>contains(s,span));if(clause<0)throw invalid();
+    if(unasserted(span[1],clause))continue;
+    cues.push({span,clause,predicate:m[0].startsWith("同時に")?"opens_together":m[0].includes("一方を")?"opens_one":"opens",
+      polarity:/(?:ない|なかった|ず|ません|なく)$/u.test(m[0])?"negative":"positive"});
+  }
+  return [...cues.filter(cue=>!allStates.some(s=>contains(s.span,cue.span))),...states].sort((a,b)=>a.span[0]-b.span[0]);
+}
+
 export type SourceOrGroup={branches:Span[];span:Span};
 /** Recognize only punctuation-delimited timing alternatives whose branch ends
  * are explicit. No guessed condition boundary or general Japanese parsing. */
@@ -63,17 +90,20 @@ export type CheckedSourceFact={
   // and the action occurrence, so unrelated facts cannot complete a group.
   identity:string;
 };
-export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[]){
-  const text=c.grid.text,cues=sourceActionCues(c);
+export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[],cues=sourceActionCues(c)){
+  const text=c.grid.text;
   for(const fact of facts){
     if(fact.kind!=="relation")continue;
     if(!fact.action)throw invalid();
     const action=text.slice(...fact.action);
+    if(fact.predicate==="is_state"&&(!isLiteralSourceState(action)||fact.objectSpans.length!==1||fact.objectSpans[0].length!==1||
+      !contains(fact.objectSpans[0][0],fact.action)||!isLiteralSourceState(text.slice(...fact.objectSpans[0][0]))))throw invalid();
     // A close cannot be accepted as stopping merely because both its noun and
     // its broad W happen to quote the source. Preserve the exact action word.
     const local=cues.filter(cue=>contains(fact.action!,cue.span));
+    if(fact.predicate==="is_state"&&!local.some(cue=>cue.predicate==="is_state"))throw invalid();
     if(fact.predicate==="stops"&&(!/(?:停止|中止|終了|止め)/u.test(action)||local.length))throw invalid();
-    if(["closes","fully_closes","releases_heat","absorbs_heat","generates_heat"].includes(fact.predicate!)){
+    if(["closes","fully_closes","releases_heat","absorbs_heat","generates_heat",...(cues.some(c=>c.predicate.startsWith("opens"))?["opens","opens_one","opens_together"]:[])].includes(fact.predicate!)){
       if(!local.length||local.some(cue=>cue.predicate!==fact.predicate||cue.polarity!==fact.polarity))throw invalid();
     }
   }
@@ -92,7 +122,7 @@ export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSo
           !overlaps(s,cue.span)&&(!named||component.test(text.slice(...s)))));
       }
       // A quoted closed state being maintained is not a new closing event.
-      return ["closes","fully_closes"].includes(cue.predicate)&&f.predicate==="maintains"&&/維持/u.test(text.slice(...f.action))&&
+      return ["opens","closes","fully_closes"].includes(cue.predicate)&&f.predicate==="maintains"&&/維持/u.test(text.slice(...f.action))&&
         f.objectSpans.some(term=>term.some(s=>contains(s,cue.span)));
     }))throw invalid();
   }

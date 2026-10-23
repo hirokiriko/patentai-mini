@@ -15,7 +15,7 @@ export function fixtureDeclareClauseReading(value,input) {
 
 // Fictional SDK plumbing ONLY. Starts from hand-authored semantic facts and
 // spans, never an actual model response. Does not invent uncovered meanings.
-export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
+export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===4?19:input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
   const readings = input.sources.map(s=>s.source.claims.map(c=>{
     let at=0;
     const clauses=c.clauses.map(([id,text],i)=>{
@@ -44,7 +44,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
       const ids=([a,b])=>r.clauses.flatMap(([x,y],id)=>x<b&&y>a?[id]:[]);
       const quote=ref=>{
         const [a,b]=span(ref);
-        if(version===18){
+        if(version>=18){
           const selected=ids([a,b]),first=selected[0],last=selected.at(-1),lo=r.clauses[first][0],hi=r.clauses[last][1],q=r.text.slice(a,b),whole=r.text.slice(lo,hi);
           if(first===last&&whole.indexOf(q)===whole.lastIndexOf(q))return [`${first}:${q}`];
           return [{first,last,quote:q,before:r.text.slice(lo,a),after:r.text.slice(b,hi)}];
@@ -83,7 +83,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           const first=selected[0],last=selected.at(-1),[x]=r.clauses[first],[,y]=r.clauses[last];
           // Whole clauses already preserve the original proof exactly. A
           // partial cross-clause proof keeps its exact text and own context.
-          if(a===x&&b===y)return version===18?{first,last}:selected;
+          if(a===x&&b===y)return version>=18?{first,last}:selected;
           if(version>=16||first===last)return quote(v)[0];
           return [String(first),String(last),r.text.slice(a,b),r.text.slice(x,a),r.text.slice(b,y)];
         };
@@ -93,7 +93,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
         const O=f.O===null?(version>=16?[null,null,null,null,null]:null):f.O.map(v=>v===null?null:proof(v));
         const F=f.F===null?null:{E:proof(f.F.E),X:proof(f.F.X),T:proof(f.F.T),C:f.F.C.map(proof),D:f.F.D.map(proof)};
         if(version>=17){
-          const cq=q=>version===18?q:typeof q==="string"?q:Array.isArray(q)&&q.length===3&&q.every(x=>typeof x==="string")?
+          const cq=q=>version>=18?q:typeof q==="string"?q:Array.isArray(q)&&q.length===3&&q.every(x=>typeof x==="string")?
             {quote:q[0],before:q[1],after:q[2]}:(()=>{throw Error("fictional_context_invalid")})();
           const cp=p=>p===null?p:Array.isArray(p)&&p.every(x=>typeof x==="number")?p:cq(p);
           for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=m[k].map(cq);
@@ -101,7 +101,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           const enums={x:["capability","operation","unresolved"],g:["unconditional","when","only_when","unresolved"],
             p:["positive","negative","reserved"],k:["set","path","relation"],S:["required","one","nonempty","all","unspecified"],
             e:["closed","partial","segment","whole","unresolved"],r:["route","precedes"],
-            P:["has","upstream","downstream","inside","opens","closes","fully_closes","generates_heat","absorbs_heat","releases_heat","maintains","at_least","at_most","greater_than","less_than","opens_one","opens_together","executes","stops","power_ends"]};
+            P:["has","upstream","downstream","inside","opens","closes","fully_closes","generates_heat","absorbs_heat","releases_heat","maintains","at_least","at_most","greater_than","less_than","opens_one","opens_together","executes","stops","power_ends","is_state"]};
           for(const k of Object.keys(enums))if(Object.hasOwn(m,k))m[k]=enums[k][m[k]];
           if(m.k==="relation"){
             // Only hand-authored fictional meanings/spans enter this adapter.
@@ -109,7 +109,9 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
             // this is never used to repair or accept an acquired AI answer.
             const patterns={closes:/閉じ(?:ない|ず|る|て|た|(?=[、，]))/gu,fully_closes:/全閉(?:にする|とする|にし|とし|する)/gu,
               generates_heat:/発熱(?:させ|する|し)/gu,absorbs_heat:/吸熱(?:させ|する|し)/gu,releases_heat:/放熱(?:させ|する|し)/gu,
-              stops:/(?:停止|終了|中止)(?:する|した|し)?/gu};
+              stops:/(?:停止|終了|中止)(?:する|した|し)?/gu,
+              opens:/開(?:かない|かず|く|き(?=[、，]))/gu,opens_one:/(?:何れか|いずれか)?一方を開く/gu,opens_together:/同時に開く/gu,
+              is_state:/(?:電源が供給され(?:る)?|非通電とされ(?:る)?|接続された|全閉となり|閉じた状態に復帰する|開いた状態に復帰する)/gu};
             const match=patterns[m.P]?[...r.text.matchAll(patterns[m.P])].find(x=>ids([x.index,x.index+x[0].length]).every(id=>W.has(id))):undefined;
             const action=match?[match.index,match.index+match[0].length]:r.clauses[[...W][0]];
             m.a=cq(quote(r.ref(action))[0]);
@@ -117,6 +119,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           const named=Object.fromEntries(["selection","extent","polarity","guard","context"].map((k,i)=>[k,cp(O[i])]));
           const frame=F===null?null:{E:cp(F.E),X:cp(F.X),T:cp(F.T),C:F.C.map(cp),D:F.D.map(cp)};
           const T=version===18?(r.c.readingTasks??[]).flatMap(([clause,predicate],id)=>m.k==="relation"&&m.P===predicate&&W.has(clause)?[id]:[]):undefined;
+          if(version===19){const {W:oldEvidence,...rest}=f;void oldEvidence;return {...rest,m,O:named,F:frame};}
           return {...f,...(T?{T}:{}),m,O:named,F:frame,W:[...W].sort((a,b)=>a-b)};
         }
         return {...f,m,O,F,W:[...W].sort((a,b)=>a-b)};
