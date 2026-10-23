@@ -225,6 +225,7 @@ export function sourceDictionaryPropositionModelSchemaFor(chunks:readonly Manage
   schema.definitions!.PriorArtSourceDictionaryQuote=structuredClone(schema.definitions!.PriorArtSourceCellQuote);
   schema.definitions!.PriorArtSourceCellQuote={type:"integer",description:"Index in this claim's Q, never a clause ID or another claim's dictionary."};
   schema.definitions!.PriorArtSourceEvidence={$ref:"#/definitions/PriorArtSourceCellQuote"};
+  schema.definitions!.PriorArtSourceOperators={type:"array",items:{anyOf:[{$ref:"#/definitions/PriorArtSourceCellQuote"},{type:"null"}]},minItems:5,maxItems:5,description:"Exactly [selection,extent,polarity,guard,context], each a Q index or null."};
   schema.definitions!.PriorArtSourceDictionaryClaim={type:"object",properties:{
     Q:{type:"array",items:{$ref:"#/definitions/PriorArtSourceDictionaryQuote"},description:"Exact claim-local first-last:quote/context entries, unique original locations, all used."},
     facts:{type:"array",items:{$ref:"#/definitions/PriorArtSourceAdditionalFact"}},

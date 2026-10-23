@@ -182,7 +182,7 @@ export function sourceQuoteDictionary(c:SourceReadingClaim,value:unknown){
 }
 export function sourceDictionaryFact(c:SourceReadingClaim,value:unknown,dictionary:ReturnType<typeof sourceQuoteDictionary>){
   if(!record(value)||!record(value.m)||!Number.isSafeInteger(value.R)||Number(value.R)<0||!c.clauses[Number(value.R)]||
-    !exact(value.O,["selection","extent","polarity","guard","context"]))throw invalid();
+    !Array.isArray(value.O)||value.O.length!==5)throw invalid();
   const m={...value.m};
   const term=(v:unknown)=>{
     if(!Array.isArray(v)||!v.length||v.length>4||new Set(v).size!==v.length)throw invalid();
@@ -194,7 +194,8 @@ export function sourceDictionaryFact(c:SourceReadingClaim,value:unknown,dictiona
   }
   if(Object.hasOwn(m,"a"))m.a=dictionary.get(m.a);
   const proof=(v:unknown)=>v===null?null:dictionary.get(v);
-  const O=Object.fromEntries(Object.entries(value.O).map(([k,v])=>[k,proof(v)]));
+  const operators=value.O;
+  const O=Object.fromEntries(["selection","extent","polarity","guard","context"].map((k,i)=>[k,proof(operators[i])]));
   let F=value.F;
   if(record(F)){
     if(!exact(F,["E","X","T","C","D"])||!Array.isArray(F.C)||!Array.isArray(F.D))throw invalid();

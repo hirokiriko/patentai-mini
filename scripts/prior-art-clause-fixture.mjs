@@ -165,7 +165,7 @@ function fixtureDictionaryWire(wire,input){
         for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=m[k].map(q);
         for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k))m[k]=m[k].map(t=>t.map(q));
         if(Object.hasOwn(m,"a"))m.a=q(m.a);
-        const O=Object.fromEntries(Object.entries(value.O).map(([k,v])=>[k,proof(v)]));
+        const O=["selection","extent","polarity","guard","context"].map(k=>proof(value.O[k]));
         const F=value.F===null||typeof value.F==="number"?value.F:{E:proof(value.F.E),X:proof(value.F.X),T:proof(value.F.T),C:value.F.C.map(proof),D:value.F.D.map(proof)};
         return {...value,R,m,O,F};
       };
