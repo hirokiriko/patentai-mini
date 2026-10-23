@@ -15,7 +15,8 @@ export function fixtureDeclareClauseReading(value,input) {
 
 // Fictional SDK plumbing ONLY. Starts from hand-authored semantic facts and
 // spans, never an actual model response. Does not invent uncovered meanings.
-export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===6?21:input?.citationClauses?.version===5?20:input?.citationClauses?.version===4?19:input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
+export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===7?22:input?.citationClauses?.version===6?21:input?.citationClauses?.version===5?20:input?.citationClauses?.version===4?19:input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
+  if(version===22)return fixtureIdentifiedWire(fixtureClauseWire(value,{...input,citationClauses:{version:6}},21));
   if(version===21)return fixtureDictionaryWire(fixtureClauseWire(value,{...input,citationClauses:{version:5}},20),input);
   const readings = input.sources.map(s=>s.source.claims.map(c=>{
     let at=0;
@@ -181,4 +182,21 @@ function fixtureDictionaryWire(wire,input){
     }
     return result;
   })};
+}
+
+// Fictional fixtures only: give every already explicit fixture quote a label.
+function fixtureIdentifiedWire(wire){
+  const fact=value=>{
+    const m={...value.m},term=v=>v.map(i=>`q${i}`),proof=v=>v===null?null:`q${v}`;
+    for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=term(m[k]);
+    for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k))m[k]=m[k].map(term);
+    if(Object.hasOwn(m,"a"))m.a=proof(m.a);
+    const F=value.F===null||typeof value.F==="number"?value.F:{E:proof(value.F.E),X:proof(value.F.X),T:proof(value.F.T),C:value.F.C.map(proof),D:value.F.D.map(proof)};
+    return {...value,m,O:value.O.map(proof),F};
+  };
+  return {v:22,s:wire.s.map(source=>Object.fromEntries(Object.entries(source).map(([key,value])=>{
+    if(key==="d")return[key,value];
+    if(key.startsWith("loop"))return[key,fact(value)];
+    return[key,{Q:value.Q.map((q,i)=>typeof q==="string"?`q${i}|${q}`:{...q,id:`q${i}`}),facts:value.facts.map(fact)}];
+  })))};
 }

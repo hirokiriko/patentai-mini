@@ -205,3 +205,38 @@ export function sourceDictionaryFact(c:SourceReadingClaim,value:unknown,dictiona
   rows[Number(R)].push(decoded);sourceOrderedFactRows(c,rows);
   return {R:Number(R),fact:decoded};
 }
+
+/** v22 labels are explicitly declared, never derived from array positions. */
+export function sourceIdentifiedQuoteDictionary(c:SourceReadingClaim,value:unknown){
+  if(!Array.isArray(value)||value.length>1024)throw invalid();
+  const quotes:unknown[]=[],labels=new Map<string,number>();
+  for(const entry of value){
+    let id:unknown,quote:unknown;
+    if(typeof entry==="string"){
+      const match=/^(q[0-9]{1,4})\|([\s\S]+)$/u.exec(entry);if(!match)throw invalid();
+      id=match[1];quote=match[2];
+    }else{
+      if(!exact(entry,["id","first","last","quote","before","after"]))throw invalid();
+      const {id:label,...locator}=entry;id=label;quote=locator;
+    }
+    if(typeof id!=="string"||!/^q[0-9]{1,4}$/u.test(id)||labels.has(id))throw invalid();
+    labels.set(id,quotes.length);quotes.push(quote);
+  }
+  // Validate every explicitly declared original location without supplying one.
+  sourceQuoteDictionary(c,quotes);
+  return {quotes,index(id:unknown){if(typeof id!=="string"||!labels.has(id))throw invalid();return labels.get(id)!;}};
+}
+export function sourceIdentifiedFact(value:unknown,dictionary:ReturnType<typeof sourceIdentifiedQuoteDictionary>){
+  if(!record(value)||!record(value.m)||!Array.isArray(value.O)||value.O.length!==5)throw invalid();
+  const m={...value.m},term=(v:unknown)=>{if(!Array.isArray(v))throw invalid();return v.map(dictionary.index);};
+  for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=term(m[k]);
+  for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k)){if(!Array.isArray(m[k]))throw invalid();m[k]=m[k].map(term);}
+  if(Object.hasOwn(m,"a"))m.a=dictionary.index(m.a);
+  const proof=(v:unknown)=>v===null?null:dictionary.index(v),O=value.O.map(proof);
+  let F=value.F;
+  if(record(F)){
+    if(!exact(F,["E","X","T","C","D"])||!Array.isArray(F.C)||!Array.isArray(F.D))throw invalid();
+    F={E:proof(F.E),X:proof(F.X),T:proof(F.T),C:F.C.map(proof),D:F.D.map(proof)};
+  }
+  return {...value,m,O,F};
+}

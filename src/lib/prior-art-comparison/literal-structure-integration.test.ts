@@ -70,7 +70,8 @@ describe("literal structure on the product path, with fictional SDK transport", 
       if(failure==="reading"&&input.task==="extract_source_propositions"){
         const firstFact=wire.s[0].c1.facts[0];
         expect(firstFact.m.J[0]).toHaveLength(1);
-        wire.s[0].c1.Q[firstFact.m.J[0][0]]="0-0:原文に存在しない語";
+        const id=firstFact.m.J[0][0],index=wire.s[0].c1.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
+        expect(index).toBeGreaterThanOrEqual(0);wire.s[0].c1.Q[index]=id+"|0-0:原文に存在しない語";
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",

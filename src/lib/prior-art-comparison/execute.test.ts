@@ -113,13 +113,15 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
-      // v21 quotes are claim-local Q indices; corrupt the declared quote itself.
+      // v22 quotes have explicit claim-local IDs; corrupt the named declaration itself.
       const firstFact=wire.s[0].c1.facts[0];
       if(mode==="missing_reading")delete firstFact.m.a;
       if(mode==="unrelated_evidence")firstFact.W=[[0,0,0,0]];
       if (mode === "blank" || mode === "overlong") {
         expect(firstFact.m.J[0]).toHaveLength(1);
-        wire.s[0].c1.Q[firstFact.m.J[0][0]] = mode === "blank" ? "" : "甲".repeat(12001);
+        const id=firstFact.m.J[0][0],index=wire.s[0].c1.Q.findIndex((q:unknown)=>typeof q==="string"?q.startsWith(id+"|"):!!q&&typeof q==="object"&&(q as {id?:unknown}).id===id);
+        expect(index).toBeGreaterThanOrEqual(0);
+        wire.s[0].c1.Q[index] = mode === "blank" ? "" : "甲".repeat(12001);
       }
       return response(wire);
     });

@@ -6,6 +6,8 @@ import { decodeSourcePropositions, propositionSourceInput } from "./proposition-
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { parseComparisonSource } from "./source";
+import { sourceCompleteActionCues } from "./source-semantic-check";
+import { sourceReadingClaim } from "./source-clause-coverage";
 
 type Relation = Extract<Meaning, { kind: "relation" }>;
 const guard = { relation: "unconditional" as const, conditions: [] };
@@ -36,6 +38,29 @@ function literalSource(phrase: string) {
 }
 
 describe("literal passive states (fictional fixtures, not AI quality)", () => {
+  it.each(["箱の外に設けられた", "入口と出口の間に設けられる"])("preserves exact passive placement without inventing inside/upstream: %s", phrase => {
+    const f=literalSource(phrase),before=JSON.stringify(f.raw);
+    const decoded=decodeSourcePropositions(f.plan,f.raw);
+    expect(JSON.stringify(f.raw)).toBe(before);
+    const fact=decoded.facts.find(p=>p.scope==="base:1")!;
+    expect(fact.meaning).toEqual(state(phrase));
+    expect(renderMeaning(fact.meaning)).toContain(`「${phrase}」`);
+    const assertion={...target(state(phrase)),sourceIds:[fact.id]};
+    expect(compareProposition(assertion,decoded.facts).relation).toBe("entailed");
+    for(const changed of [state("箱の内に設けられた"),{...state(phrase),predicate:"inside" as const,objects:["箱"]},
+      {...state(phrase),predicate:"upstream" as const,objects:["入口"]}])
+      expect(compareProposition({...assertion,meaning:changed},decoded.facts).relation).toBe("unresolved");
+  });
+  it.each(["設けられた","箱に設ける","箱に設けられない","箱に設けられた場合","箱に設けられたが弁を開く","弁が開けば箱の外に設けられた","弁を開き箱の外に設けられた"])("rejects missing location, active action or conditional placement: %s", phrase=>{
+    expect(isLiteralSourceState(phrase)).toBe(false);
+    const f=literalSource(phrase);expect(()=>decodeSourcePropositions(f.plan,f.raw)).toThrow();
+  });
+  it("does not hide a preceding valve action inside a placement state cue",()=>{
+    const claim=sourceReadingClaim(1,"赤弁を開き、箱の外に設けられた。");
+    const cues=sourceCompleteActionCues(claim);
+    expect(cues.some(c=>c.predicate==="opens")).toBe(true);
+    expect(cues.filter(c=>c.predicate==="is_state").map(c=>claim.grid.text.slice(...c.span))).toEqual(["箱の外に設けられた"]);
+  });
   it.each(["電源が供給され", "電源が供給される", "非通電とされる", "吸込側に接続された", "全閉となり", "閉じた状態に復帰する", "開いた状態に復帰する"])(
     "retains the permitted literal state %s", phrase => {
       expect(isLiteralSourceState(phrase)).toBe(true);

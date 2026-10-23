@@ -8,7 +8,7 @@ import { SOURCE_MEANING_ENUMS } from "./source-wire-compact";
 import { SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceFullActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
 import type { Span } from "./propositions";
-import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks,sourceOrderedQuote,resolveSourceOrderedQuote,sourceDeclaredOrderedEvidence,sourceOrderedFactRows,sourceQuoteDictionary,sourceDictionaryFact} from "./source-reading-tasks";
+import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks,sourceOrderedQuote,resolveSourceOrderedQuote,sourceDeclaredOrderedEvidence,sourceOrderedFactRows,sourceQuoteDictionary,sourceDictionaryFact,sourceIdentifiedQuoteDictionary,sourceIdentifiedFact} from "./source-reading-tasks";
 
 const invalid=()=>new Error("comparison_source_semantic_wire_invalid");
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==="object"&&!Array.isArray(v);
@@ -278,6 +278,60 @@ export function sourceDictionaryPropositionModelSchemaFor(chunks:readonly Manage
       const result=await old.validate(converted);
       if(result.success)decodeSourcePropositions(chunks,result.value);
       return result;
+    }catch{return {success:false,error:invalid()};}
+  }});
+}
+
+export function propositionSourceIdentifiedTransport(input:ReturnType<typeof propositionSourceInput>){
+  return {...propositionSourceDictionaryTransport(input),citationClauses:{version:7}};
+}
+/** v22 replaces positional dictionary indices with explicit, claim-local labels.
+ * Its reversible adapter never repairs a quotation, actor, guard or meaning. */
+export function sourceIdentifiedPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]){
+  const old=sourceDictionaryPropositionModelSchemaFor(chunks),input=propositionSourceInput(chunks);
+  const schema=structuredClone(old.jsonSchema) as JSONSchema7;
+  schema.properties!.v={type:"integer",enum:[22]};
+  const declaration=schema.definitions!.PriorArtSourceDictionaryQuote as JSONSchema7;
+  for(const branch of declaration.anyOf??[]){
+    if(!record(branch))continue;
+    if(branch.type==="string")branch.description="Explicit qID|first-last:exact text, e.g. q17|2-2:赤弁. ID is declared here, not counted by position.";
+    if(branch.type==="object"&&record(branch.properties)){
+      branch.properties.id={type:"string",description:"Explicit claim-local qID, e.g. q17."};
+      branch.required=[...(branch.required as string[]),"id"];
+    }
+  }
+  const context=schema.definitions!.PriorArtSourceQuoteContext as JSONSchema7;
+  context.properties!.id={type:"string",description:"Exact explicitly declared claim-local qID, e.g. q17."};
+  context.required=[...context.required!,"id"];
+  (schema.definitions!.PriorArtSourceOperators as JSONSchema7).description="Exactly [selection,extent,polarity,guard,context], each a declared qID string or null.";
+  const claim=schema.definitions!.PriorArtSourceDictionaryClaim as JSONSchema7;
+  (claim.properties!.Q as JSONSchema7).description="Explicit claim-local qID|first-last:quote or context object including id; unique IDs and locations, all used.";
+  schema.definitions!.PriorArtSourceCellQuote={type:"string",description:"Exact explicitly declared claim-local qID, e.g. q17. Never an array position, clause number or loop ID."};
+  assertSourceGridProviderSchema(schema);
+  return jsonSchema(schema,{validate:async raw=>{
+    try{
+      if(!exact(raw,["v","s"])||raw.v!==22||!Array.isArray(raw.s)||raw.s.length!==input.sources.length||
+        Buffer.byteLength(JSON.stringify(raw),"utf8")>SOURCE_CAPACITY.wireBytes||!old.validate)throw invalid();
+      const converted={v:21,s:raw.s.map((source,i)=>{
+        if(!record(source)||source.d!==input.sources[i].sourceDigest)throw invalid();
+        const claims=input.sources[i].source.claims.map(c=>sourceReadingClaim(c.claimNo,c.segments.map(p=>p.text).join("")));
+        const dictionaries=new Map(claims.map(c=>{
+          const value=source[`c${c.claimNo}`];if(!exact(value,["Q","facts"])||!Array.isArray(value.facts))throw invalid();
+          return[c.claimNo,sourceIdentifiedQuoteDictionary(c,value.Q)]as const;
+        }));
+        const result:Record<string,unknown>={d:source.d};
+        for(const[key,value]of Object.entries(source)){
+          if(key==="d")continue;
+          const own=/^c([1-9]\d*)$/u.exec(key),loop=/^loop(0|[1-9]\d*)$/u.exec(key);
+          const no=own?Number(own[1]):loop?input.sources[i].recognizedLoopRoutes[Number(loop[1])]?.claimNo:undefined;
+          const dictionary=dictionaries.get(no!);if(!dictionary)throw invalid();
+          if(loop){result[key]=sourceIdentifiedFact(value,dictionary);continue;}
+          if(!exact(value,["Q","facts"])||!Array.isArray(value.facts))throw invalid();
+          result[key]={Q:dictionary.quotes,facts:value.facts.map(f=>sourceIdentifiedFact(f,dictionary))};
+        }
+        return result;
+      })};
+      return await old.validate(converted);
     }catch{return {success:false,error:invalid()};}
   }});
 }

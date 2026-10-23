@@ -49,7 +49,11 @@ export function sourceCompleteActionCues(c:SourceReadingClaim):SourceActionCue[]
   // component name. Unknown inflections/conditions remain original-QA work;
   // they never force a positive state from an arbitrary matched prefix.
   const states=allStates.filter(s=>/^(?:[、，。]|$|ことを特徴)/u.test(text.slice(s.span[1]))||
-    /接続された$/u.test(text.slice(...s.span))&&/^[\p{Script=Katakana}ー]+(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(s.span[1],c.clauses[s.clause][1])));
+    /接続された$/u.test(text.slice(...s.span))&&/^[\p{Script=Katakana}ー]+(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(s.span[1],c.clauses[s.clause][1]))||
+    // A passive placement may directly define a printed component. Require a
+    // bounded component noun and list/subject ending, never a condition tail.
+    /に設けられ(?:た|る)$/u.test(text.slice(...s.span))&&isLiteralSourceState(text.slice(...s.span))&&
+      /^[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]*(?:器|弁|配管|装置|センサ|アキュムレータ)(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(s.span[1],c.clauses[s.clause][1])));
   const pattern=/(?:同時に|(?:何れか|いずれか)?一方を)?開(?:いていなかった|いていない|かなかった|かない|かず|きません|くこと(?:は|が|も)(?:なかった|ない)|くことなく|く|き(?=[、，])|いた(?=状態を維持))/gu;
   for(const m of text.matchAll(pattern)){
     const span:Span=[m.index,m.index+m[0].length],clause=c.clauses.findIndex(s=>contains(s,span));if(clause<0)throw invalid();
