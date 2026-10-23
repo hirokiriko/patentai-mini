@@ -52,13 +52,20 @@ function fixture(){
   }
   return {raw,plan,input};
 }
+// v20 emits original-clause order. Compare every complete fact and its
+// multiplicity, while source order and all fact fields remain significant.
+const stableFields=(value:unknown):unknown=>Array.isArray(value)?value.map(stableFields):value&&typeof value==="object"?
+  Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>[k,stableFields(v)])):value;
+const factMultiset=(raw:SourceExtraction)=>({...raw,sources:raw.sources.map(s=>({...s,
+  facts:[...s.facts].sort((a,b)=>JSON.stringify(stableFields(a)).localeCompare(JSON.stringify(stableFields(b))))}))});
 it("stores a complete repeated witness losslessly within the actual internal/descriptor caps",async()=>{
   const f=fixture(),wire=fixturePropositionWire(f.raw,propositionSourceTransport(f.input)),original=JSON.stringify(f.raw);
   const r=await sourcePropositionModelSchemaFor(f.plan).validate!(wire);expect(r.success).toBe(true);
   if(!r.success)return;
-  expect(r.value).toEqual(f.raw);
+  expect(factMultiset(r.value as SourceExtraction)).toEqual(factMultiset(f.raw));
   const decoded=decodeSourcePropositions(f.plan,r.value);
-  expect(expandSourceWitness(decoded.raw)).toEqual(f.raw);
+  expect(expandSourceWitness(decoded.raw)).toEqual(r.value);
+  expect(factMultiset(expandSourceWitness(decoded.raw))).toEqual(factMultiset(f.raw));
   expect(JSON.stringify(f.raw)).toBe(original);
   expect(f.raw.sources.reduce((n,s)=>n+s.facts.length,0)).toBeGreaterThanOrEqual(60);
   expect(Buffer.byteLength(original)).toBeGreaterThan(16_000);

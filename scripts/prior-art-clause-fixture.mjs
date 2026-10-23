@@ -84,7 +84,7 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
           // Whole clauses already preserve the original proof exactly. A
           // partial cross-clause proof keeps its exact text and own context.
           if(a===x&&b===y&&version!==20)return version>=18?{first,last}:selected;
-          if(version>=16||first===last)return quote(v)[0];
+          if(version>=16||first===last)return quote(v.length?v:r.ref([a,b]))[0];
           return [String(first),String(last),r.text.slice(a,b),r.text.slice(x,a),r.text.slice(b,y)];
         };
         const m={...f.m};

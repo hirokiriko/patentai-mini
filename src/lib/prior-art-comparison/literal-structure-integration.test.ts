@@ -52,7 +52,7 @@ describe("literal structure on the product path, with fictional SDK transport", 
         // This hand-authored mock explicitly reads the full claim, including
         // canonical mode/reference clauses; it supplies no new semantic facts.
         fixtureDeclareClauseReading(answer,input);
-        // v19 records this explicit fictional reading in a context proof,
+        // v20 records this explicit fictional reading in an exact context quote,
         // rather than the removed duplicate W inventory.
         for(const source of answer.sources)for(const fact of source.facts)
           fact.operators.context=[...fact.basis[0]];
@@ -68,8 +68,9 @@ describe("literal structure on the product path, with fictional SDK transport", 
       }
       const wire=fixturePropositionWire(answer);
       if(failure==="reading"&&input.task==="extract_source_propositions"){
-        expect(wire.s[0].c1[0].m.J[0]).toHaveLength(1);
-        wire.s[0].c1[0].m.J[0][0]="0:原文に存在しない語";
+        const firstFact=wire.s[0].c1.flat()[0];
+        expect(firstFact.m.J[0]).toHaveLength(1);
+        firstFact.m.J[0][0]="0-0:原文に存在しない語";
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
