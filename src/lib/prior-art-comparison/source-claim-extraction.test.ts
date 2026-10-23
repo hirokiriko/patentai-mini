@@ -97,3 +97,14 @@ it.each(["invalid_context","reserved_context","extra_meaning_key","bypass_role_c
  expect(JSON.stringify(f.answers[0].value)).toBe(before);
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
 });
+
+it("states the exact existing ID grammar in v23 system and schema without unsupported keywords or changing v22",()=>{
+ const f=setup(),before=structuredClone(sourceIdentifiedPropositionModelSchemaFor(f.chunks).jsonSchema);
+ const plan=sourceClaimExtractionPlan(f.chunks),schema=plan.tasks[0].schema.jsonSchema as {definitions:Record<string,{description?:string;properties?:Record<string,{description?:string}>;anyOf?:{type?:string;description?:string;properties?:Record<string,{description?:string}>}[]}>};
+ const descriptions=[schema.definitions.PriorArtSourceCellQuote.description,schema.definitions.PriorArtSourceQuoteContext.properties!.id.description,schema.definitions.PriorArtSourceDictionaryClaim.properties!.Q.description,...schema.definitions.PriorArtSourceDictionaryQuote.anyOf!.filter(b=>b.type==="string"||b.type==="object").map(b=>b.type==="string"?b.description:b.properties!.id.description)];
+ for(const text of [plan.tasks[0].system,...descriptions]){expect(text).toContain("q[0-9]{1,4}");expect(text).toContain("q0a");expect(text).toMatch(/forbidden/);}
+ const unsupported=["pattern","minLength","maxLength","format"];
+ function entries(v:unknown):string[]{if(!v||typeof v!=="object")return [];if(Array.isArray(v))return v.flatMap(entries);return Object.entries(v).flatMap(([k,x])=>[...(unsupported.includes(k)?[k]:[]),...entries(x)]);}
+ expect(entries(schema)).toEqual(entries(before));
+ expect(sourceIdentifiedPropositionModelSchemaFor(f.chunks).jsonSchema).toEqual(before);
+});

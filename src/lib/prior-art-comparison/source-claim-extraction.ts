@@ -27,6 +27,7 @@ const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonC
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.replace("v22", "v23") + `
 This request extracts ONLY target.claimNo of target.sourceDigest. Return {v:23,sourceDigest,claimNo,answer}.
 answer contains d, this cN and ONLY this claim's supplied loopN keys. Preserve original loop IDs.
+Every quote ID matches q[0-9]{1,4}: lowercase q followed by one to four decimal digits ONLY (q0/q17/q9999 allowed; q0a and q10000 forbidden). Declare the exact ID in Q and reuse only that declared ID in m/O/F. IDs are labels, never array positions.
 sourceContext contains unchanged originals and reference logic for reading context. Other claims are context only;
 their own meanings are extracted in separate requests. Do not copy ancestor facts into this claim or cite another claim.
 Read the entire target claim including all component definitions, conditions and reference tails. All v22 meaning,
@@ -60,6 +61,22 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       claimNo: { type: "integer", enum: [claimNo] },
       answer: { type: "object", properties: Object.fromEntries(keys.map(k => [k, own.properties![k]])), required: keys, additionalProperties: false },
     }, required: ["v", "sourceDigest", "claimNo", "answer"], additionalProperties: false, definitions: structuredClone(definitions) };
+    // Azure does not support string pattern constraints. State the existing
+    // decoder grammar exactly in this v23 copy; do not alter historical v22.
+    const idDescription="Quote ID grammar is exactly q[0-9]{1,4}: lowercase q plus 1..4 decimal digits ONLY. q0/q17/q9999 allowed; q0a/q10000 forbidden. Use only an exactly declared claim-local ID, never an array position.";
+    const ownDefinitions=schema.definitions!;
+    const ref=ownDefinitions.PriorArtSourceCellQuote as JSONSchema7;
+    ref.description=idDescription;
+    const context=ownDefinitions.PriorArtSourceQuoteContext as JSONSchema7;
+    (context.properties!.id as JSONSchema7).description=idDescription;
+    const declaration=ownDefinitions.PriorArtSourceDictionaryQuote as JSONSchema7;
+    for(const branch of declaration.anyOf??[]){
+      if(typeof branch!=="object")continue;
+      if(branch.type==="string")branch.description=`Declare qID|first-last:exact text. ${idDescription}`;
+      if(branch.type==="object"&&branch.properties?.id)(branch.properties.id as JSONSchema7).description=idDescription;
+    }
+    const dictionaryClaim=ownDefinitions.PriorArtSourceDictionaryClaim as JSONSchema7;
+    (dictionaryClaim.properties!.Q as JSONSchema7).description=`Every declaration uses this exact grammar. ${idDescription}`;
     assertSourceGridProviderSchema(schema);
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
     const taskSchema = jsonSchema(schema, { validate: async raw => {
