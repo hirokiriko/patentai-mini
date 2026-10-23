@@ -15,7 +15,8 @@ export function fixtureDeclareClauseReading(value,input) {
 
 // Fictional SDK plumbing ONLY. Starts from hand-authored semantic facts and
 // spans, never an actual model response. Does not invent uncovered meanings.
-export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===5?20:input?.citationClauses?.version===4?19:input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
+export function fixtureClauseWire(value,input,version=input?.citationClauses?.version===6?21:input?.citationClauses?.version===5?20:input?.citationClauses?.version===4?19:input?.citationClauses?.version===3?18:input?.citationClauses?.version===2?17:16) {
+  if(version===21)return fixtureDictionaryWire(fixtureClauseWire(value,{...input,citationClauses:{version:5}},20),input);
   const readings = input.sources.map(s=>s.source.claims.map(c=>{
     let at=0;
     const clauses=c.clauses.map(([id,text],i)=>{
@@ -137,5 +138,47 @@ export function fixtureClauseWire(value,input,version=input?.citationClauses?.ve
       }
     }
     return out;
+  })};
+}
+
+// Test-only lexical compression of explicitly hand-authored fixture facts.
+// Never applied to an acquired provider response or production input.
+function fixtureDictionaryWire(wire,input){
+  return {v:21,s:wire.s.map((source,si)=>{
+    const result={d:source.d},tables=new Map();
+    for(const claim of input.sources[si].source.claims){
+      let at=0;const ranges=claim.clauses.map(([,text])=>{const start=at;at+=text.length;return[start,at];}),text=claim.clauses.map(c=>c[1]).join("");
+      const Q=[],seen=new Map();
+      const locate=value=>{
+        let first,last,quote,before="",after="";
+        if(typeof value==="string"){const m=/^(\d+)-(\d+):([\s\S]+)$/u.exec(value);if(!m)throw Error("fictional_dictionary_quote");first=Number(m[1]);last=Number(m[2]);quote=m[3];}
+        else({first,last,quote,before,after}=value);
+        if(!ranges[first]||!ranges[last]||last<first)throw Error("fictional_dictionary_range");
+        const local=text.slice(ranges[first][0],ranges[last][1]),context=before+quote+after,index=local.indexOf(context);
+        if(index<0||index!==local.lastIndexOf(context))throw Error("fictional_dictionary_occurrence");
+        return[ranges[first][0]+index+before.length,ranges[first][0]+index+before.length+quote.length];
+      };
+      const q=value=>{const key=JSON.stringify(locate(value));if(!seen.has(key)){seen.set(key,Q.length);Q.push(value);}return seen.get(key);};
+      const proof=value=>value===null?null:q(value);
+      const fact=(value,R)=>{
+        const m={...value.m};
+        for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=m[k].map(q);
+        for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k))m[k]=m[k].map(t=>t.map(q));
+        if(Object.hasOwn(m,"a"))m.a=q(m.a);
+        const O=Object.fromEntries(Object.entries(value.O).map(([k,v])=>[k,proof(v)]));
+        const F=value.F===null||typeof value.F==="number"?value.F:{E:proof(value.F.E),X:proof(value.F.X),T:proof(value.F.T),C:value.F.C.map(proof),D:value.F.D.map(proof)};
+        return {...value,R,m,O,F};
+      };
+      const rows=source[`c${claim.claimNo}`],facts=rows.flatMap((row,R)=>row.map(f=>fact(f,R)));
+      result[`c${claim.claimNo}`]={Q,facts};tables.set(claim.claimNo,{fact,locate,ranges});
+    }
+    for(const[k,v]of Object.entries(source))if(k.startsWith("loop")){
+      const no=input.sources[si].recognizedLoopRoutes[Number(k.slice(4))].claimNo,t=tables.get(no),quotes=[];
+      const scan=x=>{if(typeof x==="string"||x&&typeof x==="object"&&!Array.isArray(x)&&typeof x.quote==="string"){quotes.push(x);return;}
+        if(Array.isArray(x))x.forEach(scan);else if(x&&typeof x==="object")Object.values(x).forEach(scan);};
+      for(const k of ["u","i","j","G","M","V","B","J","a"])if(Object.hasOwn(v.m,k)&&v.m[k]!==null)scan(v.m[k]);
+      const first=Math.min(...quotes.map(q=>t.locate(q)[0])),R=t.ranges.findIndex(([a,b])=>a<=first&&b>first);result[k]=t.fact(v,R);
+    }
+    return result;
   })};
 }

@@ -162,3 +162,45 @@ export function sourceOrderedFactRows(c:SourceReadingClaim,value:unknown):unknow
     return f;
   }));
 }
+
+/** Claim-local v21 locators. AI declares every quote; code only resolves the
+ * stated range and tracks references. No meaning or missing quote is supplied. */
+export function sourceQuoteDictionary(c:SourceReadingClaim,value:unknown){
+  if(!Array.isArray(value)||value.length>1024)throw invalid();
+  const ids=c.clauses.map((_,id)=>id),seen=new Set<string>(),used=new Set<number>();
+  const quotes=value.map(q=>{
+    const span=resolveSourceOrderedQuote(c,q,ids),key=JSON.stringify(span);
+    if(seen.has(key))throw invalid();seen.add(key);return q;
+  });
+  return {
+    get(index:unknown):unknown{
+      if(!Number.isSafeInteger(index)||Number(index)<0||Number(index)>=quotes.length)throw invalid();
+      used.add(Number(index));return quotes[Number(index)];
+    },
+    assertAllUsed(){if(used.size!==quotes.length)throw invalid();},
+  };
+}
+export function sourceDictionaryFact(c:SourceReadingClaim,value:unknown,dictionary:ReturnType<typeof sourceQuoteDictionary>){
+  if(!record(value)||!record(value.m)||!Number.isSafeInteger(value.R)||Number(value.R)<0||!c.clauses[Number(value.R)]||
+    !exact(value.O,["selection","extent","polarity","guard","context"]))throw invalid();
+  const m={...value.m};
+  const term=(v:unknown)=>{
+    if(!Array.isArray(v)||!v.length||v.length>4||new Set(v).size!==v.length)throw invalid();
+    return v.map(index=>dictionary.get(index));
+  };
+  for(const k of ["u","i","j"])if(Object.hasOwn(m,k)&&m[k]!==null)m[k]=term(m[k]);
+  for(const k of ["G","M","V","B","J"])if(Object.hasOwn(m,k)){
+    if(!Array.isArray(m[k])||m[k].length>12)throw invalid();m[k]=m[k].map(term);
+  }
+  if(Object.hasOwn(m,"a"))m.a=dictionary.get(m.a);
+  const proof=(v:unknown)=>v===null?null:dictionary.get(v);
+  const O=Object.fromEntries(Object.entries(value.O).map(([k,v])=>[k,proof(v)]));
+  let F=value.F;
+  if(record(F)){
+    if(!exact(F,["E","X","T","C","D"])||!Array.isArray(F.C)||!Array.isArray(F.D))throw invalid();
+    F={E:proof(F.E),X:proof(F.X),T:proof(F.T),C:F.C.map(proof),D:F.D.map(proof)};
+  }else if(F!==null&&!Number.isSafeInteger(F))throw invalid();
+  const {R,...rest}=value,decoded={...rest,m,O,F},rows=c.clauses.map(()=>[] as unknown[]);
+  rows[Number(R)].push(decoded);sourceOrderedFactRows(c,rows);
+  return {R:Number(R),fact:decoded};
+}

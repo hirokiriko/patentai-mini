@@ -113,13 +113,13 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "duplicate") notes[1] = { ...notes[0] };
       if (mode === "foreign") notes[0].sourceDigest = "f".repeat(64);
       const wire=wireGuards(answer);
-      // v20 orders facts by clause; corrupt the actual fact, not its row.
-      const firstFact=wire.s[0].c1.flat()[0];
+      // v21 quotes are claim-local Q indices; corrupt the declared quote itself.
+      const firstFact=wire.s[0].c1.facts[0];
       if(mode==="missing_reading")delete firstFact.m.a;
       if(mode==="unrelated_evidence")firstFact.W=[[0,0,0,0]];
       if (mode === "blank" || mode === "overlong") {
         expect(firstFact.m.J[0]).toHaveLength(1);
-        firstFact.m.J[0][0] = mode === "blank" ? "" : "甲".repeat(12001);
+        wire.s[0].c1.Q[firstFact.m.J[0][0]] = mode === "blank" ? "" : "甲".repeat(12001);
       }
       return response(wire);
     });
@@ -273,7 +273,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
       expect(body.reasoning).toEqual({effort:"low"});
-      expect(body.max_output_tokens).toBe(phase === "extract_source_propositions" ? 32768 : phase === "review" ? 22528 : 8192);
+      expect(body.max_output_tokens).toBe(phase === "extract_source_propositions" ? 32400 : phase === "review" ? 22528 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);
       const input=JSON.parse(body.input[1].content[0].text);
