@@ -10,6 +10,7 @@ import {fictionalQuotationClaim,fictionalScopesFor} from "./source-claim-fixture
 import {decodeClaimQuotationQuotes} from "./source-claim-quotations";
 import {resolveSourceOrderedQuote} from "./source-reading-tasks";
 import {sourceReadingClaim} from "./source-clause-coverage";
+import {SOURCE_CAPACITY} from "./source-capacity";
 
 function groupFact<T extends {R:number}>(value:T){const {R,...fact}=value;void R;return fact;}
 function setupFacts(claim:Record<string,unknown>){return claim.f2 as ReturnType<typeof setup>["wire"]["s"][number]["c1"]["facts"];}
@@ -254,7 +255,7 @@ it("validates the complete fictional direct-reference has/path example and rejec
  expect(schema.definitions.PriorArtSourceGroupedFact.properties).not.toHaveProperty('R');
  const pathSchema=schema.definitions.PriorArtSourceMeaning.anyOf!.find(x=>x.properties.i)!;
  for(const k of ['i','j','V','B'])expect(pathSchema.properties[k].description).toContain('THIS route occurrence');
- expect(pathSchema.properties.u.description).toContain('THIS action');
+ expect(pathSchema.properties.u.description).toContain('printed MODE');
 });
 
 it("shows existing literal route anchors near the target without supplying completed route meanings",()=>{
@@ -396,4 +397,23 @@ it("preserves scattered possession heads and their separate function, splitting 
  const badBefore=JSON.stringify(bad);
  expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);
  expect(JSON.stringify(bad)).toBe(badBefore);
+});
+
+
+it("keeps the recognized whole-route mode subject distinct from its controller without weakening the fixed-frame decoder",async()=>{
+ const f=fictionalInputs(),body="制御器により、前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");f.selection.draftClaimNos=[1];
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource("【請求項1】装置は信号を保持する。",d.id,d.label));
+ const chunks=makePlan(f.inputs,f.selection),source=propositionSourceInput(chunks).sources[0],claim=source.source.claims[0],frame=source.recognizedLoopRoutes[0];
+ expect(frame).toBeDefined();
+ const {validateDirectSourceClaim}=await import("./source-direct-quotes"),{sourceCitationGrid,sourceCellRef}=await import("./source-citation-grid");
+ const claimText=claim.segments.map(p=>p.text).join(""),grid=sourceCitationGrid(claimText),q=(span:readonly[number,number])=>({cells:sourceCellRef(grid,span)});
+ const direct={sourceDigest:source.sourceDigest,c1:[],loop0:{claimNo:1,basis:{firstPart:frame.basisParts[0],lastPart:frame.basisParts[1]},meaning:{subject:[q(frame.mode)],context:"operation",guardRelation:"unconditional",guardConditions:[],polarity:"positive",kind:"path",origin:[q(frame.entry)],destination:[q(frame.exit)],via:[],bypass:[],extent:"whole",relation:"route"},operators:null,routeFrame:0}};
+ const before=JSON.stringify(direct);await expect(validateDirectSourceClaim(source,1,direct,SOURCE_CAPACITY)).resolves.toBeDefined();expect(JSON.stringify(direct)).toBe(before);
+ const wrong=structuredClone(direct),controller:[number,number]=[claimText.indexOf("制御器"),claimText.indexOf("制御器")+3];wrong.loop0.meaning.subject=[q(controller)];const wrongBefore=JSON.stringify(wrong);
+ await expect(validateDirectSourceClaim(source,1,wrong,SOURCE_CAPACITY)).rejects.toThrow();expect(JSON.stringify(wrong)).toBe(wrongBefore);
+ const task=sourceClaimExtractionPlan(chunks).tasks.find(t=>t.sourceIndex===0)!;
+ const defs=(task.schema.jsonSchema as {definitions:Record<string,{anyOf?:{properties?:Record<string,{description?:string}>}[]}>}).definitions;
+ const branches=defs.PriorArtSourceMeaning.anyOf!;expect(branches.find(b=>b.properties?.i)?.properties?.u.description).toContain("fixed recognizedLoopRoutes mode");
+ expect(task.system).toContain("A return path and switching action in the same clause are distinct meanings");
 });
