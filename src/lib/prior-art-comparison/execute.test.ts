@@ -288,7 +288,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe(model);
       const phase = JSON.parse(body.input[1].content[0].text).task;
-      expect(body.reasoning).toEqual({effort:"low"});
+      expect(body.reasoning).toEqual({effort:phase === "extract_source_propositions" ? "medium" : "low"});
       expect(body.max_output_tokens).toBe(phase === "extract_source_propositions" ? 32400 : phase === "review" ? 22528 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);

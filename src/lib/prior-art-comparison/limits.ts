@@ -1,5 +1,5 @@
-// Only low-effort source extraction gets the new representation allowance.
-// Keep medium's effective pre-v17 cap; raising low must not reopen it.
+// Preserve the existing source output allowance for the bounded medium-effort trial.
+// Reasoning and visible output remain within the same unchanged token ceiling.
 export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 230_000,
   sourceClaims: 19, claimOperationMilliseconds: 4_500_000, claimDiagnosticQaMilliseconds: 900_000,
   requestMilliseconds: 210_000, inputBytes: 120_000, outputTokens: 8192, azureSourceLowOutputTokens: 32400, azureSourceOutputTokens: 16384, azureReasoningOutputTokens: 22528 } as const);

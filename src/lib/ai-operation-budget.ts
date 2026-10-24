@@ -181,7 +181,7 @@ export class AiOperationBudget {
         const outputLimit = this.comparison && role === "normal" && ["low","medium"].includes(body.reasoning?.effort) &&
           isComparisonTaskInput(body.input,"extract_source_propositions")
           ? Math.min(comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "source"),
-            body.reasoning.effort==="medium" ? comparisonLimits.azureSourceOutputTokens : comparisonLimits.azureSourceLowOutputTokens)
+            comparisonLimits.azureSourceLowOutputTokens)
           : this.comparison && role === "normal" && ["low", "medium"].includes(body.reasoning?.effort) &&
             isComparisonTaskInput(body.input,"review")
             ? comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "review") : 8192;
