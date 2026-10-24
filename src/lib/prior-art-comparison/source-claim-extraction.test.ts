@@ -417,3 +417,21 @@ it("keeps the recognized whole-route mode subject distinct from its controller w
  const branches=defs.PriorArtSourceMeaning.anyOf!;expect(branches.find(b=>b.properties?.i)?.properties?.u.description).toContain("fixed recognizedLoopRoutes mode");
  expect(task.system).toContain("A return path and switching action in the same clause are distinct meanings");
 });
+
+
+it("preserves the operation discriminator independently of a device claim and its mode guard",async()=>{
+ const f=fictionalInputs(),text="制御器により、赤弁を閉じる冬モードと、赤弁を開く夏モード。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const original={Q:["q0|0-0:制御器","q1|1-1:赤弁","q2|1-1:閉じる","q3|1-1:冬モード","q4|2-2:赤弁","q5|2-2:開く","q6|2-2:夏モード"],facts:[
+  {R:1,m:{u:["q0"],x:"operation",g:"when",G:[["q3"]],p:"positive",k:"relation",P:"closes",J:[["q1"]],a:"q2"},O:[null,null,null,"q3",null],F:null},
+  {R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q6"]],p:"positive",k:"relation",P:"opens",J:[["q4"]],a:"q5"},O:[null,null,null,"q6",null],F:null}]};
+ const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(sourceReadingClaim(1,text),structuredClone(original));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const before=JSON.stringify(answers),actual=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers));
+ const propertyAnswers=structuredClone(answers);for(const answer of propertyAnswers)for(const k of ["f1","f2"])for(const row of answer.value.c1[k] as {m:{x:string}}[])row.m.x="capability";
+ const properties=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,propertyAnswers));
+ expect(properties).not.toEqual(actual);expect(JSON.stringify(actual)).toContain('"context":"operation"');expect(JSON.stringify(properties)).toContain('"context":"capability"');expect(JSON.stringify(answers)).toBe(before);
+ expect(plan.tasks[0].system).toContain("A device claim does not turn its mode operations into capabilities");
+ const schema=plan.tasks[0].schema.jsonSchema as {definitions:Record<string,{anyOf?:{properties:Record<string,{description?:string}>}[]}>};
+ for(const branch of schema.definitions.PriorArtSourceMeaning.anyOf!)expect(branch.properties.x.description).toContain("Choose context for THIS assertion");
+});
