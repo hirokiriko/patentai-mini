@@ -38,7 +38,8 @@ Quote IDs match q[0-9]{1,4}: q0/q17/q9999 allowed, q0a/q10000 forbidden.
 Each required integer tN indexes, from zero, the fact expressing that literal action occurrence. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
 For maintains, a and J quote the same FULL compound maintained state including the verb.
 target.quoteSource is the unchanged continuous claim; sourceContext supplies clause IDs/context. Q must match exactly, including spaces, punctuation and printed 前記/該; never insert prefixes. Missing, ambiguous, normalized or invented text is rejected. Quote+context spans <=12 consecutive clauses. Context only locates a quote, adding no meaning/coverage or guard/action. O uses declared IDs/null.
-Route i/V/j use components at the ACTUAL ROUTE occurrence, not definitions; F/O cannot replace them. Fictional "青弁と赤弁を備え、前記青弁から該赤弁へ流す。" uses later "前記青弁"/"該赤弁" for its route. Use distinct IDs/context for repeats. A restated controller supplies the later action's actor. Combined m/O/F evidence must fit 12 clauses; avoid distant definition quotes.
+Q is an OCCURRENCE dictionary, not a component glossary. Build each fact's m first, then Q for its references; reuse a qID only for the identical original span, never for the same word at another position. Unused Q count must be ZERO. R must overlap an m quote; F/O/context do not count. u uses that action's actor/restatement occurrence; path i/j/V/B use that route's occurrences. Combined m/O/F evidence still fits <=12 clauses.
+Fictional target.quoteSource="白管と黒管を備え、白管から黒管へ流す。" (clauses0,1). Q=[{"id":"q0","quote":"白管","before":"","after":"と"},{"id":"q1","quote":"黒管","before":"と","after":"を"},{"id":"q2","quote":"備え","before":"","after":""},{"id":"q3","quote":"白管","before":"備え、","after":"から"},{"id":"q4","quote":"黒管","before":"から","after":"へ"}]. facts=[{"R":0,"m":{"u":null,"x":"capability","g":"unconditional","G":[],"p":"positive","k":"relation","P":"has","J":[["q0"],["q1"]],"a":"q2"},"O":[null,null,null,null,null],"F":null},{"R":1,"m":{"u":null,"x":"operation","g":"unconditional","G":[],"p":"positive","k":"path","i":["q3"],"j":["q4"],"V":[],"B":[],"e":"whole","r":"route"},"O":[null,null,null,null,null],"F":null}]. q0/q1 locate definitions; q3/q4 locate the route. Unprinted actor remains null.
 Other claims in sourceContext are reference context, extracted separately: never cite them or copy ancestor facts. Read all target definitions, conditions and reference tails. All v22 meaning/quotation/order/completeness rules remain; no previous answer is supplied or reusable.`;
 
 /** Fixed before any send. Original digests, claim coordinates, references and
@@ -90,6 +91,16 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       type: "integer", description: `Index in facts expressing literal obligation ${key}; the actual action and meaning are checked.`,
     };
     dictionaryClaim.required = [...dictionaryClaim.required!, ...obligationKeys];
+    (dictionaryClaim.properties!.Q as JSONSchema7).description += " Occurrence dictionary: identical span reuse only; same word elsewhere needs another ID. Zero unused entries.";
+    const meaning = ownDefinitions.PriorArtSourceMeaning as JSONSchema7;
+    for (const branch of meaning.anyOf as JSONSchema7[]) {
+      const props = branch.properties!;
+      (props.u as JSONSchema7).description = "Actor/restatement occurrence of THIS action, not a distant definition.";
+      for (const key of ["i", "j", "V", "B"]) if (props[key])
+        (props[key] as JSONSchema7).description = "THIS route occurrence; never substitute its component definition.";
+    }
+    ((ownDefinitions.PriorArtSourceAdditionalFact as JSONSchema7).properties!.R as JSONSchema7).description =
+      "Original clause overlapping an m quote; F/O/context never anchor R. Keep facts nondecreasing.";
     // Remove definitions unreachable from this one-claim schema, preserving
     // the provider's existing 100-property and five-object-depth boundaries.
     const used = new Set<string>();
@@ -168,7 +179,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
     tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
-      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 11 },
+      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 12 },
         target: { sourceDigest, claimNo, quoteSource: c.grid.text,
           obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })) },
         sourceContext: { ...transport.sources[sourceIndex],

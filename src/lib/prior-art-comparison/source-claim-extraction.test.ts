@@ -37,7 +37,7 @@ it("uses one consistent readable quote contract while retaining literal obligati
  const f=setup();
  for(const [i,task]of f.plan.tasks.entries()){
   const request=JSON.parse(task.prompt);
-  expect(request.citationClauses.version).toBe(11);
+  expect(request.citationClauses.version).toBe(12);
   expect(request.target).not.toHaveProperty("grid");
   expect(request.target.quoteSource).toBe("制御器は、非通電状態の場合、赤弁を閉じる。");
   expect(request.target.obligations).toEqual([{key:"t0",clause:2,literal:"閉じる"}]);
@@ -223,4 +223,28 @@ it("binds route endpoints to operative route occurrences rather than same-name c
  expect(spans[1].span[0]).not.toBe(text.indexOf("出口器"));
  expect(()=>decodeClaimQuotationQuotes(c,[{...raw[0],before:"",after:""}])).toThrow();
  expect(JSON.stringify(raw)).toBe(before);
+});
+
+
+it("validates the complete fictional occurrence-dictionary has/path example and rejects definition or R substitution",async()=>{
+ const text="白管と黒管を備え、白管から黒管へ流す。",f=fictionalInputs();
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const Q=[{id:"q0",quote:"白管",before:"",after:"と"},{id:"q1",quote:"黒管",before:"と",after:"を"},{id:"q2",quote:"備え",before:"",after:""},{id:"q3",quote:"白管",before:"備え、",after:"から"},{id:"q4",quote:"黒管",before:"から",after:"へ"}];
+ const has={R:0,m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[["q0"],["q1"]],a:"q2"},O:[null,null,null,null,null],F:null};
+ const path={R:1,m:{u:null,x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:["q3"],j:["q4"],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null};
+ const raw={v:25,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:{Q,facts:[has,path]}}};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ expect(task.system).toContain('Q='+JSON.stringify(Q));expect(task.system).toContain('facts='+JSON.stringify([has,path]));
+ const definition=structuredClone(raw);definition.answer.c1.Q=definition.answer.c1.Q.slice(0,3);Object.assign(definition.answer.c1.facts[1].m,{i:["q0"],j:["q1"]});
+ expect((await task.schema.validate!(definition)).success).toBe(false);
+ const wrongR=structuredClone(raw);wrongR.answer.c1.facts[1].R=0;
+ expect((await task.schema.validate!(wrongR)).success).toBe(false);
+ const unused=structuredClone(raw);unused.answer.c1.Q.push({id:"q5",quote:"流す",before:"",after:""});
+ expect((await task.schema.validate!(unused)).success).toBe(false);
+ const schema=task.schema.jsonSchema as {definitions:Record<string,{properties?:Record<string,{description?:string}>;anyOf?:{properties:Record<string,{description?:string}>}[]}>};
+ expect(schema.definitions.PriorArtSourceAdditionalFact.properties!.R.description).toContain('m quote');
+ const pathSchema=schema.definitions.PriorArtSourceMeaning.anyOf!.find(x=>x.properties.i)!;
+ for(const k of ['i','j','V','B'])expect(pathSchema.properties[k].description).toContain('THIS route occurrence');
+ expect(pathSchema.properties.u.description).toContain('THIS action');
 });
