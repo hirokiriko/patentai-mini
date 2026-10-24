@@ -347,3 +347,24 @@ it("retains disjoint coordinated action operands through the unchanged strict de
  const plan=sourceClaimExtractionPlan(chunks),answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(reading,structuredClone(legacy));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
  const assembled=await assembleSourceClaims(plan,answers),expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))},validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);expect(validated.success).toBe(true);if(!validated.success)throw validated.error;expect(assembled).toEqual(validated.value);expect(decodeSourcePropositions(chunks,assembled)).toEqual(decodeSourcePropositions(chunks,validated.value));
 });
+
+it("preserves explicit continuing actors and the new passive subject without decoder inheritance",async()=>{
+ const f=fictionalInputs(),text="制御器により、青板を研磨材で研磨し、青板を布で拭く。赤管は白管に接続された。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text);
+ const legacy={Q:["q0|0-0:制御器","q1|1-1:青板を研磨材で研磨し","q2|2-2:青板を布で拭く","q3|3-3:赤管","q4|3-3:白管に接続された","q5|3-3:接続された"],facts:[
+  {R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["q1"]],a:"q1"},O:[null,null,null,null,null],F:null},
+  {R:2,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["q2"]],a:"q2"},O:[null,null,null,null,null],F:null},
+  {R:3,m:{u:["q3"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"is_state",J:[["q4"]],a:"q5"},O:[null,null,null,null,null],F:null}]};
+ const plan=sourceClaimExtractionPlan(chunks),answers=plan.tasks.map(task=>{
+  const c1=fictionalQuotationClaim(reading,structuredClone(legacy));
+  return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};
+ });
+ const before=JSON.stringify(answers),actual=await assembleSourceClaims(plan,answers);
+ const expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))};
+ const validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);
+ expect(validated.success).toBe(true);if(!validated.success)throw validated.error;
+ expect(actual).toEqual(validated.value);expect(JSON.stringify(answers)).toBe(before);
+ expect(decodeSourcePropositions(chunks,actual)).toEqual(decodeSourcePropositions(chunks,validated.value));
+});
