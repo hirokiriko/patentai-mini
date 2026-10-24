@@ -8,7 +8,7 @@ describe("comparison-only reasoning",()=>{
     vi.stubEnv("AI_PROVIDER",provider.split(".")[0]);
     for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId})).toEqual({[provider.split(".")[0]]:{reasoningEffort:"low",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
     for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId},"review")).toEqual({[provider.split(".")[0]]:{reasoningEffort:"low",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
-    for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId},"source")).toEqual({[provider.split(".")[0]]:{reasoningEffort:"medium",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
+    for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId},"source")).toEqual({[provider.split(".")[0]]:{reasoningEffort:"high",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
     for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini"]) expect(comparisonProviderOptions({provider,modelId})).toBeUndefined();
     expect(comparisonProviderOptions({provider:"unknown",modelId:"gpt-5.4"})).toBeUndefined();
   });
@@ -16,7 +16,7 @@ describe("comparison-only reasoning",()=>{
     vi.stubEnv("AI_PROVIDER","azure");
     expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"})).toEqual({azure:{reasoningEffort:"low",forceReasoning:true,serviceTier:"default"}});
     expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"},"review")).toEqual({azure:{reasoningEffort:"low",forceReasoning:true,serviceTier:"default"}});
-    expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"},"source")).toEqual({azure:{reasoningEffort:"medium",forceReasoning:true,serviceTier:"default"}});
+    expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"},"source")).toEqual({azure:{reasoningEffort:"high",forceReasoning:true,serviceTier:"default"}});
     for(const modelId of ["patentai-gpt54-mini","custom-alias","patentai-gpt54-other"]) expect(comparisonProviderOptions({provider:"azure.responses",modelId})).toBeUndefined();
     expect(comparisonProviderOptions({provider:"openai.responses",modelId:"patentai-gpt54"})).toBeUndefined();
   });
@@ -29,7 +29,7 @@ describe("comparison-only reasoning",()=>{
       expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(8192);
       expect(comparisonOutputTokens({provider:"azure.responses",modelId},"review")).toBe(22528);
       expect(comparisonOutputTokens({provider:"azure.responses",modelId},"source")).toBe(32400);
-      expect(comparisonProviderOptions({provider:"azure.responses",modelId},"source")?.azure?.reasoningEffort).toBe("medium");
+      expect(comparisonProviderOptions({provider:"azure.responses",modelId},"source")?.azure?.reasoningEffort).toBe("high");
     }
     for(const provider of ["openai.responses","google.generative-ai","unknown"])
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"})).toBe(8192);
@@ -37,7 +37,7 @@ describe("comparison-only reasoning",()=>{
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"review")).toBe(8192);
     for(const provider of ["openai.responses","google.generative-ai","unknown"])
       expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"source")).toBe(8192);
-    expect(comparisonProviderOptions({provider:"openai.responses",modelId:"gpt-5.4"},"source")).toEqual({openai:{reasoningEffort:"medium"}});
+    expect(comparisonProviderOptions({provider:"openai.responses",modelId:"gpt-5.4"},"source")).toEqual({openai:{reasoningEffort:"high"}});
     for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini","patentai-gpt54-mini"])
       for(const phase of ["generation","source","review"] as const)
         expect(comparisonOutputTokens({provider:"azure.responses",modelId},phase)).toBe(8192);

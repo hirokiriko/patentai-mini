@@ -1,4 +1,4 @@
-// Preserve the existing source output allowance for the bounded medium-effort trial.
+// Preserve the existing source output allowance for the bounded high-effort trial.
 // Reasoning and visible output remain within the same unchanged token ceiling.
 export const LIMITS = Object.freeze({ calls: 3, pairsPerCall: 2, reviewPairs: 4, milliseconds: 230_000,
   sourceClaims: 19, claimOperationMilliseconds: 4_500_000, claimDiagnosticQaMilliseconds: 900_000,
