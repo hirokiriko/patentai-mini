@@ -110,10 +110,10 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       expect(input.task).toBe("extract_source_propositions");
-      const wire = fictionalSourceAnalysis(input), claim=wire.answer[`c${input.target.claimNo}`];
-      if(mode==="missing")delete wire.answer[`c${input.target.claimNo}`];
+      const wire = fictionalSourceAnalysis(input), claim=wire[`c${input.target.claimNo}`];
+      if(mode==="missing")delete wire[`c${input.target.claimNo}`];
       if(mode==="reordered")wire.claimNo=input.target.claimNo+1;
-      if(mode==="duplicate")wire.answer.c999=structuredClone(claim);
+      if(mode==="duplicate")wire.c999=structuredClone(claim);
       if(mode==="foreign")wire.sourceDigest="f".repeat(64);
       const firstFact=[...claim.possessions,...Object.keys(claim).filter(key=>/^f[0-9]+$/.test(key)).flatMap(key=>claim[key])].find(f=>f.m.J?.length);
       if(mode==="missing_reading")delete firstFact.m.a;
@@ -134,8 +134,8 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(input.task).toBe("extract_source_propositions");
       const answer=fictionalSourceAnalysis(input);
       if(phases.length===3){
-        if(mode==="missing_claim")delete answer.answer[`c${input.target.claimNo}`];
-        else {const claim=answer.answer[`c${input.target.claimNo}`];claim.facts=[];}
+        if(mode==="missing_claim")delete answer[`c${input.target.claimNo}`];
+        else {const claim=answer[`c${input.target.claimNo}`];claim.facts=[];}
       }
       return response(answer);
     });

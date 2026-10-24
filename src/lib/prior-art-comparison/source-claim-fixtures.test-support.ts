@@ -19,7 +19,7 @@ export function fictionalQuotationClaim<F>(c:SourceReadingClaim,claim:{Q:unknown
   const local=c.grid.text.slice(c.clauses[first][0],c.clauses[last][1]);let found=false;
   for(let at=local.indexOf(quote);at>=0;at=local.indexOf(quote,at+1)){if(c.clauses[first][0]+at===start){found=true;break;}}
   if(!found)throw Error("fictional_fixture_missing_original_occurrence");
-  references.set(typeof original[i]==="string"?(original[i] as string).split("|")[0]:(original[i] as {id:string}).id,(()=>{const ref=`${first}-${last}:${quote}`;let count=0;for(let at=local.indexOf(quote);at>=0;at=local.indexOf(quote,at+1))count++;return count===1?ref:[ref,local.slice(0,start-c.clauses[first][0]),local.slice(end-c.clauses[first][0])];})());
+  references.set(typeof original[i]==="string"?(original[i] as string).split("|")[0]:(original[i] as {id:string}).id,(()=>{const ref=`${first}-${last}:${quote}`;let count=0;for(let at=local.indexOf(quote);at>=0;at=local.indexOf(quote,at+1))count++;return count===1?ref:{reference:ref,before:local.slice(0,start-c.clauses[first][0]),after:local.slice(end-c.clauses[first][0])};})());
  });
  const project=(v:unknown):unknown=>typeof v==="string"?(references.get(v)??v):Array.isArray(v)?v.map(project):v&&typeof v==="object"?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,project(x)])):v;
  const obligations=sourceClaimObligations(c),bindings:Record<string,number>={};
@@ -53,5 +53,5 @@ export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:R
  const answer=Object.fromEntries(keys.map(k=>[k,source[k]]));
  answer[`c${c.claimNo}`]=fictionalQuotationClaim(reading,answer[`c${c.claimNo}`],project=>{for(const key of keys)if(key.startsWith("loop"))answer[key]=project(answer[key]);});
  answer.scopes=fictionalScopesFor(answer[`c${c.claimNo}`]);
- return {v:31,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
+ return {v:32,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,...answer} as typeof answer & {v:number;sourceDigest:string;claimNo:number};
 }

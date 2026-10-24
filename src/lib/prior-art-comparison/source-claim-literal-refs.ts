@@ -8,20 +8,21 @@ const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==="object"&&
 /** Select only a unique exact substring. Optional adjacent original context
  * disambiguates within the declared range; no ordinal, repair or nearest match. */
 export function resolveClaimLiteralReference(c:SourceReadingClaim,value:unknown):Span{
- const contextual=Array.isArray(value);
- if(contextual&&(value.length!==3||!value.every(v=>typeof v==="string")))throw invalid();
- const reference=contextual?value[0]:value,before=contextual?value[1]:"",after=contextual?value[2]:"";
+ const contextual=record(value);
+ if(contextual&&(Object.keys(value).length!==3||!["reference","before","after"].every(k=>Object.hasOwn(value,k))))throw invalid();
+ const reference=contextual?value.reference:value,before=contextual?value.before:"",after=contextual?value.after:"";
  if(typeof reference!=="string"||typeof before!=="string"||typeof after!=="string"||before.length>12000||after.length>12000)throw invalid();
  const match=/^(0|[1-9]\d*)-(0|[1-9]\d*):([\s\S]+)$/u.exec(reference);if(!match)throw invalid();
  const first=Number(match[1]),last=Number(match[2]),quote=match[3];
  if(![first,last].every(Number.isSafeInteger)||last<first||last-first>=12||!c.clauses[first]||!c.clauses[last]||quote.length>12000)throw invalid();
- const [start]=c.clauses[first],end=c.clauses[last][1],text=c.grid.text.slice(start,end);const candidates:Span[]=[];
+ const [start]=c.clauses[first],end=c.clauses[last][1],text=c.grid.text.slice(start,end);const candidates:Span[]=[];let baseMatches=0;
  for(let at=text.indexOf(quote);at>=0;at=text.indexOf(quote,at+1)){
+  baseMatches++;
   if(at<before.length||at+quote.length+after.length>text.length||text.slice(at-before.length,at)!==before||text.slice(at+quote.length,at+quote.length+after.length)!==after)continue;
   const span:Span=[start+at,start+at+quote.length];
   sourceCellRef(c.grid,span);sourceCellRef(c.grid,[span[0]-before.length,span[1]+after.length]);candidates.push(span);
  }
- if(candidates.length!==1)throw invalid();return candidates[0];
+ if(candidates.length!==1||(contextual&&baseMatches<2))throw invalid();return candidates[0];
 }
 /** Intern only already validated spans. Equal spans share an internal ID;
  * no actor, condition, fact or additional quotation is ever constructed. */
