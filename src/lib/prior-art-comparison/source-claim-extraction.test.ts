@@ -368,3 +368,31 @@ it("preserves explicit continuing actors and the new passive subject without dec
  expect(actual).toEqual(validated.value);expect(JSON.stringify(answers)).toBe(before);
  expect(decodeSourcePropositions(chunks,actual)).toEqual(decodeSourcePropositions(chunks,validated.value));
 });
+
+it("preserves scattered possession heads and their separate function, splitting only the actual support union",async()=>{
+ const f=fictionalInputs(),members=["青センサ","乙部材","丙部材","丁部材","戊部材","己部材","庚部材","辛部材","壬部材","癸部材","子部材","丑部材","制御器"];
+ const text="温度を検出する"+members.join("と、")+"を備える。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),plan=sourceClaimExtractionPlan(chunks);
+ expect(reading.clauses).toHaveLength(13);
+ const possession=(indices:number[])=>({R:12,m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:indices.map(i=>[`q${i}`]),a:"q13"},O:[null,null,null,null,null],F:null});
+ const legacy={Q:[...members.map((name,i)=>`q${i}|${i}-${i}:${name}`),"q13|12-12:備える","q14|0-0:温度を検出する"],facts:[
+  {R:0,m:{u:["q0"],x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["q14"]],a:"q14"},O:[null,null,null,null,null],F:null},
+  possession([0,2,12]),possession([1,3,4,5,6,7,8,9,10,11])]};
+ const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(reading,structuredClone(legacy));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const before=JSON.stringify(answers),actual=await assembleSourceClaims(plan,answers);
+ const expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))};
+ const validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);
+ expect(validated.success).toBe(true);if(!validated.success)throw validated.error;
+ expect(actual).toEqual(validated.value);expect(JSON.stringify(answers)).toBe(before);
+ expect(decodeSourcePropositions(chunks,actual)).toEqual(decodeSourcePropositions(chunks,validated.value));
+ const bad=structuredClone(answers[0].value),rows=bad.c1.possessions as {m:{J:string[][]}}[];
+ // Twelve heads plus the verb's distinct thirteenth clause exceed support capacity,
+ // even though each individual reference and the twelve-object array fit.
+ rows[0].m.J=members.slice(0,12).map((name,i)=>[`${i}-${i}:${name}`]);
+ rows[1].m.J=[["12-12:制御器"]];
+ const badBefore=JSON.stringify(bad);
+ expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);
+ expect(JSON.stringify(bad)).toBe(badBefore);
+});
