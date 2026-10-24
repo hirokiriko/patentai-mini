@@ -12,6 +12,7 @@ import { SOURCE_CAPACITY } from "./source-capacity";
 import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
 import type { Span } from "./propositions";
+import { projectClaimScopeLanes } from "./source-claim-scope-projection";
 import { claimLiteralDictionary,mapClaimLiteralFact } from "./source-claim-literal-refs";
 import { sourceClaimObligations } from "./source-claim-obligations";
 
@@ -28,19 +29,19 @@ const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonC
   normalize: Map<string, (raw: Record<string, unknown>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
-  if (line.startsWith("Extract complete")) return line.replace("v22", "v29");
-  if (line.startsWith("Each cN=")) return 'Each cN={f0:[],f1:[],...,T:[]}, one fact array per original clause. fN contains {m,O,F} anchored at clause N (R implicit); empty only when no additional assertion remains. T[i] indexes the fact for obligation ti in f0,f1,... concatenation. Every m/O/F quote is a DIRECT string first-last#occurrence:exact quote. All numbers zero-based; first/last are inclusive original clause IDs, occurrence counts ALL exact overlapping matches within that range. Use exact original characters, <=12 clauses; never qIDs, character offsets, normalized or inserted text. Terms:1..4 references,<=80 UTF16 original characters; disjoint pieces remain separate references.';
-  if (line.startsWith("O=[")) return 'O=[selection,extent,polarity,guard,context], exactly five entries: null or a direct original reference. when/only_when requires full governing guard in G AND a continuous O[3] span containing ALL G conditions, duration/mode and connecting operator; a marker alone is insufficient. O never replaces G. Never invent conditions. Negative needs full negation in O[2]. F=null, supplied loop ID, or {E,X,T,C,D} with direct references/null(C/D arrays). loopN retains n/b/m/O/F/R and its own original meaning; no implicit context from another fact.';
-  if (line.startsWith("Fictional clauses")) return 'Fictional original claim="温度を検出して出力する青センサと、読取器を備える。" (clauses 0,1). f0=[{m:{u:["0-0#0:青センサ"],x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["0-0#0:温度を検出して出力する"]],a:"0-0#0:温度を検出して出力する"},O:[null,null,null,null,null],F:null}]. f1=[{m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[["0-0#0:青センサ"],["1-1#0:読取器"]],a:"1-1#0:備える"},O:[null,null,null,null,null],F:null}]. The function and possession are separate facts; the unprinted device actor stays null. Every component joined by と/及び before 備える needs possession, including components already used by function facts. Split long lists into has facts within the 12-clause evidence bound, omitting none.';
-  if (line.startsWith("facts is flat")) return "f0,f1,... are original clause groups in that order; each group preserves its own fact order. T refers to the concatenation, never to quotes/groups/loops.";
+  if (line.startsWith("Extract complete")) return line.replace("v22", "v30");
+  if (line.startsWith("Each cN=")) return 'Each cN={possessions:[],sets:[],f0:[],f1:[],...,T:[]}. possessions ONLY relation/has and sets ONLY set meanings, each row {R,s,m,O,F} nondecreasing R. fN ONLY other meanings as {s,m,O,F}, R=N. Merge by original R, then possessions,sets,fN at each R; never sort raw rows or infer omitted meaning. T indexes ONLY f0,f1,... concatenation, not possessions/sets. References are first-last:exact original quote, uniquely matched in that inclusive <=12-clause range; repeated text uses [reference,immediate before,immediate after] with exactly one adjacent match. No occurrence counts/qIDs/offsets/normalization. Terms are 1..4 references <=80 UTF16 characters.';
+  if (line.startsWith("O=[")) return 'answer.scopes=[{id:"s0",g:"when" or "only_when",G:terms,proof:directReference}]. Each fact and loop has required s:scopeID or null for explicit unconditional. m has NO g/G; O=[selection,extent,polarity,context], exactly four references/null. Selected scope supplies only g/G/full O.guard; actor u/context x/polarity p stay in EACH m. No actor inheritance. G is nonempty and proof contains ALL governing conditions, duration/mode and connectors. Reject duplicate/unknown/unused scopes. Semantic G/g instructions mean selected scope.G/g; never put them inside m. Negative still requires O[2]. F=null, supplied loop ID, or {E,X,T,C,D}; E/X/T are references/null, C/D arrays of references/null. loopN retains n/b/m/O/F/R plus required s with identical scope semantics. Never invent a when phrase.';
+  if (line.startsWith("Fictional clauses")) return 'Fictional original="温度を検出して出力する青センサと、読取器を備える。", scopes=[]. possessions=[{R:1,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:青センサ"],["1-1:読取器"]],a:"1-1:備える"},O:[null,null,null,null],F:null}]. f0=[{s:null,m:{u:["0-0:青センサ"],x:"capability",p:"positive",k:"relation",P:"executes",J:[["0-0:温度を検出して出力する"]],a:"0-0:温度を検出して出力する"},O:[null,null,null,null],F:null}]. f1=[],sets=[]. Possession never substitutes its defining function, or vice versa. Split long possessions within <=12 clauses without omitting components.';
+  if (line.startsWith("facts is flat")) return "f0,f1,... are original clause groups in that order; each group preserves its own fact order. T refers only to the fN concatenation, never to possessions/sets/quotes/groups/loops.";
   return line;
 }).join("\n") + `
-Extract ONLY target.claimNo of target.sourceDigest. Return {v:29,sourceDigest,claimNo,answer}; answer has d, this cN and its supplied loopN keys with original IDs.
-No output Q dictionary or qIDs: each reference names its original range, explicit occurrence and exact literal directly.
+Extract ONLY target.claimNo of target.sourceDigest. Return {v:30,sourceDigest,claimNo,answer}; answer has d, scopes, this cN and its supplied loopN keys with original IDs.
+No output Q dictionary or qIDs: each reference names its original range, exact literal and optional immediate disambiguating context directly.
 Each required T[N] indexes, from zero, the fact expressing literal obligation tN in original-clause group order. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
 For maintains, a and J quote the same FULL compound maintained state including the verb.
 sourceContext target claim clauses concatenate unchanged in ID order. Resolve references only inside their stated range; identical text at another occurrence is not interchangeable. Context or another group/loop never supplies missing meaning. R must overlap an m quote, not F/O/context. Each actor/restatement and route endpoint/via uses its actual occurrence. Combined m/O/F evidence still fits <=12 clauses.
-Fictional original claim="白管と黒管を備え、白管から黒管へ流す。" (clauses0,1). f0=[{"m":{"u":null,"x":"capability","g":"unconditional","G":[],"p":"positive","k":"relation","P":"has","J":[["0-0#0:白管"],["0-0#0:黒管"]],"a":"0-0#0:備え"},"O":[null,null,null,null,null],"F":null}]. f1=[{"m":{"u":null,"x":"operation","g":"unconditional","G":[],"p":"positive","k":"path","i":["1-1#0:白管"],"j":["1-1#0:黒管"],"V":[],"B":[],"e":"whole","r":"route"},"O":[null,null,null,null,null],"F":null}]. References select actual definition or route occurrences, never a guessed component alias. Unprinted actor remains null.
+Fictional original="白管と黒管を備え、白管から黒管へ流す。",scopes=[]. possessions=[{R:0,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:白管"],["0-0:黒管"]],a:"0-0:備え"},O:[null,null,null,null],F:null}],sets=[],f0=[]. f1=[{s:null,m:{u:null,x:"operation",p:"positive",k:"path",i:["1-1:白管"],j:["1-1:黒管"],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null],F:null}]. References retain actual route occurrences; an unprinted actor stays null.
 For each requiredRouteClauses anchor, cite actual endpoint/via occurrences from that clause; another occurrence/loop elsewhere cannot cover it. One path/loop may cover several anchors only with its actual route quotes in each.
 Other claims in sourceContext are reference context, extracted separately: never cite them or copy ancestor facts. Read all target definitions, conditions and reference tails. All v22 meaning/quotation/order/completeness rules remain; no previous answer is supplied or reusable.`;
 
@@ -61,7 +62,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const groupKeys=c.clauses.map((_,i)=>`f${i}`);
     const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo ? [id] : []);
     // Preserve batch-global loop identities; direct references have no forward dictionary.
-    const keys = ["d", ...loops.map(id => `loop${id}`), `c${claimNo}`];
+    const keys = ["d", "scopes", ...loops.map(id => `loop${id}`), `c${claimNo}`];
     // Reuse the provider's complete fact/quote definitions without an extra
     // nested wrapper level. The sole claim key is required, never an array slot.
     const items = fullJson.properties!.s as JSONSchema7;
@@ -71,22 +72,28 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       const d = v.properties?.d as JSONSchema7 | undefined;
       return d?.const === sourceDigest || d?.enum?.includes(sourceDigest);
     });
-    if (!own?.properties || keys.some(k => !own.properties![k])) throw new ComparisonError("plan_limit");
+    if (!own?.properties || keys.some(k => k !== "scopes" && !own.properties![k])) throw new ComparisonError("plan_limit");
     const schema: JSONSchema7 = { type: "object", properties: {
-      v: { type: "integer", enum: [29] }, sourceDigest: { type: "string", enum: [sourceDigest] },
+      v: { type: "integer", enum: [30] }, sourceDigest: { type: "string", enum: [sourceDigest] },
       claimNo: { type: "integer", enum: [claimNo] },
-      answer: { type: "object", properties: Object.fromEntries(keys.map(k => [k, own.properties![k]])), required: keys, additionalProperties: false },
+      answer: { type: "object", properties: Object.fromEntries(keys.map(k => [k, k === "scopes" ? {type:"array",items:{$ref:"#/definitions/PriorArtSourceScope"}} : structuredClone(own.properties![k])])), required: keys, additionalProperties: false },
     }, required: ["v", "sourceDigest", "claimNo", "answer"], additionalProperties: false, definitions: structuredClone(definitions) };
-    // Fresh v29 exact quotations and required occurrence references. Historical
+    // Fresh v30 exact quotations and required occurrence references. Historical
     // answers are not accepted or repaired through this contract.
     const ownDefinitions=schema.definitions!;
     const ref=ownDefinitions.PriorArtSourceCellQuote as JSONSchema7;
-    ref.description="Direct original reference first-last#occurrence:exact quote; all numbers zero-based. Match only the declared original clause range, including overlapping matches; choose exactly the stated occurrence. No qIDs, normalization, inserted prefixes or guessed text.";
-    (ownDefinitions.PriorArtSourceOperators as JSONSchema7).description="Exactly [selection,extent,polarity,guard,context]: direct original references/null. O[3] is the full continuous governing guard containing ALL G conditions plus connecting operator, never only a marker.";
+    ref.anyOf=[{type:"string"},{type:"array",items:{type:"string"},minItems:3,maxItems:3}];delete ref.type;
+    ref.description="Unique exact original reference first-last:quote, or [reference,immediate before,immediate after] only for exact adjacent disambiguation. No occurrence counts, qIDs, normalization or inferred text.";
+    ownDefinitions.PriorArtSourceScope={type:"object",properties:{id:{type:"string"},g:{type:"string",enum:["when","only_when"]},G:{type:"array",items:{$ref:"#/definitions/PriorArtSourceTerm"}},proof:{$ref:"#/definitions/PriorArtSourceCellQuote"}},required:["id","g","G","proof"],additionalProperties:false,description:"An explicitly extracted governing mode/condition environment. G is nonempty and proof contains ALL G plus connecting operators. Each fact selects s or explicit null (unconditional); no actor inheritance."};
+    const operators=ownDefinitions.PriorArtSourceOperators as JSONSchema7;
+    operators.minItems=4;operators.maxItems=4;
+    operators.description="Exactly [selection,extent,polarity,context] direct references/null. Guard proof belongs ONLY to the explicitly selected scope, not O.";
     const dictionaryClaim=ownDefinitions.PriorArtSourceDictionaryClaim as JSONSchema7;
     const groupedFact=structuredClone(ownDefinitions.PriorArtSourceAdditionalFact) as JSONSchema7;
     delete groupedFact.properties!.R;groupedFact.required=groupedFact.required!.filter(key=>key!=="R");
-    groupedFact.description="Actor/mode/conditions belong to EACH fact; other groups/loop/reference scopes supply none. A controller action retains its controller; source-supported mode conditions need m.G plus O.guard, not O.context or F alone. Never invent a when phrase.";
+    groupedFact.properties!.s={anyOf:[{type:"string"},{type:"null"}]};groupedFact.required!.push("s");
+    ownDefinitions.PriorArtSourceLaneFact={...structuredClone(groupedFact),properties:{...structuredClone(groupedFact.properties),R:{type:"integer"}},required:[...groupedFact.required!,"R"]};
+    groupedFact.description="Actor/context/polarity remain fact-local. Required s explicitly selects a declared governing scope; null explicitly means unconditional. No actor or mode may be inferred from another fact/loop. Never invent a when phrase.";
     ownDefinitions.PriorArtSourceGroupedFact=groupedFact;
     ownDefinitions.PriorArtSourceClauseGroup={type:"array",items:{$ref:"#/definitions/PriorArtSourceGroupedFact"},description:"All assertions anchored in this original clause, including component-defining functions and inherited mode/conditions regardless of literal T checks. Other groups/has/loop never replace distinct meaning. Empty only if no additional assertion remains."};
     dictionaryClaim.description="fN anchors facts to original clause N; its key supplies R. Concatenate f0,f1,..., retaining each group's fact order; never infer missing meaning/context.";
@@ -94,10 +101,14 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       ...groupKeys.map(key=>[key,{$ref:"#/definitions/PriorArtSourceClauseGroup"}]),
       ["T",{type:"array",items:{type:"integer"},minItems:obligations.length,maxItems:obligations.length,description:"T[i] indexes the fact expressing obligation ti in all f0,f1,... arrays concatenated in original clause order. Partial literal checklist, not an inventory of all required facts. No omitted or extra bindings."}],
     ]);
-    dictionaryClaim.required=[...groupKeys,"T"];
+    dictionaryClaim.properties!.possessions={type:"array",items:{$ref:"#/definitions/PriorArtSourceLaneFact"},description:"Every component possession assertion, including components already used in functions. Only relation/has facts, explicit original R in nondecreasing order. Empty only if none printed."};
+    dictionaryClaim.properties!.sets={type:"array",items:{$ref:"#/definitions/PriorArtSourceLaneFact"},description:"Every quantified member/alternative set assertion, including any/combinations/all. Only set facts with explicit selection and original R nondecreasing. Enumeration of operations never replaces selection."};
+    dictionaryClaim.properties={possessions:dictionaryClaim.properties!.possessions,sets:dictionaryClaim.properties!.sets,...Object.fromEntries(groupKeys.map(k=>[k,dictionaryClaim.properties![k]])),T:dictionaryClaim.properties!.T};
+    dictionaryClaim.required=["possessions","sets",...groupKeys,"T"];
     const meaning = ownDefinitions.PriorArtSourceMeaning as JSONSchema7;
     for (const branch of meaning.anyOf as JSONSchema7[]) {
       const props = branch.properties!;
+      delete props.g;delete props.G;branch.required=branch.required!.filter(k=>k!=="g"&&k!=="G");
       (props.u as JSONSchema7).description = "Governing actor/restatement of THIS action; not a distant component definition.";
       for (const key of ["i", "j", "V", "B"]) if (props[key])
         (props[key] as JSONSchema7).description = "THIS route occurrence; never substitute its component definition.";
@@ -106,6 +117,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     }
     ((ownDefinitions.PriorArtSourceAdditionalFact as JSONSchema7).properties!.R as JSONSchema7).description =
       "Original clause overlapping an m quote; F/O/context never anchor R. Keep facts nondecreasing.";
+    for(const key of loops.map(id=>`loop${id}`)){const loop=(schema.properties!.answer as JSONSchema7).properties![key] as JSONSchema7;loop.properties!.s={anyOf:[{type:"string"},{type:"null"}]};loop.required!.push("s");}
     // Remove definitions unreachable from this one-claim schema, preserving
     // the provider's existing 100-property and five-object-depth boundaries.
     const used = new Set<string>();
@@ -125,22 +137,19 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       if (!record(raw.answer)) throw invalid();
       const rawAnswer=raw.answer;
       const own = rawAnswer[`c${claimNo}`];
-      if (!exact(own, [...groupKeys,"T"])||!Array.isArray(own.T)||own.T.length!==obligations.length) throw invalid();
-      const dictionary=claimLiteralDictionary(c);
-      const facts=groupKeys.flatMap((key,R)=>{
-        const rows=own[key];if(!Array.isArray(rows))throw invalid();
-        return rows.map(row=>{if(!exact(row,["m","O","F"]))throw invalid();return {...mapClaimLiteralFact(row,dictionary),R};});
-      });
-      const mappedLoops=Object.fromEntries(loops.map(id=>[`loop${id}`,mapClaimLiteralFact(rawAnswer[`loop${id}`],dictionary)]));
-      return { ...raw.answer,...mappedLoops, [`c${claimNo}`]: { Q: dictionary.quotes(), facts } };
+      if (!record(own)||!Array.isArray(own.T)||own.T.length!==obligations.length)throw invalid();
+      const projected=projectClaimScopeLanes(rawAnswer,claimNo,c),dictionary=claimLiteralDictionary(c);
+      const facts=projected.facts.map(row=>mapClaimLiteralFact(row,dictionary));
+      const mappedLoops=Object.fromEntries(Object.entries(projected.loops).map(([key,row])=>[key,mapClaimLiteralFact(row,dictionary)]));
+      return {...rawAnswer,...mappedLoops,[`c${claimNo}`]:{Q:dictionary.quotes(),facts},__bindings:projected.bindings};
     };
     const taskSchema = jsonSchema(schema, { validate: async raw => {
       try {
-        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 29 || raw.sourceDigest !== sourceDigest ||
+        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 30 || raw.sourceDigest !== sourceDigest ||
           raw.claimNo !== claimNo || !exact(raw.answer, keys) || raw.answer.d !== sourceDigest ||
           Buffer.byteLength(JSON.stringify(raw), "utf8") > SOURCE_CAPACITY.wireBytes) throw invalid();
-        const answer = normalizeAnswer(raw), declaredClaim = raw.answer[`c${claimNo}`] as Record<string, unknown>;
-        const declaredBindings=declaredClaim.T as unknown[];
+        const answer = normalizeAnswer(raw);
+        const declaredBindings=answer.__bindings as unknown[];delete answer.__bindings;delete answer.scopes;
         const ownClaim = answer[`c${claimNo}`];
         if (!exact(ownClaim, ["Q", "facts"]) || !Array.isArray(ownClaim.facts)) throw invalid();
         const factCount = ownClaim.facts.length;
@@ -192,7 +201,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
     tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
-      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 16 },
+      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 17 },
         target: { sourceDigest, claimNo,
           obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })),
           requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path").map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
@@ -217,7 +226,7 @@ export async function assembleSourceClaims(plan: SourceClaimPlan, answers: reado
     const result = await task.schema.validate(answer.value);
     if (!result.success || !record(result.value) || !record(result.value.answer)) throw invalid();
     for (const [key, value] of Object.entries(bound.normalize.get(task.id)!(result.value))) {
-      if (key === "d") continue;
+      if (key === "d"||key === "scopes"||key === "__bindings") continue;
       if (Object.hasOwn(sources[task.sourceIndex], key)) throw invalid();
       sources[task.sourceIndex][key] = value;
     }

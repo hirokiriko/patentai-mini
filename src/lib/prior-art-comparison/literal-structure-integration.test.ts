@@ -67,9 +67,9 @@ describe("literal structure on the product path, with fictional SDK transport", 
       }
       const wire=fixturePropositionWire(answer);
       if(failure==="reading"&&input.task==="extract_source_propositions"){
-        const claim=wire.answer[`c${input.target.claimNo}`],firstFact=claim[Object.keys(claim).find(key=>/^f[0-9]+$/.test(key)&&claim[key].length)!][0];
+        const claim=wire.answer[`c${input.target.claimNo}`],firstFact=[...claim.possessions,...Object.keys(claim).filter(key=>/^f[0-9]+$/.test(key)).flatMap(key=>claim[key])].find(f=>f.m.J?.length);
         expect(firstFact.m.J[0]).toHaveLength(1);
-        firstFact.m.J[0][0]="0-0#0:原文に存在しない語";
+        firstFact.m.J[0][0]="0-0:原文に存在しない語";
       }
       return Response.json({ id: "resp_fixture", created_at: 0, model: "fictional", status: "completed",
         output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",

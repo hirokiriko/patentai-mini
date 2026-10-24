@@ -115,11 +115,11 @@ describe("real installed SDK, guarded fictional transport", () => {
       if(mode==="reordered")wire.claimNo=input.target.claimNo+1;
       if(mode==="duplicate")wire.answer.c999=structuredClone(claim);
       if(mode==="foreign")wire.sourceDigest="f".repeat(64);
-      const firstFact=claim[Object.keys(claim).find(key=>/^f[0-9]+$/.test(key)&&claim[key].length)!][0];
+      const firstFact=[...claim.possessions,...Object.keys(claim).filter(key=>/^f[0-9]+$/.test(key)).flatMap(key=>claim[key])].find(f=>f.m.J?.length);
       if(mode==="missing_reading")delete firstFact.m.a;
       if(mode==="unrelated_evidence")firstFact.W=[[0,0,0,0]];
       if(mode==="blank"||mode==="overlong"){
-       firstFact.m.J[0][0]=mode==="blank"?"":"0-0#0:"+"甲".repeat(12001);
+       firstFact.m.J[0][0]=mode==="blank"?"":"0-0:"+"甲".repeat(12001);
       }
       return response(wire);
     });
