@@ -105,9 +105,9 @@ it("preserves batch-global loop IDs while limiting each claim answer to its own 
   const schema=task.schema.jsonSchema as {properties?:Record<string,{properties?:Record<string,unknown>}>};
   return Object.keys(schema.properties?.answer.properties??{});
  };
- expect(answerKeys(first)).toEqual(expect.arrayContaining(["d","c1","loop0"]));
+ expect(answerKeys(first)).toEqual(["d","loop0","c1"]);
  expect(answerKeys(first)).not.toContain("loop1");
- expect(answerKeys(second)).toEqual(expect.arrayContaining(["d","c2","loop1"]));
+ expect(answerKeys(second)).toEqual(["d","loop1","c2"]);
  expect(answerKeys(second)).not.toContain("loop0");
 });
 
@@ -257,4 +257,22 @@ it("shows existing literal route anchors near the target without supplying compl
  expect(request.citationClauses.version).toBe(13);
  expect(request.target.requiredRouteClauses).toEqual([{clause:0,literal:"冷媒を白管に流し、"},{clause:1,literal:"冷媒を黒管に流す。"}]);
  for(const t of request.target.requiredRouteClauses)expect(Object.keys(t).sort()).toEqual(['clause','literal']);
+});
+
+
+it("emits all fact references before Q without relaxing exact quotation or unused-ID rejection",async()=>{
+ const f=setup(),task=f.plan.tasks[0];
+ const schema=task.schema.jsonSchema as {definitions:Record<string,{properties:Record<string,unknown>;required:string[]}>};
+ const claimSchema=schema.definitions.PriorArtSourceDictionaryClaim;
+ expect(Object.keys(claimSchema.properties)).toEqual(["facts","t0","Q"]);
+ expect(claimSchema.required).toEqual(["facts","t0","Q"]);
+ const original=f.answers[0].value,own=original.answer.c1;
+ const ordered={...original,answer:{d:task.sourceDigest,c1:{facts:own.facts,t0:0,Q:own.Q}}};
+ const before=JSON.stringify(ordered);
+ expect((await task.schema.validate!(ordered)).success).toBe(true);
+ const stitched=structuredClone(ordered);stitched.answer.c1.Q[0].quote="制御器赤弁";
+ expect((await task.schema.validate!(stitched)).success).toBe(false);
+ const unused=structuredClone(ordered);unused.answer.c1.Q.push({id:"q999",quote:"御器",clause:0});
+ expect((await task.schema.validate!(unused)).success).toBe(false);
+ expect(JSON.stringify(ordered)).toBe(before);
 });
