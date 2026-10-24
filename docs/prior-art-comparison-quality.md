@@ -1444,3 +1444,16 @@ addresses the independently observed problem of model-authored citation ranges
 disagreeing with their quotations. Diagnostic responses are excluded from
 quality acceptance, persistence and deployment. New real-AI results must pass
 the full existing quality gates before any production acceptance.
+
+
+A fresh v25 response completed with usage, then failed the unchanged product
+validator. Its quotations included an unprinted prefix; possession omitted
+components, and route/actor references selected earlier definitions instead of
+the operative occurrences. This is a quality failure, separate from refusal.
+
+Citation input revision 11 supplies the exact continuous `target.quoteSource`.
+The prompt includes a complete fictional function-and-possession example and
+distinguishes repeated definition, route and restated actor occurrences. These
+changes do not alter the schema, raw response, validators or QA thresholds.
+A new response must satisfy all existing gates; failed answers are never repaired
+for acceptance.

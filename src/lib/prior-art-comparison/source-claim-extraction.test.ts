@@ -6,6 +6,8 @@ import {decodeSourcePropositions,propositionSourceInput} from "./proposition-ext
 import {sourceIdentifiedPropositionModelSchemaFor} from "./source-semantic-wire";
 import {sourceClaimExtractionPlan,assembleSourceClaims} from "./source-claim-extraction";
 import {fictionalQuotationClaim} from "./source-claim-fixtures.test-support";
+import {decodeClaimQuotationQuotes} from "./source-claim-quotations";
+import {resolveSourceOrderedQuote} from "./source-reading-tasks";
 import {sourceReadingClaim} from "./source-clause-coverage";
 
 // Only hand-authored fictional output is split here. Never use this adapter to
@@ -35,8 +37,9 @@ it("uses one consistent readable quote contract while retaining literal obligati
  const f=setup();
  for(const [i,task]of f.plan.tasks.entries()){
   const request=JSON.parse(task.prompt);
-  expect(request.citationClauses.version).toBe(10);
+  expect(request.citationClauses.version).toBe(11);
   expect(request.target).not.toHaveProperty("grid");
+  expect(request.target.quoteSource).toBe("制御器は、非通電状態の場合、赤弁を閉じる。");
   expect(request.target.obligations).toEqual([{key:"t0",clause:2,literal:"閉じる"}]);
   expect(task.system).not.toContain("startRow,startColumn,endRow,endColumn");
   for(const quote of f.answers[i].value.answer.c1.Q)expect(Object.keys(quote).sort()).toEqual(["after","before","id","quote"]);
@@ -179,4 +182,45 @@ it("requires the maintained state and verb together in both action and object",a
  const before=JSON.stringify(bad);
  expect((await task.schema.validate!(bad)).success).toBe(false);
  expect(JSON.stringify(bad)).toBe(before);
+});
+
+
+it("rejects a prefix from another claim even when that exact prefix occurs in the same source",async()=>{
+ const f=fictionalInputs(),first="別の制御器は、非通電状態の場合、赤弁を閉じる。",second="制御器は、非通電状態の場合、赤弁を閉じる。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${first}\n【請求項2】${second}`,11,"架空");f.selection.draftClaimNos=[1,2];
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${second}`,d.id,"架空"));
+ const plan=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)),task=plan.tasks.find(t=>t.sourceIndex===0&&t.claimNo===2)!;
+ const c=fictionalQuotationClaim(sourceReadingClaim(2,second),{Q:["q0|0-0:制御器","q1|1-1:非通電状態の場合","q2|2-2:赤弁","q3|2-2:閉じる"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"closes",J:[["q2"]],a:"q3"},O:[null,null,null,"q1",null],F:null}]});
+ const request=JSON.parse(task.prompt);
+ expect(request.target.quoteSource).toBe(second);
+ expect(request.target.quoteSource).not.toContain("別の");
+ const raw={v:25,sourceDigest:task.sourceDigest,claimNo:2,answer:{d:task.sourceDigest,c2:c}};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const wrong=structuredClone(raw);wrong.answer.c2.Q.find(q=>q.id==="q0")!.before="別の";
+ const before=JSON.stringify(wrong);
+ expect((await task.schema.validate!(wrong)).success).toBe(false);
+ expect(JSON.stringify(wrong)).toBe(before);
+});
+
+it("keeps the operative actor occurrence distinct from the same name in a condition",async()=>{
+ const f=fictionalInputs(),text="制御器は、制御器が非通電状態の場合、赤弁を閉じる。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const c=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:["q0|0-0:制御器","q1|1-1:制御器が非通電状態の場合","q2|2-2:赤弁","q3|2-2:閉じる"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"closes",J:[["q2"]],a:"q3"},O:[null,null,null,"q1",null],F:null}]});
+ const raw={v:25,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:c}};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const wrong=structuredClone(raw);Object.assign(wrong.answer.c1.Q.find(q=>q.id==="q0")!,{before:"制御器は、",after:"が非通電状態の場合"});
+ expect((await task.schema.validate!(wrong)).success).toBe(false);
+});
+
+it("binds route endpoints to operative route occurrences rather than same-name component definitions",()=>{
+ const text="入口器と出口器を備え、入口器から気体を出口器へ流す。",c=sourceReadingClaim(1,text);
+ const raw=[{id:"q0",quote:"入口器",before:"備え、",after:"から気体を"},{id:"q1",quote:"出口器",before:"から気体を",after:"へ流す"}];
+ const before=JSON.stringify(raw),decoded=decodeClaimQuotationQuotes(c,raw) as {id:string;first:number;last:number;quote:string;before:string;after:string}[];
+ const spans=decoded.map(({id,...q})=>({id,span:resolveSourceOrderedQuote(c,q,Array.from({length:q.last-q.first+1},(_,i)=>q.first+i))}));
+ expect(spans).toEqual([{id:"q0",span:[text.lastIndexOf("入口器"),text.lastIndexOf("入口器")+3]},{id:"q1",span:[text.lastIndexOf("出口器"),text.lastIndexOf("出口器")+3]}]);
+ expect(spans[0].span[0]).not.toBe(text.indexOf("入口器"));
+ expect(spans[1].span[0]).not.toBe(text.indexOf("出口器"));
+ expect(()=>decodeClaimQuotationQuotes(c,[{...raw[0],before:"",after:""}])).toThrow();
+ expect(JSON.stringify(raw)).toBe(before);
 });
