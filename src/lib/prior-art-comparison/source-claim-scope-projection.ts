@@ -23,12 +23,12 @@ export function projectClaimScopeLanes(answer:Record<string,unknown>,claimNo:num
   if(!exact(row,["m","O","F","R","s"])||!record(row.m)||(kind==='possession'?row.m.k!=="relation"||row.m.P!=="has":row.m.k!=="set"))throw invalid();
   const expanded=expand(row,true);if(Number(expanded.R)<previous)throw invalid();previous=Number(expanded.R);return expanded;
  });};
- const possessions=lane(own.possessions,'possession'),sets=lane(own.sets,'set'),facts:Record<string,unknown>[]=[],bindingMap:number[]=[];
+ const possessions=lane(own.possessions,'possession'),sets=lane(own.sets,'set'),facts:Record<string,unknown>[]=[],bindingMap=new Map<string,number>();
  for(let R=0;R<groups.length;R++){
   facts.push(...possessions.filter(f=>f.R===R),...sets.filter(f=>f.R===R));const rows=own[groups[R]];if(!Array.isArray(rows))throw invalid();
-  for(const row of rows){if(!exact(row,["m","O","F","s"])||!record(row.m)||row.m.k==='set'||row.m.P==='has')throw invalid();bindingMap.push(facts.length);facts.push({...expand(row,false),R});}
+  for(const [local,row]of rows.entries()){if(!exact(row,["m","O","F","s"])||!record(row.m)||row.m.k==='set'||row.m.P==='has')throw invalid();bindingMap.set(`${groups[R]}:${local}`,facts.length);facts.push({...expand(row,false),R});}
  }
- const bindings=own.T.map(at=>{if(!Number.isInteger(at)||Number(at)<0||Number(at)>=bindingMap.length)throw invalid();return bindingMap[Number(at)];});
+ const bindings=own.T.map(address=>{if(typeof address!=="string"||!/^f(?:0|[1-9]\d*):(?:0|[1-9]\d*)$/.test(address)||!bindingMap.has(address))throw invalid();return bindingMap.get(address)!;});
  const loops=Object.fromEntries(Object.entries(answer).filter(([k])=>k.startsWith('loop')).map(([k,row])=>[k,expand(row,false)]));
  if(used.size!==scopes.size)throw invalid();
  return {facts,loops,bindings};

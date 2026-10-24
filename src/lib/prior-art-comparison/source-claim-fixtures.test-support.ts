@@ -37,9 +37,9 @@ export function fictionalQuotationClaim<F>(c:SourceReadingClaim,claim:{Q:unknown
  c.clauses.forEach((_,R)=>{grouped[`f${R}`]=claim.facts.flatMap((row,i)=>{const value=row as F&{R:number;m:{k:string;P?:string}};if(value.R!==R)return[];
   if(value.m.P==="has"){possessions.push(rowProject(value));return[];}if(value.m.k==="set"){sets.push(rowProject(value));return[];}
   order.push(i);const {R:_anchor,...fact}=value;void _anchor;return[rowProject(fact)];});});
- const T=obligations.map((_,i)=>order.indexOf(bindings[`t${i}`]));
+ const T=obligations.map((_,i)=>{const index=bindings[`t${i}`],row=claim.facts[index] as F&{R:number};const local=order.filter(old=>old<=index&&(claim.facts[old] as F&{R:number}).R===row.R).length-1;return `f${row.R}:${local}`;});
  projectRelated?.(rowProject);
- const result={...grouped,possessions,sets,T} as Record<string,unknown>&{T:number[]};fixtureScopes.set(result,scopes);return result;
+ const result={...grouped,possessions,sets,T} as Record<string,unknown>&{T:string[]};fixtureScopes.set(result,scopes);return result;
 
 }
 /** Fictional SDK fixture only. It never processes or repairs real AI output. */
@@ -53,5 +53,5 @@ export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:R
  const answer=Object.fromEntries(keys.map(k=>[k,source[k]]));
  answer[`c${c.claimNo}`]=fictionalQuotationClaim(reading,answer[`c${c.claimNo}`],project=>{for(const key of keys)if(key.startsWith("loop"))answer[key]=project(answer[key]);});
  answer.scopes=fictionalScopesFor(answer[`c${c.claimNo}`]);
- return {v:30,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
+ return {v:31,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
 }

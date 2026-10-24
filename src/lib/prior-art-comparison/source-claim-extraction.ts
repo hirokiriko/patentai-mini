@@ -29,19 +29,20 @@ const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonC
   normalize: Map<string, (raw: Record<string, unknown>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
-  if (line.startsWith("Extract complete")) return line.replace("v22", "v30");
-  if (line.startsWith("Each cN=")) return 'Each cN={possessions:[],sets:[],f0:[],f1:[],...,T:[]}. possessions ONLY relation/has and sets ONLY set meanings, each row {R,s,m,O,F} nondecreasing R. fN ONLY other meanings as {s,m,O,F}, R=N. Merge by original R, then possessions,sets,fN at each R; never sort raw rows or infer omitted meaning. T indexes ONLY f0,f1,... concatenation, not possessions/sets. References are first-last:exact original quote, uniquely matched in that inclusive <=12-clause range; repeated text uses [reference,immediate before,immediate after] with exactly one adjacent match. No occurrence counts/qIDs/offsets/normalization. Terms are 1..4 references <=80 UTF16 characters.';
-  if (line.startsWith("O=[")) return 'answer.scopes=[{id:"s0",g:"when" or "only_when",G:terms,proof:directReference}]. Each fact and loop has required s:scopeID or null for explicit unconditional. m has NO g/G; O=[selection,extent,polarity,context], exactly four references/null. Selected scope supplies only g/G/full O.guard; actor u/context x/polarity p stay in EACH m. No actor inheritance. G is nonempty and proof contains ALL governing conditions, duration/mode and connectors. Reject duplicate/unknown/unused scopes. Semantic G/g instructions mean selected scope.G/g; never put them inside m. Negative still requires O[2]. F=null, supplied loop ID, or {E,X,T,C,D}; E/X/T are references/null, C/D arrays of references/null. loopN retains n/b/m/O/F/R plus required s with identical scope semantics. Never invent a when phrase.';
+  if (line.startsWith("Extract complete")) return line.replace("v22", "v31");
+  if (line.startsWith("Each cN=")) return 'Each cN={possessions:[],sets:[],f0:[],f1:[],...,T:[]}. possessions ONLY relation/has and sets ONLY set meanings, each row {R,s,m,O,F} nondecreasing R. fN ONLY other meanings as {s,m,O,F}, R=N. Merge by original R, then possessions,sets,fN at each R; never sort raw rows or infer omitted meaning. T contains ONLY fN:row addresses, never global counts or possession/set addresses. References are first-last:exact original quote, uniquely matched in that inclusive <=12-clause range; repeated text uses [reference,immediate before,immediate after] with exactly one adjacent match. No occurrence counts/qIDs/offsets/normalization. Terms are 1..4 references <=80 UTF16 characters.';
+  if (line.startsWith("O=[")) return 'answer.scopes=[{id:"s0",g:"when" or "only_when",G:terms,proof:directReference}]. Each fact and loop has required s:scopeID or null for explicit unconditional. m has NO g/G; O=[selection,extent,polarity,context], exactly four references/null. Selected scope supplies only g/G/full O.guard; actor u/context x/polarity p stay in EACH m. A postposed printed mode label may be G/proof verbatim: controller actions select its scope, keeping the controller in u; do not invent a literal when phrase. No actor inheritance. G is nonempty and proof contains ALL governing conditions, duration/mode and connectors. Reject duplicate/unknown/unused scopes. Semantic G/g instructions mean selected scope.G/g; never put them inside m. O[3] context is only an actual contiguous governing marker, or null; actor/action are separately cited in m.u/m.a, never stitch them into one quote. Negative still requires O[2]. F=null, supplied loop ID, or {E,X,T,C,D}; E/X/T are references/null, C/D arrays of references/null. loopN retains n/b/m/O/F/R plus required s with identical scope semantics. Never invent a when phrase.';
   if (line.startsWith("Fictional clauses")) return 'Fictional original="温度を検出して出力する青センサと、読取器を備える。", scopes=[]. possessions=[{R:1,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:青センサ"],["1-1:読取器"]],a:"1-1:備える"},O:[null,null,null,null],F:null}]. f0=[{s:null,m:{u:["0-0:青センサ"],x:"capability",p:"positive",k:"relation",P:"executes",J:[["0-0:温度を検出して出力する"]],a:"0-0:温度を検出して出力する"},O:[null,null,null,null],F:null}]. f1=[],sets=[]. Possession never substitutes its defining function, or vice versa. Split long possessions within <=12 clauses without omitting components.';
-  if (line.startsWith("facts is flat")) return "f0,f1,... are original clause groups in that order; each group preserves its own fact order. T refers only to the fN concatenation, never to possessions/sets/quotes/groups/loops.";
+  if (line.startsWith("facts is flat")) return "f0,f1,... are original clause groups in that order; each group preserves its own fact order. T uses only explicit fN:row addresses, never flattened counts or possession/set/loop references.";
   return line;
 }).join("\n") + `
-Extract ONLY target.claimNo of target.sourceDigest. Return {v:30,sourceDigest,claimNo,answer}; answer has d, scopes, this cN and its supplied loopN keys with original IDs.
+Extract ONLY target.claimNo of target.sourceDigest. Return {v:31,sourceDigest,claimNo,answer}; answer has d, scopes, this cN and its supplied loopN keys with original IDs.
 No output Q dictionary or qIDs: each reference names its original range, exact literal and optional immediate disambiguating context directly.
-Each required T[N] indexes, from zero, the fact expressing literal obligation tN in original-clause group order. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
+T array index i identifies obligation ti; the f-number identifies an original clause, and row is local to that group. Example T[0]="f7:1" selects the second fact in f7 only when it expresses t0. Never use a flattened index. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
 For maintains, a and J quote the same FULL compound maintained state including the verb.
 sourceContext target claim clauses concatenate unchanged in ID order. Resolve references only inside their stated range; identical text at another occurrence is not interchangeable. Context or another group/loop never supplies missing meaning. R must overlap an m quote, not F/O/context. Each actor/restatement and route endpoint/via uses its actual occurrence. Combined m/O/F evidence still fits <=12 clauses.
-Fictional original="白管と黒管を備え、白管から黒管へ流す。",scopes=[]. possessions=[{R:0,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:白管"],["0-0:黒管"]],a:"0-0:備え"},O:[null,null,null,null],F:null}],sets=[],f0=[]. f1=[{s:null,m:{u:null,x:"operation",p:"positive",k:"path",i:["1-1:白管"],j:["1-1:黒管"],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null],F:null}]. References retain actual route occurrences; an unprinted actor stays null.
+Fictional original="制御器により、赤弁を閉じる冬モードと、赤弁を開く夏モード。". scopes=[{id:"s0",g:"when",G:[["1-1:冬モード"]],proof:"1-1:冬モード"},{id:"s1",g:"when",G:[["2-2:夏モード"]],proof:"2-2:夏モード"}]. f1=[{s:"s0",m:{u:["0-0:制御器"],x:"operation",p:"positive",k:"relation",P:"closes",J:[["1-1:赤弁"]],a:"1-1:閉じる"},O:[null,null,null,null],F:null}]; f2 uses s1, the same controller, P:opens,a:"2-2:開く",J:[["2-2:赤弁"]]. The obligations address f1:0/f2:0; O.context never concatenates controller and distant action.
+For original "青管と青管。", ["0-0:青管","と","。"] selects the second 青管: before/after are RAW immediately adjacent characters, not locator strings. Unambiguous references use a string without a context tuple.
 For each requiredRouteClauses anchor, cite actual endpoint/via occurrences from that clause; another occurrence/loop elsewhere cannot cover it. One path/loop may cover several anchors only with its actual route quotes in each.
 Other claims in sourceContext are reference context, extracted separately: never cite them or copy ancestor facts. Read all target definitions, conditions and reference tails. All v22 meaning/quotation/order/completeness rules remain; no previous answer is supplied or reusable.`;
 
@@ -74,11 +75,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     });
     if (!own?.properties || keys.some(k => k !== "scopes" && !own.properties![k])) throw new ComparisonError("plan_limit");
     const schema: JSONSchema7 = { type: "object", properties: {
-      v: { type: "integer", enum: [30] }, sourceDigest: { type: "string", enum: [sourceDigest] },
+      v: { type: "integer", enum: [31] }, sourceDigest: { type: "string", enum: [sourceDigest] },
       claimNo: { type: "integer", enum: [claimNo] },
       answer: { type: "object", properties: Object.fromEntries(keys.map(k => [k, k === "scopes" ? {type:"array",items:{$ref:"#/definitions/PriorArtSourceScope"}} : structuredClone(own.properties![k])])), required: keys, additionalProperties: false },
     }, required: ["v", "sourceDigest", "claimNo", "answer"], additionalProperties: false, definitions: structuredClone(definitions) };
-    // Fresh v30 exact quotations and required occurrence references. Historical
+    // Fresh v31 exact quotations and required occurrence references. Historical
     // answers are not accepted or repaired through this contract.
     const ownDefinitions=schema.definitions!;
     const ref=ownDefinitions.PriorArtSourceCellQuote as JSONSchema7;
@@ -99,7 +100,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     dictionaryClaim.description="fN anchors facts to original clause N; its key supplies R. Concatenate f0,f1,..., retaining each group's fact order; never infer missing meaning/context.";
     dictionaryClaim.properties=Object.fromEntries([
       ...groupKeys.map(key=>[key,{$ref:"#/definitions/PriorArtSourceClauseGroup"}]),
-      ["T",{type:"array",items:{type:"integer"},minItems:obligations.length,maxItems:obligations.length,description:"T[i] indexes the fact expressing obligation ti in all f0,f1,... arrays concatenated in original clause order. Partial literal checklist, not an inventory of all required facts. No omitted or extra bindings."}],
+      ["T",{type:"array",items:{type:"string"},minItems:obligations.length,maxItems:obligations.length,description:"T[i] addresses obligation ti as f<originalClause>:<zeroBasedLocalRow>; e.g T[0]=f7:1 selects the second f7 fact for t0. No flattened counts. Partial literal checklist, not an inventory of all required facts. No omitted or extra bindings."}],
     ]);
     dictionaryClaim.properties!.possessions={type:"array",items:{$ref:"#/definitions/PriorArtSourceLaneFact"},description:"Every component possession assertion, including components already used in functions. Only relation/has facts, explicit original R in nondecreasing order. Empty only if none printed."};
     dictionaryClaim.properties!.sets={type:"array",items:{$ref:"#/definitions/PriorArtSourceLaneFact"},description:"Every quantified member/alternative set assertion, including any/combinations/all. Only set facts with explicit selection and original R nondecreasing. Enumeration of operations never replaces selection."};
@@ -113,7 +114,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       for (const key of ["i", "j", "V", "B"]) if (props[key])
         (props[key] as JSONSchema7).description = "THIS route occurrence; never substitute its component definition.";
       if (props.j) (props.j as JSONSchema7).description += " Final printed endpoint, even in a later clause.";
-      if (props.J) (props.J as JSONSchema7).description = "executes: full printed objects/function, not bare verb. is_state: ONE term/ONE span containing the entire a state/transition and its verb, not only its location. Disjoint pieces use separate direct references.";
+      if (props.J) (props.J as JSONSchema7).description = "Heat releases/absorbs/generates: J is the actual heat COMPONENT, never refrigerant or action; u remains the printed actor/mode. executes: full printed objects/function, not bare verb. is_state: ONE term/ONE span containing the entire a state/transition and its verb, not only its location. Disjoint pieces use separate direct references.";
     }
     ((ownDefinitions.PriorArtSourceAdditionalFact as JSONSchema7).properties!.R as JSONSchema7).description =
       "Original clause overlapping an m quote; F/O/context never anchor R. Keep facts nondecreasing.";
@@ -145,7 +146,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     };
     const taskSchema = jsonSchema(schema, { validate: async raw => {
       try {
-        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 30 || raw.sourceDigest !== sourceDigest ||
+        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 31 || raw.sourceDigest !== sourceDigest ||
           raw.claimNo !== claimNo || !exact(raw.answer, keys) || raw.answer.d !== sourceDigest ||
           Buffer.byteLength(JSON.stringify(raw), "utf8") > SOURCE_CAPACITY.wireBytes) throw invalid();
         const answer = normalizeAnswer(raw);
@@ -201,7 +202,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
     tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
-      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 17 },
+      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 18 },
         target: { sourceDigest, claimNo,
           obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })),
           requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path").map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
