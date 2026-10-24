@@ -9,6 +9,16 @@
 新形式の無通信検証は、合格結果の保存・再起動読込・全PDF/CSV・再取得AI0・固定URL一巡・
 PC停止中利用の実確認を代替しない。
 
+Local診断ではAzure ResponsesのHTTP拒否を、出力フィルター、モデルのrefusal、
+製品側の原文検証FAILと区別する。非成功HTTPの固定メタデータは`param=prompt`、
+既知innererror、`content_filters`の入力／出力区分・検出／遮断・severity・offset、
+usageの有無を保持する。任意messageや未知項目は公開メタデータへ転記せず、
+既存の16KiB・読取1秒・保存1秒の非公開原本保存を維持する。
+注記の分類やoffsetだけで具体的な入力箇所・修正原因を確定しない。
+usageの存在は精算成立を意味しない。bridgeがSDKより前に停止した場合は、
+汎用停止例外をproviderのSDK例外として扱わない。成功HTTPのResponses本文は
+既存の保存応答からstatus/error/incomplete_details/outputのrefusalを照合する。
+
 通常の1操作は参照先を含むN請求項の抽出＋比較1＋レビュー1（N≤19、最大21送信）。
 HTTPは永続予約のACK後に202を返し、サーバーのafter処理で継続する。GETは保存状態の
 照会だけで、同一操作のPOST、画面再読込やサーバー再起動から自動再送しない。

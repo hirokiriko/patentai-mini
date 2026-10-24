@@ -124,7 +124,7 @@ describe("protected-parent revalidation adapter", () => {
     const f=fixture(),raw=JSON.stringify({error:{code:"invalid_json_schema",type:"invalid_request_error",param:"text.format.schema",message:"FICTIONAL_SECRET"},usage:{input_tokens:1,output_tokens:0}});
     f.transport.mockResolvedValue(new Response(raw,{status:400}));
     await expect(f.send()).rejects.toThrow();
-    expect(JSON.parse(Buffer.from(f.records.get("provider-failure-44.json")!).toString())).toEqual({status:400,bodyState:"complete",bodyBytes:Buffer.byteLength(raw),bodySHA256:revalidationHash(raw),code:"invalid_json_schema",type:"invalid_request_error",param:"text.format.schema",usageKnown:false});
+    expect(JSON.parse(Buffer.from(f.records.get("provider-failure-44.json")!).toString())).toEqual({status:400,bodyState:"complete",bodyBytes:Buffer.byteLength(raw),bodySHA256:revalidationHash(raw),code:"invalid_json_schema",type:"invalid_request_error",param:"text.format.schema",usageKnown:false,usagePresent:true});
     expect([...f.records.values()].map(v=>Buffer.from(v).toString()).join("")).not.toContain("FICTIONAL_SECRET");
     expect(f.calls.indexOf("provider-metadata-44.json")).toBeLessThan(f.calls.indexOf("provider-failure-44.json"));
     expect(f.parent.mock.calls.some(([command])=>command==="reconcile")).toBe(false);
