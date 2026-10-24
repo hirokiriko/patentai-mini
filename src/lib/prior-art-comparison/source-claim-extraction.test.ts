@@ -407,7 +407,7 @@ it("keeps the recognized whole-route mode subject distinct from its controller w
  const chunks=makePlan(f.inputs,f.selection),source=propositionSourceInput(chunks).sources[0],claim=source.source.claims[0],frame=source.recognizedLoopRoutes[0];
  expect(frame).toBeDefined();
  const {validateDirectSourceClaim}=await import("./source-direct-quotes"),{sourceCitationGrid,sourceCellRef}=await import("./source-citation-grid");
- const claimText=claim.segments.map(p=>p.text).join(""),grid=sourceCitationGrid(claimText),q=(span:readonly[number,number])=>({cells:sourceCellRef(grid,span)});
+ const claimText=claim.segments.map(p=>p.text).join(""),grid=sourceCitationGrid(claimText),q=(span:readonly[number,number])=>({cells:sourceCellRef(grid,[...span])});
  const direct={sourceDigest:source.sourceDigest,c1:[],loop0:{claimNo:1,basis:{firstPart:frame.basisParts[0],lastPart:frame.basisParts[1]},meaning:{subject:[q(frame.mode)],context:"operation",guardRelation:"unconditional",guardConditions:[],polarity:"positive",kind:"path",origin:[q(frame.entry)],destination:[q(frame.exit)],via:[],bypass:[],extent:"whole",relation:"route"},operators:null,routeFrame:0}};
  const before=JSON.stringify(direct);await expect(validateDirectSourceClaim(source,1,direct,SOURCE_CAPACITY)).resolves.toBeDefined();expect(JSON.stringify(direct)).toBe(before);
  const wrong=structuredClone(direct),controller:[number,number]=[claimText.indexOf("制御器"),claimText.indexOf("制御器")+3];wrong.loop0.meaning.subject=[q(controller)];const wrongBefore=JSON.stringify(wrong);
