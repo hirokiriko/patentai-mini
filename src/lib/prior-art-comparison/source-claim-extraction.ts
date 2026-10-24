@@ -29,20 +29,20 @@ const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonC
   normalize: Map<string, (raw: Record<string, unknown>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
-  if (line.startsWith("Extract complete")) return line.replace("v22", "v33");
-  if (line.startsWith("Each cN=")) return 'Each cN={possessions:[],sets:[],f0:[],f1:[],...,T:[]}. possessions ONLY relation/has and sets ONLY set meanings, each row {R,s,m,O,F} nondecreasing R. fN ONLY other meanings as {s,m,O,F}, R=N. Merge by original R, then possessions,sets,fN at each R; never sort raw rows or infer omitted meaning. T contains ONLY fN:row addresses, never global counts or possession/set addresses. References are first-last:exact original quote, uniquely matched in that inclusive <=12-clause range; prefer a plain string; optional {reference,before,after} must match raw adjacent outside context and select exactly one match. No occurrence counts/qIDs/offsets/normalization. Terms are 1..4 references <=80 UTF16 characters.';
+  if (line.startsWith("Extract complete")) return line.replace("v22", "v34");
+  if (line.startsWith("Each cN=")) return 'Each cN={possessions:[],sets:[],f0:[],f1:[],...,T:[]}. possessions ONLY relation/has and sets ONLY set meanings, each row {R,s,m,O,F} nondecreasing R. fN ONLY other meanings as {s,m,O,F}, R=N. Merge by original R, then possessions,sets,fN at each R; never sort raw rows or infer omitted meaning. T contains ONLY fN:row addresses, never global counts or possession/set addresses. References are first-last:exact original quote, uniquely matched in that inclusive <=12-clause range; prefer a plain string; optional {reference,focus} selects a unique exact focus inside a uniquely matched outer reference. No occurrence counts/qIDs/offsets/normalization. Terms are 1..4 references <=80 UTF16 characters.';
   if (line.startsWith("O=[")) return 'scopes=[{id:"s0",g:"when" or "only_when",G:terms,proof:directReference}]. Each fact and loop has required s:scopeID or null for explicit unconditional. m has NO g/G; O=[selection,extent,polarity,context], exactly four references/null. Selected scope supplies only g/G/full O.guard; actor u/context x/polarity p stay in EACH m. A postposed printed mode label may be G/proof verbatim: controller actions select its scope, keeping the controller in u; do not invent a literal when phrase. No actor inheritance. G separately cites every governing condition including full duration/mode, never punctuation or an action object alone. proof contains ALL G plus connectors; proof alone cannot supply omitted G. Reject duplicate/unknown/unused scopes. Semantic G/g instructions mean selected scope.G/g; never put them inside m. O[3] context is only an actual contiguous governing marker, or null; actor/action are separately cited in m.u/m.a, never stitch them into one quote. Negative still requires O[2]. F=null, supplied loop ID, or {E,X,T,C,D}; E/X/T are references/null, C/D arrays of references/null. loopN retains n/b/m/O/F/R plus required s with identical scope semantics. Never invent a when phrase.';
   if (line.startsWith("Fictional clauses")) return 'Fictional original="温度を検出して出力する青センサと、読取器を備える。", scopes=[]. possessions=[{R:1,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:青センサ"],["1-1:読取器"]],a:"1-1:備える"},O:[null,null,null,null],F:null}]. f0=[{s:null,m:{u:["0-0:青センサ"],x:"capability",p:"positive",k:"relation",P:"executes",J:[["0-0:温度を検出して出力する"]],a:"0-0:温度を検出して出力する"},O:[null,null,null,null],F:null}]. f1=[],sets=[]. Possession never substitutes its defining function, or vice versa. Split long possessions within <=12 clauses without omitting components.';
   if (line.startsWith("facts is flat")) return "f0,f1,... are original clause groups in that order; each group preserves its own fact order. T uses only explicit fN:row addresses, never flattened counts or possession/set/loop references.";
   return line;
 }).join("\n") + `
-Extract ONLY target.claimNo of target.sourceDigest. Return {v:33,sourceDigest,claimNo,d,scopes,...loopN,cN}; all fields are at root, with original IDs and no answer wrapper.
-No output Q dictionary or qIDs: each reference names its original range, exact literal and optional immediate disambiguating context directly.
+Extract ONLY target.claimNo of target.sourceDigest. Return {v:34,sourceDigest,claimNo,d,scopes,...loopN,cN}; all fields are at root, with original IDs and no answer wrapper.
+No output Q dictionary or qIDs: cite an exact original literal, optionally a unique outer reference plus exact inner focus.
 T array index i identifies obligation ti; the f-number identifies an original clause, and row is local to that group. Example T[0]="f7:1" selects the second fact in f7 only when it expresses t0. Never use a flattened index. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
 For maintains, a and J quote the same FULL compound maintained state including the verb. Fictional "青工程と、赤工程を交替する": executes J=[["0-0:青工程"],["1-1:赤工程を交替する"]], retaining both operands.
 sourceContext target claim clauses concatenate unchanged in ID order. Resolve references only inside their stated range; identical text at another occurrence is not interchangeable. Context or another group/loop never supplies missing meaning. R must overlap an m quote, not F/O/context. Each actor/restatement and route endpoint/via uses its actual occurrence. Combined m/O/F evidence still fits <=12 clauses.
 Fictional original="制御器により、赤弁を閉じる冬モードと、赤弁を開く夏モード。". scopes=[{id:"s0",g:"when",G:[["1-1:冬モード"]],proof:"1-1:冬モード"},{id:"s1",g:"when",G:[["2-2:夏モード"]],proof:"2-2:夏モード"}]. f1=[{s:"s0",m:{u:["0-0:制御器"],x:"operation",p:"positive",k:"relation",P:"closes",J:[["1-1:赤弁"]],a:"1-1:閉じる"},O:[null,null,null,null],F:null}]; f2 uses s1, the same controller, P:opens,a:"2-2:開く",J:[["2-2:赤弁"]]. The obligations address f1:0/f2:0; O.context never concatenates controller and distant action.
-For original "青管と青管。", {reference:"0-0:青管",before:"と",after:"。"} selects the second 青管: before/after are RAW immediately adjacent characters, not locator strings. Prefer plain strings; every supplied context must match exactly, even for unique literals.
+For original "青管と青管。", {reference:"0-0:と青管。",focus:"青管"} selects only the second 青管. Both outer quote and inner focus must match uniquely and exactly. Outer locator text adds no semantic evidence. Prefer plain strings when already unique.
 For each requiredRouteClauses anchor, cite actual endpoint/via occurrences from that clause; another occurrence/loop elsewhere cannot cover it. One path/loop may cover several anchors only with its actual route quotes in each.
 Fictional scope for "起動時、所定期間、弁を開く。": G=[["0-0:起動時"],["1-1:所定期間"]], proof="0-1:起動時、所定期間、"; punctuation and 弁 are not G.
 Other claims in sourceContext are reference context, extracted separately: never cite them or copy ancestor facts. Read all target definitions, conditions and reference tails. All v22 meaning/quotation/order/completeness rules remain; no previous answer is supplied or reusable.`;
@@ -76,16 +76,16 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     });
     if (!own?.properties || keys.some(k => k !== "scopes" && !own.properties![k])) throw new ComparisonError("plan_limit");
     const schema: JSONSchema7 = { type: "object", properties: {
-      v: { type: "integer", enum: [33] }, sourceDigest: { type: "string", enum: [sourceDigest] },
+      v: { type: "integer", enum: [34] }, sourceDigest: { type: "string", enum: [sourceDigest] },
       claimNo: { type: "integer", enum: [claimNo] },
       ...Object.fromEntries(keys.map(k => [k, k === "scopes" ? {type:"array",items:{$ref:"#/definitions/PriorArtSourceScope"}} : structuredClone(own.properties![k])])),
     }, required: ["v", "sourceDigest", "claimNo", ...keys], additionalProperties: false, definitions: structuredClone(definitions) };
-    // Fresh v33 exact quotations and required occurrence references. Historical
+    // Fresh v34 exact quotations and required occurrence references. Historical
     // answers are not accepted or repaired through this contract.
     const ownDefinitions=schema.definitions!;
     const ref=ownDefinitions.PriorArtSourceCellQuote as JSONSchema7;
-    ref.anyOf=[{type:"string"},{type:"object",properties:{reference:{type:"string"},before:{type:"string"},after:{type:"string"}},required:["reference","before","after"],additionalProperties:false}];delete ref.type;
-    ref.description="Prefer exact original first-last:quote strings. Optional {reference,before,after} must match raw immediately adjacent outside context and select exactly one exact candidate. No occurrence counts, qIDs, normalization or inferred text.";
+    ref.anyOf=[{type:"string"},{type:"object",properties:{reference:{type:"string"},focus:{type:"string"}},required:["reference","focus"],additionalProperties:false}];delete ref.type;
+    ref.description="Prefer exact original first-last:quote strings. Optional {reference,focus}: reference uniquely matches an outer original quote; focus uniquely matches inside it. Return only the inner focus span. No occurrence counts, qIDs, normalization or inferred text.";
     ownDefinitions.PriorArtSourceScope={type:"object",properties:{id:{type:"string"},g:{type:"string",enum:["when","only_when"]},G:{type:"array",items:{$ref:"#/definitions/PriorArtSourceTerm"}},proof:{$ref:"#/definitions/PriorArtSourceCellQuote"}},required:["id","g","G","proof"],additionalProperties:false,description:"An explicitly extracted governing mode/condition environment. G is nonempty and proof contains ALL G plus connecting operators. Each fact selects s or explicit null (unconditional); no actor inheritance."};
     const operators=ownDefinitions.PriorArtSourceOperators as JSONSchema7;
     operators.minItems=4;operators.maxItems=4;
@@ -146,7 +146,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     };
     const taskSchema = jsonSchema(schema, { validate: async raw => {
       try {
-        if (!exact(raw, ["v", "sourceDigest", "claimNo", ...keys]) || raw.v !== 33 || raw.sourceDigest !== sourceDigest ||
+        if (!exact(raw, ["v", "sourceDigest", "claimNo", ...keys]) || raw.v !== 34 || raw.sourceDigest !== sourceDigest ||
           raw.claimNo !== claimNo || raw.d !== sourceDigest ||
           Buffer.byteLength(JSON.stringify(raw), "utf8") > SOURCE_CAPACITY.wireBytes) throw invalid();
         const answer = normalizeAnswer(raw);
@@ -202,7 +202,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
     tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
-      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 19 },
+      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
           obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })),
           requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path").map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
