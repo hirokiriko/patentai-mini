@@ -9,6 +9,7 @@ vi.mock("@/repositories", () => ({ caseRepo: { findById: seam.case }, draftPaten
 vi.mock("next/navigation", () => ({ notFound: () => { throw Error("NOT_FOUND"); }, useRouter: () => ({ refresh: seam.request, push: seam.request }),
   usePathname: () => "/cases/7", useSearchParams: () => new URLSearchParams() }));
 vi.mock("@/lib/current-draft", () => import("../../../lib/current-draft"));
+vi.mock("@/lib/prior-art-comparison/marker", () => import("../../../lib/prior-art-comparison/marker"));
 vi.mock("@/lib/safe-json", () => import("../../../lib/safe-json"));
 vi.mock("@/lib/original-file-metadata", () => import("../../../lib/original-file-metadata"));
 vi.mock("@/lib/patent-keyword-assist", () => import("../../../lib/patent-keyword-assist"));

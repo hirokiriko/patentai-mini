@@ -1,0 +1,103 @@
+import { createRevalidationGuard, revalidationPlan, revalidationHash,
+  type RevalidationDependencies } from "./prior-art-revalidation-guard";
+import { providerFailureMetadata } from "./prior-art-provider-failure";
+
+/** Local harness adapter. The protected parent owns approval, the exclusive
+ * ledger, and process cleanup. No environment switch or native fetch here. */
+export function createRevalidationBridge(deps: Omit<RevalidationDependencies,
+  "journal" | "assertAdmission" | "assertDiagnosticQa" | "transport"> & {
+  parent(command: "admit" | "claim" | "reserve" | "reconcile" | "qa" | "stop", value: unknown): Promise<void>;
+  record(name: string, bytes: Uint8Array): Promise<void>;
+  /** Explicit protected Local sink, separate from publishable metadata. */
+  recordPrivateFailureBody?(ordinal: number, bytes: Uint8Array): Promise<void>;
+  transport: typeof fetch;
+}) {
+  const plan = revalidationPlan(deps.propositionSlot);
+  let body = "", response: Uint8Array | undefined, busy = false;
+  const guard = createRevalidationGuard({ ...deps,
+    assertAdmission: (binding, decision) => deps.parent("admit", { binding, decision }),
+    assertDiagnosticQa: qa => deps.parent("qa", qa),
+    journal: {
+      claim: (binding, prior) => deps.parent("claim", { binding, prior }),
+      reserve: async event => {
+        if (revalidationHash(body) !== event.requestHash) throw Error("bridge_request_changed");
+        await deps.record(`request-${event.ordinal}.json`, Buffer.from(body));
+        await deps.parent("reserve", event);
+      },
+      reconcile: async event => {
+        if (!response || revalidationHash(response) !== event.responseHash) throw Error("bridge_response_changed");
+        await deps.parent("reconcile", event);
+      },
+      stop: async event => {
+        await deps.parent("stop", event);
+        await deps.record(`stop-ack-${event.ordinal}.json`, Buffer.from(JSON.stringify({
+          ordinal: event.ordinal, eventSHA256: revalidationHash(JSON.stringify(event)), stopAckReceived: true,
+        })));
+      },
+    },
+    transport: async (url, init) => {
+      const stage = plan.stages[guard.snapshot().completed];
+      let received: Response;
+      try { received = await deps.transport(url, init); }
+      catch {
+        await deps.record(`provider-transport-${stage.ordinal}.json`, Buffer.from(JSON.stringify({
+          outcome: "transport_rejected", signalAborted: init?.signal?.aborted === true,
+        })));
+        throw Error("revalidation_transport_rejected");
+      }
+      // Headers are recorded before reading or discarding the body. Never save
+      // arbitrary error text/headers in metadata: errors can contain input/secrets.
+      const requestId = [received.headers.get("x-request-id"), received.headers.get("apim-request-id")]
+        .find(id => id && /^(?:[a-f0-9]{32}|[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})$/i.test(id)) ?? null;
+      try {
+        await deps.record(`provider-metadata-${stage.ordinal}.json`, Buffer.from(JSON.stringify({
+          status: received.status,
+          requestId,
+        })));
+      } catch (error) { void received.body?.cancel().catch(() => undefined); throw error; }
+      if (!received.ok) {
+        const failure = await providerFailureMetadata(received, init?.signal,
+          deps.recordPrivateFailureBody && (bytes => deps.recordPrivateFailureBody!(stage.ordinal, bytes)));
+        await deps.record(`provider-failure-${stage.ordinal}.json`, Buffer.from(JSON.stringify(failure)));
+        return new Response(null, { status: received.status, headers: received.headers });
+      }
+      // Tee to disk as the guard consumes the response; do not pre-buffer an
+      // unbounded body or weaken the guard's deadline/size/usage checks.
+      if (!received.body) return received;
+      const reader = received.body.getReader(), chunks: Uint8Array[] = [];
+      const abort = () => { void reader.cancel().catch(() => undefined); };
+      init?.signal?.addEventListener("abort", abort, { once: true });
+      if (init?.signal?.aborted) abort();
+      let bytes = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await reader.read();
+            if (next.done) {
+              init?.signal?.removeEventListener("abort", abort);
+              response = Buffer.concat(chunks);
+              await deps.record(`provider-response-${stage.ordinal}.json`, response);
+              controller.close(); return;
+            }
+            bytes += next.value.length;
+            if (bytes > plan.responseBytes) throw Error("bridge_response_limit");
+            chunks.push(next.value); controller.enqueue(next.value);
+          } catch (error) { init?.signal?.removeEventListener("abort", abort); controller.error(error); void reader.cancel().catch(() => undefined); }
+        },
+        cancel: reason => { init?.signal?.removeEventListener("abort", abort); return reader.cancel(reason); },
+      });
+      return new Response(stream, { status: received.status, headers: received.headers });
+    },
+    validateAnswer: async (stage, answer) => {
+      await deps.validateAnswer(stage, answer);
+      await deps.record(`answer-${stage.ordinal}.json`, Buffer.from(JSON.stringify(answer)));
+    },
+  });
+  return Object.freeze({ ...guard,
+    fetch: (async (url, init) => {
+      if (busy) { guard.close(); throw Error("revalidation_stopped"); }
+      busy = true; body = typeof init?.body === "string" ? init.body : ""; response = undefined;
+      try { return await guard.fetch(url, init); } finally { busy = false; }
+    }) as typeof fetch,
+  });
+}
