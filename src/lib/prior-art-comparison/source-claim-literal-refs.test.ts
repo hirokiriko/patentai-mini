@@ -44,9 +44,12 @@ it("distinguishes prefix variants without adding or normalizing prefixes",()=>{
  expect(()=>resolveClaimLiteralReference(x,ctx("0-0:青管","当該","と"))).toThrow();
 });
 
-it("accepts context objects only for ambiguous base matches and rejects historical tuples",()=>{
+it("accepts exact context for a unique quote without ignoring supplied context or accepting historical tuples",()=>{
  const x=sourceReadingClaim(1,"前記圧縮機と赤管。");expect(resolveClaimLiteralReference(x,"0-0:前記圧縮機")).toEqual([0,5]);
- for(const v of [ctx("0-0:前記圧縮機","","と"),ctx("0-0:前記圧縮機","記","と"),ctx("0-0:前記圧縮機","\u0000","と"),["0-0:前記圧縮機","","と"],{reference:"0-0:前記圧縮機",before:"",after:"と",extra:true}])expect(()=>resolveClaimLiteralReference(x,v)).toThrow();
+ expect(resolveClaimLiteralReference(x,ctx("0-0:前記圧縮機","","と"))).toEqual([0,5]);
+ const mode=sourceReadingClaim(1,"循環させる冬モードと、冷やす夏モード。");
+ expect(resolveClaimLiteralReference(mode,ctx("0-0:冬モード","る","と"))).toEqual(resolveClaimLiteralReference(mode,"0-0:冬モード"));
+ for(const v of [ctx("0-0:前記圧縮機","記","と"),ctx("0-0:前記圧縮機","\u0000","と"),ctx("0-0:前記圧縮機","","赤"),["0-0:前記圧縮機","","と"],{reference:"0-0:前記圧縮機",before:"",after:"と",extra:true}])expect(()=>resolveClaimLiteralReference(x,v)).toThrow();
 });
 it("never drops incorrect outside context even when quote matches several times",()=>{
  const x=sourceReadingClaim(1,"前記青管と前記青管。");expect(resolveClaimLiteralReference(x,ctx("0-0:前記青管","と","。"))).toEqual([5,9]);

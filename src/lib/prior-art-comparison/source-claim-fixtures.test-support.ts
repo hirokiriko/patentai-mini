@@ -53,5 +53,5 @@ export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:R
  const answer=Object.fromEntries(keys.map(k=>[k,source[k]]));
  answer[`c${c.claimNo}`]=fictionalQuotationClaim(reading,answer[`c${c.claimNo}`],project=>{for(const key of keys)if(key.startsWith("loop"))answer[key]=project(answer[key]);});
  answer.scopes=fictionalScopesFor(answer[`c${c.claimNo}`]);
- return {v:32,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,...answer} as typeof answer & {v:number;sourceDigest:string;claimNo:number};
+ return {v:33,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,...answer} as typeof answer & {v:number;sourceDigest:string;claimNo:number};
 }

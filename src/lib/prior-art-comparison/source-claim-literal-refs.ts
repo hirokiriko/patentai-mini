@@ -15,14 +15,13 @@ export function resolveClaimLiteralReference(c:SourceReadingClaim,value:unknown)
  const match=/^(0|[1-9]\d*)-(0|[1-9]\d*):([\s\S]+)$/u.exec(reference);if(!match)throw invalid();
  const first=Number(match[1]),last=Number(match[2]),quote=match[3];
  if(![first,last].every(Number.isSafeInteger)||last<first||last-first>=12||!c.clauses[first]||!c.clauses[last]||quote.length>12000)throw invalid();
- const [start]=c.clauses[first],end=c.clauses[last][1],text=c.grid.text.slice(start,end);const candidates:Span[]=[];let baseMatches=0;
+ const [start]=c.clauses[first],end=c.clauses[last][1],text=c.grid.text.slice(start,end);const candidates:Span[]=[];
  for(let at=text.indexOf(quote);at>=0;at=text.indexOf(quote,at+1)){
-  baseMatches++;
   if(at<before.length||at+quote.length+after.length>text.length||text.slice(at-before.length,at)!==before||text.slice(at+quote.length,at+quote.length+after.length)!==after)continue;
   const span:Span=[start+at,start+at+quote.length];
   sourceCellRef(c.grid,span);sourceCellRef(c.grid,[span[0]-before.length,span[1]+after.length]);candidates.push(span);
  }
- if(candidates.length!==1||(contextual&&baseMatches<2))throw invalid();return candidates[0];
+ if(candidates.length!==1)throw invalid();return candidates[0];
 }
 /** Intern only already validated spans. Equal spans share an internal ID;
  * no actor, condition, fact or additional quotation is ever constructed. */

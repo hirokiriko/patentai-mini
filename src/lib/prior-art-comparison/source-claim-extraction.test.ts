@@ -23,7 +23,7 @@ function setup(actor="制御器"){
  const claim=()=>({Q:[`q91|0-0:${actor}`,"q4|1-1:非通電状態の場合","q73|2-2:赤弁","q8|2-2:閉じる"],facts:[{R:2,m:{u:["q91"],x:"operation",g:"when",G:[["q4"]],p:"positive",k:"relation",P:"closes",J:[["q73"]],a:"q8"},O:[null,null,null,"q4",null],F:null}]});
  const wire={v:22,s:input.sources.map(s=>({d:s.sourceDigest,c1:claim()}))};
  const plan=sourceClaimExtractionPlan(chunks);
- const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1));return{taskId:task.id,value:{v:32,sourceDigest:task.sourceDigest,claimNo:task.claimNo,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1));return{taskId:task.id,value:{v:33,sourceDigest:task.sourceDigest,claimNo:task.claimNo,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
  return {chunks,input,wire,plan,answers};
 }
 it("assembles exactly once in original source order and is equivalent to the existing strict decoder",async()=>{
@@ -71,7 +71,7 @@ it.each(["missing","duplicate","foreign_task","wrong_source","wrong_claim","fore
  if(mode==="foreign_key")Object.assign(first.value,{c2:structuredClone(first.value.c1)});
  if(mode==="undeclared_quote")setupFacts(first.value.c1)[0].m.a="q404";
  if(mode==="invalid_quote")setupFacts(first.value.c1)[0].m.a="2-2:原文に無い架空引用";
- if(mode==="previous_version")first.value.v=31;
+ if(mode==="previous_version")first.value.v=32;
  if(mode==="old_version")first.value.v=24;
  const raw=JSON.stringify(f.answers);
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
@@ -161,7 +161,7 @@ it("rejects a different occurrence or long evidence quote as the required indepe
   Q:["q0|0-0:制御器","q1|1-1:青放熱器","q2|1-1:放熱させ","q3|2-2:白吸熱器","q4|2-2:吸熱させる"],
   facts:[fact(1,"releases_heat","q1","q2"),fact(2,"absorbs_heat","q3","q4")],
  });
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const wrong=structuredClone(raw);wrong.c1.T[1]="f1:0";
  expect((await task.schema.validate!(wrong)).success).toBe(false);
@@ -181,7 +181,7 @@ it("requires the maintained state and verb together in both action and object",a
  const full="青弁の開度を所定の値に維持する";
  const original={Q:["q0|0-0:制御器",`q1|1-1:${full}`],facts:[{R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"maintains",J:[["q1"]],a:"q1"},O:[null,null,null,null,null],F:null}]};
  const reading=sourceReadingClaim(1,text),claim=fictionalQuotationClaim(reading,original);
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const split=structuredClone(original);split.Q.push("q2|1-1:維持する");split.facts[0].m.a="q2";
  const bad={...raw,...raw,c1:fictionalQuotationClaim(reading,split)};
@@ -200,7 +200,7 @@ it("rejects a prefix from another claim even when that exact prefix occurs in th
  const request=JSON.parse(task.prompt);
  expect(request.target).not.toHaveProperty("quoteSource");
  expect(request.sourceContext.source.claims.find((c:{claimNo:number})=>c.claimNo===2).clauses.map(([,text]:[number,string])=>text).join("")).toBe(second);
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:2,d:task.sourceDigest,scopes:fictionalScopesFor(c),c2:c};
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:2,d:task.sourceDigest,scopes:fictionalScopesFor(c),c2:c};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const wrong=structuredClone(raw);(wrong.c2.f2 as {m:{u:string[]}}[])[0].m.u=["0-0:別の制御器"];
  const before=JSON.stringify(wrong);
@@ -213,7 +213,7 @@ it("keeps the operative actor occurrence distinct from the same name in a condit
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
  const c=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:["q0|0-0:制御器","q1|1-1:制御器が非通電状態の場合","q2|2-2:赤弁","q3|2-2:閉じる"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"closes",J:[["q2"]],a:"q3"},O:[null,null,null,"q1",null],F:null}]});
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c),c1:c};
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c),c1:c};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const wrong=structuredClone(raw);setupFacts(wrong.c1)[0].m.u=["1-1:制御器"];
  expect((await task.schema.validate!(wrong)).success).toBe(false);
@@ -239,7 +239,7 @@ it("validates the complete fictional direct-reference has/path example and rejec
  
  const has={R:0,s:null,m:{u:null,x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:白管"],["0-0:黒管"]],a:"0-0:備え"},O:[null,null,null,null],F:null};
  const path={R:1,s:null,m:{u:null,x:"operation",p:"positive",k:"path",i:["1-1:白管"],j:["1-1:黒管"],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null],F:null};
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:[],c1:{possessions:[has],sets:[],f0:[],f1:[groupFact(path)],T:[]}};
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:[],c1:{possessions:[has],sets:[],f0:[],f1:[groupFact(path)],T:[]}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  expect(task.system).not.toContain("Q=[");expect(task.system).toContain("possessions=[");
  const definition=structuredClone(raw);Object.assign(definition.c1.f1[0].m,{i:["0-0:白管"],j:["0-0:黒管"]});
@@ -309,7 +309,7 @@ it("projects explicit opposite-mode scopes into exactly the strict original mean
  const original={Q:["q0|0-0:制御器","q1|1-1:赤弁","q2|1-1:閉じる","q3|1-1:冬モード","q4|2-2:赤弁","q5|2-2:開く","q6|2-2:夏モード"],facts:[
   {R:1,m:{u:["q0"],x:"operation",g:"when",G:[["q3"]],p:"positive",k:"relation",P:"closes",J:[["q1"]],a:"q2"},O:[null,null,null,"q3",null],F:null},
   {R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q6"]],p:"positive",k:"relation",P:"opens",J:[["q4"]],a:"q5"},O:[null,null,null,"q6",null],F:null}]};
- const answers=plan.tasks.map(task=>{const claim=fictionalQuotationClaim(sourceReadingClaim(1,text),structuredClone(original));return{taskId:task.id,value:{v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim}};});
+ const answers=plan.tasks.map(task=>{const claim=fictionalQuotationClaim(sourceReadingClaim(1,text),structuredClone(original));return{taskId:task.id,value:{v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim}};});
  const legacy={v:22,s:input.sources.map(s=>({d:s.sourceDigest,c1:structuredClone(original)}))},validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(legacy);expect(validated.success).toBe(true);if(!validated.success)throw validated.error;
  const actual=await assembleSourceClaims(plan,answers);expect(actual).toEqual(validated.value);
  const decoded=decodeSourcePropositions(chunks,actual);expect(decoded).toEqual(decodeSourcePropositions(chunks,validated.value));
@@ -319,21 +319,31 @@ it("projects explicit opposite-mode scopes into exactly the strict original mean
 it("rejects exact refrigerant heat objects while retaining the actual component and governing actor",async()=>{
  const f=fictionalInputs(),text="制御器は、冷媒を青放熱器にて放熱させる。";f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
  const claim=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:['q0|0-0:制御器','q1|1-1:青放熱器','q2|1-1:放熱させる'],facts:[{R:1,m:{u:['q0'],x:'operation',g:'unconditional',G:[],p:'positive',k:'relation',P:'releases_heat',J:[['q1']],a:'q2'},O:[null,null,null,null,null],F:null}]});
- const raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};expect((await task.schema.validate!(raw)).success).toBe(true);
+ const raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};expect((await task.schema.validate!(raw)).success).toBe(true);
  const bad=structuredClone(raw);(bad.c1.f1 as {m:{J:string[][]}}[])[0].m.J=[['1-1:冷媒']];const before=JSON.stringify(bad);expect((await task.schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(before);
  const schema=task.schema.jsonSchema as {definitions:Record<string,{anyOf?:{properties:Record<string,{description?:string}>}[]}>};expect(schema.definitions.PriorArtSourceMeaning.anyOf!.find(x=>x.properties.J)!.properties.J.description).toContain('never refrigerant');
 });
 it("shows actual adjacent raw context and mode scopes without accepting stitched context roles",async()=>{const f=setup(),task=f.plan.tasks[0];expect(task.system).toContain('{reference:"0-0:青管",before:"と",after:"。"}');expect(task.system).toContain('before/after are RAW');expect(task.system).toContain('proof:"1-1:冬モード"');const raw=structuredClone(f.answers[0].value);(raw.c1.f2 as {O:unknown[]}[])[0].O[3]='0-2:制御器は、赤弁を閉じる';const before=JSON.stringify(raw);expect((await task.schema.validate!(raw)).success).toBe(false);expect(JSON.stringify(raw)).toBe(before);});
 
-it("rejects the historical answer wrapper without flattening or raw repair",async()=>{const f=setup(),value=f.answers[0].value;const {v,sourceDigest,claimNo,...answer}=value;const old={v:31,sourceDigest,claimNo,answer};const before=JSON.stringify(old);expect((await f.plan.tasks[0].schema.validate!(old)).success).toBe(false);expect(JSON.stringify(old)).toBe(before);expect(v).toBe(32);});
+it("rejects the historical answer wrapper without flattening or raw repair",async()=>{const f=setup(),value=f.answers[0].value;const {v,sourceDigest,claimNo,...answer}=value;const old={v:31,sourceDigest,claimNo,answer};const before=JSON.stringify(old);expect((await f.plan.tasks[0].schema.validate!(old)).success).toBe(false);expect(JSON.stringify(old)).toBe(before);expect(v).toBe(33);});
 
 it("keeps the complete duration in G even when the proof already contains it",async()=>{
  const f=fictionalInputs(),text="制御器は、起動時、所定期間、赤弁を閉じる。";
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0],reading=sourceReadingClaim(1,text);
  const legacy={Q:["q0|0-0:制御器","q1|1-1:起動時","q2|2-2:所定期間","q3|1-2:起動時、所定期間、","q4|3-3:赤弁","q5|3-3:閉じる"],facts:[{R:3,m:{u:["q0"],x:"operation",g:"when",G:[["q1"],["q2"]],p:"positive",k:"relation",P:"closes",J:[["q4"]],a:"q5"},O:[null,null,null,"q3",null],F:null}]};
- const c1=fictionalQuotationClaim(reading,legacy),raw={v:32,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1};
+ const c1=fictionalQuotationClaim(reading,legacy),raw={v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  expect((raw.scopes[0] as {G:string[][]}).G).toEqual([["1-1:起動時"],["2-2:所定期間"]]);
  for(const replacement of ["3-3:赤弁"]){const bad=structuredClone(raw);(bad.scopes[0] as {G:string[][]}).G[1]=[replacement];const before=JSON.stringify(bad);expect((await task.schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(before);}
+});
+
+it("rejects the preceding flat v32 wire without changing its raw body",async()=>{const f=setup(),old={...f.answers[0].value,v:32},before=JSON.stringify(old);expect((await f.plan.tasks[0].schema.validate!(old)).success).toBe(false);expect(JSON.stringify(old)).toBe(before);});
+it("preserves the exact same unique original span when optional context is supplied",async()=>{const f=setup(),raw=structuredClone(f.answers[0].value);setupFacts(raw.c1)[0].m.a={reference:"2-2:閉じる",before:"赤弁を",after:"。"} as unknown as string;expect((await f.plan.tasks[0].schema.validate!(raw)).success).toBe(true);const bad=structuredClone(raw);setupFacts(bad.c1)[0].m.a={reference:"2-2:閉じる",before:"じ",after:"。"} as unknown as string;const before=JSON.stringify(bad);expect((await f.plan.tasks[0].schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(before);});
+
+it("retains disjoint coordinated action operands through the unchanged strict decoder",async()=>{
+ const f=fictionalInputs(),text="制御器は、青工程と、赤工程を切り換えて実行する。";f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),legacy={Q:["q0|0-0:制御器","q1|1-1:青工程","q2|2-2:赤工程を切り換えて実行する","q3|2-2:切り換えて実行する"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["q1"],["q2"]],a:"q3"},O:[null,null,null,null,null],F:null}]};
+ const plan=sourceClaimExtractionPlan(chunks),answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(reading,structuredClone(legacy));return{taskId:task.id,value:{v:33,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const assembled=await assembleSourceClaims(plan,answers),expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))},validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);expect(validated.success).toBe(true);if(!validated.success)throw validated.error;expect(assembled).toEqual(validated.value);expect(decodeSourcePropositions(chunks,assembled)).toEqual(decodeSourcePropositions(chunks,validated.value));
 });
