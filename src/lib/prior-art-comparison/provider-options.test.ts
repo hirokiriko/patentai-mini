@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { comparisonProviderOptions } from "./provider-options";
-import { comparisonOutputTokens } from "./limits";
+import { comparisonOutputTokens, comparisonRequestMilliseconds } from "./limits";
 
 afterEach(()=>vi.unstubAllEnvs());
 describe("comparison-only reasoning",()=>{
@@ -42,4 +42,10 @@ describe("comparison-only reasoning",()=>{
       for(const phase of ["generation","source","review"] as const)
         expect(comparisonOutputTokens({provider:"azure.responses",modelId},phase)).toBe(8192);
   });
+});
+
+it("extends only known Azure source request waits, preserving all other phases/providers/models",()=>{
+ for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"])for(const phase of ["source","generation","review"] as const)expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},phase)).toBe(phase==="source"?270000:210000);
+ for(const provider of ["openai.responses","google.generative-ai","unknown"])expect(comparisonRequestMilliseconds({provider,modelId:"gpt-5.4"},"source")).toBe(210000);
+ for(const modelId of ["custom-alias","gpt-5.4-mini","patentai-gpt54-mini"])expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},"source")).toBe(210000);
 });

@@ -8,7 +8,7 @@ import { decodeGeneration } from "./generation";
 import { batchTransportInput, batchSchema, batchSchemaFor, requestBytes, modelRequestBytes } from "./generation-batch";
 import { type ReviewDraft } from "./semantic-review";
 import { comparisonProviderOptions } from "./provider-options";
-import { comparisonOutputTokens, type ComparisonPhase } from "./limits";
+import { comparisonOutputTokens, comparisonRequestMilliseconds, type ComparisonPhase } from "./limits";
 import { decodeSourcePropositions, PROPOSITION_TARGET_SYSTEM, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
@@ -37,7 +37,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         const model = getModel();
         const options = comparisonProviderOptions(model, phase);
         const outputTokens = comparisonOutputTokens(model, phase);
-        const signal = AbortSignal.any([absolute, aiOperationDeadline(LIMITS.requestMilliseconds)]);
+        const signal = AbortSignal.any([absolute, aiOperationDeadline(comparisonRequestMilliseconds(model, phase))]);
         const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
           maxOutputTokens: outputTokens, abortSignal: signal,

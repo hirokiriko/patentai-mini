@@ -6,7 +6,7 @@ import { caseNumber, comparisonFailure } from "@/lib/prior-art-comparison/http";
 import { ComparisonError } from "@/lib/prior-art-comparison/source";
 
 // Deployment metadata; the comparison scope also enforces its own deadline.
-export const maxDuration = 4500;
+export const maxDuration = 5640;
 type Context = { params: Promise<{ caseId: string }> };
 export const GET = withOwnerRoute(async (request: Request, { params }: Context) => {
   try {

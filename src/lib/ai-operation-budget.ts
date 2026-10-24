@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
-import { LIMITS as comparisonLimits, comparisonOutputTokens } from "./prior-art-comparison/limits";
+import { LIMITS as comparisonLimits, comparisonOutputTokens, comparisonRequestMilliseconds } from "./prior-art-comparison/limits";
 
 type Role = "normal" | "fast";
 const stopReasons = new WeakMap<object, PatentWatchStopReason>();
@@ -155,6 +155,7 @@ export class AiOperationBudget {
         init?.signal && deadlines.has(init.signal) ? "timeout" : "aborted";
       let estimatedInputTokens = 0;
       let maximumOutputTokens = 0;
+      let requestMilliseconds = this.comparison ? comparisonLimits.requestMilliseconds : 35_000;
       try {
         if (this.stopped) throw this.stopped;
         if (this.managed?.deadline.aborted) throw stop("timeout");
@@ -178,6 +179,9 @@ export class AiOperationBudget {
           keys.add("service_tier");
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
+        if (this.comparison?.claimPlan && role === "normal" && body.reasoning?.effort === "high" &&
+            isComparisonTaskInput(body.input,"extract_source_propositions"))
+          requestMilliseconds = comparisonRequestMilliseconds({ provider: "azure.responses", modelId: body.model }, "source");
         const outputLimit = this.comparison && role === "normal" && ["low","medium","high"].includes(body.reasoning?.effort) &&
           isComparisonTaskInput(body.input,"extract_source_propositions")
           ? Math.min(comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "source"),
@@ -221,7 +225,7 @@ export class AiOperationBudget {
         if (this.managed.deadline.aborted) throw stop("timeout");
         if (init?.signal?.aborted) throw stop(callerReason());
       }
-      const deadline = aiOperationDeadline(this.comparison ? comparisonLimits.requestMilliseconds : 35_000);
+      const deadline = aiOperationDeadline(requestMilliseconds);
       const signal = AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : []), ...(this.managed ? [this.managed.deadline] : []), ...(this.comparison ? [this.comparison.deadline] : [])]);
       const abortReason = (): PatentWatchStopReason => deadline.aborted || this.managed?.deadline.aborted || this.comparison?.deadline.aborted ? "timeout" : callerReason();
       let abort: (() => void) | undefined;
@@ -309,7 +313,7 @@ export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, opera
   const calls = sourceClaims + (diagnostic ? 1 : 2), closing = new AbortController();
   // A diagnostic may wait for the fixed independent source-QA gate before its
   // final review. This adds time only, never a dispatch or a retry allowance.
-  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, calls * comparisonLimits.requestMilliseconds + 30_000)
+  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, sourceClaims * comparisonLimits.sourceRequestMilliseconds + (calls-sourceClaims) * comparisonLimits.requestMilliseconds + 30_000)
     + (diagnostic ? comparisonLimits.claimDiagnosticQaMilliseconds : 0);
   const deadline = AbortSignal.any([aiOperationDeadline(milliseconds), closing.signal]);
   deadlines.add(deadline);
