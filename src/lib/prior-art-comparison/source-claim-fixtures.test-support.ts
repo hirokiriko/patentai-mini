@@ -25,7 +25,10 @@ export function fictionalQuotationClaim<F>(c:SourceReadingClaim,claim:{Q:unknown
   for(const i of sourceMatchedTasks(obligations,f.m,ids,action,[]))bindings[`t${i}`]??=at;
  });
  if(Object.keys(bindings).length!==obligations.length)throw Error("fictional_fixture_has_uncovered_obligation");
- return {Q,facts:claim.facts,...bindings};
+ const grouped:Record<string,unknown>={};const order:number[]=[];
+ c.clauses.forEach((_,R)=>{grouped[`f${R}`]=claim.facts.flatMap((row,i)=>{const value=row as F&{R:number};if(value.R!==R)return[];order.push(i);const {R:_anchor,...fact}=value;void _anchor;return[fact];});});
+ const T=obligations.map((_,i)=>order.indexOf(bindings[`t${i}`]));
+ return {...grouped,T,Q} as Record<string,unknown>&{T:number[];Q:typeof Q};
 }
 /** Fictional SDK fixture only. It never processes or repairs real AI output. */
 export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:ReturnType<typeof fictionalClauseSource>)=>void){
@@ -37,5 +40,5 @@ export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:R
  const reading=sourceReadingClaim(c.claimNo,c.clauses.map(([,text])=>text).join(""));
  const answer=Object.fromEntries(keys.map(k=>[k,source[k]]));
  answer[`c${c.claimNo}`]=fictionalQuotationClaim(reading,answer[`c${c.claimNo}`]);
- return {v:27,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
+ return {v:28,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
 }

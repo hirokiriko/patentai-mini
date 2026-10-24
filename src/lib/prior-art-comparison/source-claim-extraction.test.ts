@@ -11,6 +11,8 @@ import {decodeClaimQuotationQuotes} from "./source-claim-quotations";
 import {resolveSourceOrderedQuote} from "./source-reading-tasks";
 import {sourceReadingClaim} from "./source-clause-coverage";
 
+function groupFact<T extends {R:number}>(value:T){const {R,...fact}=value;void R;return fact;}
+function setupFacts(claim:Record<string,unknown>){return claim.f2 as ReturnType<typeof setup>["wire"]["s"][number]["c1"]["facts"];}
 // Only hand-authored fictional output is split here. Never use this adapter to
 // repair, reassign or accept a provider response.
 function setup(actor="制御器"){
@@ -21,7 +23,7 @@ function setup(actor="制御器"){
  const claim=()=>({Q:[`q91|0-0:${actor}`,"q4|1-1:非通電状態の場合","q73|2-2:赤弁","q8|2-2:閉じる"],facts:[{R:2,m:{u:["q91"],x:"operation",g:"when",G:[["q4"]],p:"positive",k:"relation",P:"closes",J:[["q73"]],a:"q8"},O:[null,null,null,"q4",null],F:null}]});
  const wire={v:22,s:input.sources.map(s=>({d:s.sourceDigest,c1:claim()}))};
  const plan=sourceClaimExtractionPlan(chunks);
- const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:27,sourceDigest:task.sourceDigest,claimNo:task.claimNo,answer:{d:task.sourceDigest,c1:fictionalQuotationClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1))}}}));
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:28,sourceDigest:task.sourceDigest,claimNo:task.claimNo,answer:{d:task.sourceDigest,c1:fictionalQuotationClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1))}}}));
  return {chunks,input,wire,plan,answers};
 }
 it("assembles exactly once in original source order and is equivalent to the existing strict decoder",async()=>{
@@ -38,14 +40,14 @@ it("uses one consistent readable quote contract while retaining literal obligati
  const f=setup();
  for(const [i,task]of f.plan.tasks.entries()){
   const request=JSON.parse(task.prompt);
-  expect(request.citationClauses.version).toBe(14);
+  expect(request.citationClauses.version).toBe(15);
   expect(request.target).not.toHaveProperty("grid");
   expect(request.target).not.toHaveProperty("quoteSource");
   expect(request.sourceContext.source.claims[0].clauses.map(([,text]:[number,string])=>text).join("")).toBe("制御器は、非通電状態の場合、赤弁を閉じる。");
   expect(request.target.obligations).toEqual([{key:"t0",clause:2,literal:"閉じる"}]);
   expect(task.system).not.toContain("startRow,startColumn,endRow,endColumn");
   for(const quote of f.answers[i].value.answer.c1.Q)expect(Object.keys(quote).sort()).toEqual(["S","id"]);
-  expect(f.answers[i].value.answer.c1).toHaveProperty("t0",0);
+  expect(f.answers[i].value.answer.c1.T).toEqual([0]);
  }
 });
 it.each(["old_coordinate","missing_context","invented_context","unused_quote"])("rejects obsolete or inconsistent quote declarations without repair: %s",async mode=>{
@@ -66,9 +68,9 @@ it.each(["missing","duplicate","foreign_task","wrong_source","wrong_claim","fore
  if(mode==="wrong_source")first.value.sourceDigest=f.answers[1].value.sourceDigest;
  if(mode==="wrong_claim")first.value.claimNo=2;
  if(mode==="foreign_key")Object.assign(first.value.answer,{c2:structuredClone(first.value.answer.c1)});
- if(mode==="undeclared_quote")first.value.answer.c1.facts[0].m.a="q404";
+ if(mode==="undeclared_quote")setupFacts(first.value.answer.c1)[0].m.a="q404";
  if(mode==="invalid_quote")Object.assign(first.value.answer.c1.Q[2],{quote:"原文に無い架空引用"});
- if(mode==="previous_version")first.value.v=26;
+ if(mode==="previous_version")first.value.v=27;
  if(mode==="old_version")first.value.v=24;
  const raw=JSON.stringify(f.answers);
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
@@ -78,7 +80,7 @@ it("rejects combined wire overflow even when every individual claim reply is bel
  const f=setup();
  // Repeated fully cited facts exercise the aggregate transport boundary;
  // do not introduce a malformed quote merely to increase the byte count.
- for(const a of f.answers){const fact=structuredClone(a.value.answer.c1.facts[0]);fact.m.G=Array.from({length:8},()=>["q4"]);a.value.answer.c1.facts=Array.from({length:96},()=>structuredClone(fact));}
+ for(const a of f.answers){const fact=structuredClone(setupFacts(a.value.answer.c1)[0]);fact.m.G=Array.from({length:9},()=>["q4"]);a.value.answer.c1.f2=Array.from({length:96},()=>structuredClone(fact));}
  for(const [i,a] of f.answers.entries())expect((await f.plan.tasks[i].schema.validate!(a.value)).success).toBe(true);
  expect(f.answers.every(a=>Buffer.byteLength(JSON.stringify(a.value),"utf8")<64000)).toBe(true);
  expect(Buffer.byteLength(JSON.stringify({v:22,s:f.answers.map(a=>a.value.answer)}),"utf8")).toBeGreaterThan(64000);
@@ -115,12 +117,12 @@ it("preserves batch-global loop IDs while limiting each claim answer to its own 
 
 it.each(["invalid_context","reserved_context","extra_meaning_key","bypass_role_conflict","long_actor"])("rejects claim-local domain failure before any next request: %s",async mode=>{
  const f=setup(mode==="long_actor"?"制"+"御".repeat(80):undefined),claim=f.answers[0].value.answer.c1;
- if(mode==="invalid_context")claim.facts[0].m.x="invalid_context";
- if(mode==="reserved_context")claim.facts[0].m.x="unresolved";
- if(mode==="extra_meaning_key")Object.assign(claim.facts[0].m,{claimNo:1});
+ if(mode==="invalid_context")setupFacts(claim)[0].m.x="invalid_context";
+ if(mode==="reserved_context")setupFacts(claim)[0].m.x="unresolved";
+ if(mode==="extra_meaning_key")Object.assign(setupFacts(claim)[0].m,{claimNo:1});
  if(mode==="bypass_role_conflict"){
   const path={R:2,m:{u:["q91"],x:"operation",g:"when",G:[["q4"]],p:"positive",k:"path",i:["q73"],j:["q73"],V:[],B:[["q73"]],e:"segment",r:"route"},O:[null,null,null,"q4",null],F:null};
-  (claim.facts as unknown[]).push(path);
+  (claim.f2 as unknown[]).push(path);
  }
  const before=JSON.stringify(f.answers[0].value);
  expect((await f.plan.tasks[0].schema.validate!(f.answers[0].value)).success).toBe(false);
@@ -141,10 +143,10 @@ it("states exact ID grammar and exact-context declarations in v25 without changi
 
 it.each(["missing","negative","out_of_range","quote_instead_of_fact"])("requires every literal action to reference an existing fact: %s",async mode=>{
  const f=setup(),claim=f.answers[0].value.answer.c1 as Record<string,unknown>;
- if(mode==="missing")delete claim.t0;
- if(mode==="negative")claim.t0=-1;
- if(mode==="out_of_range")claim.t0=1;
- if(mode==="quote_instead_of_fact")claim.t0="q8";
+ if(mode==="missing")delete claim.T;
+ if(mode==="negative")claim.T=[-1];
+ if(mode==="out_of_range")claim.T=[1];
+ if(mode==="quote_instead_of_fact")claim.T=["q8"];
  const before=JSON.stringify(f.answers[0].value);
  expect((await f.plan.tasks[0].schema.validate!(f.answers[0].value)).success).toBe(false);
  expect(JSON.stringify(f.answers[0].value)).toBe(before);
@@ -160,11 +162,11 @@ it("rejects a different occurrence or long evidence quote as the required indepe
   Q:["q0|0-0:制御器","q1|1-1:青放熱器","q2|1-1:放熱させ","q3|2-2:白吸熱器","q4|2-2:吸熱させる"],
   facts:[fact(1,"releases_heat","q1","q2"),fact(2,"absorbs_heat","q3","q4")],
  });
- const raw={v:27,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
+ const raw={v:28,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
- const wrong=structuredClone(raw);Object.assign(wrong.answer.c1,{t1:0});
+ const wrong=structuredClone(raw);wrong.answer.c1.T[1]=0;
  expect((await task.schema.validate!(wrong)).success).toBe(false);
- const absent=structuredClone(raw);absent.answer.c1.facts.pop();Object.assign(absent.answer.c1,{t1:0});
+ const absent=structuredClone(raw);(absent.answer.c1.f2 as unknown[]).pop();absent.answer.c1.T[1]=0;
  const before=JSON.stringify(absent);
  expect((await task.schema.validate!(absent)).success).toBe(false);
  expect(JSON.stringify(absent)).toBe(before);
@@ -178,7 +180,7 @@ it("requires the maintained state and verb together in both action and object",a
  const full="青弁の開度を所定の値に維持する";
  const original={Q:["q0|0-0:制御器",`q1|1-1:${full}`],facts:[{R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"maintains",J:[["q1"]],a:"q1"},O:[null,null,null,null,null],F:null}]};
  const reading=sourceReadingClaim(1,text),claim=fictionalQuotationClaim(reading,original);
- const raw={v:27,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
+ const raw={v:28,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:claim}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const split=structuredClone(original);split.Q.push("q2|1-1:維持する");split.facts[0].m.a="q2";
  const bad={...raw,answer:{...raw.answer,c1:fictionalQuotationClaim(reading,split)}};
@@ -197,7 +199,7 @@ it("rejects a prefix from another claim even when that exact prefix occurs in th
  const request=JSON.parse(task.prompt);
  expect(request.target).not.toHaveProperty("quoteSource");
  expect(request.sourceContext.source.claims.find((c:{claimNo:number})=>c.claimNo===2).clauses.map(([,text]:[number,string])=>text).join("")).toBe(second);
- const raw={v:27,sourceDigest:task.sourceDigest,claimNo:2,answer:{d:task.sourceDigest,c2:c}};
+ const raw={v:28,sourceDigest:task.sourceDigest,claimNo:2,answer:{d:task.sourceDigest,c2:c}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const wrong=structuredClone(raw);Object.assign(wrong.answer.c2.Q.find(q=>q.id==="q0")!,{S:[0,999,0,1000]});
  const before=JSON.stringify(wrong);
@@ -210,7 +212,7 @@ it("keeps the operative actor occurrence distinct from the same name in a condit
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
  const c=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:["q0|0-0:制御器","q1|1-1:制御器が非通電状態の場合","q2|2-2:赤弁","q3|2-2:閉じる"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"closes",J:[["q2"]],a:"q3"},O:[null,null,null,"q1",null],F:null}]});
- const raw={v:27,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:c}};
+ const raw={v:28,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:c}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const wrong=structuredClone(raw);wrong.answer.c1.Q.find(q=>q.id==="q0")!.S=[1,0,1,3];
  expect((await task.schema.validate!(wrong)).success).toBe(false);
@@ -236,17 +238,19 @@ it("validates the complete fictional occurrence-dictionary has/path example and 
  const Q=[{id:"q0",S:[0,0,0,2]},{id:"q1",S:[0,3,0,5]},{id:"q2",S:[0,6,0,8]},{id:"q3",S:[1,0,1,2]},{id:"q4",S:[1,4,1,6]}];
  const has={R:0,m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[["q0"],["q1"]],a:"q2"},O:[null,null,null,null,null],F:null};
  const path={R:1,m:{u:null,x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:["q3"],j:["q4"],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null};
- const raw={v:27,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:{Q,facts:[has,path]}}};
+ const raw={v:28,sourceDigest:task.sourceDigest,claimNo:1,answer:{d:task.sourceDigest,c1:{f0:[groupFact(has)],f1:[groupFact(path)],T:[],Q}}};
  expect((await task.schema.validate!(raw)).success).toBe(true);
- expect(task.system).toContain('Q='+JSON.stringify(Q));expect(task.system).toContain('facts='+JSON.stringify([has,path]));
- const definition=structuredClone(raw);definition.answer.c1.Q=definition.answer.c1.Q.slice(0,3);Object.assign(definition.answer.c1.facts[1].m,{i:["q0"],j:["q1"]});
+ expect(task.system).toContain('Q='+JSON.stringify(Q));expect(task.system).toContain('f0='+JSON.stringify([groupFact(has)]));expect(task.system).toContain('f1='+JSON.stringify([groupFact(path)]));
+ const definition=structuredClone(raw);definition.answer.c1.Q=definition.answer.c1.Q.slice(0,3);Object.assign(definition.answer.c1.f1[0].m,{i:["q0"],j:["q1"]});
  expect((await task.schema.validate!(definition)).success).toBe(false);
- const wrongR=structuredClone(raw);wrongR.answer.c1.facts[1].R=0;
+ const wrongR=structuredClone(raw);Object.assign(wrongR.answer.c1.f1[0],{R:0});
  expect((await task.schema.validate!(wrongR)).success).toBe(false);
+ const wrongGroup=structuredClone(raw);Object.assign(wrongGroup.answer.c1,{f0:[...wrongGroup.answer.c1.f0,...wrongGroup.answer.c1.f1],f1:[]});
+ expect((await task.schema.validate!(wrongGroup)).success).toBe(false);
  const unused=structuredClone(raw);unused.answer.c1.Q.push({id:"q5",S:[1,7,1,9]});
  expect((await task.schema.validate!(unused)).success).toBe(false);
  const schema=task.schema.jsonSchema as {definitions:Record<string,{properties?:Record<string,{description?:string}>;anyOf?:{properties:Record<string,{description?:string}>}[]}>};
- expect(schema.definitions.PriorArtSourceAdditionalFact.properties!.R.description).toContain('m quote');
+ expect(schema.definitions.PriorArtSourceGroupedFact.properties).not.toHaveProperty('R');
  const pathSchema=schema.definitions.PriorArtSourceMeaning.anyOf!.find(x=>x.properties.i)!;
  for(const k of ['i','j','V','B'])expect(pathSchema.properties[k].description).toContain('THIS route occurrence');
  expect(pathSchema.properties.u.description).toContain('THIS action');
@@ -256,7 +260,7 @@ it("shows existing literal route anchors near the target without supplying compl
  const text="冷媒を白管に流し、冷媒を黒管に流す。",f=fictionalInputs();
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const request=JSON.parse(sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0].prompt);
- expect(request.citationClauses.version).toBe(14);
+ expect(request.citationClauses.version).toBe(15);
  expect(request.target.requiredRouteClauses).toEqual([{clause:0,literal:"冷媒を白管に流し、"},{clause:1,literal:"冷媒を黒管に流す。"}]);
  for(const t of request.target.requiredRouteClauses)expect(Object.keys(t).sort()).toEqual(['clause','literal']);
 });
@@ -266,10 +270,10 @@ it("emits all fact references before Q without relaxing exact quotation or unuse
  const f=setup(),task=f.plan.tasks[0];
  const schema=task.schema.jsonSchema as {definitions:Record<string,{properties:Record<string,unknown>;required:string[]}>};
  const claimSchema=schema.definitions.PriorArtSourceDictionaryClaim;
- expect(Object.keys(claimSchema.properties)).toEqual(["facts","t0","Q"]);
- expect(claimSchema.required).toEqual(["facts","t0","Q"]);
+ expect(Object.keys(claimSchema.properties)).toEqual(["f0","f1","f2","T","Q"]);
+ expect(claimSchema.required).toEqual(["f0","f1","f2","T","Q"]);
  const original=f.answers[0].value,own=original.answer.c1;
- const ordered={...original,answer:{d:task.sourceDigest,c1:{facts:own.facts,t0:0,Q:own.Q}}};
+ const ordered={...original,answer:{d:task.sourceDigest,c1:own}};
  const before=JSON.stringify(ordered);
  expect((await task.schema.validate!(ordered)).success).toBe(true);
  const stitched=structuredClone(ordered);Object.assign(stitched.answer.c1.Q[0],{quote:"制御器赤弁"});
@@ -285,4 +289,15 @@ it("keeps exact state J containing the full passive transition instead of a loca
  const fact={kind:"relation",predicate:"is_state",polarity:"positive",polarityProof:null,action,evidence:c.clauses,objectSpans:[[action]],guardSpans:[],guardProof:null,identity:"fictional"};
  expect(()=>assertSourceSemanticReading(c,[fact],sourceFullActionCues(c))).not.toThrow();
  expect(()=>assertSourceSemanticReading(c,[{...fact,objectSpans:[[[0,2]]]}],sourceFullActionCues(c))).toThrow();
+});
+
+
+it("requires all original clause groups and exact T length without accepting old flat answers",async()=>{
+ const f=setup(),raw=f.answers[0].value,task=f.plan.tasks[0];
+ const before=JSON.stringify(raw);
+ for(const change of [(c:Record<string,unknown>)=>{delete c.f0;},(c:Record<string,unknown>)=>{c.f3=[];},(c:Record<string,unknown>)=>{c.T=[];},(c:Record<string,unknown>)=>{c.T=[0,0];},(c:Record<string,unknown>)=>{c.facts=c.f2;},(c:Record<string,unknown>)=>{(c.f2 as Record<string,unknown>[])[0].R=2;}]){
+  const bad=structuredClone(raw);change(bad.answer.c1);expect((await task.schema.validate!(bad)).success).toBe(false);
+ }
+ expect((await task.schema.validate!(raw)).success).toBe(true);expect(JSON.stringify(raw)).toBe(before);
+ expect(task.system).not.toContain("facts is flat");
 });
