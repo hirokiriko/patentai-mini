@@ -1401,7 +1401,7 @@ actions still need the existing semantic/domain checks and independent reading.
 
 ## Source v19 citation accounting and literal states
 
-The active source contract retains clause-qualified exact quotes and explicit
+The v19 source contract retains clause-qualified exact quotes and explicit
 operator proofs. It derives the supporting clause inventory from those declared
 locations and the explicitly selected loop frame. Facts no longer repeat W or T;
 the decoder checks task coverage against each actual predicate, action occurrence
@@ -1417,3 +1417,30 @@ stand in for active opening/closing, maintenance or supply loss. Source and targ
 use the same meaning, quote validation and literal rendering; distinct state
 phrases do not become synonyms. Printed active action phrases remain `executes`.
 Fictional SDK fixtures demonstrate transport only, never real-AI quality.
+
+## Claim extraction v25: exact original quotations
+
+The current per-claim request reads the unchanged original clauses directly.
+It no longer duplicates the target claim as a character-separated coordinate
+table. Each model-authored Q entry has `id`, `quote`, `before` and `after`.
+The complete original claim must contain exactly one verbatim occurrence of
+`before + quote + after`; missing, ambiguous or normalized text is rejected.
+Only after that check may the decoder project the established occurrence into
+the existing internal citation format. The raw model answer remains unchanged.
+Context identifies an occurrence; it contributes no extra quoted-clause coverage.
+
+This replaces the quotation-location representation, including its system,
+input, schema and decoder contract. It retains every required literal-obligation
+key and its link to an actual fact. Digit-only quote IDs, no duplicate/unused
+declarations, the 12-clause and 80-character bounds, complete action/state and
+guard checks, all original reading tasks and independent semantic QA remain.
+The old coordinate and historical quotation decoders remain available for
+historical replay; v24 responses cannot satisfy the v25 request.
+
+Controlled input-only diagnostics localized a provider input refusal to a
+change set in the user payload. They did not identify a particular triggering
+string or establish a provider false positive. The representation change also
+addresses the independently observed problem of model-authored citation ranges
+disagreeing with their quotations. Diagnostic responses are excluded from
+quality acceptance, persistence and deployment. New real-AI results must pass
+the full existing quality gates before any production acceptance.

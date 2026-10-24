@@ -12,8 +12,7 @@ import { SOURCE_CAPACITY } from "./source-capacity";
 import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
 import type { Span } from "./propositions";
-import { compactSourceGridRows, sourceCellRef, SOURCE_GRID_GUIDE } from "./source-citation-grid";
-import { decodeClaimCoordinateQuotes } from "./source-claim-coordinates";
+import { decodeClaimQuotationQuotes } from "./source-claim-quotations";
 import { sourceClaimObligations } from "./source-claim-obligations";
 
 const invalid = () => new ComparisonError("ai_incomplete");
@@ -29,17 +28,17 @@ const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonC
   normalize: Map<string, (raw: Record<string, unknown>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
-  if (line.startsWith("Extract complete")) return line.replace("v22", "v24");
-  if (line.startsWith("Each cN=")) return 'Each cN={Q,facts,t0,t1,...} with exactly the supplied obligation keys. Q entries are {id:"q17",K:[startRow,startColumn,endRow,endColumn]}, selecting inclusive ORIGINAL grid cells in THIS target claim. Do not regenerate quotation text or clause ranges. Every m/O/F quote reference is an exactly declared qID; never an array index. No duplicate IDs/spans or unused declarations. Terms remain 1..4 IDs and <=80 UTF16 original characters.';
-  if (line.startsWith("Fictional clauses")) return 'Fictional target text "赤弁を閉じる。" has cells row0=赤|弁|を|閉|じ|る|。; Q=[{id:"q8",K:[0,0,0,1]},{id:"q3",K:[0,3,0,5]}]. A closes fact uses J=[["q8"]],a="q3". An obligation naming that closing occurrence points to its zero-based facts index, not to a quote ID.';
+  if (line.startsWith("Extract complete")) return line.replace("v22", "v25");
+  if (line.startsWith("Each cN=")) return 'Each cN={Q,facts,t0,t1,...} with exactly the supplied obligation keys. Q entries are {id:"q17",quote,before,after}. Copy quote verbatim from THIS target claim. before and after are immediately adjacent original text; use empty strings when the quote is already unique in the FULL claim, or enough exact context to identify exactly one occurrence. Do not output coordinates or clause ranges in Q. Every m/O/F quote reference is an exactly declared qID; never an array index. No duplicate IDs/spans or unused declarations. Terms remain 1..4 IDs and <=80 UTF16 original characters.';
+  if (line.startsWith("Fictional clauses")) return 'Fictional target text "赤弁を閉じる。": Q=[{id:"q8",quote:"赤弁",before:"",after:""},{id:"q3",quote:"閉じる",before:"",after:""}]. A closes fact uses J=[["q8"]],a="q3". An obligation naming that closing occurrence points to its zero-based facts index, not to a quote ID.';
   return line;
 }).join("\n") + `
-This request extracts ONLY target.claimNo of target.sourceDigest. Return {v:24,sourceDigest,claimNo,answer}.
+This request extracts ONLY target.claimNo of target.sourceDigest. Return {v:25,sourceDigest,claimNo,answer}.
 answer contains d, this cN and ONLY this claim's supplied loopN keys. Preserve original loop IDs.
 Every quote ID matches q[0-9]{1,4}: lowercase q followed by one to four decimal digits ONLY (q0/q17/q9999 allowed; q0a and q10000 forbidden). Declare the exact ID in Q and reuse only that declared ID in m/O/F. IDs are labels, never array positions.
 Each supplied obligation tN is a literal action occurrence, NOT a supplied proposition. Its REQUIRED integer value is the zero-based index of the fact in facts that actually expresses that occurrence. Emit the independent fact with its actor, full action/object and complete guard before assigning the index. A definition fact cannot discharge a different mode occurrence. Paths, O quotes and a task index alone never replace an action. One fact may serve multiple obligations only when it expresses every occurrence. Keep facts in R order; do not duplicate or reorder facts to match task order. Obligations are partial: retain all other meanings too.
 For maintains, a and J must quote the same FULL maintained state including the maintaining verb, not a bare verb or a truncated first conjunct.
-${SOURCE_GRID_GUIDE.replace("Empty [] is whole-claim proof ONLY in operators/frames, never a term.", "Empty coordinates are forbidden; O uses declared quote IDs or null.")}
+Read sourceContext's original clauses in their original order as continuous text. Q quote/before/after must match that unchanged full claim exactly, including spaces, punctuation and repeated words. A context must identify one occurrence; normalized, missing, ambiguous or invented text is rejected. A quote and its supplied context may cover at most 12 consecutive original clauses. Context locates the quote only; it does not add a semantic fact or replace a guard/action quote. O uses declared quote IDs or null.
 sourceContext contains unchanged originals and reference logic for reading context. Other claims are context only;
 their own meanings are extracted in separate requests. Do not copy ancestor facts into this claim or cite another claim.
 Read the entire target claim including all component definitions, conditions and reference tails. All v22 meaning,
@@ -72,22 +71,24 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     });
     if (!own?.properties || keys.some(k => !own.properties![k])) throw new ComparisonError("plan_limit");
     const schema: JSONSchema7 = { type: "object", properties: {
-      v: { type: "integer", enum: [24] }, sourceDigest: { type: "string", enum: [sourceDigest] },
+      v: { type: "integer", enum: [25] }, sourceDigest: { type: "string", enum: [sourceDigest] },
       claimNo: { type: "integer", enum: [claimNo] },
       answer: { type: "object", properties: Object.fromEntries(keys.map(k => [k, own.properties![k]])), required: keys, additionalProperties: false },
     }, required: ["v", "sourceDigest", "claimNo", "answer"], additionalProperties: false, definitions: structuredClone(definitions) };
-    // Fresh v24 coordinates and required occurrence references. Historical
-    // v22/v23 answers are not accepted or repaired through this contract.
+    // Fresh v25 exact quotations and required occurrence references. Historical
+    // answers are not accepted or repaired through this contract.
     const idDescription="Quote ID grammar is exactly q[0-9]{1,4}: lowercase q plus 1..4 decimal digits ONLY. q0/q17/q9999 allowed; q0a/q10000 forbidden. Use only an exactly declared claim-local ID, never an array position.";
     const ownDefinitions=schema.definitions!;
     const ref=ownDefinitions.PriorArtSourceCellQuote as JSONSchema7;
     ref.description=idDescription;
     ownDefinitions.PriorArtSourceDictionaryQuote = { type: "object", properties: {
       id: { type: "string", description: idDescription },
-      K: { type: "array", items: { type: "integer" }, description: "Exactly four inclusive original grid coordinates [startRow,startColumn,endRow,endColumn]." },
-    }, required: ["id", "K"], additionalProperties: false };
+      quote: { type: "string", description: "Nonempty verbatim quote in this full original claim; never paraphrase or normalize." },
+      before: { type: "string", description: "Immediately preceding original text, empty if unnecessary for a unique occurrence." },
+      after: { type: "string", description: "Immediately following original text, empty if unnecessary for a unique occurrence." },
+    }, required: ["id", "quote", "before", "after"], additionalProperties: false };
     const dictionaryClaim=ownDefinitions.PriorArtSourceDictionaryClaim as JSONSchema7;
-    (dictionaryClaim.properties!.Q as JSONSchema7).description=`Original cell selections only. ${idDescription}`;
+    (dictionaryClaim.properties!.Q as JSONSchema7).description=`Exact original quotations with explicit adjacent context identifying one occurrence in the full claim. ${idDescription}`;
     for (const key of obligationKeys) dictionaryClaim.properties![key] = {
       type: "integer", description: `Index in facts expressing literal obligation ${key}; the actual action and meaning are checked.`,
     };
@@ -111,11 +112,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       if (!record(raw.answer)) throw invalid();
       const own = raw.answer[`c${claimNo}`];
       if (!exact(own, ["Q", "facts", ...obligationKeys])) throw invalid();
-      return { ...raw.answer, [`c${claimNo}`]: { Q: decodeClaimCoordinateQuotes(c, own.Q), facts: own.facts } };
+      return { ...raw.answer, [`c${claimNo}`]: { Q: decodeClaimQuotationQuotes(c, own.Q), facts: own.facts } };
     };
     const taskSchema = jsonSchema(schema, { validate: async raw => {
       try {
-        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 24 || raw.sourceDigest !== sourceDigest ||
+        if (!exact(raw, ["v", "sourceDigest", "claimNo", "answer"]) || raw.v !== 25 || raw.sourceDigest !== sourceDigest ||
           raw.claimNo !== claimNo || !exact(raw.answer, keys) || raw.answer.d !== sourceDigest ||
           Buffer.byteLength(JSON.stringify(raw), "utf8") > SOURCE_CAPACITY.wireBytes) throw invalid();
         const answer = normalizeAnswer(raw), declaredClaim = raw.answer[`c${claimNo}`] as Record<string, unknown>;
@@ -170,9 +171,9 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
     tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
-      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 9 },
-        target: { sourceDigest, claimNo, grid: compactSourceGridRows(c.grid),
-          obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, K: sourceCellRef(c.grid, t.span), literal: c.grid.text.slice(...t.span) })) },
+      prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 10 },
+        target: { sourceDigest, claimNo,
+          obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })) },
         sourceContext: { ...transport.sources[sourceIndex],
           referenceLogic: source.source.referenceLogic, scopes: source.scopes } }), schema: taskSchema }));
   }
