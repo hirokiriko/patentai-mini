@@ -12,10 +12,11 @@ export function fictionalQuotationClaim<F>(c:SourceReadingClaim,claim:{Q:unknown
  const labels=sourceIdentifiedQuoteDictionary(c,claim.Q),dict=sourceQuoteDictionary(c,labels.quotes),all=c.clauses.map((_,i)=>i);
  const original=claim.Q as ({id:string}|string)[];
  const Q=labels.quotes.map((q,i)=>{
-  const [start,end]=resolveSourceOrderedQuote(c,q,all),quote=c.grid.text.slice(start,end);
-  const clause=c.clauses.findIndex(([a,b])=>a<=start&&start<b);
-  if(clause<0)throw Error("fictional_fixture_missing_start_clause");
-  return {id:typeof original[i]==="string"?(original[i] as string).split("|")[0]:(original[i] as {id:string}).id,quote,clause};
+  const [start,end]=resolveSourceOrderedQuote(c,q,all);
+  const first=c.clauses.findIndex(([a,b])=>a<=start&&start<b),last=c.clauses.findIndex(([a,b])=>a<end&&end<=b);
+  if(first<0||last<0)throw Error("fictional_fixture_missing_span_clause");
+  const S=[first,Array.from(c.grid.text.slice(c.clauses[first][0],start)).length,last,Array.from(c.grid.text.slice(c.clauses[last][0],end)).length];
+  return {id:typeof original[i]==="string"?(original[i] as string).split("|")[0]:(original[i] as {id:string}).id,S};
  });
  const obligations=sourceClaimObligations(c),bindings:Record<string,number>={};
  claim.facts.forEach((row,at)=>{
@@ -36,5 +37,5 @@ export function fictionalClaimSource(input:FictionalClaimRequest,prepare?:(raw:R
  const reading=sourceReadingClaim(c.claimNo,c.clauses.map(([,text])=>text).join(""));
  const answer=Object.fromEntries(keys.map(k=>[k,source[k]]));
  answer[`c${c.claimNo}`]=fictionalQuotationClaim(reading,answer[`c${c.claimNo}`]);
- return {v:26,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
+ return {v:27,sourceDigest:input.target.sourceDigest,claimNo:input.target.claimNo,answer};
 }
