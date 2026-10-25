@@ -47,7 +47,7 @@ export function sourceClaimObligations(c: SourceReadingClaim): SourceReadingTask
   // definitions, premises and negations remain subject to full original QA.
   for (const m of text.matchAll(/(?:吸熱させ|放熱させ|発熱させ|流し|流す|吸い込ませる)/gu)) {
     const tail = text.slice(m.index + m[0].length);
-    if (!/^(?:[、，]|る?[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ー]*モード)/u.test(tail)) continue;
+    if (!/^(?:[、，]|る?[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ーの]*モード)/u.test(tail)) continue;
     const mode = assertedModeAfter(tail);
     const clause = c.clauses.find(([a, b]) => a <= m.index && b >= m.index + m[0].length);
     const prefix = clause ? text.slice(clause[0], m.index) : "";

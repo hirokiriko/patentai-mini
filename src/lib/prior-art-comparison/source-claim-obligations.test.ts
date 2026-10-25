@@ -44,6 +44,13 @@ it("requires separate active occurrences beside heat and mode-owned paths", () =
  expect(generated).toContainEqual({kind:"executes",literal:"発熱させ"});
 });
 
+it("retains active transfers into numbered modes without admitting a purpose definition",()=>{
+ const tasks=read("制御器により、液を槽に流す第１の運転モードと、槽から源に吸い込ませる第２の運転モードを切り換えて実行する装置において、停止中は表示する。");
+ expect(tasks).toContainEqual({kind:"executes",literal:"流す"});
+ expect(tasks).toContainEqual({kind:"executes",literal:"吸い込ませる"});
+ expect(read("液を槽に流すための弁を備え、第１の運転モードを実行する装置。").some(t=>t.kind==="executes"&&t.literal==="流す")).toBe(false);
+});
+
 it.each([
  "液を槽に流すための弁と、液を吸熱させる夏モードを実行する装置。",
  "液を吸熱させない夏モードである。",

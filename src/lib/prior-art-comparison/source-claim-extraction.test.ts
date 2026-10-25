@@ -394,13 +394,13 @@ it("keeps cross-clause action ranges independent of the fact group and mode-scop
 });
 
 it.each([0,25])("keeps each causative mode action beside heat/paths, including cross-partition actors and guards (%i prefix clauses)",async padding=>{
- const f=fictionalInputs(),r=padding+1,h=r+1,p=r+2,s=r+3,state=r+4;
- const text="制御器により、"+Array.from({length:padding},(_,i)=>`青弁${i}を開く、`).join("")+"液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる夏モードである。赤管は白管に接続された。";
+ const f=fictionalInputs(),r=padding+1,h=r+1,p=r+2,s=r+3,state=r+4,modeName=padding?"第２の運転モード":"夏モード";
+ const text="制御器により、"+Array.from({length:padding},(_,i)=>`青弁${i}を開く、`).join("")+`液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる${modeName}である。赤管は白管に接続された。`;
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),plan=sourceClaimExtractionPlan(chunks),Q:string[]=[];
  const q=(at:number,literal:string,last=at)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${last}:${literal}`);return id;};
- const controller=q(0,"制御器"),mode=q(s,"夏モード"),after=q(r,"液を白弁で減圧した後");
- const proof=q(r,"液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる夏モード",s);
+ const controller=q(0,"制御器"),mode=q(s,modeName),after=q(r,"液を白弁で減圧した後");
+ const proof=q(r,`液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる${modeName}`,s);
  const base=(u:string,g:string[][])=>({u:[u],x:"operation",g:"when",G:g,p:"positive"});
  const operation=(R:number,action:string,afterReduction:boolean)=>{const a=q(R,action);return {R,m:{...base(controller,afterReduction?[[mode],[after]]:[[mode]]),k:"relation",P:"executes",J:[[a]],a},O:[null,null,null,afterReduction?proof:mode,null],F:null};};
  const path=(R:number,origin:string,destination:string)=>({R,m:{...base(mode,[[mode],[after]]),k:"path",i:[q(R,origin)],j:[q(R,destination)],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,proof,null],F:null});
