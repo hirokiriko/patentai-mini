@@ -348,6 +348,12 @@ it.each(["before","after"])("retains both coordinated action operands and their 
  const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),legacy={Q:[after?"q0|1-1:読取装置":"q0|0-0:制御器",`q1|${first}-${first}:青工程`,`q2|${last}-${last}:赤工程を切り換えて実行する`,`q3|${last}-${last}:切り換えて実行する`],facts:[{R:last,m:{u:["q0"],x:after?"capability":"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[["q1"],["q2"]],a:"q3"},O:[null,null,null,null,null],F:null}]};
  const plan=sourceClaimExtractionPlan(chunks),answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(reading,structuredClone(legacy));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
  const assembled=await assembleSourceClaims(plan,answers),expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))},validated=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);expect(validated.success).toBe(true);if(!validated.success)throw validated.error;expect(assembled).toEqual(validated.value);expect(decodeSourcePropositions(chunks,assembled)).toEqual(decodeSourcePropositions(chunks,validated.value));
+ const missingAction=structuredClone(answers[0].value);
+ (missingAction.c1[`f${last}`] as {m:{J:string[][]}}[])[0].m.J=[[`${first}-${first}:青工程`],[`${last}-${last}:赤工程`]];
+ const before=JSON.stringify(missingAction);
+ expect((await plan.tasks[0].schema.validate!(missingAction)).success).toBe(false);
+ expect(JSON.stringify(missingAction)).toBe(before);
+ await expect(assembleSourceClaims(plan,[{...answers[0],value:missingAction},...answers.slice(1)])).rejects.toThrow();
 });
 
 it("preserves explicit continuing actors and the new passive subject without decoder inheritance",async()=>{

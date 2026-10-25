@@ -39,6 +39,7 @@ const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line =
 Extract ONLY target.claimNo of target.sourceDigest. Return {v:34,sourceDigest,claimNo,d,scopes,...loopN,cN}; all fields are at root, with original IDs and no answer wrapper.
 No output Q dictionary or qIDs: cite an exact original literal, optionally a unique outer reference plus exact inner focus.
 T array index i identifies obligation ti; the f-number identifies an original clause, and row is local to that group. Example T[0]="f7:1" selects the second fact in f7 only when it expresses t0. Never use a flattened index. Emit its actor, full action/object and complete guard. Definitions cannot discharge other mode occurrences; paths/O/task indices cannot replace actions. A fact may serve several obligations only if it expresses them all. Keep R order, without duplicates or task-order rearrangement. Obligations are partial: retain all other meanings.
+For EVERY executes, at least one J quote must contain the complete exact a quote at the SAME original occurrence. a is only validation evidence and is removed from the final meaning; operands alone lose the action. For switching, J must retain both operands AND the full switching action, e.g. [["0-0:青工程"],["1-1:赤工程を切り換えて実行する"]], not just the two names. Never rely on a alone to retain a verb.
 For maintains, a and J quote the same FULL compound maintained state including the verb. Fictional "青工程と、赤工程を交替する": executes J=[["0-0:青工程"],["1-1:赤工程を交替する"]], retaining both operands.
 Choose x for EACH assertion, not for the apparatus claim as a whole: capability is a defining property/function or overall apparatus ability; operation is each stated operating-mode action, route, control, startup/transition or duration-bound maintenance. A device claim does not turn its mode operations into capabilities. Retain their explicit scopes and operation context together.
 Paths keep their printed mode in u; controller u belongs to its separate active relation facts. For numeric F, loop u must equal that recognizedLoopRoutes mode, never the controller. Finish EVERY mode through its final printed outlet/return even when not listed in requiredRouteClauses. A return path and switching action in the same clause are distinct meanings; neither substitutes the other. Fictional clauses [[0,"青源から白管を経て黒槽へ流す冬モードと、"],[1,"黒槽から青源へ戻す夏モードを切り換えて実行する読取装置。"]]: emit the summer path u=["1-1:夏モード"], i=["1-1:黒槽"], j=["1-1:青源"], AND a separate executes with u=["1-1:読取装置"] and both mode operands. Never omit the final 青源 because the clause also names a mode and switching action.
@@ -182,6 +183,10 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
           };
           const action = m.k === "relation" ? q(m.a) : null;
           const guard = terms(m.G), objects = m.k === "relation" ? terms(m.J) : [];
+          // The decoder removes a after quotation checks. Generic executes
+          // therefore needs its action in J itself, at the same occurrence.
+          if (m.k === "relation" && m.P === "executes" && (!action ||
+              !objects.some(term => term.some(([start, end]) => start <= action[0] && end >= action[1])))) throw invalid();
           const route = m.k === "path" ? [...(m.i === null ? [] : terms([m.i]).flat()), ...terms(m.V).flat(), ...(m.j === null ? [] : terms([m.j]).flat())] : [];
           sourceMatchedTasks(tasks, m, ids, action, route).forEach(id => completed.add(id));
           const matchedObligations = sourceMatchedTasks(obligations, m, ids, action, route);
