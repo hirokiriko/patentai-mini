@@ -69,7 +69,7 @@ it("permits an OR condition owned only by the second part while the union still 
  const missing=structuredClone(f.answers);const row=missing[1].value.c1.f30 as {s:string|null}[];row[0].s=null;missing[1].value.scopes=[];
  await expect(assembleSourceClaims(f.plan,missing)).rejects.toThrow();
 });
-it("assigns complete recognized loops once to the final part without changing their original IDs or references",()=>{
+it("assigns complete recognized loops once to the final part without changing their original IDs or references",async()=>{
  const f=fictionalInputs(),body="制御器により、"+Array.from({length:24},(_,i)=>`青弁${i+1}を開く、`).join("")+"前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。";
  f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource("【請求項1】装置は信号を保持する。",d.id,d.label));
  const chunks=makePlan(f.inputs,f.selection),source=propositionSourceInput(chunks).sources[0],parts=sourceClaimExtractionPlan(chunks).tasks.filter(t=>t.sourceIndex===0);
@@ -78,7 +78,7 @@ it("assigns complete recognized loops once to the final part without changing th
  expect(prompts[0].target.partition.loopIds).toEqual([]);
  expect(prompts[1].target.partition.loopIds).toEqual(source.recognizedLoopRoutes.map((_,i)=>i));
  for(const[i]of source.recognizedLoopRoutes.entries()){
-  const first=parts[0].schema.jsonSchema,last=parts[1].schema.jsonSchema;
+  const first=await parts[0].schema.jsonSchema,last=await parts[1].schema.jsonSchema;
   expect(first.properties).not.toHaveProperty(`loop${i}`);expect(first.additionalProperties).toBe(false);
   expect(last.required).toContain(`loop${i}`);expect(last.additionalProperties).toBe(false);
  }
