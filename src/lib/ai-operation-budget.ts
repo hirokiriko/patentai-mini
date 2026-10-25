@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { captureAiRequestTiming } from "./ai-request-timing";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
@@ -136,7 +137,13 @@ export class AiOperationBudget {
   }
   wrapFetch(role: Role, transport: typeof fetch = globalThis.fetch): typeof fetch {
     const boundDiagnostic = capturePatentWatchDiagnostic();
+    const boundTiming = captureAiRequestTiming();
     return async (url, init) => {
+      const trace = (boundTiming ?? captureAiRequestTiming())?.(this.consumed[role] + 1);
+      trace?.watch(init?.signal, "caller");
+      trace?.watch(this.managed?.deadline, "managed");
+      trace?.watch(this.comparison?.deadline, "comparison");
+      try {
       const diagnostic = boundDiagnostic ?? capturePatentWatchDiagnostic();
       let observation: DetailObservation | null = null;
       try { observation = diagnostic?.observation() ?? null; } catch { /* optional */ }
@@ -216,9 +223,11 @@ export class AiOperationBudget {
       if (this.managed) {
         this.managedInFlight = true;
         try {
+          trace?.emit("reservation_begin");
           await boundedJournalAck(() => this.managed!.journal.reserve({ ordinal: attempt,
             requestSha256: createHash("sha256").update(init!.body as string).digest("hex"),
             estimatedInputTokens, maximumOutputTokens }), this.managed.deadline);
+          trace?.emit("reservation_ack");
         } catch { throw stop("unknown"); }
         // An ACK does not make an expired or stopped run dispatchable.
         if (this.stopped) throw this.stopped;
@@ -226,6 +235,8 @@ export class AiOperationBudget {
         if (init?.signal?.aborted) throw stop(callerReason());
       }
       const deadline = aiOperationDeadline(requestMilliseconds);
+      trace?.watch(deadline, "request");
+      trace?.emit("request_deadline_armed");
       const signal = AbortSignal.any([deadline, ...(init?.signal ? [init.signal] : []), ...(this.managed ? [this.managed.deadline] : []), ...(this.comparison ? [this.comparison.deadline] : [])]);
       const abortReason = (): PatentWatchStopReason => deadline.aborted || this.managed?.deadline.aborted || this.comparison?.deadline.aborted ? "timeout" : callerReason();
       let abort: (() => void) | undefined;
@@ -246,15 +257,19 @@ export class AiOperationBudget {
       try {
         let response: Response;
         try { observation?.dispatch(attempt); } catch { /* optional */ }
+        trace?.emit("transport_begin");
         try { response = await Promise.race([transport(url, { ...init, signal, redirect: "error" }), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "transport_error"); }
+        trace?.emit("headers_received");
         if (this.stopped) throw this.stopped;
         try { observation?.phase("validating_response"); } catch { /* optional */ }
         if (!response.ok) throw stop("upstream_http_error");
         let result;
         try { observation?.phase("reading_response"); } catch { /* optional */ }
+        trace?.emit("body_begin");
         try { result = await Promise.race([response.clone().json(), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "invalid_response"); }
+        trace?.emit("body_complete");
         if (this.stopped) throw this.stopped;
         try { observation?.phase("validating_response"); } catch { /* optional */ }
         const usage = result?.usage;
@@ -281,6 +296,7 @@ export class AiOperationBudget {
         if (abort) signal.removeEventListener("abort", abort);
         this.managedInFlight = false;
       }
+      } finally { trace?.close(); }
     };
   }
 }
