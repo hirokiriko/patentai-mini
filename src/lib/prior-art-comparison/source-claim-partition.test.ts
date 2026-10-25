@@ -72,6 +72,32 @@ it("permits an OR condition owned only by the third part while the union still r
  const missing=structuredClone(f.answers);const row=missing[2].value.c1.f30 as {s:string|null}[];row[0].s=null;missing[2].value.scopes=[];
  await expect(assembleSourceClaims(f.plan,missing)).rejects.toThrow();
 });
+it("retains a later apparatus possessor across partitions without borrowing its controller",async()=>{
+ const clauses=["制御器により、",...Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`),"冬モードを実行する検査装置。"];
+ clauses[9]="白管と、";clauses[10]="黒管と、";clauses[11]="青管を備え、";
+ const Q=["q0|0-0:制御器","q1|30-30:冬モード","q2|30-30:検査装置"],facts:Record<string,unknown>[]=[];
+ const q=(at:number,text:string)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${at}:${text}`);return id;};
+ for(let i=1;i<30;i++){
+  if(i>=9&&i<=11){
+   if(i===11)facts.push({R:11,m:{u:["q2"],x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[[q(9,"白管")],[q(10,"黒管")],[q(11,"青管")]],a:q(11,"備え")},O:[null,null,null,null,null],F:null});
+   continue;
+  }
+  facts.push({R:i,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"opens",J:[[q(i,`青弁${i}`)]],a:q(i,"開く")},O:[null,null,null,"q1",null],F:null});
+ }
+ facts.push({R:30,m:{u:["q2"],x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"executes",J:[[q(30,"冬モードを実行する")]],a:q(30,"実行する")},O:[null,null,null,null,null],F:null});
+ const f=fixture(clauses.join(""),{Q,facts});await equivalent(f);
+ const second=JSON.parse(f.plan.tasks[1].prompt),third=JSON.parse(f.plan.tasks[2].prompt);
+ expect(second.target.partition.clauseIds).toContain(11);expect(second.target.partition.clauseIds).not.toContain(30);
+ expect(third.target.partition.clauseIds).toContain(30);
+ const rows=f.answers[1].value.c1.possessions as {R:number;m:{u:string[]}}[];
+ expect(rows[0]).toMatchObject({R:11,m:{u:["30-30:検査装置"]}});
+ const result=await assembleSourceClaims(f.plan,f.answers);
+ for(const source of result.sources){
+  const possession=source.facts.find(x=>x.meaning.kind==="relation"&&x.meaning.predicate==="has")!;
+  expect(possession.meaning).toMatchObject({subject:"検査装置",objects:["白管","黒管","青管"]});
+  expect(source.facts.filter(x=>x.meaning.kind==="relation"&&x.meaning.predicate==="opens").every(x=>x.meaning.subject==="制御器")).toBe(true);
+ }
+});
 it.each([12,24])("assigns complete loops once by their original route start with %s prefix clauses",async prefix=>{
  const f=fictionalInputs(),body="制御器により、"+Array.from({length:prefix},(_,i)=>`青弁${i+1}を開く、`).join("")+"前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、"+Array.from({length:24-prefix},(_,i)=>`赤弁${i+1}を閉じる、`).join("")+"別経路を実行する第２の運転モードを切り換える。";
  f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource("【請求項1】装置は信号を保持する。",d.id,d.label));
