@@ -377,6 +377,22 @@ it("preserves explicit continuing actors and the new passive subject without dec
  expect(decodeSourcePropositions(chunks,actual)).toEqual(decodeSourcePropositions(chunks,validated.value));
 });
 
+it("keeps cross-clause action ranges independent of the fact group and mode-scoped controller",async()=>{
+ const f=fictionalInputs(),text="制御器により、青板を、研磨材で研磨する冬モードと、青板を、布で拭く夏モード。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),plan=sourceClaimExtractionPlan(chunks);
+ const legacy={Q:["q0|0-0:制御器","q1|1-2:青板を、研磨材で研磨する","q2|2-2:研磨する","q3|2-2:冬モード","q4|3-4:青板を、布で拭く","q5|4-4:拭く","q6|4-4:夏モード"],facts:[
+  {R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q3"]],p:"positive",k:"relation",P:"executes",J:[["q1"]],a:"q2"},O:[null,null,null,"q3",null],F:null},
+  {R:4,m:{u:["q0"],x:"operation",g:"when",G:[["q6"]],p:"positive",k:"relation",P:"executes",J:[["q4"]],a:"q5"},O:[null,null,null,"q6",null],F:null}]};
+ const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(reading,structuredClone(legacy));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const before=JSON.stringify(answers),actual=await assembleSourceClaims(plan,answers),expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))},checked=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);
+ expect(checked.success).toBe(true);if(!checked.success)throw checked.error;expect(actual).toEqual(checked.value);expect(JSON.stringify(answers)).toBe(before);
+ for(const [group,ref]of [["f2","2-2:青板を、研磨材で研磨する"],["f4","4-4:青板を、布で拭く"]]){
+  const bad=structuredClone(answers[0].value);(bad.c1[group] as {m:{J:string[][]}}[])[0].m.J=[[ref]];const raw=JSON.stringify(bad);
+  expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(raw);
+ }
+});
+
 it("preserves scattered possession heads and their separate function, splitting only the actual support union",async()=>{
  const f=fictionalInputs(),members=["青センサ","乙部材","丙部材","丁部材","戊部材","己部材","庚部材","辛部材","壬部材","癸部材","子部材","丑部材","制御器"];
  const text="温度を検出する"+members.join("と、")+"を備える。";
