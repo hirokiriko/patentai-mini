@@ -72,7 +72,11 @@ it("assembles a complete balanced fictional answer identically to the strict who
  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${body}`,d.id,"架空"));
  const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks),reading=sourceReadingClaim(1,body),input=propositionSourceInput(chunks);
  const Q:string[]=[],facts:Record<string,unknown>[]=[],quotes=new Map<string,string>(),q=(id:number,text:string,last=id)=>{const location=`${id}-${last}:${text}`,prior=quotes.get(location);if(prior)return prior;const key=`q${Q.length}`;Q.push(`${key}|${location}`);quotes.set(location,key);return key;};
- const controller=q(13,"該制御器"),mode=q(20,"第１の運転モード"),apparatus=q(30,"検査装置"),mode2=q(30,"第２の運転モード"),after=q(17,"その気体を白弁で減圧した後"),guard=q(17,"その気体を白弁で減圧した後、青器にて吸熱させ、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モード",20);
+ const controller=q(13,"該制御器"),mode=q(20,"第１の運転モード"),apparatus=q(30,"検査装置"),mode2=q(30,"第２の運転モード"),after=q(17,"その気体を白弁で減圧した後");
+ // Hand-authored fictional meanings must retain causal conditions too. This
+ // fixture is not an adapter for modifying or adopting any provider response.
+ const cause=[[q(14,"前記第１の開閉弁を閉じ")],[q(15,"前記第２の開閉弁を開くことで")]],modeGuard=[[mode],...cause];
+ const guard=q(14,clauses().slice(14,21).join("").replace(/と、$/u,""),20);
  const relation=(R:number,u:string|null,P:string,J:string[][],a:string,G:string[][]=[],proof:string|null=null,x="operation")=>({R,m:{u:u===null?null:[u],x,g:G.length?"when":"unconditional",G,p:"positive",k:"relation",P,J,a},O:[null,null,null,proof,null],F:null});
  for(let i=0;i<9;i++)facts.push(relation(i,null,"opens",[[q(i,`青弁${i+1}`)]],q(i,"開く")));
  facts.push(relation(11,q(11,"第２の開閉弁"),"executes",[[q(10,"前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流す",11)]],q(11,"流す"),[],null,"capability"));
@@ -81,17 +85,17 @@ it("assembles a complete balanced fictional answer identically to the strict who
  facts.push(relation(15,controller,"opens",[[q(15,"前記第２の開閉弁")]],q(15,"開く"),[[mode]],mode));
  for(const[i,action]of [[16,"流し"],[17,"減圧した"],[19,"流し"],[20,"吸い込ませる"]]as const){
   const phrase=clauses()[i].replace(/[、，]$/u,"").replace(/後$/u,"").replace(/第１の運転モードと$/u,"");
-  facts.push(relation(i,controller,"executes",[[q(i,phrase)]],q(i,action),[[mode]],mode));
+  facts.push(relation(i,controller,"executes",[[q(i,phrase)]],q(i,action),i>17?[...modeGuard,[after]]:modeGuard,guard));
  }
- facts.push(relation(18,mode,"absorbs_heat",[[q(18,"青器")]],q(18,"吸熱させ"),[[mode],[after]],guard));
- facts.push(relation(18,controller,"executes",[[q(18,"青器にて吸熱させ")]],q(18,"吸熱させ"),[[mode],[after]],guard));
- facts.push({R:19,m:{u:[mode],x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:[q(19,"前記分岐器")],j:[q(20,"前記送出器")],V:[[q(19,"前記蓄積器")]],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null});
+ facts.push(relation(18,mode,"absorbs_heat",[[q(18,"青器")]],q(18,"吸熱させ"),[...modeGuard,[after]],guard));
+ facts.push(relation(18,controller,"executes",[[q(18,"青器にて吸熱させ")]],q(18,"吸熱させ"),[...modeGuard,[after]],guard));
+ facts.push({R:19,m:{u:[mode],x:"operation",g:"when",G:[...modeGuard,[after]],p:"positive",k:"path",i:[q(19,"前記分岐器")],j:[q(20,"前記送出器")],V:[[q(19,"前記蓄積器")]],B:[],e:"whole",r:"route"},O:[null,null,null,guard,null],F:null});
  for(let i=21;i<30;i++)facts.push(relation(i,controller,"closes",[[q(i,`赤弁${i-20}`)]],q(i,"閉じる"),[[mode2]],mode2));
  facts.push(relation(30,apparatus,"executes",[[mode],[q(30,"第２の運転モードを切り換えて実行する")]],q(30,"切り換えて実行する"),[],null,"capability"));
  facts.push(relation(31,apparatus,"executes",[[q(31,"信号を保持する")]],q(31,"保持する"),[],null,"capability"));
  facts.sort((a,b)=>Number(a.R)-Number(b.R));
  const frame=input.sources[0].recognizedLoopRoutes[0];expect(frame).toBeDefined();
- const loop={n:1,b:{a:frame.basisParts[0],z:frame.basisParts[1]},R:20,m:{u:[mode],x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:[q(16,"前記送出器")],j:[q(20,"前記送出器")],V:[[q(16,"前記混合器")],[q(17,"白弁")],[q(18,"青器")],[q(19,"前記分岐器")],[q(19,"前記蓄積器")]],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:0};
+ const loop={n:1,b:{a:frame.basisParts[0],z:frame.basisParts[1]},R:20,m:{u:[mode],x:"operation",g:"when",G:modeGuard,p:"positive",k:"path",i:[q(16,"前記送出器")],j:[q(20,"前記送出器")],V:[[q(16,"前記混合器")],[q(17,"白弁")],[q(18,"青器")],[q(19,"前記分岐器")],[q(19,"前記蓄積器")]],B:[],e:"whole",r:"route"},O:[null,null,null,guard,null],F:0};
  const legacy={Q,facts};let projectedLoop:unknown;
  const whole=fictionalQuotationClaim(reading,legacy,project=>{projectedLoop=project(loop);});
  const answers=plan.tasks.map(task=>{
@@ -105,6 +109,12 @@ it("assembles a complete balanced fictional answer identically to the strict who
  expect(expected.success).toBe(true);if(!expected.success)throw expected.error;
  for(const[i,task]of plan.tasks.entries())expect((await task.schema.validate!(answers[i].value)).success).toBe(true);
  const assembled=await assembleSourceClaims(plan,answers);expect(decodeSourcePropositions(chunks,assembled)).toEqual(decodeSourcePropositions(chunks,expected.value));expect(JSON.stringify(answers)).toBe(before);
+ const missingCause=structuredClone(answers);
+ for(const answer of missingCause)for(const s of answer.value.scopes){const scope=s as {G:string[][]};scope.G=scope.G.filter(term=>!term.some(quote=>/^(?:14|15)-(?:14|15):/u.test(quote)));}
+ const missingBefore=JSON.stringify(missingCause);
+ expect((await plan.tasks[1].schema.validate!(missingCause[1].value)).success).toBe(false);
+ await expect(assembleSourceClaims(plan,missingCause)).rejects.toThrow();
+ expect(JSON.stringify(missingCause)).toBe(missingBefore);
  const lost=structuredClone(answers);lost[0].value.c1.possessions=[];await expect(assembleSourceClaims(plan,lost)).rejects.toThrow();
  const duplicate=structuredClone(answers);duplicate[1].value.c1.possessions=structuredClone(answers[0].value.c1.possessions);expect((await plan.tasks[1].schema.validate!(duplicate[1].value)).success).toBe(false);await expect(assembleSourceClaims(plan,duplicate)).rejects.toThrow();
  await expect(assembleSourceClaims(plan,answers.slice(1))).rejects.toThrow();
