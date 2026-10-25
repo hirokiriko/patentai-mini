@@ -45,7 +45,7 @@ it("uses one consistent readable quote contract while retaining literal obligati
   expect(request.target).not.toHaveProperty("grid");
   expect(request.target).not.toHaveProperty("quoteSource");
   expect(request.sourceContext.source.claims[0].clauses.map(([,text]:[number,string])=>text).join("")).toBe("制御器は、非通電状態の場合、赤弁を閉じる。");
-  expect(request.target.obligations).toEqual([{key:"t0",clause:2,literal:"閉じる"}]);
+  expect(request.target.obligations).toEqual([{key:"t0",clause:2,predicate:"closes",literal:"閉じる"}]);
   expect(task.system).not.toContain("startRow,startColumn,endRow,endColumn");
   expect(f.answers[i].value.c1).not.toHaveProperty("Q");
   expect(setupFacts(f.answers[i].value.c1)[0].m.a).toBe("2-2:閉じる");
@@ -390,6 +390,47 @@ it("keeps cross-clause action ranges independent of the fact group and mode-scop
  for(const [group,ref]of [["f2","2-2:青板を、研磨材で研磨する"],["f4","4-4:青板を、布で拭く"]]){
   const bad=structuredClone(answers[0].value);(bad.c1[group] as {m:{J:string[][]}}[])[0].m.J=[[ref]];const raw=JSON.stringify(bad);
   expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(raw);
+ }
+});
+
+it.each([0,25])("keeps each causative mode action beside heat/paths, including cross-partition actors and guards (%i prefix clauses)",async padding=>{
+ const f=fictionalInputs(),r=padding+1,h=r+1,p=r+2,s=r+3,state=r+4;
+ const text="制御器により、"+Array.from({length:padding},(_,i)=>`青弁${i}を開く、`).join("")+"液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる夏モードである。赤管は白管に接続された。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),reading=sourceReadingClaim(1,text),plan=sourceClaimExtractionPlan(chunks),Q:string[]=[];
+ const q=(at:number,literal:string,last=at)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${last}:${literal}`);return id;};
+ const controller=q(0,"制御器"),mode=q(s,"夏モード"),after=q(r,"液を白弁で減圧した後");
+ const proof=q(r,"液を白弁で減圧した後、液を白吸熱器にて吸熱させ、液を槽に流し、槽から源に吸い込ませる夏モード",s);
+ const base=(u:string,g:string[][])=>({u:[u],x:"operation",g:"when",G:g,p:"positive"});
+ const operation=(R:number,action:string,afterReduction:boolean)=>{const a=q(R,action);return {R,m:{...base(controller,afterReduction?[[mode],[after]]:[[mode]]),k:"relation",P:"executes",J:[[a]],a},O:[null,null,null,afterReduction?proof:mode,null],F:null};};
+ const path=(R:number,origin:string,destination:string)=>({R,m:{...base(mode,[[mode],[after]]),k:"path",i:[q(R,origin)],j:[q(R,destination)],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,proof,null],F:null});
+ const facts=[
+  ...Array.from({length:padding},(_,i)=>({R:i+1,m:{...base(controller,[[mode]]),k:"relation",P:"opens",J:[[q(i+1,`青弁${i}`)]],a:q(i+1,"開く")},O:[null,null,null,mode,null],F:null})),
+  operation(r,"液を白弁で減圧した",false),
+  {R:h,m:{...base(mode,[[mode],[after]]),k:"relation",P:"absorbs_heat",J:[[q(h,"白吸熱器")]],a:q(h,"吸熱させ")},O:[null,null,null,proof,null],F:null},operation(h,"液を白吸熱器にて吸熱させ",true),
+  path(p,"液","槽"),operation(p,"液を槽に流し",true),path(s,"槽","源"),operation(s,"槽から源に吸い込ませる",true),
+  {R:state,m:{u:[q(state,"赤管")],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"is_state",J:[[q(state,"白管に接続された")]],a:q(state,"接続された")},O:[null,null,null,null,null],F:null},
+ ];
+ const legacy={Q,facts},whole=fictionalQuotationClaim(reading,structuredClone(legacy)),allScopes=fictionalScopesFor(whole) as {id:string}[];
+ const answers=plan.tasks.map(task=>{
+  const request=JSON.parse(task.prompt),ids:number[]=request.target.partition?.clauseIds??reading.clauses.map((_,i)=>i);
+  const c1={possessions:[],sets:[],...Object.fromEntries(ids.map(id=>[`f${id}`,structuredClone(whole[`f${id}`])])),T:request.target.obligations.map((o:{key:string})=>whole.T[Number(o.key.slice(1))])};
+  const used=new Set(ids.flatMap(id=>(c1[`f${id}` as keyof typeof c1] as unknown as {s:string|null}[]).map(row=>row.s)));
+  return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:allScopes.filter(scope=>used.has(scope.id)),c1}};
+ });
+ expect(plan.tasks).toHaveLength(padding?9:3);
+ const before=JSON.stringify(answers),actual=await assembleSourceClaims(plan,answers);
+ const expected={v:22,s:propositionSourceInput(chunks).sources.map(source=>({d:source.sourceDigest,c1:structuredClone(legacy)}))};
+ const checked=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);expect(checked.success).toBe(true);if(!checked.success)throw checked.error;
+ expect(actual).toEqual(checked.value);expect(JSON.stringify(answers)).toBe(before);
+ for(const clause of [h,p,s]){
+  const index=plan.tasks.findIndex(t=>JSON.parse(t.prompt).target.obligations.some((o:{clause:number;predicate:string})=>o.clause===clause&&o.predicate==="executes"));
+  const task=plan.tasks[index],bad=structuredClone(answers[index].value),key=`f${clause}`;
+  (bad.c1 as Record<string,unknown>)[key]=(bad.c1 as Record<string,{m:{P?:string}}[]>)[key].filter(row=>row.m.P!=="executes");
+  // Try to credit the remaining heat/path row for the missing independent action.
+  bad.c1.T=bad.c1.T.map((address:string)=>address===`${key}:1`?`${key}:0`:address);
+  const raw=JSON.stringify(bad);expect((await task.schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(raw);
+  await expect(assembleSourceClaims(plan,answers.map((answer,i)=>i===index?{...answer,value:bad}:answer))).rejects.toThrow();
  }
 });
 
