@@ -72,11 +72,35 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const claimNo = claim.claimNo, sourceDigest = source.sourceDigest;
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
     const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
-    // Limit extraction responsibility, never its source context. Three bounded
-    // parts keep original IDs and may cite across every boundary. This is a
-    // workload hypothesis, not a timeout or semantic-quality guarantee.
+    // Limit responsibility, never source context. A small, unambiguous terminal
+    // possession declaration immediately before its named controller starts can
+    // stay with the preceding definitions. This only reallocates original IDs;
+    // it derives no meaning, and its workload benefit requires real validation.
     const partitions=c.clauses.length>=30&&allObligations.length>=20
       ?Array.from({length:3},(_,i)=>allClauseIds.slice(Math.ceil(i*c.clauses.length/3),Math.ceil((i+1)*c.clauses.length/3))):[allClauseIds];
+    if(partitions.length===3){
+      const firstEnd=partitions[1][0],secondEnd=partitions[2][0];
+      const loopStarts=source.recognizedLoopRoutes.filter(r=>r.claimNo===claimNo)
+        .map(r=>c.clauses.findIndex(([a,b])=>a<=r.route[0]&&r.route[0]<b));
+      const firstLoop=loopStarts.length?Math.min(...loopStarts):-1;
+      const declaration=/^(?:前記|当該|該)?([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]{1,80})を(?:備え|有し)[、，]$/u;
+      const candidates=partitions[1].filter(id=>{
+        const named=declaration.exec(c.grid.text.slice(...c.clauses[id]));
+        if(!named||id+1>=secondEnd)return false;
+        const next=c.grid.text.slice(...c.clauses[id+1]);
+        return ['該','前記','当該'].some(prefix=>next===`${prefix}${named[1]}により、`||next===`${prefix}${named[1]}により，`);
+      });
+      if(candidates.length===1){
+        const boundary=candidates[0]+1,coordinate=c.clauses[boundary][0];
+        // Move only a short prefix; never cross a route start or an action's
+        // literal obligation. Other declarations/control syntax keep thirds.
+        if(firstLoop>=boundary&&boundary-firstEnd<=Math.floor(partitions[1].length/3)&&
+            !allObligations.some(t=>t.span[0]<coordinate&&coordinate<t.span[1])){
+          partitions[0]=allClauseIds.slice(0,boundary);
+          partitions[1]=allClauseIds.slice(boundary,secondEnd);
+        }
+      }
+    }
     for(const [partIndex,clauseIds]of partitions.entries()){
     const split=partitions.length>1, taskId=`${sourceDigest}:${claimNo}${split?`:part${partIndex+1}of${partitions.length}`:""}`;
     const obligationIndices=allObligations.flatMap((t,i)=>clauseIds.includes(t.clause)?[i]:[]);
