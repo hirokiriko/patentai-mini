@@ -25,6 +25,9 @@ function fixture(text:string,legacy:{Q:string[];facts:Record<string,unknown>[]})
 }
 async function equivalent(f:ReturnType<typeof fixture>){
  expect(f.plan.tasks).toHaveLength(6);const before=JSON.stringify(f.answers);
+ const second=JSON.parse(f.plan.tasks[1].prompt);expect(second.target.obligations[0].key).not.toBe("t0");
+ const schema=await f.plan.tasks[1].schema.jsonSchema;
+ expect(JSON.stringify(schema.definitions)).toContain("T[i] addresses target.obligations[i]");
  for(const[i,task]of f.plan.tasks.entries())expect((await task.schema.validate!(f.answers[i].value)).success).toBe(true);
  const expected={v:22,s:propositionSourceInput(f.chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(f.legacy)}))};
  const checked=await sourceIdentifiedPropositionModelSchemaFor(f.chunks).validate!(expected);expect(checked.success).toBe(true);if(!checked.success)throw checked.error;
