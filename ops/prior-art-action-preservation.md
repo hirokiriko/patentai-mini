@@ -29,19 +29,28 @@ rejects incorrectly narrowed citation ranges without modifying raw answers.
 ## Bounded extraction partitions
 
 Claims with at least 30 original clauses and 20 explicit action obligations
-use two fixed, contiguous extraction responsibilities. Both requests retain the
+use three fixed, contiguous extraction responsibilities. All requests retain the
 unchanged complete source, references, clause IDs and source digest. Group and
 possession/set ownership follows original clause R; complete recognized loops
-belong to the final part. Each part cites its own full actors and conditions,
+belong to the part containing their unchanged route-start coordinate. Each part
+cites its own full actors and conditions,
 including references across the boundary. Original obligation IDs are retained.
 
 Local scope projection and literal span interning are structural operations;
 they do not create or repair meaning. All parts are required exactly once, and
 the combined result still passes the existing full-source schema and decoder.
 An incomplete part cannot produce a comparison, saved result or accepted QA.
-The original 19-claim limit remains; at most 22 source requests are admitted.
+The original 19-claim limit remains; at most 25 source requests are admitted.
 Request timeouts, operation time ceilings and automatic retry policy remain
 unchanged. A finite real run must independently fit its measured request costs,
 send counts and all original deadlines before dispatch. Quality improvement is
 unproven until actual full-source QA passes.
 
+
+Three parts reduce each request's owned fact groups and obligations; they do not
+reduce the common original context or raise the 270-second request deadline.
+This is an unconfirmed latency hypothesis. Waiting for HTTP headers does not
+prove which provider-side stage was slow. No retry is admitted merely because
+a local timeout ended. Historical two-part audit records remain readable, but
+changed task IDs or request bodies cannot reuse their old answers. A changed
+roster requires fresh finite funding, deadline admission and actual source QA.

@@ -399,7 +399,7 @@ it("partitions complex claims with common full context and accepts only their co
  const reading=sourceReadingClaim(1,text),chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
  const legacy={Q:["q0|0-0:制御器","q1|30-30:冬モード",...Array.from({length:29},(_,i)=>[`q${2+i*2}|${i+1}-${i+1}:青弁${i+1}`,`q${3+i*2}|${i+1}-${i+1}:開く`]).flat()],facts:Array.from({length:29},(_,i)=>({R:i+1,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"opens",J:[[`q${2+i*2}`]],a:`q${3+i*2}`},O:[null,null,null,"q1",null],F:null}))};
  const whole=fictionalQuotationClaim(reading,structuredClone(legacy));
- expect(plan.tasks).toHaveLength(6);
+ expect(plan.tasks).toHaveLength(9);
  const answers=plan.tasks.map(task=>{
   const p=JSON.parse(task.prompt),ids=p.target.partition.clauseIds as number[];
   const c1={possessions:[],sets:[],...Object.fromEntries(ids.map(id=>[`f${id}`,structuredClone(whole[`f${id}`])])),T:p.target.obligations.map((o:{key:string})=>whole.T[Number(o.key.slice(1))])};

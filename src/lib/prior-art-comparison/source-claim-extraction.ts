@@ -69,17 +69,20 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const claimNo = claim.claimNo, sourceDigest = source.sourceDigest;
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
     const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
-    // Limit extraction responsibility, never its source context. Both halves
-    // keep original IDs and may cite subjects/conditions across the boundary.
+    // Limit extraction responsibility, never its source context. Three bounded
+    // parts keep original IDs and may cite across every boundary. This is a
+    // workload hypothesis, not a timeout or semantic-quality guarantee.
     const partitions=c.clauses.length>=30&&allObligations.length>=20
-      ?[allClauseIds.slice(0,Math.ceil(c.clauses.length/2)),allClauseIds.slice(Math.ceil(c.clauses.length/2))]:[allClauseIds];
+      ?Array.from({length:3},(_,i)=>allClauseIds.slice(Math.ceil(i*c.clauses.length/3),Math.ceil((i+1)*c.clauses.length/3))):[allClauseIds];
     for(const [partIndex,clauseIds]of partitions.entries()){
     const split=partitions.length>1, taskId=`${sourceDigest}:${claimNo}${split?`:part${partIndex+1}of${partitions.length}`:""}`;
     const obligationIndices=allObligations.flatMap((t,i)=>clauseIds.includes(t.clause)?[i]:[]);
     const obligations=obligationIndices.map(i=>allObligations[i]),obligationKeys=obligationIndices.map(i=>`t${i}`);
     const groupKeys=clauseIds.map(i=>`f${i}`);
-    // Whole recognized loops belong to the final half, even across its edge.
-    const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo && partIndex===partitions.length-1 ? [id] : []);
+    // Assign each complete loop once by its unchanged route-start coordinate.
+    // Its full route, control and exclusion evidence can cross either edge.
+    const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo &&
+      clauseIds.some(i=>c.clauses[i][0]<=r.route[0]&&r.route[0]<c.clauses[i][1]) ? [id] : []);
     // Preserve batch-global loop identities; direct references have no forward dictionary.
     const keys = ["d", "scopes", ...loops.map(id => `loop${id}`), `c${claimNo}`];
     // Reuse the provider's complete fact/quote definitions without an extra

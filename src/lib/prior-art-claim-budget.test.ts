@@ -11,18 +11,18 @@ describe("finite per-claim comparison scope (fictional transport only)",()=>{
   await withPriorArtClaimComparisonBudget(19,async()=>{const send=boundedAzureFetch("normal");for(let n=0;n<19;n++)await send(url,request());if(!diagnostic)await send(url,request("compare"));await send(url,request("review"));await expect(send(url,request("review"))).rejects.toThrow("ai_operation_stopped");},diagnostic);
   expect(transport).toHaveBeenCalledTimes(diagnostic?20:21);expect(AbortSignal.timeout).toHaveBeenNthCalledWith(1,19*270000+(diagnostic?1:2)*210000+30000+(diagnostic?900000:0));
  });
- it.each([0,-1,23,1.5])("rejects invalid claim count%s before transport",n=>{
+ it.each([0,-1,26,1.5])("rejects invalid claim count%s before transport",n=>{
   const transport=vi.fn<typeof fetch>();vi.stubGlobal("fetch",transport);expect(()=>withPriorArtClaimComparisonBudget(n,async()=>undefined)).toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
  });
- it.each([false,true])("admits22 partition requests without extending the existing phase deadline, diagnostic=%s",async diagnostic=>{
+ it.each([false,true])("admits25 partition requests without extending the existing phase deadline, diagnostic=%s",async diagnostic=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
-  await withPriorArtClaimComparisonBudget(22,async deadline=>{
-   const send=boundedAzureFetch("normal");for(let n=0;n<22;n++)await send(url,request());
+  await withPriorArtClaimComparisonBudget(25,async deadline=>{
+   const send=boundedAzureFetch("normal");for(let n=0;n<25;n++)await send(url,request());
    await vi.advanceTimersByTimeAsync(diagnostic?6_270_000:5_580_000);
    expect(deadline.aborted).toBe(true);
    await expect(send(url,request(diagnostic?"review":"compare"))).rejects.toThrow("ai_operation_stopped");
   },diagnostic);
-  expect(transport).toHaveBeenCalledTimes(22);
+  expect(transport).toHaveBeenCalledTimes(25);
   expect(AbortSignal.timeout).toHaveBeenNthCalledWith(1,diagnostic?6_270_000:5_580_000);
  });
  it.each(["compare","review"])("rejects premature%s and all later sends",async task=>{

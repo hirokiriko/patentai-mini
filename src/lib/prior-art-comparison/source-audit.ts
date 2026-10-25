@@ -11,6 +11,11 @@ export type SourceAudit = { version: 1; operationId: string; inputDigest: string
   auditDigest: string };
 export type SourceAuditSink = (audit: SourceAudit) => Promise<void>;
 const invalid = () => new ComparisonError("save_unconfirmed");
+// Keep historical two-part audits readable; new three-part rosters remain exact.
+const partition = (id:string) => {
+  const m=/:part([1-3])of([23])$/.exec(id);
+  return m&&Number(m[1])<=Number(m[2])?{index:Number(m[1]),count:Number(m[2])}:null;
+};
 export function sourceAudit(operationId: string, inputDigest: string, tasks: readonly SourceAuditTask[],
   answers: SourceAudit["answers"], failure?: SourceAudit["failure"]): SourceAudit {
   const value = { version: 1 as const, operationId, inputDigest, tasks: tasks.map(({id,sourceIndex,sourceDigest,claimNo}) => ({id,sourceIndex,sourceDigest,claimNo})),
@@ -25,16 +30,17 @@ export function validateSourceAudit(raw: unknown, operationId: string, inputDige
         a.version !== 1 || a.operationId !== operationId || a.inputDigest !== inputDigest || !/^[a-f0-9]{64}$/.test(inputDigest) ||
         !Array.isArray(a.tasks) || !a.tasks.length || a.tasks.length > LIMITS.sourceRequests || !Array.isArray(a.answers) || a.answers.length > a.tasks.length) throw invalid();
     if (new Set(a.tasks.map(t => t.id)).size !== a.tasks.length || a.tasks.some(t => !t || Object.keys(t).sort().join() !== "claimNo,id,sourceDigest,sourceIndex" ||
-        !/^[a-f0-9]{64}$/.test(t.sourceDigest) || typeof t.id !== "string" || ![`${t.sourceDigest}:${t.claimNo}`,`${t.sourceDigest}:${t.claimNo}:part1of2`,`${t.sourceDigest}:${t.claimNo}:part2of2`].includes(t.id) || !Number.isSafeInteger(t.sourceIndex) || t.sourceIndex < 0 || t.sourceIndex > 3 || !Number.isSafeInteger(t.claimNo) || t.claimNo < 1)) throw invalid();
+        !/^[a-f0-9]{64}$/.test(t.sourceDigest) || typeof t.id !== "string" || !(t.id===`${t.sourceDigest}:${t.claimNo}`||[2,3].some(count=>Array.from({length:count},(_,i)=>`${t.sourceDigest}:${t.claimNo}:part${i+1}of${count}`).includes(t.id))) || !Number.isSafeInteger(t.sourceIndex) || t.sourceIndex < 0 || t.sourceIndex > 3 || !Number.isSafeInteger(t.claimNo) || t.claimNo < 1)) throw invalid();
     if(new Set(a.tasks.map(t=>`${t.sourceDigest}:${t.claimNo}`)).size>LIMITS.sourceClaims)throw invalid();
     const sources = new Map<number, string>();
     for (const [i,t] of a.tasks.entries()) {
       const previous = a.tasks[i-1];
       const base=`${t.sourceDigest}:${t.claimNo}`;
-      if(t.id.endsWith(":part1of2")&&a.tasks[i+1]?.id!==`${base}:part2of2`||
-         t.id.endsWith(":part2of2")&&previous?.id!==`${base}:part1of2`)throw invalid();
+      const part=partition(t.id), prior=previous&&partition(previous.id);
+      if(part&&Array.from({length:part.count},(_,j)=>j).some(j=>
+        a.tasks[i-part.index+1+j]?.id!==`${base}:part${j+1}of${part.count}`))throw invalid();
       if ((!previous && t.sourceIndex !== 0) || (previous && (t.sourceIndex < previous.sourceIndex || t.sourceIndex > previous.sourceIndex + 1 ||
-          (t.sourceIndex === previous.sourceIndex && (t.claimNo<previous.claimNo||t.claimNo===previous.claimNo&&!(previous.id===`${base}:part1of2`&&t.id===`${base}:part2of2`))))) ||
+          (t.sourceIndex === previous.sourceIndex && (t.claimNo<previous.claimNo||t.claimNo===previous.claimNo&&!(part&&prior&&part.count===prior.count&&part.index===prior.index+1))))) ||
           (sources.has(t.sourceIndex) && sources.get(t.sourceIndex) !== t.sourceDigest) ||
           [...sources].some(([index,hash]) => index !== t.sourceIndex && hash === t.sourceDigest)) throw invalid();
       sources.set(t.sourceIndex,t.sourceDigest);

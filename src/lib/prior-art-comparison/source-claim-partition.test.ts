@@ -24,7 +24,7 @@ function fixture(text:string,legacy:{Q:string[];facts:Record<string,unknown>[]})
  return{chunks,plan,answers,legacy};
 }
 async function equivalent(f:ReturnType<typeof fixture>){
- expect(f.plan.tasks).toHaveLength(6);const before=JSON.stringify(f.answers);
+ expect(f.plan.tasks).toHaveLength(9);const before=JSON.stringify(f.answers);
  const second=JSON.parse(f.plan.tasks[1].prompt);expect(second.target.obligations[0].key).not.toBe("t0");
  const schema=await f.plan.tasks[1].schema.jsonSchema;
  expect(JSON.stringify(schema.definitions)).toContain("T[i] addresses target.obligations[i]");
@@ -36,30 +36,30 @@ async function equivalent(f:ReturnType<typeof fixture>){
 }
 it.each(["route","possession"])("retains cross-part %s and negation, with full-union omission rejection",async kind=>{
  const clauses=["制御器により、",...Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`),"冬モード。"];
- const special=kind==="route"?[15,16]:[14,15,16];
- if(kind==="route"){clauses[15]="白管から、";clauses[16]="黒管へ流し、";}
- else{clauses[14]="白管と、";clauses[15]="黒管と、";clauses[16]="青管を備え、";}
+ const special=kind==="route"?[10,11]:[9,10,11];
+ if(kind==="route"){clauses[10]="白管から、";clauses[11]="黒管へ流し、";}
+ else{clauses[9]="白管と、";clauses[10]="黒管と、";clauses[11]="青管を備え、";}
  clauses[20]="青弁20を開かない、";
  const Q=["q0|0-0:制御器","q1|30-30:冬モード"],facts:Record<string,unknown>[]=[];
  const q=(at:number,text:string)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${at}:${text}`);return id;};
  for(let i=1;i<30;i++){
-  if(special.includes(i)){if(i!==16)continue;
-   if(kind==="route")facts.push({R:16,m:{u:["q1"],x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:[q(15,"白管")],j:[q(16,"黒管")],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null});
-   else facts.push({R:16,m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[[q(14,"白管")],[q(15,"黒管")],[q(16,"青管")]],a:q(16,"備え")},O:[null,null,null,null,null],F:null});
+  if(special.includes(i)){if(i!==11)continue;
+   if(kind==="route")facts.push({R:11,m:{u:["q1"],x:"operation",g:"unconditional",G:[],p:"positive",k:"path",i:[q(10,"白管")],j:[q(11,"黒管")],V:[],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null});
+   else facts.push({R:11,m:{u:null,x:"capability",g:"unconditional",G:[],p:"positive",k:"relation",P:"has",J:[[q(9,"白管")],[q(10,"黒管")],[q(11,"青管")]],a:q(11,"備え")},O:[null,null,null,null,null],F:null});
    continue;
   }
   const obj=q(i,`青弁${i}`),action=q(i,i===20?"開かない":"開く");
   facts.push({R:i,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:i===20?"negative":"positive",k:"relation",P:"opens",J:[[obj]],a:action},O:[null,null,i===20?action:null,"q1",null],F:null});
  }
  const f=fixture(clauses.join(""),{Q,facts});await equivalent(f);
- const lost=structuredClone(f.answers);if(kind==="route")lost[1].value.c1.f16=[];else lost[1].value.c1.possessions=[];
+ const lost=structuredClone(f.answers);if(kind==="route")lost[1].value.c1.f11=[];else lost[1].value.c1.possessions=[];
  await expect(assembleSourceClaims(f.plan,lost)).rejects.toThrow();
  const bad=structuredClone(f.answers);const neg=bad[1].value.c1.f20 as {m:{p:string}}[];neg[0].m.p="positive";
  await expect(assembleSourceClaims(f.plan,bad)).rejects.toThrow();
  const duplicate=structuredClone(f.answers);duplicate[0].value.c1.possessions=structuredClone(f.answers[1].value.c1.possessions);
  if(kind==="possession")expect((await f.plan.tasks[0].schema.validate!(duplicate[0].value)).success).toBe(false);
 });
-it("permits an OR condition owned only by the second part while the union still requires every alternative",async()=>{
+it("permits an OR condition owned only by the third part while the union still requires every alternative",async()=>{
  const text="制御器により、"+Array.from({length:26},(_,i)=>`青弁${i+1}を開く、`).join("")+"停止後、又は、起動時、赤弁を開く。";
  const Q=["q0|0-0:制御器"],facts:Record<string,unknown>[]=[];
  const q=(at:number,text:string,last=at)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${last}:${text}`);return id;};
@@ -67,22 +67,29 @@ it("permits an OR condition owned only by the second part while the union still 
  const guard=q(27,"停止後、又は、起動時",29);
  facts.push({R:30,m:{u:["q0"],x:"operation",g:"when",G:[[guard]],p:"positive",k:"relation",P:"opens",J:[[q(30,"赤弁")]],a:q(30,"開く")},O:[null,null,null,guard,null],F:null});
  const f=fixture(text,{Q,facts});await equivalent(f);
- const bad=structuredClone(f.answers);const scope=bad[1].value.scopes[0] as {G:string[][]};scope.G=[["27-27:停止後"],["29-29:起動時"]];
+ const bad=structuredClone(f.answers);const scope=bad[2].value.scopes[0] as {G:string[][]};scope.G=[["27-27:停止後"],["29-29:起動時"]];
  await expect(assembleSourceClaims(f.plan,bad)).rejects.toThrow();
- const missing=structuredClone(f.answers);const row=missing[1].value.c1.f30 as {s:string|null}[];row[0].s=null;missing[1].value.scopes=[];
+ const missing=structuredClone(f.answers);const row=missing[2].value.c1.f30 as {s:string|null}[];row[0].s=null;missing[2].value.scopes=[];
  await expect(assembleSourceClaims(f.plan,missing)).rejects.toThrow();
 });
-it("assigns complete recognized loops once to the final part without changing their original IDs or references",async()=>{
- const f=fictionalInputs(),body="制御器により、"+Array.from({length:24},(_,i)=>`青弁${i+1}を開く、`).join("")+"前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、別経路を実行する第２の運転モードを切り換える。";
+it.each([12,24])("assigns complete loops once by their original route start with %s prefix clauses",async prefix=>{
+ const f=fictionalInputs(),body="制御器により、"+Array.from({length:prefix},(_,i)=>`青弁${i+1}を開く、`).join("")+"前記分岐器から出た気体を、前記混合器を経ること無く前記蓄積器に流すための第２の開閉弁と、前記第１の開閉弁を閉じ、前記第２の開閉弁を開くことで、前記送出器から吐出された気体を前記混合器に流し、前記分岐器から前記蓄積器に流し、前記送出器に吸い込ませる第１の運転モードと、"+Array.from({length:24-prefix},(_,i)=>`赤弁${i+1}を閉じる、`).join("")+"別経路を実行する第２の運転モードを切り換える。";
  f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource("【請求項1】装置は信号を保持する。",d.id,d.label));
  const chunks=makePlan(f.inputs,f.selection),source=propositionSourceInput(chunks).sources[0],parts=sourceClaimExtractionPlan(chunks).tasks.filter(t=>t.sourceIndex===0);
- expect(source.recognizedLoopRoutes.length).toBeGreaterThan(0);expect(parts).toHaveLength(2);
- const prompts=parts.map(t=>JSON.parse(t.prompt));expect(prompts[0].sourceContext).toEqual(prompts[1].sourceContext);
- expect(prompts[0].target.partition.loopIds).toEqual([]);
- expect(prompts[1].target.partition.loopIds).toEqual(source.recognizedLoopRoutes.map((_,i)=>i));
- for(const[i]of source.recognizedLoopRoutes.entries()){
-  const first=await parts[0].schema.jsonSchema,last=await parts[1].schema.jsonSchema;
-  expect(first.properties).not.toHaveProperty(`loop${i}`);expect(first.additionalProperties).toBe(false);
-  expect(last.required).toContain(`loop${i}`);expect(last.additionalProperties).toBe(false);
+ expect(source.recognizedLoopRoutes.length).toBeGreaterThan(0);expect(parts).toHaveLength(3);
+ const prompts=parts.map(t=>JSON.parse(t.prompt)),reading=sourceReadingClaim(1,body);
+ for(const p of prompts)expect(p.sourceContext).toEqual(prompts[0].sourceContext);
+ expect(prompts.flatMap(p=>p.target.partition.clauseIds)).toEqual(reading.clauses.map((_,i)=>i));
+ expect(prompts.flatMap(p=>p.target.partition.loopIds)).toEqual(source.recognizedLoopRoutes.map((_,i)=>i));
+ for(const[i,frame]of source.recognizedLoopRoutes.entries()){
+  const anchor=reading.clauses.findIndex(c=>c[0]<=frame.route[0]&&frame.route[0]<c[1]);
+  const owner=prompts.findIndex(p=>p.target.partition.clauseIds.includes(anchor));
+  expect(owner).toBe(prefix===12?1:2);
+  for(const[j,part]of parts.entries()){
+   const schema=await part.schema.jsonSchema;
+   expect(schema.additionalProperties).toBe(false);
+   if(j===owner){expect(prompts[j].target.partition.loopIds).toContain(i);expect(schema.required).toContain(`loop${i}`);}
+   else{expect(prompts[j].target.partition.loopIds).not.toContain(i);expect(schema.properties).not.toHaveProperty(`loop${i}`);}
+  }
  }
 });

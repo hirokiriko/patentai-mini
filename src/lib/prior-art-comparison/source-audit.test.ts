@@ -35,3 +35,11 @@ it("retains complete partition identities and a failed prefix without treating i
  expect(validateSourceAudit(a,operationId,inputDigest,parts)).toEqual(a);
  for(const bad of [[parts[0]],[parts[1]],[parts[1],parts[0]],[base,...parts]])expect(()=>sourceAudit(operationId,inputDigest,bad,[])).toThrow();
 });
+
+it.each([2,3])("requires an exact adjacent %s-part roster and preserves only the successful prefix",count=>{
+ const base=tasks[0],parts=Array.from({length:count},(_,i)=>({...base,id:`${base.id}:part${i+1}of${count}`}));
+ const value={raw:"unchanged"},a=sourceAudit(operationId,inputDigest,parts,[{taskId:parts[0].id,value}],{taskId:parts[1].id,text:"stopped"});
+ expect(validateSourceAudit(a,operationId,inputDigest,parts)).toEqual(a);expect(a.answers).toHaveLength(1);
+ for(const bad of [parts.slice(1),parts.slice(0,-1),[...parts].reverse(),[base,...parts],[parts[0],...parts],parts.map((p,i)=>i===1?{...p,id:`${base.id}:part2of${count===3?2:3}`}:p)])
+  expect(()=>sourceAudit(operationId,inputDigest,bad,[])).toThrow();
+});
