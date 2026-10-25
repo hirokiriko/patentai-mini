@@ -4,8 +4,10 @@ const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==="object"&&
 const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>record(v)&&Object.keys(v).length===keys.length&&keys.every(k=>Object.hasOwn(v,k));
 /** New wire semantics only: expand scopes explicitly selected by raw rows.
  * No actor, scope boundary, missing assertion or conditional is inferred. */
-export function projectClaimScopeLanes(answer:Record<string,unknown>,claimNo:number,c:SourceReadingClaim){
- const own=answer[`c${claimNo}`],groups=c.clauses.map((_,i)=>`f${i}`);
+export function projectClaimScopeLanes(answer:Record<string,unknown>,claimNo:number,c:SourceReadingClaim,
+ clauseIds:readonly number[]=c.clauses.map((_,i)=>i)){
+ if(!clauseIds.length||clauseIds.some((id,i)=>!Number.isInteger(id)||id<0||id>=c.clauses.length||(i>0&&id!==clauseIds[i-1]+1)))throw invalid();
+ const own=answer[`c${claimNo}`],groups=clauseIds.map(i=>`f${i}`);
  if(!Array.isArray(answer.scopes)||!exact(own,[...groups,"possessions","sets","T"])||!Array.isArray(own.T))throw invalid();
  const scopes=new Map<string,Record<string,unknown>>(),used=new Set<string>(),duplicates=new Set<string>();
  for(const scope of answer.scopes){
@@ -16,7 +18,7 @@ export function projectClaimScopeLanes(answer:Record<string,unknown>,claimNo:num
   if(!record(row)||!record(row.m)||Object.hasOwn(row.m,"g")||Object.hasOwn(row.m,"G")||!Object.hasOwn(row,"s")||!Array.isArray(row.O)||row.O.length!==4)throw invalid();
   const {s,...rest}=row;let g:unknown="unconditional",G:unknown[]=[],proof:unknown=null;
   if(s!==null){if(typeof s!=="string"||!scopes.has(s))throw invalid();const scope=scopes.get(s)!;used.add(s);g=scope.g;G=scope.G as unknown[];proof=scope.proof;}
-  if(withR&&(!Number.isInteger(rest.R)||Number(rest.R)<0||Number(rest.R)>=groups.length))throw invalid();
+  if(withR&&(!Number.isInteger(rest.R)||!clauseIds.includes(Number(rest.R))))throw invalid();
   return {...rest,m:{...row.m,g,G},O:[row.O[0],row.O[1],row.O[2],proof,row.O[3]]};
  };
  const lane=(value:unknown,kind:'possession'|'set')=>{if(!Array.isArray(value))throw invalid();let previous=-1;return value.map(row=>{
@@ -24,9 +26,9 @@ export function projectClaimScopeLanes(answer:Record<string,unknown>,claimNo:num
   const expanded=expand(row,true);if(Number(expanded.R)<previous)throw invalid();previous=Number(expanded.R);return expanded;
  });};
  const possessions=lane(own.possessions,'possession'),sets=lane(own.sets,'set'),facts:Record<string,unknown>[]=[],bindingMap=new Map<string,number>();
- for(let R=0;R<groups.length;R++){
-  facts.push(...possessions.filter(f=>f.R===R),...sets.filter(f=>f.R===R));const rows=own[groups[R]];if(!Array.isArray(rows))throw invalid();
-  for(const [local,row]of rows.entries()){if(!exact(row,["m","O","F","s"])||!record(row.m)||row.m.k==='set'||row.m.P==='has')throw invalid();bindingMap.set(`${groups[R]}:${local}`,facts.length);facts.push({...expand(row,false),R});}
+ for(const R of clauseIds){
+  facts.push(...possessions.filter(f=>f.R===R),...sets.filter(f=>f.R===R));const rows=own[`f${R}`];if(!Array.isArray(rows))throw invalid();
+  for(const [local,row]of rows.entries()){if(!exact(row,["m","O","F","s"])||!record(row.m)||row.m.k==='set'||row.m.P==='has')throw invalid();bindingMap.set(`f${R}:${local}`,facts.length);facts.push({...expand(row,false),R});}
  }
  const bindings=own.T.map(address=>{if(typeof address!=="string"||!/^f(?:0|[1-9]\d*):(?:0|[1-9]\d*)$/.test(address)||!bindingMap.has(address))throw invalid();return bindingMap.get(address)!;});
  const loops=Object.fromEntries(Object.entries(answer).filter(([k])=>k.startsWith('loop')).map(([k,row])=>[k,expand(row,false)]));

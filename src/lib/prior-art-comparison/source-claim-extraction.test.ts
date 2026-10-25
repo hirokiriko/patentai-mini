@@ -393,6 +393,31 @@ it("keeps cross-clause action ranges independent of the fact group and mode-scop
  }
 });
 
+it("partitions complex claims with common full context and accepts only their complete strict union",async()=>{
+ const f=fictionalInputs(),text="制御器により、"+Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`).join("")+"冬モード。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const reading=sourceReadingClaim(1,text),chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const legacy={Q:["q0|0-0:制御器","q1|30-30:冬モード",...Array.from({length:29},(_,i)=>[`q${2+i*2}|${i+1}-${i+1}:青弁${i+1}`,`q${3+i*2}|${i+1}-${i+1}:開く`]).flat()],facts:Array.from({length:29},(_,i)=>({R:i+1,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"opens",J:[[`q${2+i*2}`]],a:`q${3+i*2}`},O:[null,null,null,"q1",null],F:null}))};
+ const whole=fictionalQuotationClaim(reading,structuredClone(legacy));
+ expect(plan.tasks).toHaveLength(6);
+ const answers=plan.tasks.map(task=>{
+  const p=JSON.parse(task.prompt),ids=p.target.partition.clauseIds as number[];
+  const c1={possessions:[],sets:[],...Object.fromEntries(ids.map(id=>[`f${id}`,structuredClone(whole[`f${id}`])])),T:p.target.obligations.map((o:{key:string})=>whole.T[Number(o.key.slice(1))])};
+  expect(p.sourceContext.source.claims[0].clauses.map((v:[number,string])=>v[1]).join("")).toBe(text);
+  return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(whole),c1}};
+ });
+ const before=JSON.stringify(answers);
+ for(const[i,task]of plan.tasks.entries())expect((await task.schema.validate!(answers[i].value)).success).toBe(true);
+ const expected={v:22,s:propositionSourceInput(chunks).sources.map(s=>({d:s.sourceDigest,c1:structuredClone(legacy)}))};
+ const checked=await sourceIdentifiedPropositionModelSchemaFor(chunks).validate!(expected);expect(checked.success).toBe(true);if(!checked.success)throw checked.error;
+ expect(await assembleSourceClaims(plan,[...answers].reverse())).toEqual(checked.value);
+ expect(JSON.stringify(answers)).toBe(before);
+ await expect(assembleSourceClaims(plan,answers.slice(1))).rejects.toThrow();
+ await expect(assembleSourceClaims(plan,[answers[0],...answers.slice(0,-1)])).rejects.toThrow();
+ const extra=structuredClone(answers[1].value);Object.assign(extra.c1,{f0:[]});expect((await plan.tasks[1].schema.validate!(extra)).success).toBe(false);
+ const missing=structuredClone(answers[1].value);Object.assign(missing.c1,{f16:[]});expect((await plan.tasks[1].schema.validate!(missing)).success).toBe(false);
+});
+
 it("preserves scattered possession heads and their separate function, splitting only the actual support union",async()=>{
  const f=fictionalInputs(),members=["青センサ","乙部材","丙部材","丁部材","戊部材","己部材","庚部材","辛部材","壬部材","癸部材","子部材","丑部材","制御器"];
  const text="温度を検出する"+members.join("と、")+"を備える。";

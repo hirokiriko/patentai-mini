@@ -29,3 +29,9 @@ it.each(["operation","input","task","duplicate","order","bytes","failure","diges
 it("rejects oversized failure text instead of silently truncating evidence",()=>{
  expect(()=>sourceAudit(operationId,inputDigest,tasks,[],{taskId:tasks[0].id,text:"x".repeat(1_000_001)})).toThrow();
 });
+it("retains complete partition identities and a failed prefix without treating it as a whole claim",()=>{
+ const base=tasks[0],parts=[1,2].map(i=>({...base,id:`${base.id}:part${i}of2`}));
+ const a=sourceAudit(operationId,inputDigest,parts,[{taskId:parts[0].id,value:{partial:true}}],{taskId:parts[1].id,text:"not complete"});
+ expect(validateSourceAudit(a,operationId,inputDigest,parts)).toEqual(a);
+ for(const bad of [[parts[0]],[parts[1]],[parts[1],parts[0]],[base,...parts]])expect(()=>sourceAudit(operationId,inputDigest,bad,[])).toThrow();
+});

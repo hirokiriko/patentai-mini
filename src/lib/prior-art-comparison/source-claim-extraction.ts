@@ -26,7 +26,7 @@ export type SourceClaimTask = Readonly<{ id: string; sourceIndex: number; source
 export type SourceClaimPlan = Readonly<{ tasks: readonly SourceClaimTask[] }>;
 const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonChunk[];
   input: ReturnType<typeof propositionSourceInput>; schema: ReturnType<typeof sourceIdentifiedPropositionModelSchemaFor>;
-  normalize: Map<string, (raw: Record<string, unknown>) => Record<string, unknown>> }>();
+  normalize: Map<string, (raw: Record<string, unknown>, dictionary?: ReturnType<typeof claimLiteralDictionary>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
   if (line.startsWith("Extract complete")) return line.replace("v22", "v34");
@@ -63,13 +63,23 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
   const fullJson = fullSchema.jsonSchema as JSONSchema7;
   const definitions = fullJson.definitions!;
   const tasks: SourceClaimTask[] = [];
-  const normalize = new Map<string, (raw: Record<string, unknown>) => Record<string, unknown>>();
+  if(input.sources.reduce((n,s)=>n+s.source.claims.length,0)>LIMITS.sourceClaims)throw new ComparisonError("plan_limit");
+  const normalize = new Map<string, (raw: Record<string, unknown>, dictionary?: ReturnType<typeof claimLiteralDictionary>) => Record<string, unknown>>();
   for (const [sourceIndex, source] of input.sources.entries()) for (const claim of source.source.claims) {
     const claimNo = claim.claimNo, sourceDigest = source.sourceDigest;
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
-    const obligations = sourceClaimObligations(c), obligationKeys = obligations.map((_, i) => `t${i}`);
-    const groupKeys=c.clauses.map((_,i)=>`f${i}`);
-    const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo ? [id] : []);
+    const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
+    // Limit extraction responsibility, never its source context. Both halves
+    // keep original IDs and may cite subjects/conditions across the boundary.
+    const partitions=c.clauses.length>=30&&allObligations.length>=20
+      ?[allClauseIds.slice(0,Math.ceil(c.clauses.length/2)),allClauseIds.slice(Math.ceil(c.clauses.length/2))]:[allClauseIds];
+    for(const [partIndex,clauseIds]of partitions.entries()){
+    const split=partitions.length>1, taskId=`${sourceDigest}:${claimNo}${split?`:part${partIndex+1}of${partitions.length}`:""}`;
+    const obligationIndices=allObligations.flatMap((t,i)=>clauseIds.includes(t.clause)?[i]:[]);
+    const obligations=obligationIndices.map(i=>allObligations[i]),obligationKeys=obligationIndices.map(i=>`t${i}`);
+    const groupKeys=clauseIds.map(i=>`f${i}`);
+    // Whole recognized loops belong to the final half, even across its edge.
+    const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo && partIndex===partitions.length-1 ? [id] : []);
     // Preserve batch-global loop identities; direct references have no forward dictionary.
     const keys = ["d", "scopes", ...loops.map(id => `loop${id}`), `c${claimNo}`];
     // Reuse the provider's complete fact/quote definitions without an extra
@@ -144,11 +154,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     };
     visit(schema); schema.definitions = Object.fromEntries([...used].map(key => [key, ownDefinitions[key]]));
     assertSourceGridProviderSchema(schema);
-    const normalizeAnswer = (raw: Record<string, unknown>): Record<string, unknown> => {
+    const normalizeAnswer = (raw: Record<string, unknown>, sharedDictionary?: ReturnType<typeof claimLiteralDictionary>): Record<string, unknown> => {
       const rawAnswer=Object.fromEntries(keys.map(key=>[key,raw[key]]));
       const own = rawAnswer[`c${claimNo}`];
       if (!record(own)||!Array.isArray(own.T)||own.T.length!==obligations.length)throw invalid();
-      const projected=projectClaimScopeLanes(rawAnswer,claimNo,c),dictionary=claimLiteralDictionary(c);
+      const projected=projectClaimScopeLanes(rawAnswer,claimNo,c,clauseIds),dictionary=sharedDictionary??claimLiteralDictionary(c);
       const facts=projected.facts.map(row=>mapClaimLiteralFact(row,dictionary));
       const mappedLoops=Object.fromEntries(Object.entries(projected.loops).map(([key,row])=>[key,mapClaimLiteralFact(row,dictionary)]));
       return {...rawAnswer,...mappedLoops,[`c${claimNo}`]:{Q:dictionary.quotes(),facts},__bindings:projected.bindings};
@@ -164,7 +174,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         if (!exact(ownClaim, ["Q", "facts"]) || !Array.isArray(ownClaim.facts)) throw invalid();
         const factCount = ownClaim.facts.length;
         const identified = sourceIdentifiedQuoteDictionary(c, ownClaim.Q), dictionary = sourceQuoteDictionary(c, identified.quotes);
-        const checked: CheckedSourceFact[] = [], tasks = sourceReadingTasks(c, true, true), completed = new Set<number>();
+        const checked: CheckedSourceFact[] = [], tasks = sourceReadingTasks(c, true, true).filter(t=>clauseIds.includes(t.clause)), completed = new Set<number>();
         const covered = new Set<number>();
         let previous = -1;
         const rows = [...ownClaim.facts, ...loops.map(id => answer[`loop${id}`])];
@@ -205,24 +215,29 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         if (obligationKeys.some((_,i) => !Number.isSafeInteger(declaredBindings[i]) || Number(declaredBindings[i]) < 0 ||
             Number(declaredBindings[i]) >= factCount)) throw invalid();
         dictionary.assertAllUsed();
-        if (covered.size !== c.clauses.length || completed.size !== tasks.length) throw invalid();
-        assertSourceSemanticReading(c, checked, sourceFullActionCues(c));
-        await validateIdentifiedSourceClaim(source,claimNo,answer);
+        // A possession or complete route owned by another part can quote this
+        // part's clauses. Global clause/route coverage is checked on the union;
+        // every local literal-action binding is still required above.
+        if (!split && (clauseIds.some(id=>!covered.has(id)) || completed.size !== tasks.length)) throw invalid();
+        assertSourceSemanticReading(c, checked, sourceFullActionCues(c).filter(t=>clauseIds.includes(t.clause)), !split);
+        if(!split)await validateIdentifiedSourceClaim(source,claimNo,answer);
         // A validated piece is still not a successful extraction or save. The
         // original complete decoder must validate the union below.
         return { success: true, value: structuredClone(raw) };
       } catch { return { success: false, error: invalid() }; }
     } });
-    normalize.set(`${sourceDigest}:${claimNo}`, normalizeAnswer);
-    tasks.push(Object.freeze({ id: `${sourceDigest}:${claimNo}`, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM,
+    normalize.set(taskId, normalizeAnswer);
+    tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
       prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
-          obligations: obligations.map((t, i) => ({ key: `t${i}`, clause: t.clause, literal: c.grid.text.slice(...t.span) })),
-          requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path").map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
+          ...(split?{partition:{index:partIndex,count:partitions.length,clauseIds,loopIds:loops}}:{}),
+          obligations: obligations.map((t, i) => ({ key: obligationKeys[i], clause: t.clause, literal: c.grid.text.slice(...t.span) })),
+          requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)).map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
         sourceContext: { ...transport.sources[sourceIndex],
           referenceLogic: source.source.referenceLogic, scopes: source.scopes } }), schema: taskSchema }));
+    }
   }
-  if (!tasks.length || tasks.length > LIMITS.sourceClaims) throw new ComparisonError("plan_limit");
+  if (!tasks.length || tasks.length > LIMITS.sourceRequests) throw new ComparisonError("plan_limit");
   const plan = Object.freeze({ tasks: Object.freeze(tasks) });
   plans.set(plan, { chunks: boundChunks, input, schema: fullSchema, normalize });
   return plan;
@@ -234,14 +249,28 @@ export async function assembleSourceClaims(plan: SourceClaimPlan, answers: reado
   const bound = plans.get(plan);
   if (!bound || answers.length !== plan.tasks.length || new Set(answers.map(a => a.taskId)).size !== answers.length) throw invalid();
   const sources: Record<string, unknown>[] = bound.input.sources.map(s => ({ d: s.sourceDigest }));
+  const dictionaries=new Map<string,ReturnType<typeof claimLiteralDictionary>>();
   for (const task of plan.tasks) {
     const answer = answers.find(a => a.taskId === task.id);
     if (!answer || !task.schema.validate) throw invalid();
     const result = await task.schema.validate(answer.value);
     if (!result.success || !record(result.value)) throw invalid();
-    for (const [key, value] of Object.entries(bound.normalize.get(task.id)!(result.value))) {
+    const claimKey=`${task.sourceDigest}:${task.claimNo}`;
+    if(!dictionaries.has(claimKey)){
+      const claim=bound.input.sources[task.sourceIndex].source.claims.find(c=>c.claimNo===task.claimNo)!;
+      dictionaries.set(claimKey,claimLiteralDictionary(sourceReadingClaim(task.claimNo,claim.segments.map(p=>p.text).join(""))));
+    }
+    for (const [key, value] of Object.entries(bound.normalize.get(task.id)!(result.value,dictionaries.get(claimKey)))) {
       if (key === "d"||key === "scopes"||key === "__bindings") continue;
-      if (Object.hasOwn(sources[task.sourceIndex], key)) throw invalid();
+      if (Object.hasOwn(sources[task.sourceIndex], key)) {
+        const previous=sources[task.sourceIndex][key];
+        if(key!==`c${task.claimNo}`||!task.id.includes(":part")||!record(previous)||!record(value)||!Array.isArray(previous.facts)||!Array.isArray(value.facts))throw invalid();
+        const facts=[...previous.facts,...value.facts];
+        const identities=facts.map(row=>{if(!record(row))throw invalid();const {R:_anchor,...meaning}=row;void _anchor;return JSON.stringify(meaning);});
+        if(new Set(identities).size!==identities.length)throw invalid();
+        sources[task.sourceIndex][key]={Q:value.Q,facts};
+        continue;
+      }
       sources[task.sourceIndex][key] = value;
     }
   }

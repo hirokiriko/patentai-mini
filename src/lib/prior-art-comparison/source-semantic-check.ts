@@ -118,7 +118,7 @@ export type CheckedSourceFact={
   // and the action occurrence, so unrelated facts cannot complete a group.
   identity:string;
 };
-export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[],cues=sourceActionCues(c)){
+export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[],cues=sourceActionCues(c),requireAllOrGroups=true){
   const text=c.grid.text;
   for(const fact of facts){
     if(fact.kind!=="relation")continue;
@@ -159,7 +159,12 @@ export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSo
       f.guardProof&&contains(f.guardProof,group.span));
     // An explicitly delimited condition list cannot disappear while W alone
     // claims it was read. This rejects absence; it does not create its action.
-    if(!related.length)throw invalid();
+    if(!related.length){
+      // A preplanned part may not own the assertion governed by this group.
+      // Completeness is still mandatory on the unchanged complete-source union.
+      if(requireAllOrGroups)throw invalid();
+      continue;
+    }
     const branchFacts=new Map<string,Set<number>>();
     for(const f of related){
       const whole=f.guardSpans.filter(term=>term.length===1&&contains(term[0],group.span));

@@ -123,14 +123,14 @@ export class AiOperationBudget {
     private readonly comparison?: ComparisonBudgetOptions) {
     const claimPlan = comparison?.claimPlan;
     const claimAllowed = !!claimPlan && Number.isSafeInteger(claimPlan.sourceClaims) && claimPlan.sourceClaims >= 1 &&
-      claimPlan.sourceClaims <= comparisonLimits.sourceClaims && maximum.normal === claimPlan.sourceClaims + (claimPlan.diagnostic ? 1 : 2);
+      claimPlan.sourceClaims <= comparisonLimits.sourceRequests && maximum.normal === claimPlan.sourceClaims + (claimPlan.diagnostic ? 1 : 2);
     const comparisonAllowed = comparison?.capability === comparisonCapability && !managed &&
       (claimPlan ? claimAllowed : maximum.normal === 1 || maximum.normal === comparisonLimits.calls) && maximum.fast === 0;
     if (comparison && !comparisonAllowed) throw new AiOperationStopped();
     const managedAllowed = managed?.capability === managedWatchCapability && maximum.normal === 41 && maximum.fast === 0 &&
       Number.isSafeInteger(managed.consumed) && managed.consumed >= 0 && managed.consumed <= 41;
     if (managed && !managedAllowed) throw new AiOperationStopped();
-    if (!Number.isInteger(maximum.normal) || maximum.normal < 0 || maximum.normal > (managedAllowed ? 41 : comparisonAllowed && claimPlan ? comparisonLimits.sourceClaims + 2 : 12) ||
+    if (!Number.isInteger(maximum.normal) || maximum.normal < 0 || maximum.normal > (managedAllowed ? 41 : comparisonAllowed && claimPlan ? comparisonLimits.sourceRequests + 2 : 12) ||
         !Number.isInteger(maximum.fast) || maximum.fast < 0 || maximum.fast > 8) throw new AiOperationStopped();
     this.maximum = Object.freeze({ ...maximum });
     if (managedAllowed) this.consumed.normal = managed!.consumed;
@@ -324,12 +324,14 @@ export function withPriorArtComparisonBudget<T>(operation: (deadline: AbortSigna
 /** Finite claim extraction scope. This does not change generic AI or watch
  * allowances, and cannot be nested to restart a consumed comparison budget. */
 export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, operation: (deadline: AbortSignal) => Promise<T>, diagnostic = false): Promise<T> {
-  if (active.getStore() || !Number.isSafeInteger(sourceClaims) || sourceClaims < 1 || sourceClaims > comparisonLimits.sourceClaims)
+  if (active.getStore() || !Number.isSafeInteger(sourceClaims) || sourceClaims < 1 || sourceClaims > comparisonLimits.sourceRequests)
     throw new AiOperationStopped("request_rejected");
   const calls = sourceClaims + (diagnostic ? 1 : 2), closing = new AbortController();
   // A diagnostic may wait for the fixed independent source-QA gate before its
   // final review. This adds time only, never a dispatch or a retry allowance.
-  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, sourceClaims * comparisonLimits.sourceRequestMilliseconds + (calls-sourceClaims) * comparisonLimits.requestMilliseconds + 30_000)
+  // Partitions consume extra sends inside the existing operation ceiling;
+  // splitting must not silently restart or extend the original deadline.
+  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, Math.min(sourceClaims,comparisonLimits.sourceClaims) * comparisonLimits.sourceRequestMilliseconds + (calls-sourceClaims) * comparisonLimits.requestMilliseconds + 30_000)
     + (diagnostic ? comparisonLimits.claimDiagnosticQaMilliseconds : 0);
   const deadline = AbortSignal.any([aiOperationDeadline(milliseconds), closing.signal]);
   deadlines.add(deadline);

@@ -26,3 +26,22 @@ uses its mode label. Fictional two-mode regression coverage preserves both
 controller citations and cross-clause actions through the strict decoder, and
 rejects incorrectly narrowed citation ranges without modifying raw answers.
 
+## Bounded extraction partitions
+
+Claims with at least 30 original clauses and 20 explicit action obligations
+use two fixed, contiguous extraction responsibilities. Both requests retain the
+unchanged complete source, references, clause IDs and source digest. Group and
+possession/set ownership follows original clause R; complete recognized loops
+belong to the final part. Each part cites its own full actors and conditions,
+including references across the boundary. Original obligation IDs are retained.
+
+Local scope projection and literal span interning are structural operations;
+they do not create or repair meaning. All parts are required exactly once, and
+the combined result still passes the existing full-source schema and decoder.
+An incomplete part cannot produce a comparison, saved result or accepted QA.
+The original 19-claim limit remains; at most 22 source requests are admitted.
+Request timeouts, operation time ceilings and automatic retry policy remain
+unchanged. A finite real run must independently fit its measured request costs,
+send counts and all original deadlines before dispatch. Quality improvement is
+unproven until actual full-source QA passes.
+
