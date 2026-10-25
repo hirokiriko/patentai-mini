@@ -15,6 +15,7 @@ import type { Span } from "./propositions";
 import { projectClaimScopeLanes } from "./source-claim-scope-projection";
 import { claimLiteralDictionary,mapClaimLiteralFact } from "./source-claim-literal-refs";
 import { sourceClaimObligations } from "./source-claim-obligations";
+import { sourceCausalModeGuards, assertSourceCausalModeGuards } from "./source-causal-mode-guards";
 
 const invalid = () => new ComparisonError("ai_incomplete");
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -45,6 +46,7 @@ For maintains, a and J quote the same FULL compound maintained state including t
 For passive placement is_state, a AND the single J quote include the printed location and に設けられた/に設けられる. Fictional "箱の外に設けられた青センサと、": a="0-0:箱の外に設けられた", J=[["0-0:箱の外に設けられた"]]. Bare a="0-0:設けられた" is incomplete even when J retains the location. Cite this occurrence exactly; never borrow or invent a location. This placement rule does not require adding a location to other states such as 接続された.
 Choose x for EACH assertion, not for the apparatus claim as a whole: capability is a defining property/function or overall apparatus ability; operation is each stated operating-mode action, route, control, startup/transition or duration-bound maintenance. A device claim does not turn its mode operations into capabilities. Retain their explicit scopes and operation context together.
 An explicit completed-process phrase ending 後 is a temporal condition of its governed subsequent action. Cite the FULL process+後 in that action's scope.G alongside its mode and other actual guards; preserve it on both the heat relation and the separate controller executes when both describe that governed action. Ordered path components or a separate preceding action cannot supply this relation guard. Fictional clauses [[0,"制御器により、"],[1,"液を弁で減圧した後、"],[2,"熱交換器で吸熱させる青運転モード。"]]: f2 uses G=[["2-2:青運転モード"],["1-1:液を弁で減圧した後"]] with proof="1-2:液を弁で減圧した後、熱交換器で吸熱させる青運転モード"; executes.u remains the controller. Keep the preceding reduction as its own action without making it conditional on itself. Do not invent an after-condition from component order alone, apply it to unrelated definitions, or carry it beyond its printed scope.
+Coordinated actions ending ことで are causal conditions, not merely preceding facts. Fictional "青弁を閉じ、赤弁を開くことで、液を流す冬モード": EVERY governed heat, active executes, path and loop selects G retaining BOTH "青弁を閉じ" and "赤弁を開くことで", plus its mode and any further temporal condition. Cite their actual clause ranges. Separate valve facts, loop control or proof alone never supply omitted G. Keep the valve actions themselves without self-conditions; do not extend these causes to another mode, overall apparatus switching or a separate maintenance scope.
 Paths keep their printed mode in u; controller u belongs to its separate active relation facts. For numeric F, loop u must equal that recognizedLoopRoutes mode, never the controller. Finish EVERY mode through its final printed outlet/return even when not listed in requiredRouteClauses. A return path and switching action in the same clause are distinct meanings; neither substitutes the other. Fictional clauses [[0,"青源から白管を経て黒槽へ流す冬モードと、"],[1,"黒槽から青源へ戻す夏モードを切り換えて実行する読取装置。"]]: emit the summer path u=["1-1:夏モード"], i=["1-1:黒槽"], j=["1-1:青源"], AND a separate executes with u=["1-1:読取装置"] and both mode operands. Never omit the final 青源 because the clause also names a mode and switching action.
 For a function followed by its printed subject, cite that postposed subject in u even without は/が. A named apparatus is not an unprinted implicit actor merely because it is the whole claimed device. Fictional "青工程と、赤工程を切り換えて実行する読取装置。": executes at f1 has u=["1-1:読取装置"], J=[["0-0:青工程"],["1-1:赤工程を切り換えて実行する"]], a="1-1:切り換えて実行する", x="capability", s=null. Both operands and the distinct printed actor are required; do not leave u=null or borrow an operand as actor.
 sourceContext target claim clauses concatenate unchanged in ID order. Resolve references only inside their stated range; identical text at another occurrence is not interchangeable. Context or another group/loop never supplies missing meaning. R must overlap an m quote, not F/O/context. Each actor/restatement and route endpoint/via uses its actual occurrence. Each reference range is <=12 consecutive clauses; combined m/O/F evidence uses <=12 DISTINCT actually quoted clauses, not maxID-minID+1. Separate references do not include unquoted intervening clauses.
@@ -73,6 +75,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const claimNo = claim.claimNo, sourceDigest = source.sourceDigest;
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
     const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
+    const causalGuards = sourceCausalModeGuards(c);
     // Limit responsibility, never source context. A small, unambiguous terminal
     // possession declaration immediately before its named controller starts can
     // stay with the preceding definitions. This only reallocates original IDs;
@@ -230,6 +233,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
           if (m.k === "relation" && m.P === "executes" && (!action ||
               !objects.some(term => term.some(([start, end]) => start <= action[0] && end >= action[1])))) throw invalid();
           const route = m.k === "path" ? [...(m.i === null ? [] : terms([m.i]).flat()), ...terms(m.V).flat(), ...(m.j === null ? [] : terms([m.j]).flat())] : [];
+          assertSourceCausalModeGuards(causalGuards, { kind: String(m.k), action, route, guard });
           sourceMatchedTasks(tasks, m, ids, action, route).forEach(id => completed.add(id));
           const matchedObligations = sourceMatchedTasks(obligations, m, ids, action, route);
           for (const [i] of obligations.entries()) if (declaredBindings[i] === at) {

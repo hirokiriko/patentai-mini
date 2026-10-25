@@ -9,7 +9,7 @@ function assertedEnding(tail: string): boolean {
     /^(?:請求項[^。]{1,100}に記載の)?[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ー]{0,80}(?:装置|機|器|方法|システム|回路)(?:[、，。]|$|において[、，]|であって[、，])/u.test(rest);
 }
 
-function assertedModeAfter(tail: string): string | null {
+export function assertedModeAfter(tail: string): string | null {
   const mode = /^[^。]*?(?:運転)?モード/u.exec(tail)?.[0];
   if (!mode) return null;
   const ending = tail.slice(mode.length);
