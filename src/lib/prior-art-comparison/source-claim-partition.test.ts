@@ -34,6 +34,24 @@ async function equivalent(f:ReturnType<typeof fixture>){
  const union=await assembleSourceClaims(f.plan,f.answers);expect(union).toEqual(checked.value);
  expect(decodeSourcePropositions(f.chunks,union)).toEqual(decodeSourcePropositions(f.chunks,checked.value));expect(JSON.stringify(f.answers)).toBe(before);
 }
+it("rejects an owned final suction edge missing from a split reply even when its executes binding is present",async()=>{
+ const terminal="該白槽から前記黒槽に吸い込ませる",mode="第２の運転モード";
+ const text="制御器により、"+Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`).join("")+terminal+mode+"である。";
+ const Q=["q0|0-0:制御器"],facts:Record<string,unknown>[]=[];
+ const q=(at:number,literal:string)=>{const id=`q${Q.length}`;Q.push(`${id}|${at}-${at}:${literal}`);return id;};
+ for(let i=1;i<=29;i++)facts.push({R:i,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"opens",J:[[q(i,`青弁${i}`)]],a:q(i,"開く")},O:[null,null,null,null,null],F:null});
+ const modeQuote=q(30,mode),from=q(30,"白槽"),to=q(30,"黒槽"),action=q(30,"吸い込ませる"),full=q(30,terminal);
+ facts.push({R:30,m:{u:["q0"],x:"operation",g:"when",G:[[modeQuote]],p:"positive",k:"relation",P:"executes",J:[[full]],a:action},O:[null,null,null,modeQuote,null],F:null});
+ facts.push({R:30,m:{u:[modeQuote],x:"operation",g:"when",G:[[modeQuote]],p:"positive",k:"path",i:[from],j:[to],V:[],B:[],e:"segment",r:"route"},O:[null,null,null,modeQuote,null],F:null});
+ const f=fixture(text,{Q,facts}),task=f.plan.tasks[2],raw=f.answers[2].value;
+ expect(JSON.parse(task.prompt).target.requiredRouteClauses).toEqual([{clause:30,literal:terminal}]);
+ expect(JSON.parse(f.plan.tasks[0].prompt).target.requiredRouteClauses).toEqual([]);
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const missing=structuredClone(raw);(missing.c1.f30 as unknown[]).pop();
+ const before=JSON.stringify(missing);
+ expect((await task.schema.validate!(missing)).success).toBe(false);
+ expect(JSON.stringify(missing)).toBe(before);
+});
 it.each(["route","possession"])("retains cross-part %s and negation, with full-union omission rejection",async kind=>{
  const clauses=["制御器により、",...Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`),"冬モード。"];
  const special=kind==="route"?[10,11]:[9,10,11];

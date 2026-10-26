@@ -15,6 +15,7 @@ import type { Span } from "./propositions";
 import { projectClaimScopeLanes } from "./source-claim-scope-projection";
 import { claimLiteralDictionary,mapClaimLiteralFact } from "./source-claim-literal-refs";
 import { sourceClaimObligations } from "./source-claim-obligations";
+import { sourceTerminalRoutes, matchesSourceTerminalRoute } from "./source-terminal-routes";
 import { sourceCausalModeGuards, assertSourceCausalModeGuards } from "./source-causal-mode-guards";
 
 const invalid = () => new ComparisonError("ai_incomplete");
@@ -76,6 +77,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const c = sourceReadingClaim(claimNo, claim.segments.map(p => p.text).join(""));
     const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
     const causalGuards = sourceCausalModeGuards(c);
+    const terminalRoutes = sourceTerminalRoutes(c);
     // Limit responsibility, never source context. A small, unambiguous terminal
     // possession declaration immediately before its named controller starts can
     // stay with the preceding definitions. This only reallocates original IDs;
@@ -114,6 +116,8 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     // Its full route, control and exclusion evidence can cross either edge.
     const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo &&
       clauseIds.some(i=>c.clauses[i][0]<=r.route[0]&&r.route[0]<c.clauses[i][1]) ? [id] : []);
+    const ownedTerminals = terminalRoutes.filter(t=>clauseIds.includes(t.clause) &&
+      !source.recognizedLoopRoutes.some(r=>r.claimNo===claimNo && r.route[0]<=t.span[0] && r.route[1]>=t.span[1]));
     // Preserve batch-global loop identities; direct references have no forward dictionary.
     const keys = ["d", "scopes", ...loops.map(id => `loop${id}`), `c${claimNo}`];
     // Reuse the provider's complete fact/quote definitions without an extra
@@ -209,7 +213,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         const factCount = ownClaim.facts.length;
         const identified = sourceIdentifiedQuoteDictionary(c, ownClaim.Q), dictionary = sourceQuoteDictionary(c, identified.quotes);
         const checked: CheckedSourceFact[] = [], tasks = sourceReadingTasks(c, true, true).filter(t=>clauseIds.includes(t.clause)), completed = new Set<number>();
-        const covered = new Set<number>();
+        const covered = new Set<number>(), completedTerminals = new Set<number>();
         let previous = -1;
         const rows = [...ownClaim.facts, ...loops.map(id => answer[`loop${id}`])];
         if (rows.length > SOURCE_CAPACITY.facts) throw invalid();
@@ -233,6 +237,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
           if (m.k === "relation" && m.P === "executes" && (!action ||
               !objects.some(term => term.some(([start, end]) => start <= action[0] && end >= action[1])))) throw invalid();
           const route = m.k === "path" ? [...(m.i === null ? [] : terms([m.i]).flat()), ...terms(m.V).flat(), ...(m.j === null ? [] : terms([m.j]).flat())] : [];
+          if(m.k === "path") ownedTerminals.forEach((terminal,id)=>{
+            if(matchesSourceTerminalRoute(terminal,{kind:m.k,relation:m.r,polarity:m.p,context:m.x,
+              subject:m.u===null?[]:terms([m.u]).flat(),origin:m.i===null?[]:terms([m.i]).flat(),
+              via:terms(m.V),destination:m.j===null?[]:terms([m.j]).flat()})) completedTerminals.add(id);
+          });
           assertSourceCausalModeGuards(causalGuards, { kind: String(m.k), action, route, guard });
           sourceMatchedTasks(tasks, m, ids, action, route).forEach(id => completed.add(id));
           const matchedObligations = sourceMatchedTasks(obligations, m, ids, action, route);
@@ -250,6 +259,9 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         if (obligationKeys.some((_,i) => !Number.isSafeInteger(declaredBindings[i]) || Number(declaredBindings[i]) < 0 ||
             Number(declaredBindings[i]) >= factCount)) throw invalid();
         dictionary.assertAllUsed();
+        // Enforce the owned terminal edge before advancing to another part;
+        // unrelated coverage and executes bindings cannot replace a path.
+        if(completedTerminals.size !== ownedTerminals.length) throw invalid();
         // A possession or complete route owned by another part can quote this
         // part's clauses. Global clause/route coverage is checked on the union;
         // every local literal-action binding is still required above.
@@ -267,7 +279,8 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         target: { sourceDigest, claimNo,
           ...(split?{partition:{index:partIndex,count:partitions.length,clauseIds,loopIds:loops}}:{}),
           obligations: obligations.map((t, i) => ({ key: obligationKeys[i], clause: t.clause, predicate: t.kind, literal: c.grid.text.slice(...t.span) })),
-          requiredRouteClauses: sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)).map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
+          requiredRouteClauses: [...sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)),
+            ...ownedTerminals].map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
         sourceContext: { ...transport.sources[sourceIndex],
           referenceLogic: source.source.referenceLogic, scopes: source.scopes } }), schema: taskSchema }));
     }
