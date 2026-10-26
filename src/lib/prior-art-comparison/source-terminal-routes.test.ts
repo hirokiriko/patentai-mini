@@ -44,6 +44,19 @@ it("accepts a segment or the final edge of one complete route, preserving option
   expect(matchesSourceTerminalRoute(route, { ...fact, origin: [route.origin.whole], destination: [route.destination.whole] })).toBe(true);
   expect(matchesSourceTerminalRoute(route, { ...fact, origin: [[0, 2]], via: [fact.origin] })).toBe(true);
 });
+it("requires the terminal occurrence even when an upstream path reaches the same named junction", () => {
+  const text = "前記青槽から前記白槽に流し、" + body + mode + "である。";
+  const route = sourceTerminalRoutes(sourceReadingClaim(1, text))[0];
+  const earlierJunction: Span = [text.indexOf("白槽"), text.indexOf("白槽") + 2];
+  const upstream: Span = [text.indexOf("青槽"), text.indexOf("青槽") + 2];
+  const combined = { kind: "path", relation: "route", polarity: "positive", context: "operation",
+    subject: [route.mode], origin: [upstream], via: [[earlierJunction]], destination: [route.destination.name] };
+  expect(text.slice(...earlierJunction)).toBe(text.slice(...route.origin.name));
+  const before = JSON.stringify(combined);
+  expect(matchesSourceTerminalRoute(route, combined)).toBe(false);
+  expect(JSON.stringify(combined)).toBe(before);
+  expect(matchesSourceTerminalRoute(route, { ...combined, origin: [route.origin.name], via: [] })).toBe(true);
+});
 it.each(["executes", "negative", "capability", "wrong_mode", "earlier_names", "reverse", "only_origin", "only_destination", "disconnected", "long_quote"])("rejects terminal route substitution: %s", mutation => {
   const { route, fact } = fixture();
   if (mutation === "executes") fact.kind = "relation";

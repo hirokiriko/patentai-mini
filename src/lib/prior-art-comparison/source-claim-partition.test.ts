@@ -46,6 +46,8 @@ it("rejects an owned final suction edge missing from a split reply even when its
  const f=fixture(text,{Q,facts}),task=f.plan.tasks[2],raw=f.answers[2].value;
  expect(JSON.parse(task.prompt).target.requiredRouteClauses).toEqual([{clause:30,literal:terminal}]);
  expect(JSON.parse(f.plan.tasks[0].prompt).target.requiredRouteClauses).toEqual([]);
+ expect(task.system).toContain("THAT SAME terminal clause");
+ for(const previous of f.plan.tasks.slice(0,2))expect(previous.system).not.toContain("THAT SAME terminal clause");
  expect((await task.schema.validate!(raw)).success).toBe(true);
  const missing=structuredClone(raw);(missing.c1.f30 as unknown[]).pop();
  const before=JSON.stringify(missing);
