@@ -21,7 +21,7 @@ describe("private bounded request timing (fictional transport)", () => {
     await withAiRequestTiming(event => events.push(event), () => withPriorArtClaimComparisonBudget(1, async () => {
       const pending = boundedAzureFetch("normal")(url, init);
       const failed = expect(pending).rejects.toThrow("ai_operation_stopped");
-      await vi.advanceTimersByTimeAsync(270_000); await failed;
+      await vi.advanceTimersByTimeAsync(420_000); await failed;
     }));
     const phases = events.map(event => event.phase);
     expect(phases.includes("headers_received")).toBe(waiting === "body");

@@ -41,16 +41,31 @@ they do not create or repair meaning. All parts are required exactly once, and
 the combined result still passes the existing full-source schema and decoder.
 An incomplete part cannot produce a comparison, saved result or accepted QA.
 The original 19-claim limit remains; at most 25 source requests are admitted.
-Request timeouts, operation time ceilings and automatic retry policy remain
-unchanged. A finite real run must independently fit its measured request costs,
+Automatic retry policy remains unchanged. A finite real run must independently fit its measured request costs,
 send counts and all original deadlines before dispatch. Quality improvement is
 unproven until actual full-source QA passes.
 
 
 Three parts reduce each request's owned fact groups and obligations; they do not
-reduce the common original context or raise the 270-second request deadline.
+reduce the common original context.
 This is an unconfirmed latency hypothesis. Waiting for HTTP headers does not
 prove which provider-side stage was slow. No retry is admitted merely because
 a local timeout ended. Historical two-part audit records remain readable, but
 changed task IDs or request bodies cannot reuse their old answers. A changed
 roster requires fresh finite funding, deadline admission and actual source QA.
+
+## Source transport deadline
+
+Identified Azure high-effort source requests now have one 420-second absolute
+deadline covering headers and the full response body. Each admitted request owns
+an Undici dispatcher with the same header/body allowance; it is destroyed after
+the full response is read or the request fails. The shared dispatcher is unchanged.
+Generic/watch requests remain at 35 seconds, and generation, review, unknown
+models and lower-effort source requests retain their existing limits.
+
+The operation deadline is fixed once from the admitted source request count,
+up to 25, plus the unchanged later-stage and diagnostic-QA allowances. Neither a
+new phase nor an aborted request resets it or permits a retry. Before a finite
+real run, its complete remaining work must still fit the original owner expiry,
+retained reservations and send allowance. A local timeout does not establish
+provider termination or release its reservation.

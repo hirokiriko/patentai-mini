@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { captureAiRequestTiming } from "./ai-request-timing";
+import { AiSourceDispatcher } from "./ai-source-dispatcher";
 import { capturePatentWatchDiagnostic } from "./patent-watch/diagnostic-context";
 import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 import type { DetailObservation } from "./patent-watch/diagnostic-observation";
@@ -254,11 +255,16 @@ export class AiOperationBudget {
             status, ...diagnostic?.usage(reason) }));
         } catch { /* Logging must never stop a successful send. */ }
       };
+      let sourceDispatcher: AiSourceDispatcher | undefined;
       try {
+        if (requestMilliseconds === comparisonLimits.sourceRequestMilliseconds)
+          sourceDispatcher = new AiSourceDispatcher(requestMilliseconds);
         let response: Response;
         try { observation?.dispatch(attempt); } catch { /* optional */ }
         trace?.emit("transport_begin");
-        try { response = await Promise.race([transport(url, { ...init, signal, redirect: "error" }), aborted]); }
+        const transportInit = { ...init, signal, redirect: "error" as const,
+          ...(sourceDispatcher ? { dispatcher: sourceDispatcher } : {}) };
+        try { response = await Promise.race([transport(url, transportInit), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "transport_error"); }
         trace?.emit("headers_received");
         if (this.stopped) throw this.stopped;
@@ -294,6 +300,9 @@ export class AiOperationBudget {
         throw error;
       } finally {
         if (abort) signal.removeEventListener("abort", abort);
+        // The validated clone has read the entire network body; the original
+        // Response remains readable from its buffered branch by the SDK.
+        await sourceDispatcher?.destroy();
         this.managedInFlight = false;
       }
       } finally { trace?.close(); }
@@ -329,9 +338,9 @@ export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, opera
   const calls = sourceClaims + (diagnostic ? 1 : 2), closing = new AbortController();
   // A diagnostic may wait for the fixed independent source-QA gate before its
   // final review. This adds time only, never a dispatch or a retry allowance.
-  // Partitions consume extra sends inside the existing operation ceiling;
-  // splitting must not silently restart or extend the original deadline.
-  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, Math.min(sourceClaims,comparisonLimits.sourceClaims) * comparisonLimits.sourceRequestMilliseconds + (calls-sourceClaims) * comparisonLimits.requestMilliseconds + 30_000)
+  // Fix the deadline once, using the admitted number of partition requests.
+  // Later stages cannot restart it or obtain another dispatch allowance.
+  const milliseconds = Math.min(comparisonLimits.claimOperationMilliseconds, sourceClaims * comparisonLimits.sourceRequestMilliseconds + (calls-sourceClaims) * comparisonLimits.requestMilliseconds + 30_000)
     + (diagnostic ? comparisonLimits.claimDiagnosticQaMilliseconds : 0);
   const deadline = AbortSignal.any([aiOperationDeadline(milliseconds), closing.signal]);
   deadlines.add(deadline);
