@@ -1457,3 +1457,18 @@ distinguishes repeated definition, route and restated actor occurrences. These
 changes do not alter the schema, raw response, validators or QA thresholds.
 A new response must satisfy all existing gates; failed answers are never repaired
 for acceptance.
+
+## Mode conditions on causal valve actions
+
+A completed v34 response retained the valve operations that cause a downstream
+process but marked those operations unconditional, dropping their printed
+operating mode. The prompt now distinguishes excluding a causal self-condition
+from excluding the mode: each valve action keeps a separate scope with its mode
+and any independent governing conditions. Downstream actions still retain the
+complete coordinated causes and their other conditions.
+
+This clarification changes only the extraction instruction. It neither fills
+missing scopes in an answer nor changes the decoder or quality criteria.
+The observed response remains a quality failure. Independent review of the
+instruction and fictional tests do not establish a real-model correction;
+an admissible new response must pass original-source QA before reuse or release.
