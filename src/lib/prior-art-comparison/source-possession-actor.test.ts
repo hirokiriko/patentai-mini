@@ -63,3 +63,23 @@ it.each(["absent","controller","local"] as const)("keeps possession separate fro
  // Supplied fixtures check faithful projection, not future model quality.
  // The apparatus remains the possessor even when the mode action has no actor.
 });
+
+it("retains all coordinated possessions and their functions beside an actorless mode action",async()=>{
+ const f=fictionalInputs(),text="青板を拭く青具と、赤板を拭く赤具と、白板を拭く白具を備え、第１の運転モードは光モードであり、光モードでは、青弁を開くことを特徴とする検査装置。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const functions=["青","赤","白"].map((color,i)=>({s:null,m:{u:[`${i}-${i}:${color}具`],x:"capability",p:"positive",k:"relation",P:"executes",J:[[`${i}-${i}:${color}板を拭く`]],a:`${i}-${i}:${color}板を拭く`},O:[null,null,null,null],F:null}));
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,
+  scopes:[{id:"s0",g:"when",G:[["4-4:光モードでは"]],proof:"3-4:第１の運転モードは光モードであり、光モードでは、"}],
+  c1:{possessions:[{R:2,s:null,m:{u:["5-5:検査装置"],x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:青具"],["1-1:赤具"],["2-2:白具"]],a:"2-2:備え"},O:[null,null,null,null],F:null}],sets:[],
+   f0:[functions[0]],f1:[functions[1]],f2:[functions[2]],f3:[],f4:[],f5:[{s:"s0",m:{u:null,x:"operation",p:"positive",k:"relation",P:"opens",J:[["5-5:青弁"]],a:"5-5:開く"},O:[null,null,null,null],F:null}],T:["f5:0"]}}}));
+ const before=JSON.stringify(answers),result=await assembleSourceClaims(plan,answers);
+ for(const source of result.sources){
+  expect(source.facts.find(v=>v.meaning.kind==="relation"&&v.meaning.predicate==="has")?.meaning).toMatchObject({subject:"検査装置",objects:["青具","赤具","白具"]});
+  expect(source.facts.filter(v=>v.meaning.kind==="relation"&&v.meaning.predicate==="executes").map(v=>v.meaning.subject)).toEqual(["青具","赤具","白具"]);
+  expect(source.facts.find(v=>v.meaning.kind==="relation"&&v.meaning.predicate==="opens")?.meaning).toMatchObject({subject:null,objects:["青弁"],guard:{relation:"when",conditions:["光モードでは"]}});
+ }
+ expect(decodeSourcePropositions(chunks,result)).toBeDefined();
+ expect(JSON.stringify(answers)).toBe(before);
+});

@@ -1488,3 +1488,11 @@ the instruction and actor description. It neither infers a missing actor nor
 rewrites a response. Handwritten fixtures verify preservation of possession,
 null actors and printed actors through the unchanged decoder; new real-model
 responses still require independent original-source quality review.
+
+The mode-actor distinction must not narrow a coordinated possession list.
+Every component governed by the shared possession verb remains a `has` member,
+including components whose defining functions have their own facts. A null actor
+for a mode action removes neither those members nor the component-function
+actors. A fictional fixture preserves all three kinds of meaning together.
+This additional instruction does not establish real-model completeness; the
+new response must still pass the same independent semantic review.
