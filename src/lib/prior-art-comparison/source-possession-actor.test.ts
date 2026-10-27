@@ -41,3 +41,25 @@ it("rejects an invented actor quote instead of substituting the actual apparatus
  await expect(assembleSourceClaims(f.plan,f.answers)).rejects.toThrow();
  expect(JSON.stringify(f.answers)).toBe(before);
 });
+
+it.each(["absent","controller","local"] as const)("keeps possession separate from a mode action with actor=%s",async kind=>{
+ const controlled=kind!=="absent",actor=kind==="controller"?"制御器":"駆動器";
+ const f=fictionalInputs(),text="青センサを備え、第１の運転モードは光モードであり、光モードでは、"+(controlled?(kind==="controller"?"制御器により、":"駆動器が、"):"")+"青弁を開くことを特徴とする検査装置。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks),action=controlled?4:3;
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,
+  scopes:[{id:"s0",g:"when",G:[["2-2:光モードでは"]],proof:"1-2:第１の運転モードは光モードであり、光モードでは、"}],
+  c1:{possessions:[{R:0,s:null,m:{u:[`${action}-${action}:検査装置`],x:"capability",p:"positive",k:"relation",P:"has",J:[["0-0:青センサ"]],a:"0-0:備え"},O:[null,null,null,null],F:null}],sets:[],
+   ...Object.fromEntries(Array.from({length:action+1},(_,i)=>[`f${i}`,i===action?[{s:"s0",m:{u:controlled?[`3-3:${actor}`]:null,x:"operation",p:"positive",k:"relation",P:"opens",J:[[`${action}-${action}:青弁`]],a:`${action}-${action}:開く`},O:[null,null,null,null],F:null}]:[]])),T:[`f${action}:0`]}}}));
+ for(const [i,answer] of answers.entries()){const checked=await plan.tasks[i].schema.validate!(answer.value);expect(checked.success,JSON.stringify({target:JSON.parse(plan.tasks[i].prompt).target,error:checked.success?null:checked.error})).toBe(true);}
+ const before=JSON.stringify(answers),result=await assembleSourceClaims(plan,answers);
+ for(const source of result.sources){
+  expect(source.facts.find(v=>v.meaning.kind==="relation"&&v.meaning.predicate==="has")?.meaning).toMatchObject({subject:"検査装置",objects:["青センサ"]});
+  expect(source.facts.find(v=>v.meaning.kind==="relation"&&v.meaning.predicate==="opens")?.meaning).toMatchObject({subject:controlled?actor:null,context:"operation",objects:["青弁"],guard:{relation:"when",conditions:["光モードでは"]}});
+ }
+ expect(decodeSourcePropositions(chunks,result)).toBeDefined();
+ expect(JSON.stringify(answers)).toBe(before);
+ // Supplied fixtures check faithful projection, not future model quality.
+ // The apparatus remains the possessor even when the mode action has no actor.
+});

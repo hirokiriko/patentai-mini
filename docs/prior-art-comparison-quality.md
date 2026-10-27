@@ -1472,3 +1472,19 @@ missing scopes in an answer nor changes the decoder or quality criteria.
 The observed response remains a quality failure. Independent review of the
 instruction and fictional tests do not establish a real-model correction;
 an admissible new response must pass original-source QA before reuse or release.
+
+## Actors inside separately defined modes
+
+The extraction instructions distinguish the apparatus that possesses components
+from an actor explicitly governing an action inside a separately defined mode.
+A later apparatus head may govern possession or its direct defining function;
+its presence after mode definitions alone does not supply an actor for every
+internal action. Any printed governing actor, including a continuing controller,
+must still be retained. Without one, the model must explicitly supply a null
+actor while preserving the full action, objects, mode and other conditions.
+
+This clarification accompanies supplied canonical mode sets and changes only
+the instruction and actor description. It neither infers a missing actor nor
+rewrites a response. Handwritten fixtures verify preservation of possession,
+null actors and printed actors through the unchanged decoder; new real-model
+responses still require independent original-source quality review.
