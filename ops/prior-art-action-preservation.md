@@ -69,3 +69,14 @@ new phase nor an aborted request resets it or permits a retry. Before a finite
 real run, its complete remaining work must still fit the original owner expiry,
 retained reservations and send allowance. A local timeout does not establish
 provider termination or release its reservation.
+
+## Supplied canonical mode sets
+
+When a target claim has canonical mode sets supplied by code, both its extraction
+instruction and set-field description exclude only sets with the same subject,
+selection, extent and complete members. Other sets and nearby functions, actions,
+routes and guards remain required. This avoids asking the model to repeat facts
+that the decoder already adds independently. No returned facts are deleted or
+repaired. Claims without supplied canonical sets keep their existing request
+instructions and schema; actual request compatibility is checked before reusing
+an earlier accepted result.

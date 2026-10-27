@@ -523,3 +523,27 @@ it("preserves the operation discriminator independently of a device claim and it
  const schema=plan.tasks[0].schema.jsonSchema as {definitions:Record<string,{anyOf?:{properties:Record<string,{description?:string}>}[]}>};
  for(const branch of schema.definitions.PriorArtSourceMeaning.anyOf!)expect(branch.properties.x.description).toContain("Choose context for THIS assertion");
 });
+
+
+it("limits the canonical set exception to exact supplied sets and preserves other meanings",()=>{
+ const f=fictionalInputs(),text="前記第１の運転モードは光モードであり、光モードでは青弁を開き、青センサ又は赤センサを備える装置。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0],request=JSON.parse(task.prompt);
+ expect(request.sourceContext.source.claims[0].canonicalModeSets).toEqual([{subject:"第１の運転モード",selection:"required",extent:"closed",members:["光モード"]}]);
+ expect(request.sourceContext.source.claims[0].clauses.map(([,v]:[number,string])=>v).join("")).toBe(text);
+ const schema=task.schema.jsonSchema as {definitions:Record<string,{properties:Record<string,{description?:string;items?:unknown;maxItems?:number}>}>};
+ const sets=schema.definitions.PriorArtSourceDictionaryClaim.properties.sets;
+ const instruction="Skip a set ONLY when its subject, selection, extent and complete members exactly match";
+ expect(task.system).toContain(instruction);expect(sets.description).toContain(instruction);
+ for(const contract of [task.system,sets.description!]){
+  expect(contract).toContain("Emit every other noncanonical set, including a set differing in any of those fields");
+  expect(contract).toContain("retain all nearby functions, actions, routes and guards");
+  expect(contract).toContain("Never omit a set merely because it mentions a supplied mode or member");
+ }
+ expect(sets.items).toEqual({$ref:"#/definitions/PriorArtSourceLaneFact"});expect(sets.maxItems).toBeUndefined();
+ const ordinary=setup().plan.tasks[0];
+ const ordinarySchema=ordinary.schema.jsonSchema as typeof schema;
+ expect(ordinary.system).not.toContain(instruction);
+ expect(ordinarySchema.definitions.PriorArtSourceDictionaryClaim.properties.sets.description).toBe("Every quantified member/alternative set assertion, including any/combinations/all. Only set facts with explicit selection and original R nondecreasing. Enumeration of operations never replaces selection.");
+});
