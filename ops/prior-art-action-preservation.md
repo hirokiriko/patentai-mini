@@ -80,3 +80,27 @@ that the decoder already adds independently. No returned facts are deleted or
 repaired. Claims without supplied canonical sets keep their existing request
 instructions and schema; actual request compatibility is checked before reusing
 an earlier accepted result.
+
+## Repeated terms inside one original clause
+
+A clause range cannot distinguish two equal terms inside that same clause.
+The source input now supplies literal `{reference,focus}` alternatives for
+repeated runs in the owned clauses. Each alternative is checked against the
+unchanged strict resolver and its exact original span before it is offered.
+The model chooses the occurrence supported by its assertion. The alternatives
+carry no meaning labels, do not replace the complete source, and do not cover
+every possible quotation. Surrounding locator text is not semantic evidence.
+
+The response schema and decoder are unchanged. A repeated bare term, repeated
+focus within one outer quote, wrong clause or nonliteral context remains invalid.
+Unidentifiable overlapping occurrences are not offered as valid alternatives.
+Historical failed answers remain failures and are never rewritten.
+
+For already accepted responses, retain the original request, raw response,
+usage acknowledgement and semantic QA. Reuse requires either identical request
+bytes or a separately verified delta consisting only of these input alternatives:
+system, schema, source, task/partition, obligations and all other prompt fields
+must match, every alternative must resolve exactly, and the original response
+must pass the current decoder without modification. Such compatibility is not
+new real-AI validation of the changed prompt. The final source assembly and
+independent semantic QA remain mandatory.

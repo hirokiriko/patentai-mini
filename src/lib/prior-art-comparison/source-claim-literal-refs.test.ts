@@ -1,8 +1,37 @@
 import {expect,it}from"vitest";
 import{sourceReadingClaim}from"./source-clause-coverage";
-import{resolveClaimLiteralReference,claimLiteralDictionary,mapClaimLiteralFact}from"./source-claim-literal-refs";
+import{resolveClaimLiteralReference,claimLiteralDictionary,mapClaimLiteralFact,claimLiteralReferenceChoices}from"./source-claim-literal-refs";
 const c=sourceReadingClaim(1,"青管と青管、😀を黒管へ流す。"),focused=(reference:string,focus:string)=>({reference,focus});
 const text=(v:unknown)=>c.grid.text.slice(...resolveClaimLiteralReference(c,v));
+it("offers both literal occurrences in an owned clause without choosing their meaning",()=>{
+ const x=sourceReadingClaim(1,"青槽から青管を通って青槽へ戻す。冬モードは青管を閉じる。"),before=JSON.stringify(x);
+ const choices=claimLiteralReferenceChoices(x,[0]);
+ const alternatives=choices.filter(v=>v.focus==="青槽");
+ expect(alternatives).toHaveLength(2);
+ expect(alternatives.map(v=>resolveClaimLiteralReference(x,v))).toEqual([[0,2],[10,12]]);
+ expect(choices.every(v=>v.reference.startsWith("0-0:"))).toBe(true);
+ expect(()=>resolveClaimLiteralReference(x,"0-0:青槽")).toThrow();
+ expect(()=>resolveClaimLiteralReference(x,{reference:"0-0:青槽から青管を通って青槽へ戻す",focus:"青槽"})).toThrow();
+ expect(()=>resolveClaimLiteralReference(x,{reference:alternatives[0].reference.replace("0-0:","1-1:"),focus:"青槽"})).toThrow();
+ expect(JSON.stringify(x)).toBe(before);
+});
+it("retains separate mode and clause coordinates even for the same repeated words",()=>{
+ const x=sourceReadingClaim(1,"冬は青槽から青槽へ戻す。夏は青槽から青槽へ送る。");
+ const choices=claimLiteralReferenceChoices(x,[0,1]);
+ const selected=choices.filter(v=>v.focus==="青槽").map(v=>resolveClaimLiteralReference(x,v));
+ expect(selected).toHaveLength(4);expect(new Set(selected.map(v=>v.join(":"))).size).toBe(4);
+ expect(selected.slice(0,2).every(([,end])=>end<=x.clauses[0][1])).toBe(true);
+ expect(selected.slice(2).every(([start])=>start>=x.clauses[1][0])).toBe(true);
+ for(const choice of choices)expect(x.grid.text.slice(...resolveClaimLiteralReference(x,choice))).toBe(choice.focus);
+});
+it("keeps Unicode intact and does not fabricate locators for unidentifiable overlapping text",()=>{
+ const x=sourceReadingClaim(1,"😀青槽から😀青槽へ送る。");
+ for(const choice of claimLiteralReferenceChoices(x,[0]))expect(x.grid.text.slice(...resolveClaimLiteralReference(x,choice))).toBe(choice.focus);
+ const overlap=sourceReadingClaim(1,"AAAA。");
+ for(const choice of claimLiteralReferenceChoices(overlap,[0]))expect(()=>resolveClaimLiteralReference(overlap,choice)).not.toThrow();
+ expect(()=>resolveClaimLiteralReference(overlap,{reference:"0-0:AAAA",focus:"AA"})).toThrow();
+ expect(claimLiteralReferenceChoices(sourceReadingClaim(1,"青槽から赤管へ流す。"),[0])).toEqual([]);
+});
 it("selects only unique exact outer and inner text, retaining the selected occurrence",()=>{
  expect(()=>text("0-0:青管")).toThrow();expect(resolveClaimLiteralReference(c,focused("0-0:青管と","青管"))).toEqual([0,2]);expect(resolveClaimLiteralReference(c,focused("0-0:と青管","青管"))).toEqual([3,5]);expect(text(focused("0-0:と青管","と青管"))).toBe("と青管");
 });

@@ -13,7 +13,7 @@ import { LIMITS } from "./limits";
 import { ComparisonError } from "./source";
 import type { Span } from "./propositions";
 import { projectClaimScopeLanes } from "./source-claim-scope-projection";
-import { claimLiteralDictionary,mapClaimLiteralFact } from "./source-claim-literal-refs";
+import { claimLiteralDictionary,mapClaimLiteralFact,claimLiteralReferenceChoices } from "./source-claim-literal-refs";
 import { sourceClaimObligations } from "./source-claim-obligations";
 import { sourceTerminalRoutes, matchesSourceTerminalRoute } from "./source-terminal-routes";
 import { sourceCausalModeGuards, assertSourceCausalModeGuards } from "./source-causal-mode-guards";
@@ -277,9 +277,13 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       } catch { return { success: false, error: invalid() }; }
     } });
     normalize.set(taskId, normalizeAnswer);
+    const literalReferenceChoices=claimLiteralReferenceChoices(c,clauseIds);
     tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
       prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
+          ...(literalReferenceChoices.length?{literalReferenceChoices:{
+            instruction:"Exact locator alternatives for repeated text in the owned clauses, not facts or required meanings. Select the occurrence supported by the original assertion using the existing {reference,focus} form. A narrower focus is allowed only if unique inside that reference. These choices are not exhaustive; other exact unique references remain allowed. Context adds no semantic evidence. Never substitute another mode's or clause's occurrence.",
+            choices:literalReferenceChoices}}:{}),
           ...(split?{partition:{index:partIndex,count:partitions.length,clauseIds,loopIds:loops}}:{}),
           obligations: obligations.map((t, i) => ({ key: obligationKeys[i], clause: t.clause, predicate: t.kind, literal: c.grid.text.slice(...t.span) })),
           requiredRouteClauses: [...sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)),

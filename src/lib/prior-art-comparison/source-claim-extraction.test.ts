@@ -11,6 +11,23 @@ import {decodeClaimQuotationQuotes} from "./source-claim-quotations";
 import {resolveSourceOrderedQuote} from "./source-reading-tasks";
 import {sourceReadingClaim} from "./source-clause-coverage";
 import {SOURCE_CAPACITY} from "./source-capacity";
+import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
+
+it("supplies usable occurrence choices with unchanged source text and the existing reference schema",()=>{
+ const f=fictionalInputs(),body="青槽から青管を通って青槽へ戻す。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${body}`,d.id,"架空"));
+ const before=JSON.stringify(f.inputs),task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const request=JSON.parse(task.prompt),claim=sourceReadingClaim(1,body);
+ expect(request.sourceContext.source.claims[0].clauses.map(([,text]:[number,string])=>text).join("")).toBe(body);
+ const choices=request.target.literalReferenceChoices.choices.filter((v:{focus:string})=>v.focus==="青槽");
+ expect(choices.map((v:unknown)=>resolveClaimLiteralReference(claim,v))).toEqual([[0,2],[10,12]]);
+ expect(()=>resolveClaimLiteralReference(claim,"0-0:青槽")).toThrow();
+ expect(request.target.literalReferenceChoices.instruction).toContain("not facts or required meanings");
+ const definitions=(task.schema.jsonSchema as {definitions:Record<string,unknown>}).definitions;
+ expect(definitions.PriorArtSourceCellQuote).toEqual((setup().plan.tasks[0].schema.jsonSchema as {definitions:Record<string,unknown>}).definitions.PriorArtSourceCellQuote);
+ expect(JSON.stringify(f.inputs)).toBe(before);
+});
 
 function groupFact<T extends {R:number}>(value:T){const {R,...fact}=value;void R;return fact;}
 function setupFacts(claim:Record<string,unknown>){return claim.f2 as ReturnType<typeof setup>["wire"]["s"][number]["c1"]["facts"];}

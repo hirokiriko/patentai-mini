@@ -5,6 +5,51 @@ import {sourceCellRef} from "./source-citation-grid";
 import {decodeClaimCoordinateQuotes} from "./source-claim-coordinates";
 const invalid=()=>new Error("comparison_source_literal_reference_invalid");
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==="object"&&!Array.isArray(v);
+/** Literal locator choices only: never choose a meaning or repair an answer.
+ * Maximal repeated runs keep the input aid small. Original clauses and the
+ * strict resolver remain authoritative; this is not an inventory of facts. */
+export function claimLiteralReferenceChoices(c:SourceReadingClaim,clauseIds:readonly number[]){
+ const choices:{reference:string;focus:string}[]=[];
+ for(const id of clauseIds){
+  const text=c.grid.text.slice(...c.clauses[id]),boundaries=[0];
+  for(const point of text)boundaries.push(boundaries.at(-1)!+point.length);
+  const suffixes=boundaries.slice(0,-1).map(at=>text.slice(at,at+80)).sort();
+  const repeated=new Set<string>();
+  for(let i=1;i<suffixes.length;i++){
+   const a=suffixes[i-1],b=suffixes[i];let end=0;
+   while(end<a.length&&end<b.length&&a[end]===b[end])end++;
+   if(end&&/[\uD800-\uDBFF]/u.test(a[end-1]))end--;
+   const focus=a.slice(0,end);
+   if(focus.length>=2&&/[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9]/u.test(focus)&&!/[\p{P}\p{Z}\p{C}]/u.test(focus))repeated.add(focus);
+  }
+  for(const focus of repeated){
+   const positions:number[]=[];for(let at=text.indexOf(focus);at>=0;at=text.indexOf(focus,at+1))positions.push(at);
+   // A common preceding character makes this a redundant suffix of a longer run.
+   if(positions.every(at=>at>0)&&new Set(positions.map(at=>text[at-1])).size===1)continue;
+   for(const [index,at]of positions.entries()){
+    // Largest surrounding window containing this focus once. If still
+    // ambiguous, the existing outer/focus form cannot identify this span.
+    let lo=boundaries.find(x=>x>(positions[index-1]??-1))!;
+    let hi=boundaries.findLast(x=>x<(positions[index+1]??text.length+1)+focus.length-1)??text.length;
+    hi=Math.min(hi,text.length);
+    const unique=(a:number,b:number)=>{const q=text.slice(a,b);return text.indexOf(q)===a&&text.indexOf(q,a+1)<0;};
+    if(lo>at||hi<at+focus.length||!unique(lo,hi))continue;
+    // Shrink locator context without changing focus or splitting a code point.
+    let left=boundaries.indexOf(lo),right=boundaries.indexOf(at);
+    while(left<right){const mid=Math.ceil((left+right)/2);if(unique(boundaries[mid],hi))left=mid;else right=mid-1;}
+    lo=boundaries[left];left=boundaries.indexOf(at+focus.length);right=boundaries.indexOf(hi);
+    while(left<right){const mid=Math.floor((left+right)/2);if(unique(lo,boundaries[mid]))right=mid;else left=mid+1;}
+    hi=boundaries[left];
+    const choice={reference:`${id}-${id}:${text.slice(lo,hi)}`,focus};
+    const span=resolveClaimLiteralReference(c,choice);
+    if(span[0]!==c.clauses[id][0]+at||span[1]!==c.clauses[id][0]+at+focus.length)throw invalid();
+    choices.push(choice);
+    if(choices.length>SOURCE_CAPACITY.quotes||Buffer.byteLength(JSON.stringify(choices),"utf8")>SOURCE_CAPACITY.wireBytes)throw invalid();
+   }
+  }
+ }
+ return choices;
+}
 /** Select exact original text only. An optional unique outer quote locates a
  * unique inner focus without counting offsets or inventing outside context. */
 export function resolveClaimLiteralReference(c:SourceReadingClaim,value:unknown):Span{
