@@ -154,3 +154,10 @@ requests, generation, review, generic scopes and managed-watch limits keep their
 existing deadlines. A timed-out send stays consumed with unknown usage held;
 correcting this classification neither retries it nor resets the operation clock.
 
+Tasks owning an explicit one-of opening action distinguish selection from list
+extent in their extraction instructions. Selecting one listed alternative does
+not make the list nonexhaustive. Partial lists still require their own original
+limiting quotation, separate from the one-of selection evidence. The action,
+actor and full conditions remain mandatory. Other tasks retain their exact
+request bytes; all schemas, decoders and quality criteria stay unchanged.
+

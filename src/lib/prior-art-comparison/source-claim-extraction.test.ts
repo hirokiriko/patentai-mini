@@ -14,6 +14,37 @@ import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
 
+it("keeps one-of selection independent from list extent without relaxing quotation checks",async()=>{
+ const taskFor=(body:string)=>{
+  const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");
+  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${body}`,d.id,"架空"));
+  return sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ };
+ const text="制御器は、青弁と赤弁の何れか一方を開く。",task=taskFor(text);
+ const ordinary=taskFor("制御器は、青弁と赤弁を開く。");
+ expect(task.system).toContain("Selection and extent are independent.");
+ expect(task.system).toContain("Preserve an explicitly nonexhaustive list");
+ expect(ordinary.system).not.toContain("Selection and extent are independent.");
+ const schemaFor=(t:typeof task)=>JSON.stringify(t.schema.jsonSchema).replaceAll(t.sourceDigest,"fictional-source");
+ expect(schemaFor(task)).toBe(schemaFor(ordinary));
+ const request=JSON.parse(task.prompt);
+ expect(request.sourceContext.source.claims[0].clauses.map(([,v]:[number,string])=>v).join("")).toBe(text);
+ expect(request.target.obligations).toContainEqual({key:"t0",clause:1,predicate:"opens_one",literal:"何れか一方を開く"});
+ const common={u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive"};
+ const c1=fictionalQuotationClaim(sourceReadingClaim(1,text),{
+  Q:["q0|0-0:制御器","q1|1-1:青弁","q2|1-1:赤弁","q3|1-1:何れか一方","q4|1-1:何れか一方を開く"],
+  facts:[{R:1,m:{...common,k:"set",S:"one",e:"closed",M:[["q1"],["q2"]]},O:["q3",null,null,null,null],F:null},
+   {R:1,m:{...common,k:"relation",P:"opens_one",J:[["q1"],["q2"]],a:"q4"},O:["q3",null,null,null,null],F:null}]
+ });
+ const raw={v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const invalid=structuredClone(raw),sets=invalid.c1.sets as {m:{e:string}}[];
+ sets[0].m.e="partial";
+ const before=JSON.stringify(invalid);
+ expect((await task.schema.validate!(invalid)).success).toBe(false);
+ expect(JSON.stringify(invalid)).toBe(before);
+});
+
 it("segments only a dense final mode-choice part with disjoint original obligations and full context",async()=>{
  const f=fictionalInputs(),prefix="制御器により、"+Array.from({length:24},(_,i)=>`青弁${i+1}を開く、`).join("");
  const text=prefix+"前記第２の運転モードは、"+Array.from({length:4},(_,i)=>`赤弁${i+1}を開く、`).join("")+"冷媒を青槽に流す、"+
