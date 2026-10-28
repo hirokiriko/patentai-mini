@@ -6,7 +6,7 @@ import { decodeSourcePropositions, propositionSourceInput } from "./proposition-
 import { fictionalInputs } from "./fixtures.test-support";
 import { makePlan } from "./comparison";
 import { parseComparisonSource } from "./source";
-import { sourceCompleteActionCues } from "./source-semantic-check";
+import { assertSourceSemanticReading, sourceCompleteActionCues, type CheckedSourceFact } from "./source-semantic-check";
 import { sourceReadingClaim } from "./source-clause-coverage";
 
 type Relation = Extract<Meaning, { kind: "relation" }>;
@@ -38,6 +38,22 @@ function literalSource(phrase: string) {
 }
 
 describe("literal passive states (fictional fixtures, not AI quality)", () => {
+  function placementReading(tail:string) {
+    const phrase="箱の外に設けられた", claim=sourceReadingClaim(1,phrase+tail);
+    const fact:CheckedSourceFact={kind:"relation",predicate:"is_state",polarity:"positive",polarityProof:null,
+      action:[0,phrase.length],evidence:claim.clauses,objectSpans:[[[0,phrase.length]]],guardSpans:[],guardProof:null,identity:"placement"};
+    return {claim,fact};
+  }
+  it.each(["第1の開閉弁", "第２の開閉弁", "第12のセンサ"])("retains a placement defining the numbered component %s", component => {
+    const {claim,fact}=placementReading(`${component}と、読取器を備える装置。`),before=JSON.stringify(fact);
+    expect(sourceCompleteActionCues(claim)).toEqual([]);
+    expect(()=>assertSourceSemanticReading(claim,[fact])).not.toThrow();
+    expect(JSON.stringify(fact)).toBe(before);
+  });
+  it.each(["第1の開閉弁の場合", "第２の開閉弁のとき", "第12のセンサではない", "第3の物と"])("rejects an unasserted or unsupported placement tail: %s", tail => {
+    const {claim,fact}=placementReading(`${tail}、制御器が停止する。`);
+    expect(()=>assertSourceSemanticReading(claim,[fact])).toThrow("comparison_source_semantic_incomplete");
+  });
   it.each(["箱の外に設けられた", "入口と出口の間に設けられる"])("preserves exact passive placement without inventing inside/upstream: %s", phrase => {
     const f=literalSource(phrase),before=JSON.stringify(f.raw);
     const decoded=decodeSourcePropositions(f.plan,f.raw);

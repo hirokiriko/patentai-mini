@@ -136,3 +136,13 @@ high reasoning; generation and review retain low reasoning. The actual product
 and bounded verification use the same selector. Token, request, retry and
 quality limits are unchanged. Reuse still requires the exact SDK request bytes
 and an unchanged answer accepted by the current decoder and independent QA.
+# Numbered component placement
+
+Passive placement validation recognizes a directly modified component such as
+`箱の外に設けられた第1の開閉弁と、`. The ordinal prefix remains part of the
+printed component name; it does not change the placement, actor, or conditions.
+Conditional and negative tails still do not establish a positive placement.
+Source responses, quotation coordinates, and semantic completeness checks remain
+unchanged. Previously acquired responses require strict validation and original
+source QA before any reuse.
+

@@ -129,7 +129,12 @@ export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSo
     // A close cannot be accepted as stopping merely because both its noun and
     // its broad W happen to quote the source. Preserve the exact action word.
     const local=cues.filter(cue=>contains(fact.action!,cue.span));
-    if(fact.predicate==="is_state"&&!local.some(cue=>cue.predicate==="is_state"))throw invalid();
+    // The literal checklist is partial. An AI-supplied placement can directly
+    // define a numbered component without being a checklist obligation. Check
+    // this exact occurrence and assertion ending; never supply a missing fact.
+    const numberedPlacement=/に設けられ(?:た|る)$/u.test(action)&&
+      /^第[0-9０-９]+の[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]*(?:器|弁|配管|装置|センサ|アキュムレータ)(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(fact.action[1]));
+    if(fact.predicate==="is_state"&&!local.some(cue=>cue.predicate==="is_state")&&!numberedPlacement)throw invalid();
     if(fact.predicate==="stops"&&(!/(?:停止|中止|終了|止め)/u.test(action)||local.length))throw invalid();
     if(["closes","fully_closes","releases_heat","absorbs_heat","generates_heat",...(cues.some(c=>c.predicate.startsWith("opens"))?["opens","opens_one","opens_together"]:[])].includes(fact.predicate!)){
       if(!local.length||local.some(cue=>cue.predicate!==fact.predicate||cue.polarity!==fact.polarity))throw invalid();
