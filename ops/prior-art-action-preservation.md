@@ -128,3 +128,11 @@ The request limit is 26; time, token, retry and quality limits are unchanged.
 Only an adjacent, complete `part3of3:segment1of2` / `segment2of2` pair is valid in
 the audit roster. A segment is never a complete claim or permission to reuse a
 failed answer. Full-source assembly and independent semantic QA remain required.
+
+Source tasks retain explicit partition metadata outside the model payload.
+Identified GPT-5.4 whole-claim requests use medium reasoning so the existing
+output allowance also covers the structured answer. Preplanned parts retain
+high reasoning; generation and review retain low reasoning. The actual product
+and bounded verification use the same selector. Token, request, retry and
+quality limits are unchanged. Reuse still requires the exact SDK request bytes
+and an unchanged answer accepted by the current decoder and independent QA.

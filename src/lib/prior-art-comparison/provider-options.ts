@@ -10,8 +10,10 @@ type ProviderOptions = NonNullable<Parameters<typeof generateObject>[0]["provide
  * reasoning-model override for this verified alias; request guards still verify
  * the actual model and the serialized reasoning option before sending. Pin
  * standard processing instead of inheriting a deployment's paid priority tier. */
-export function comparisonProviderOptions(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation"): ProviderOptions | undefined {
-  const reasoningEffort = ({ source: "high", generation: "low", review: "low" } as const)[phase];
+export function comparisonProviderOptions(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation", partitionedSource?: boolean): ProviderOptions | undefined {
+  // Whole-claim requests must leave output capacity for the structured answer.
+  // Preserve the existing setting for preplanned parts and unspecified callers.
+  const reasoningEffort = phase === "source" ? (partitionedSource === false ? "medium" : "high") : "low";
   if (model.provider === "azure.responses" && model.modelId === "patentai-gpt54") {
     return { azure: { reasoningEffort, forceReasoning: true, serviceTier: "default" } };
   }

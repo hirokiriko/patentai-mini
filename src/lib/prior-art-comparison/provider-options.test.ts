@@ -4,6 +4,17 @@ import { comparisonOutputTokens, comparisonRequestMilliseconds } from "./limits"
 
 afterEach(()=>vi.unstubAllEnvs());
 describe("comparison-only reasoning",()=>{
+  it.each(["azure.responses", "openai.responses"])("reserves whole-claim answer capacity without changing part or later-phase settings on %s", provider => {
+    vi.stubEnv("AI_PROVIDER", provider.split(".")[0]);
+    const model={provider,modelId:provider==="azure.responses"?"patentai-gpt54":"gpt-5.4"};
+    const key=provider.split(".")[0];
+    expect(comparisonProviderOptions(model,"source",false)?.[key]?.reasoningEffort).toBe("medium");
+    expect(comparisonProviderOptions(model,"source",true)).toEqual(comparisonProviderOptions(model,"source"));
+    for(const phase of ["generation","review"] as const)
+      expect(comparisonProviderOptions(model,phase,false)).toEqual(comparisonProviderOptions(model,phase));
+    expect(comparisonOutputTokens(model,"source")).toBe(provider==="azure.responses"?32400:8192);
+    expect(comparisonRequestMilliseconds(model,"source")).toBe(provider==="azure.responses"?420000:210000);
+  });
   it.each(["azure.responses","openai.responses"])("scopes reasoning to identified GPT-5.4 responses on %s",provider=>{
     vi.stubEnv("AI_PROVIDER",provider.split(".")[0]);
     for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId})).toEqual({[provider.split(".")[0]]:{reasoningEffort:"low",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
