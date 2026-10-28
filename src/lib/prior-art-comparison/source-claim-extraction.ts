@@ -114,6 +114,13 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const obligationIndices=allObligations.flatMap((t,i)=>clauseIds.includes(t.clause)?[i]:[]);
     const obligations=obligationIndices.map(i=>allObligations[i]),obligationKeys=obligationIndices.map(i=>`t${i}`);
     const groupKeys=clauseIds.map(i=>`f${i}`);
+    const literalReferenceChoices=claimLiteralReferenceChoices(c,clauseIds);
+    // The same bounded component names used by semantic validation can repeat
+    // within a heat assertion's clause. Require explicit locator/focus syntax
+    // for that task's heat objects; no component or occurrence is chosen here.
+    const focusedHeatObjects=obligations.some(t=>t.kind.endsWith("heat")&&literalReferenceChoices.some(choice=>
+      choice.reference.startsWith(`${t.clause}-${t.clause}:`)&&
+      /(?:熱交換器|放熱器|吸熱器|加熱器|冷却器|加熱装置|発熱体|ヒーター?)/u.test(choice.focus)));
     // Assign each complete loop once by its unchanged route-start coordinate.
     // Its full route, control and exclusion evidence can cross either edge.
     const loops = source.recognizedLoopRoutes.flatMap((r, id) => r.claimNo === claimNo &&
@@ -176,6 +183,22 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         (props[key] as JSONSchema7).description = "THIS route occurrence; never substitute its component definition.";
       if (props.j) (props.j as JSONSchema7).description += " Final printed endpoint, even in a later clause.";
       if (props.J) (props.J as JSONSchema7).description = "has: ALL nominal heads coordinated under this possession verb, including earlier function-defined components; separate exact head references, never just the terminal head. Heat releases/absorbs/generates: J is the actual heat COMPONENT, never refrigerant or action; u remains the printed actor/mode. executes: full printed action/objects including ALL coordinated operands (と/又は); separate exact references for disjoint operands, never rely on another fact/scope. is_state: ONE term/ONE span containing the entire a state/transition and its verb, not only its location. Disjoint pieces use separate direct references.";
+    }
+    if(focusedHeatObjects){
+      const heatPredicates=["generates_heat","absorbs_heat","releases_heat"];
+      meaning.anyOf=(meaning.anyOf as JSONSchema7[]).flatMap(branch=>{
+        if(!branch.properties?.J)return [branch];
+        const heat=structuredClone(branch),predicate=branch.properties.P as JSONSchema7;
+        ownDefinitions.PriorArtSourceHeatActor=branch.properties.u;
+        branch.properties.u=heat.properties!.u={$ref:"#/definitions/PriorArtSourceHeatActor"};
+        (heat.properties!.P as JSONSchema7).enum=heatPredicates;
+        predicate.enum=predicate.enum!.filter(value=>!heatPredicates.includes(String(value)));
+        const heatTerm=structuredClone(ownDefinitions.PriorArtSourceTerm) as JSONSchema7;
+        heatTerm.items=structuredClone(ref.anyOf![1]);
+        heat.properties!.J={...structuredClone(branch.properties.J as JSONSchema7),items:heatTerm,
+          description:"Every heat COMPONENT reference requires {reference,focus}. Select a unique exact outer reference and a unique exact component focus inside it. Use the supplied locator choices when applicable; their focus may be narrowed only when still unique. Outer context is not semantic evidence. Never put the action or refrigerant in focus."};
+        return [branch,heat];
+      });
     }
     ((ownDefinitions.PriorArtSourceAdditionalFact as JSONSchema7).properties!.R as JSONSchema7).description =
       "Original clause overlapping an m quote; F/O/context never anchor R. Keep facts nondecreasing.";
@@ -277,8 +300,8 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       } catch { return { success: false, error: invalid() }; }
     } });
     normalize.set(taskId, normalizeAnswer);
-    const literalReferenceChoices=claimLiteralReferenceChoices(c,clauseIds);
-    tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: CLAIM_SYSTEM+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
+    const claimSystem=focusedHeatObjects?CLAIM_SYSTEM.replace("prefer a plain string;", "heat J requires {reference,focus}; other references prefer a plain string;").replace("Prefer plain strings when already unique.", "Heat J always uses {reference,focus}; other references prefer plain strings when already unique."):CLAIM_SYSTEM;
+    tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: claimSystem+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
       prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
           ...(literalReferenceChoices.length?{literalReferenceChoices:{

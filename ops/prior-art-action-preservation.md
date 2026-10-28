@@ -91,7 +91,7 @@ The model chooses the occurrence supported by its assertion. The alternatives
 carry no meaning labels, do not replace the complete source, and do not cover
 every possible quotation. Surrounding locator text is not semantic evidence.
 
-The response schema and decoder are unchanged. A repeated bare term, repeated
+The literal alternatives alone do not change the response schema or decoder. A repeated bare term, repeated
 focus within one outer quote, wrong clause or nonliteral context remains invalid.
 Unidentifiable overlapping occurrences are not offered as valid alternatives.
 Historical failed answers remain failures and are never rewritten.
@@ -104,3 +104,18 @@ must match, every alternative must resolve exactly, and the original response
 must pass the current decoder without modification. Such compatibility is not
 new real-AI validation of the changed prompt. The final source assembly and
 independent semantic QA remain mandatory.
+
+When a task owns a heat obligation and its clause has a repeated named heat
+component among those alternatives, its provider schema requires the existing
+`{reference,focus}` form for heat-object terms. Heat and other relation predicates
+have disjoint schema branches; other citations and the semantic decoder are
+unchanged. The same bounded component-name vocabulary used by semantic validation
+activates this constraint without selecting a fact or occurrence. The alternatives
+are nonexhaustive, so this is not a complete ambiguity detector.
+
+An outer reference or inner focus that still matches more than once is rejected.
+Mandatory object syntax prevents a bare heat-object string; it does not itself
+prove a unique location or correct meaning. Unaffected tasks retain their exact
+system, prompt and schema. Earlier results from a changed task cannot use the
+input-alternatives-only reuse contract. Preserve failed raw responses and require
+fresh independently reviewed output for that task before full-source assembly.

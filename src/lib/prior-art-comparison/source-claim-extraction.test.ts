@@ -12,6 +12,35 @@ import {resolveSourceOrderedQuote} from "./source-reading-tasks";
 import {sourceReadingClaim} from "./source-clause-coverage";
 import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
+import type {JSONSchema7} from "ai";
+
+it("requires focused heat objects only when a named heat component repeats in an owned heat clause",()=>{
+ const taskFor=(body:string)=>{
+  const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");
+  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${body}`,d.id,"架空"));
+  return sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ };
+ const body="青熱交換器から青熱交換器にて液を放熱させる。",task=taskFor(body);
+ const branches=(t:typeof task)=>((t.schema.jsonSchema as JSONSchema7).definitions!.PriorArtSourceMeaning as JSONSchema7).anyOf as JSONSchema7[];
+ const relation=branches(task).filter(b=>b.properties?.J),heat=relation.find(b=>(b.properties!.P as JSONSchema7).enum!.includes("releases_heat"))!;
+ const others=relation.find(b=>(b.properties!.P as JSONSchema7).enum!.includes("executes"))!;
+ const quote=(((heat.properties!.J as JSONSchema7).items as JSONSchema7).items as JSONSchema7);
+ expect(quote).toEqual({type:"object",properties:{reference:{type:"string"},focus:{type:"string"}},required:["reference","focus"],additionalProperties:false});
+ expect((others.properties!.P as JSONSchema7).enum).not.toContain("releases_heat");
+ const original=branches(taskFor("青熱交換器にて液を放熱させる。")).find(b=>b.properties?.J)!;
+ const definitions=(task.schema.jsonSchema as JSONSchema7).definitions!;
+ expect({...others.properties,u:definitions.PriorArtSourceHeatActor,P:undefined}).toEqual({...original.properties,P:undefined});
+ expect(((heat.properties!.J as JSONSchema7).items as JSONSchema7).description).toBe((definitions.PriorArtSourceTerm as JSONSchema7).description);
+ expect(new Set(relation.flatMap(b=>(b.properties!.P as JSONSchema7).enum!))).toEqual(new Set((original.properties!.P as JSONSchema7).enum));
+ expect(task.system).toContain("heat J requires {reference,focus}");
+ for(const text of ["青熱交換器にて液を放熱させる。","青熱交換器から青熱交換器へ液を流す。","液を放熱させる放熱器。"])
+  expect(branches(taskFor(text)).filter(b=>b.properties?.J)).toHaveLength(1);
+ const c=sourceReadingClaim(1,body),choices=JSON.parse(task.prompt).target.literalReferenceChoices.choices;
+ const spans=choices.filter((q:{focus:string})=>q.focus==="青熱交換器").map((q:unknown)=>resolveClaimLiteralReference(c,q));
+ expect(spans).toEqual([[0,5],[7,12]]);
+ expect(()=>resolveClaimLiteralReference(c,"0-0:青熱交換器")).toThrow();
+ expect(()=>resolveClaimLiteralReference(c,{reference:`0-0:${body}`,focus:"青熱交換器"})).toThrow();
+});
 
 it("supplies usable occurrence choices with unchanged source text and the existing reference schema",()=>{
  const f=fictionalInputs(),body="青槽から青管を通って青槽へ戻す。";
