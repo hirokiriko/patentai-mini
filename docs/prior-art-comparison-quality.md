@@ -1496,3 +1496,9 @@ for a mode action removes neither those members nor the component-function
 actors. A fictional fixture preserves all three kinds of meaning together.
 This additional instruction does not establish real-model completeness; the
 new response must still pass the same independent semantic review.
+
+For claims with supplied canonical mode sets, the model is reminded to locate
+repeated text using the existing unique enclosing `reference` and inner `focus`.
+The model chooses the original occurrence; the decoder still rejects ambiguous
+bare quotations. The enclosing text only locates the inner span and adds no
+semantic evidence. This prompt clarification still requires real-model QA.

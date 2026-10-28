@@ -342,6 +342,26 @@ it("keeps the complete duration in G even when the proof already contains it",as
 it("rejects the preceding flat v33 wire without changing its raw body",async()=>{const f=setup(),old={...f.answers[0].value,v:33},before=JSON.stringify(old);expect((await f.plan.tasks[0].schema.validate!(old)).success).toBe(false);expect(JSON.stringify(old)).toBe(before);});
 it("preserves the exact same unique original span when optional context is supplied",async()=>{const f=setup(),raw=structuredClone(f.answers[0].value);setupFacts(raw.c1)[0].m.a={reference:"2-2:赤弁を閉じる。",focus:"閉じる"} as unknown as string;expect((await f.plan.tasks[0].schema.validate!(raw)).success).toBe(true);const bad=structuredClone(raw);setupFacts(bad.c1)[0].m.a={reference:"2-2:赤弁を閉じる。",focus:"閉じる架空"} as unknown as string;const before=JSON.stringify(bad);expect((await f.plan.tasks[0].schema.validate!(bad)).success).toBe(false);expect(JSON.stringify(bad)).toBe(before);});
 
+it("requires the model to disambiguate a repeated component with exact enclosing text",async()=>{
+ const f=fictionalInputs(),text="赤弁を備える赤弁制御装置。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const plan=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection));
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:[],c1:{
+  possessions:[{R:0,s:null,m:{u:["0-0:赤弁制御装置"],x:"capability",p:"positive",k:"relation",P:"has",J:[[{reference:"0-0:赤弁を",focus:"赤弁"}]],a:"0-0:備える"},O:[null,null,null,null],F:null}],sets:[],f0:[],T:[],
+ }}}));
+ const before=JSON.stringify(answers),actual=await assembleSourceClaims(plan,answers);
+ expect(JSON.stringify(answers)).toBe(before);
+ const decoded=decodeSourcePropositions(makePlan(f.inputs,f.selection),actual);
+ expect(decoded.facts.length).toBeGreaterThan(0);
+ expect(decoded.facts.every(f=>f.meaning.kind==="relation"&&f.meaning.objects.join()==="赤弁")).toBe(true);
+ const bad=structuredClone(answers[0].value);
+ bad.c1.possessions[0].m.J=[["0-0:赤弁" as unknown as {reference:string;focus:string}]];
+ const unchanged=JSON.stringify(bad);
+ expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);
+ expect(JSON.stringify(bad)).toBe(unchanged);
+});
+
 it.each(["before","after"])("retains both coordinated action operands and their printed actor %s the function through the strict decoder",async position=>{
  const after=position==="after",first=after?0:1,last=after?1:2;
  const f=fictionalInputs(),text=after?"青工程と、赤工程を切り換えて実行する読取装置。":"制御器は、青工程と、赤工程を切り換えて実行する。";f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
