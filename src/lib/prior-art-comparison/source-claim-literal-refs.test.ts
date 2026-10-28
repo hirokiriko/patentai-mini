@@ -1,8 +1,17 @@
 import {expect,it}from"vitest";
 import{sourceReadingClaim}from"./source-clause-coverage";
 import{resolveClaimLiteralReference,claimLiteralDictionary,mapClaimLiteralFact,claimLiteralReferenceChoices}from"./source-claim-literal-refs";
+import{SOURCE_CAPACITY}from"./source-capacity";
 const c=sourceReadingClaim(1,"青管と青管、😀を黒管へ流す。"),focused=(reference:string,focus:string)=>({reference,focus});
 const text=(v:unknown)=>c.grid.text.slice(...resolveClaimLiteralReference(c,v));
+it("bounds optional examples without rejecting or truncating the source",()=>{
+ const x=sourceReadingClaim(1,"青槽と青槽。".repeat(600)),before=JSON.stringify(x);
+ const choices=claimLiteralReferenceChoices(x,x.clauses.map((_,i)=>i));
+ expect(choices.length).toBeGreaterThan(0);expect(choices.length).toBeLessThanOrEqual(SOURCE_CAPACITY.quotes);
+ expect(Buffer.byteLength(JSON.stringify(choices),"utf8")).toBeLessThanOrEqual(SOURCE_CAPACITY.wireBytes);
+ for(const choice of choices)expect(x.grid.text.slice(...resolveClaimLiteralReference(x,choice))).toBe(choice.focus);
+ expect(JSON.stringify(x)).toBe(before);
+});
 it("offers both literal occurrences in an owned clause without choosing their meaning",()=>{
  const x=sourceReadingClaim(1,"青槽から青管を通って青槽へ戻す。冬モードは青管を閉じる。"),before=JSON.stringify(x);
  const choices=claimLiteralReferenceChoices(x,[0]);

@@ -44,7 +44,9 @@ export function claimLiteralReferenceChoices(c:SourceReadingClaim,clauseIds:read
     const span=resolveClaimLiteralReference(c,choice);
     if(span[0]!==c.clauses[id][0]+at||span[1]!==c.clauses[id][0]+at+focus.length)throw invalid();
     choices.push(choice);
-    if(choices.length>SOURCE_CAPACITY.quotes||Buffer.byteLength(JSON.stringify(choices),"utf8")>SOURCE_CAPACITY.wireBytes)throw invalid();
+    // This aid is explicitly nonexhaustive. Bound examples, never source/QA;
+    // adding optional examples must not reject an otherwise valid input.
+    if(choices.length>SOURCE_CAPACITY.quotes||Buffer.byteLength(JSON.stringify(choices),"utf8")>SOURCE_CAPACITY.wireBytes){choices.pop();return choices;}
    }
   }
  }
