@@ -14,6 +14,33 @@ import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
 
+it("segments only a dense final mode-choice part with disjoint original obligations and full context",async()=>{
+ const f=fictionalInputs(),prefix="制御器により、"+Array.from({length:24},(_,i)=>`青弁${i+1}を開く、`).join("");
+ const text=prefix+"前記第２の運転モードは、"+Array.from({length:4},(_,i)=>`赤弁${i+1}を開く、`).join("")+"冷媒を青槽に流す、"+
+  Array.from({length:5},(_,i)=>`白弁${i+1}を開く、`).join("")+"光モードと、風モードのうち何れか又はそれらの組み合わせ若しくはそれらの全てである。";
+ const make=(body:string)=>{
+  f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");
+  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${body}`,d.id,"架空"));
+  return sourceClaimExtractionPlan(makePlan(f.inputs,f.selection));
+ };
+ const plan=make(text),own=plan.tasks.filter(t=>t.sourceIndex===0),reading=sourceReadingClaim(1,text);
+ expect(own).toHaveLength(4);
+ expect(own.map(t=>t.id.slice(t.id.indexOf(":")+1))).toEqual(["1:part1of3","1:part2of3","1:part3of3:segment1of2","1:part3of3:segment2of2"]);
+ const requests=own.map(t=>JSON.parse(t.prompt));
+ expect(requests.flatMap(p=>p.target.partition.clauseIds)).toEqual(reading.clauses.map((_,i)=>i));
+ const keys=requests.flatMap(p=>p.target.obligations.map((o:{key:string})=>o.key));
+ expect(keys).toEqual(keys.map((_,i)=>`t${i}`));
+ for(const p of requests)expect(p.sourceContext.source.claims[0].clauses.map(([,v]:[number,string])=>v).join("")).toBe(text);
+ for(const [i,p]of requests.entries()){
+  expect(p.target.partition.count).toBe(3);
+  expect(p.target.partition.segment).toEqual(i<2?undefined:{index:i-2,count:2});
+ }
+ await expect(assembleSourceClaims(plan,[])).rejects.toThrow();
+ // Without a positive path boundary, the original three-part roster remains.
+ const unsplit=make(text.replace("冷媒を青槽に流す、","青槽を保持する、"));
+ expect(unsplit.tasks.filter(t=>t.sourceIndex===0)).toHaveLength(3);
+});
+
 it("requires focused heat objects only when a named heat component repeats in an owned heat clause",()=>{
  const taskFor=(body:string)=>{
   const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");

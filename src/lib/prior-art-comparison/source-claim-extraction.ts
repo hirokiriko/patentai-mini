@@ -109,8 +109,28 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
         }
       }
     }
-    for(const [partIndex,clauseIds]of partitions.entries()){
-    const split=partitions.length>1, taskId=`${sourceDigest}:${claimNo}${split?`:part${partIndex+1}of${partitions.length}`:""}`;
+    // A dense final mode-choice part can retain two disjoint responsibilities.
+    // Earlier task identities and bytes stay unchanged. Context and every
+    // cross-boundary guard remain complete; no answer supplies another's scope.
+    const responsibilities=partitions.flatMap((clauseIds,partIndex)=>{
+      const plain={partIndex,clauseIds,segment:undefined as number|undefined};
+      const choiceTail=source.source.literalStructure?.modes.some(([no,,kind,members,declaration])=>
+        no===claimNo&&kind==="choice"&&members.length>=2&&clauseIds.some(id=>c.clauses[id][0]<declaration[1]&&declaration[1]<=c.clauses[id][1]));
+      const owned=allObligations.filter(t=>clauseIds.includes(t.clause));
+      if(partitions.length!==3||partIndex!==2||!choiceTail||owned.length<10)return [plain];
+      const pathStarts=new Set(sourceReadingTasks(c,true,true).filter(t=>t.kind==="path"&&t.polarity==="positive").map(t=>t.clause));
+      const candidates=clauseIds.slice(1).flatMap(boundary=>{
+        const coordinate=c.clauses[boundary][0],left=owned.filter(t=>t.clause<boundary).length,right=owned.length-left;
+        return pathStarts.has(boundary)&&left>0&&right>0&&Math.max(left,right)<=Math.ceil(owned.length*0.6)&&
+          !allObligations.some(t=>t.span[0]<coordinate&&coordinate<t.span[1])?[{boundary,imbalance:Math.abs(left-right)}]:[];
+      }).sort((a,b)=>a.imbalance-b.imbalance||a.boundary-b.boundary);
+      if(!candidates.length)return [plain];
+      const boundary=candidates[0].boundary;
+      return [{partIndex,clauseIds:clauseIds.filter(id=>id<boundary),segment:0},
+        {partIndex,clauseIds:clauseIds.filter(id=>id>=boundary),segment:1}];
+    });
+    for(const {partIndex,clauseIds,segment}of responsibilities){
+    const split=partitions.length>1, taskId=`${sourceDigest}:${claimNo}${split?`:part${partIndex+1}of${partitions.length}`:""}${segment===undefined?"":`:segment${segment+1}of2`}`;
     const obligationIndices=allObligations.flatMap((t,i)=>clauseIds.includes(t.clause)?[i]:[]);
     const obligations=obligationIndices.map(i=>allObligations[i]),obligationKeys=obligationIndices.map(i=>`t${i}`);
     const groupKeys=clauseIds.map(i=>`f${i}`);
@@ -307,7 +327,7 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
           ...(literalReferenceChoices.length?{literalReferenceChoices:{
             instruction:"Exact locator alternatives for repeated text in the owned clauses, not facts or required meanings. Select the occurrence supported by the original assertion using the existing {reference,focus} form. A narrower focus is allowed only if unique inside that reference. These choices are not exhaustive; other exact unique references remain allowed. Context adds no semantic evidence. Never substitute another mode's or clause's occurrence.",
             choices:literalReferenceChoices}}:{}),
-          ...(split?{partition:{index:partIndex,count:partitions.length,clauseIds,loopIds:loops}}:{}),
+          ...(split?{partition:{index:partIndex,count:partitions.length,clauseIds,loopIds:loops,...(segment===undefined?{}:{segment:{index:segment,count:2}})}}:{}),
           obligations: obligations.map((t, i) => ({ key: obligationKeys[i], clause: t.clause, predicate: t.kind, literal: c.grid.text.slice(...t.span) })),
           requiredRouteClauses: [...sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)),
             ...ownedTerminals].map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },

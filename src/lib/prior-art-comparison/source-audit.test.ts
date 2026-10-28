@@ -43,3 +43,14 @@ it.each([2,3])("requires an exact adjacent %s-part roster and preserves only the
  for(const bad of [parts.slice(1),parts.slice(0,-1),[...parts].reverse(),[base,...parts],[parts[0],...parts],parts.map((p,i)=>i===1?{...p,id:`${base.id}:part2of${count===3?2:3}`}:p)])
   expect(()=>sourceAudit(operationId,inputDigest,bad,[])).toThrow();
 });
+
+it("requires both ordered segments of only the final third and preserves the failed prefix",()=>{
+ const base=tasks[0],ids=["part1of3","part2of3","part3of3:segment1of2","part3of3:segment2of2"];
+ const parts=ids.map(id=>({...base,id:`${base.id}:${id}`}));
+ const a=sourceAudit(operationId,inputDigest,parts,parts.slice(0,3).map(t=>({taskId:t.id,value:{raw:"unchanged"}})),{taskId:parts[3].id,text:"stopped"});
+ expect(validateSourceAudit(a,operationId,inputDigest,parts)).toEqual(a);
+ for(const bad of [parts.slice(0,-1),parts.slice(1),[...parts].reverse(),[...parts.slice(0,2),parts[3],parts[2]],
+  [...parts,{...base,id:`${base.id}:part3of3`}],parts.map((p,i)=>i===2?{...p,id:`${base.id}:part2of3:segment1of2`}:p),
+  parts.map((p,i)=>i===3?{...p,id:`${base.id}:part3of3:segment2of3`}:p)])
+  expect(()=>sourceAudit(operationId,inputDigest,bad,[])).toThrow("save_unconfirmed");
+});

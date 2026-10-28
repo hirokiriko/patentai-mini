@@ -119,3 +119,12 @@ prove a unique location or correct meaning. Unaffected tasks retain their exact
 system, prompt and schema. Earlier results from a changed task cannot use the
 input-alternatives-only reuse contract. Preserve failed raw responses and require
 fresh independently reviewed output for that task before full-source assembly.
+
+A dense final third containing a canonical mode-choice tail may be divided once
+at a positive route clause into two balanced responsibilities. Both retain the
+complete original context, global clause/obligation/loop identities and explicit
+local scopes. Earlier thirds keep their exact request identities and bytes.
+The request limit is 26; time, token, retry and quality limits are unchanged.
+Only an adjacent, complete `part3of3:segment1of2` / `segment2of2` pair is valid in
+the audit roster. A segment is never a complete claim or permission to reuse a
+failed answer. Full-source assembly and independent semantic QA remain required.
