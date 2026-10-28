@@ -68,22 +68,22 @@ describe("finite per-claim comparison scope (fictional transport only)",()=>{
 });
 
 
-describe("bounded source-high wait only inside finite claim scope",()=>{
+describe("bounded medium/high source wait only inside finite claim scope",()=>{
  beforeEach(()=>{vi.useFakeTimers();vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});});
  afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.clearAllTimers();vi.useRealTimers();});
  const high=(task="extract_source_propositions",model="patentai-gpt54",effort="high")=>({...request(task),body:JSON.stringify({...JSON.parse(request(task).body),model,reasoning:{effort}})});
- it.each(["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"])("receives a360second source response only on the identified high finite scope:%s",async model=>{
+ it.each(["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"].flatMap(model=>["medium","high"].map(effort=>({model,effort}))))("receives a360second source response on the identified finite scope:$model/$effort",async({model,effort})=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(()=>new Promise(resolve=>setTimeout(()=>resolve(response()),360000)));vi.stubGlobal("fetch",transport);
-  await withPriorArtClaimComparisonBudget(1,async()=>{const pending=boundedAzureFetch("normal")(url,high(undefined,model));const done=expect(pending).resolves.toHaveProperty("status",200);await vi.advanceTimersByTimeAsync(360000);await done;});expect(transport).toHaveBeenCalledTimes(1);
+  await withPriorArtClaimComparisonBudget(1,async()=>{const pending=boundedAzureFetch("normal")(url,high(undefined,model,effort));const done=expect(pending).resolves.toHaveProperty("status",200);await vi.advanceTimersByTimeAsync(360000);await done;});expect(transport).toHaveBeenCalledTimes(1);
  });
- it.each(["low","medium","xhigh","unknown","oldscope"])("keeps the210second request boundary for%s",async mode=>{
+ it.each(["low","xhigh","unknown","oldscope"])("keeps the210second request boundary for%s",async mode=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(()=>new Promise(resolve=>setTimeout(()=>resolve(response()),240000)));vi.stubGlobal("fetch",transport);
   const run=async()=>{const send=boundedAzureFetch("normal"),pending=send(url,high(undefined,mode==="unknown"?"custom-alias":"patentai-gpt54",["low","medium","xhigh"].includes(mode)?mode:"high"));const done=expect(pending).rejects.toThrow("ai_operation_stopped");await vi.advanceTimersByTimeAsync(210000);await done;await expect(send(url,high())).rejects.toThrow("ai_operation_stopped");};
   if(mode==="oldscope")await withPriorArtComparisonBudget(run,1);else await withPriorArtClaimComparisonBudget(1,run);expect(transport).toHaveBeenCalledTimes(1);
  });
- it("aborts source at420seconds and never retries its unknown send",async()=>{
+ it.each(["medium","high"])("aborts %s source at420seconds and never retries its unknown send",async effort=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(()=>new Promise(()=>{}));vi.stubGlobal("fetch",transport);
-  await withPriorArtClaimComparisonBudget(1,async()=>{const send=boundedAzureFetch("normal"),pending=send(url,high());const done=expect(pending).rejects.toThrow("ai_operation_stopped");await vi.advanceTimersByTimeAsync(419999);expect(transport).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(1);await done;await expect(send(url,high())).rejects.toThrow("ai_operation_stopped");});expect(transport).toHaveBeenCalledTimes(1);
+  await withPriorArtClaimComparisonBudget(1,async()=>{const send=boundedAzureFetch("normal");let settled=false;const pending=send(url,high(undefined,undefined,effort));void pending.then(()=>{settled=true;},()=>{settled=true;});const done=expect(pending).rejects.toThrow("ai_operation_stopped");await vi.advanceTimersByTimeAsync(210001);expect(settled).toBe(false);await vi.advanceTimersByTimeAsync(209998);expect(settled).toBe(false);expect(transport).toHaveBeenCalledTimes(1);await vi.advanceTimersByTimeAsync(1);await done;await expect(send(url,high())).rejects.toThrow("ai_operation_stopped");});expect(transport).toHaveBeenCalledTimes(1);
  });
  it.each(["compare","review"])("keeps generation/review210seconds even after longer source admission:%s",async task=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async(_u,init)=>JSON.parse(JSON.parse(String(init?.body)).input[0].content).task===task?new Promise(()=>{}):response());vi.stubGlobal("fetch",transport);

@@ -187,7 +187,7 @@ export class AiOperationBudget {
           keys.add("service_tier");
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
-        if (this.comparison?.claimPlan && role === "normal" && body.reasoning?.effort === "high" &&
+        if (this.comparison?.claimPlan && role === "normal" && ["medium", "high"].includes(body.reasoning?.effort) &&
             isComparisonTaskInput(body.input,"extract_source_propositions"))
           requestMilliseconds = comparisonRequestMilliseconds({ provider: "azure.responses", modelId: body.model }, "source");
         const outputLimit = this.comparison && role === "normal" && ["low","medium","high"].includes(body.reasoning?.effort) &&

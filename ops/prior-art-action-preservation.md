@@ -146,3 +146,11 @@ Source responses, quotation coordinates, and semantic completeness checks remain
 unchanged. Previously acquired responses require strict validation and original
 source QA before any reuse.
 
+The finite claim scope applies the existing 420-second source deadline to both
+medium whole-claim and high partition requests for the identified GPT-5.4
+deployment. Its request classification previously recognized only high and
+prematurely stopped medium requests at 210 seconds. Low or unsupported model
+requests, generation, review, generic scopes and managed-watch limits keep their
+existing deadlines. A timed-out send stays consumed with unknown usage held;
+correcting this classification neither retries it nor resets the operation clock.
+
