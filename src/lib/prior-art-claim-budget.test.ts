@@ -11,19 +11,20 @@ describe("finite per-claim comparison scope (fictional transport only)",()=>{
   await withPriorArtClaimComparisonBudget(19,async()=>{const send=boundedAzureFetch("normal");for(let n=0;n<19;n++)await send(url,request());if(!diagnostic)await send(url,request("compare"));await send(url,request("review"));await expect(send(url,request("review"))).rejects.toThrow("ai_operation_stopped");},diagnostic);
   expect(transport).toHaveBeenCalledTimes(diagnostic?20:21);expect(AbortSignal.timeout).toHaveBeenNthCalledWith(1,19*420000+(diagnostic?1:2)*210000+30000+(diagnostic?900000:0));
  });
- it.each([0,-1,26,1.5])("rejects invalid claim count%s before transport",n=>{
+ it.each([0,-1,27,1.5])("rejects invalid claim count%s before transport",n=>{
   const transport=vi.fn<typeof fetch>();vi.stubGlobal("fetch",transport);expect(()=>withPriorArtClaimComparisonBudget(n,async()=>undefined)).toThrow("ai_operation_stopped");expect(transport).not.toHaveBeenCalled();
  });
- it.each([false,true])("fixes the complete25 partition deadline at admission, diagnostic=%s",async diagnostic=>{
+ it.each([[25,false],[25,true],[26,false],[26,true]] as const)("fixes the complete%s partition deadline at admission, diagnostic=%s",async(count,diagnostic)=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
-  await withPriorArtClaimComparisonBudget(25,async deadline=>{
-   const send=boundedAzureFetch("normal");for(let n=0;n<25;n++)await send(url,request());
-   await vi.advanceTimersByTimeAsync(diagnostic?11_640_000:10_950_000);
+  const milliseconds=diagnostic?(count===25?11_640_000:11_850_000):10_950_000;
+  await withPriorArtClaimComparisonBudget(count,async deadline=>{
+   const send=boundedAzureFetch("normal");for(let n=0;n<count;n++)await send(url,request());
+   await vi.advanceTimersByTimeAsync(milliseconds);
    expect(deadline.aborted).toBe(true);
    await expect(send(url,request(diagnostic?"review":"compare"))).rejects.toThrow("ai_operation_stopped");
   },diagnostic);
-  expect(transport).toHaveBeenCalledTimes(25);
-  expect(AbortSignal.timeout).toHaveBeenNthCalledWith(1,diagnostic?11_640_000:10_950_000);
+  expect(transport).toHaveBeenCalledTimes(count);
+  expect(AbortSignal.timeout).toHaveBeenNthCalledWith(1,milliseconds);
  });
  it.each(["compare","review"])("rejects premature%s and all later sends",async task=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
