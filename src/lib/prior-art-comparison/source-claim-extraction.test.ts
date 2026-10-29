@@ -29,6 +29,11 @@ it.each(["。","ことを特徴とする装置。"])("preserves the complete bra
  const answers=plan.tasks.map(t=>({taskId:t.id,value:{v:34,sourceDigest:t.sourceDigest,claimNo:1,d:t.sourceDigest,scopes:[],c1:structuredClone(c1)}}));
  expect(JSON.parse(plan.tasks[0].prompt).target.continuityCues.maintainedSpans[0].literal).toBe(full.slice(4));
  expect(decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers)).facts).toHaveLength(12);
+ const inventedPrefix=structuredClone(answers[0].value);
+ (inventedPrefix.c1.f1[1].m as {V:string[][]}).V=[["1-1:前記白管"]];
+ const unchanged=JSON.stringify(inventedPrefix);
+ expect((await plan.tasks[0].schema.validate!(inventedPrefix)).success).toBe(false);
+ expect(JSON.stringify(inventedPrefix)).toBe(unchanged);
  const shortened=structuredClone(answers[0].value);shortened.c1.f5[0].m.J=[["5-5:赤弁が開いた状態を維持する"]];shortened.c1.f5[0].m.a="5-5:赤弁が開いた状態を維持する";
  expect((await plan.tasks[0].schema.validate!(shortened)).success).toBe(false);
  if(ending.startsWith("こと")){
@@ -39,6 +44,27 @@ it.each(["。","ことを特徴とする装置。"])("preserves the complete bra
  const noBranch=structuredClone(answers[0].value);
  (noBranch.c1.f1[0].m as {J:string[][]}).J=[["1-1:液を青槽から赤槽へ流す"]];
  expect((await plan.tasks[0].schema.validate!(noBranch)).success).toBe(false);
+});
+
+it("does not borrow a component prefix from a later original occurrence",()=>{
+ const c=sourceReadingClaim(1,"白管を通す。前記白管を閉じる。");
+ expect(()=>resolveClaimLiteralReference(c,"0-0:白管")).not.toThrow();
+ expect(()=>resolveClaimLiteralReference(c,"1-1:前記白管")).not.toThrow();
+ expect(()=>resolveClaimLiteralReference(c,"0-0:前記白管")).toThrow();
+});
+
+it.each([
+ ["制御器は、源を停止した後、圧力が所定値まで縮小した場合、青弁を開き、赤弁を閉じる装置。",true],
+ ["制御器は、源を停止した後、圧力が所定値まで縮小した場合、青弁を開き、赤弁を閉じ、白弁を開く装置。",false],
+ [`制御器は、${"検査対象".repeat(28)}を調べる装置。`,false],
+ ["冷媒を白管に流し、冷媒を黒管に流す。",false],
+])("bounds compact eligibility without removing conditions: %s",(text,eligible)=>{
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ for(const t of sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks){
+  expect(t.compactBatchEligible).toBe(eligible);
+  expect(JSON.parse(t.prompt).sourceContext.source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(text);
+ }
 });
 
 it.each(["維持する場合、弁を開く。","維持しない。","維持する必要がある。","維持するとは限らない。"])("does not force a compound maintained state for %s",tail=>{
