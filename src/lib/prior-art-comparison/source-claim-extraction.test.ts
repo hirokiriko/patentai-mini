@@ -14,6 +14,35 @@ import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
 
+it("retains a coordinated placement and its direction beside a fixed singleton mode through full assembly",async()=>{
+ const text="補助器は、通路の空気の流れに対して、熱交換器の上流側に設けられると共に、前記第２の運転モードは、光モードである。";
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const answers=plan.tasks.map(task=>({taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,
+  scopes:[{id:"s0",g:"when",G:[["1-1:通路の空気の流れに対して"]],proof:"1-1:通路の空気の流れに対して"}],
+  c1:{possessions:[],sets:[{R:4,s:null,m:{u:["3-3:前記第２の運転モード"],x:"capability",p:"positive",k:"set",S:"required",e:"closed",M:[["4-4:光モード"]]},O:[null,null,null,null],F:null}],
+   f0:[],f1:[],f2:[{s:"s0",m:{u:["0-0:補助器"],x:"capability",p:"positive",k:"relation",P:"is_state",J:[["2-2:熱交換器の上流側に設けられる"]],a:"2-2:熱交換器の上流側に設けられる"},O:[null,null,null,null],F:null}],f3:[],f4:[],T:[]}}}));
+ for(const task of plan.tasks){expect(task.system).toContain('fixes the mode identity');expect(task.outputTokenLimit).toBe(22528);}
+ const before=JSON.stringify(answers),actual=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers));
+ expect(actual.facts.some(f=>f.meaning.kind==="set"&&f.meaning.context==="capability"&&f.meaning.selection==="required"&&f.meaning.extent==="closed"&&f.meaning.members.join("")==="光モード")).toBe(true);
+ expect(actual.facts.some(f=>f.meaning.kind==="relation"&&f.meaning.predicate==="is_state"&&f.meaning.objects.includes("熱交換器の上流側に設けられる")&&f.meaning.guard.conditions.includes("通路の空気の流れに対して"))).toBe(true);
+ expect(JSON.stringify(answers)).toBe(before);
+ const bad=structuredClone(answers[0].value);bad.c1.f2[0].m.a="2-2:設けられる";
+ expect((await plan.tasks[0].schema.validate!(bad)).success).toBe(false);
+});
+
+it.each(["場合、","必要がある、","とは限らない、","と共には設けられない、","と共に設けられる場合、"])("does not treat a passive placement prefix as asserted before %s",tail=>{
+ const action="熱交換器の上流側に設けられる",text=`補助器は、${action}${tail}光モードを使う。`,c=sourceReadingClaim(1,text);
+ const start=text.indexOf(action),span:[number,number]=[start,start+action.length];
+ expect(()=>assertSourceSemanticReading(c,[{kind:"relation",predicate:"is_state",polarity:"positive",polarityProof:null,action:span,evidence:[span],objectSpans:[[span]],guardSpans:[],guardProof:null,identity:"fictional"}],sourceFullActionCues(c))).toThrow();
+});
+
+it.each(["前記第２の運転モードは、光モード又は音モードである。","前記第２の運転モードは、光モードではない。","前記第２の運転モードは、光モードである場合、弁を開く。","「前記第２の運転モードは、光モードである。」という例。"])("does not prescribe a singleton or smaller output for %s",text=>{
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ for(const task of sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks){expect(task.system).not.toContain('fixes the mode identity');expect(task.outputTokenLimit).toBeUndefined();}
+});
+
 it("keeps one-of selection independent from list extent without relaxing quotation checks",async()=>{
  const taskFor=(body:string)=>{
   const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${body}`,11,"架空");

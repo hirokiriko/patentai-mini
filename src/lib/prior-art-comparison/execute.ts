@@ -32,11 +32,11 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     try {
-      const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string, partitionedSource?: boolean) => {
+      const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string, partitionedSource?: boolean, outputTokenLimit?: number) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
         const model = getModel();
         const options = comparisonProviderOptions(model, phase, partitionedSource);
-        const outputTokens = comparisonOutputTokens(model, phase);
+        const outputTokens = Math.min(comparisonOutputTokens(model, phase), outputTokenLimit ?? Infinity);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(comparisonRequestMilliseconds(model, phase))]);
         const answer = await generateObject({ model, schema,
           system, prompt, maxRetries: 0,
@@ -71,7 +71,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       };
       for (const task of sourcePlan.tasks) {
         try {
-          const value = await generate(task.system, task.prompt, task.schema, "source", task.id, task.partitioned);
+          const value = await generate(task.system, task.prompt, task.schema, "source", task.id, task.partitioned, task.outputTokenLimit);
           pieces.push({ taskId: task.id, value });
         } catch (error) {
           // Retain completed prefix and bounded model text only; never transport

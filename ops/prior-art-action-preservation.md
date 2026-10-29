@@ -177,3 +177,16 @@ narrower original quotation. Fictional regression cases accept that occurrence
 and reject the ambiguous broader quotation without modifying either answer.
 Other tasks, schemas and strict decoders remain unchanged.
 
+
+A quoted passive placement ending `に設けられると共に、` is an explicit
+coordinated state. Validation retains the complete location and exact action
+occurrence; conditional, negative and incomplete placement quotations still
+fail. This optional state check does not infer or add missing facts.
+
+Short affirmative fixed-mode definitions ending `である` receive task-specific
+reading guidance: preserve the printed subject and single member as a required
+closed capability set, separately from nearby placement and direction. Quoted
+or conditional claims receive no such advice. The advice derives no facts.
+These unpartitioned tasks of at most eight clauses cap requested output at
+22,528 tokens, or the provider's smaller existing cap. The normal execution
+uses this same task cap; incomplete answers and semantic omissions still fail.

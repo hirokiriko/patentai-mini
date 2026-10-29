@@ -38,6 +38,17 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
   });
   afterEach(() => { expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(SECRET); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+  it.each([["patentai-gpt54",22528],["fictional",8192]])("uses the smaller task/provider output bound on %s without retrying an incomplete answer",async(model,limit)=>{
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
+    const f=fictionalInputs(),text="【請求項1】前記第２の運転モードは、光モードである。";
+    f.inputs.draft=parseComparisonSource(text,11,"基準");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(text,d.id,"架空"));
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(url,init)=>{
+      expect(String(url)).toMatch(/^https:\/\/example\.invalid\/openai\//);
+      expect(JSON.parse(String(init?.body)).max_output_tokens).toBe(limit);
+      return Response.json({id:"resp_fixture",model,created_at:0,status:"incomplete",incomplete_details:{reason:"max_output_tokens"},service_tier:"default",output:[],usage:{input_tokens:100,output_tokens:30}});
+    });vi.stubGlobal("fetch",transport);
+    await expect(executeComparison(f.inputs,f.selection)).rejects.toThrow();expect(transport).toHaveBeenCalledTimes(1);
+  });
   it("sends every selected full source tail and persists exactly its evidence", async () => {
     const { inputs, selection } = fictionalInputs();
     const payloads: string[] = [];
