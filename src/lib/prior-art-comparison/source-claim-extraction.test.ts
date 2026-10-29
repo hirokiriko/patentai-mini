@@ -43,6 +43,36 @@ it("keeps one-of selection independent from list extent without relaxing quotati
  const before=JSON.stringify(invalid);
  expect((await task.schema.validate!(invalid)).success).toBe(false);
  expect(JSON.stringify(invalid)).toBe(before);
+ const shortened=structuredClone(raw);
+ (shortened.c1.f1 as {m:{a:string}}[])[0].m.a="1-1:開く";
+ const unchanged=JSON.stringify(shortened);
+ expect((await task.schema.validate!(shortened)).success).toBe(false);
+ expect(JSON.stringify(shortened)).toBe(unchanged);
+ expect(task.system).toContain("a must quote the COMPLETE obligation.literal");
+ expect(task.system).toContain("each alternative separate");
+});
+
+it("retains an upstream branch definition alongside the route in a one-of task",async()=>{
+ const text="青弁の上流側で分岐し、液を青槽から赤槽へ流す白管を備える。制御器は、青弁と赤弁の何れか一方を開く。";
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ expect(task.system).toContain("do not express where a pipe branches");
+ const common={x:"capability",g:"unconditional",G:[],p:"positive"};
+ const c1=fictionalQuotationClaim(sourceReadingClaim(1,text),{
+  Q:["q0|1-1:白管","q1|0-1:青弁の上流側で分岐し、液を青槽から赤槽へ流す","q2|1-1:流す","q3|1-1:青槽","q4|1-1:赤槽","q5|1-1:備える","q6|2-2:制御器","q7|3-3:青弁","q8|3-3:赤弁","q9|3-3:何れか一方","q10|3-3:何れか一方を開く"],
+  facts:[{R:1,m:{...common,u:null,k:"relation",P:"has",J:[["q0"]],a:"q5"},O:[null,null,null,null,null],F:null},
+   {R:1,m:{...common,u:["q0"],k:"relation",P:"executes",J:[["q1"]],a:"q2"},O:[null,null,null,null,null],F:null},
+   {R:1,m:{...common,u:null,k:"path",i:["q3"],j:["q4"],V:[["q0"]],B:[],e:"whole",r:"route"},O:[null,null,null,null,null],F:null},
+   {R:3,m:{...common,x:"operation",u:["q6"],k:"relation",P:"opens_one",J:[["q7"],["q8"]],a:"q10"},O:["q9",null,null,null,null],F:null}]
+ });
+ const raw={v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const omitted=structuredClone(raw);
+ (omitted.c1.f1 as {m:{J:string[][]}}[])[0].m.J=[["1-1:液を青槽から赤槽へ流す"]];
+ const before=JSON.stringify(omitted);
+ expect((await task.schema.validate!(omitted)).success).toBe(false);
+ expect(JSON.stringify(omitted)).toBe(before);
 });
 
 it("segments only a dense final mode-choice part with disjoint original obligations and full context",async()=>{

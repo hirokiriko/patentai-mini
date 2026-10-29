@@ -161,3 +161,11 @@ limiting quotation, separate from the one-of selection evidence. The action,
 actor and full conditions remain mandatory. Other tasks retain their exact
 request bytes; all schemas, decoders and quality criteria stay unchanged.
 
+The same one-of tasks explicitly retain the complete choice action in its action
+quotation and quote each affected valve as a separate component object. An
+opening verb alone cannot discharge a one-of action. Structural definitions,
+including the location of a branch, remain required alongside endpoint/via
+routes; a route does not encode that location. Fictional regression cases keep
+complete action and branch definitions valid while rejecting their omission.
+These instructions do not repair an acquired answer or relax its validation.
+
