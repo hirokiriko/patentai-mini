@@ -169,3 +169,11 @@ routes; a route does not encode that location. Fictional regression cases keep
 complete action and branch definitions valid while rejecting their omission.
 These instructions do not repair an acquired answer or relax its validation.
 
+Whole-claim tasks with repeated heat-component names explicitly distinguish
+outer-reference uniqueness from focus uniqueness inside that reference. A
+unique full clause containing the component twice still has an ambiguous focus.
+The instructions require the actual heat-action occurrence, using an exact
+narrower original quotation. Fictional regression cases accept that occurrence
+and reject the ambiguous broader quotation without modifying either answer.
+Other tasks, schemas and strict decoders remain unchanged.
+

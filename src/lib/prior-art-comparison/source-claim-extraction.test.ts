@@ -121,6 +121,7 @@ it("requires focused heat objects only when a named heat component repeats in an
  expect(((heat.properties!.J as JSONSchema7).items as JSONSchema7).description).toBe((definitions.PriorArtSourceTerm as JSONSchema7).description);
  expect(new Set(relation.flatMap(b=>(b.properties!.P as JSONSchema7).enum!))).toEqual(new Set((original.properties!.P as JSONSchema7).enum));
  expect(task.system).toContain("heat J requires {reference,focus}");
+ expect(task.system).toContain("focus occurs exactly once INSIDE that reference");
  for(const text of ["青熱交換器にて液を放熱させる。","青熱交換器から青熱交換器へ液を流す。","液を放熱させる放熱器。"])
   expect(branches(taskFor(text)).filter(b=>b.properties?.J)).toHaveLength(1);
  const c=sourceReadingClaim(1,body),choices=JSON.parse(task.prompt).target.literalReferenceChoices.choices;
@@ -306,6 +307,26 @@ it("rejects a different occurrence or long evidence quote as the required indepe
  const before=JSON.stringify(absent);
  expect((await task.schema.validate!(absent)).success).toBe(false);
  expect(JSON.stringify(absent)).toBe(before);
+});
+
+it("requires a unique inner heat-object occurrence even when its outer quote is unique",async()=>{
+ const f=fictionalInputs(),text="制御器は、青熱交換器を用いて当該青熱交換器にて放熱させる。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const claim=fictionalQuotationClaim(sourceReadingClaim(1,text),{
+  Q:["q0|0-0:制御器","q1|1-1:当該青熱交換器にて放熱させる","q2|1-1:放熱させる"],
+  facts:[{R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"releases_heat",J:[["q1"]],a:"q2"},O:[null,null,null,null,null],F:null}],
+ });
+ const heat=(claim.f1 as {m:{J:unknown[][]}}[])[0];
+ heat.m.J=[[{reference:"1-1:当該青熱交換器にて放熱させる",focus:"青熱交換器"}]];
+ const raw={v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const ambiguous=structuredClone(raw);
+ (ambiguous.c1.f1 as {m:{J:unknown[][]}}[])[0].m.J=[[{reference:"1-1:青熱交換器を用いて当該青熱交換器にて放熱させる",focus:"青熱交換器"}]];
+ const before=JSON.stringify(ambiguous);
+ expect((await task.schema.validate!(ambiguous)).success).toBe(false);
+ expect(JSON.stringify(ambiguous)).toBe(before);
 });
 
 it("requires the maintained state and verb together in both action and object",async()=>{
