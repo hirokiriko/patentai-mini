@@ -17,6 +17,7 @@ import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
 import { comparisonModelSchema } from "./model-schema";
 import { sourceClaimExtractionPlan, assembleSourceClaims } from "./source-claim-extraction";
+import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 
@@ -28,7 +29,8 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
   const batch = separatedGenerationPlan(plan, PROPOSITION_GENERATION_SYSTEM);
   assertPropositionPlan(batch);
   const sourcePlan = sourceClaimExtractionPlan(batch);
-  return withPriorArtClaimComparisonBudget(sourcePlan.tasks.length, async absolute => {
+  const sourceRequests = sourceRequestPlan(sourcePlan);
+  return withPriorArtClaimComparisonBudget(sourceRequests.length, async absolute => {
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     try {
@@ -46,6 +48,9 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           if (signal.aborted) throw new ComparisonExecutionError(stage, "timeout");
           throw error;
         });
+        // A syntactically complete object can still accompany a provider's
+        // truncated response. It must not authorize adopting either member.
+        if (answer.finishReason !== "stop") throw new ComparisonExecutionError(stage, "output_incomplete");
         // Azure also reconciles transport usage in the existing budget. Preserve
         // the same fail-closed rule for other existing providers at this adapter.
         if (signal.aborted) throw new ComparisonExecutionError(stage, "timeout");
@@ -69,15 +74,15 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         try { await auditSink(sourceAudit(selection.operationId, inputs.inputDigest, sourcePlan.tasks, pieces, failure)); }
         catch { throw new ComparisonExecutionError("source_reading", "transport_unknown"); }
       };
-      for (const task of sourcePlan.tasks) {
+      for (const request of sourceRequests) {
         try {
-          const value = await generate(task.system, task.prompt, task.schema, "source", task.id, task.partitioned, task.outputTokenLimit);
-          pieces.push({ taskId: task.id, value });
+          const value = await generate(request.system, request.prompt, request.schema, "source", request.id, request.partitioned, request.outputTokenLimit);
+          pieces.push(...await sourceRequestPieces(request, value));
         } catch (error) {
           // Retain completed prefix and bounded model text only; never transport
           // headers, credentials, error messages or inferred/repaired answers.
           await persistAudit(NoObjectGeneratedError.isInstance(error) && typeof error.text === "string"
-            ? { taskId: task.id, text: error.text } : undefined);
+            ? { taskId: request.tasks[0].id, text: error.text } : undefined);
           throw error;
         }
       }

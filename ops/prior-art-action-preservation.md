@@ -190,3 +190,20 @@ or conditional claims receive no such advice. The advice derives no facts.
 These unpartitioned tasks of at most eight clauses cap requested output at
 22,528 tokens, or the provider's smaller existing cap. The normal execution
 uses this same task cap; incomplete answers and semantic omissions still fail.
+
+Very short adjacent whole claims can share one physical request. The source
+plan groups at most two claims from the same source, in original order, only
+when each has at most four clauses and 100 characters, no required route, and
+identical system instructions. Fixed-mode definitions stay separate. Both
+targets retain the unchanged complete source context and their own strict
+schemas, quotation coordinates and obligations. The wrapper is accepted only
+after both members validate; the source audit retains the unchanged members in
+the original logical task order. Physical request and usage counts remain one.
+Requested output is capped at 22,528 tokens or the provider's smaller limit.
+Incomplete provider responses fail even when their JSON happens to be complete.
+
+Claims containing an upstream branching definition together with a coordinated
+maintained state receive exact original span reminders. These do not construct
+facts. The decoder also rejects a maintained-state quotation that drops the
+preceding coordinated valve state, including when its tail quotation is longer.
+Full original assembly and independent semantic QA remain necessary.

@@ -14,7 +14,7 @@ import { ComparisonError } from "./source";
 import type { Span } from "./propositions";
 import { projectClaimScopeLanes } from "./source-claim-scope-projection";
 import { claimLiteralDictionary,mapClaimLiteralFact,claimLiteralReferenceChoices } from "./source-claim-literal-refs";
-import { sourceClaimObligations } from "./source-claim-obligations";
+import { sourceClaimObligations, sourceCompoundMaintainedStates } from "./source-claim-obligations";
 import { sourceTerminalRoutes, matchesSourceTerminalRoute } from "./source-terminal-routes";
 import { sourceCausalModeGuards, assertSourceCausalModeGuards } from "./source-causal-mode-guards";
 
@@ -24,7 +24,7 @@ const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => reco
   Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 
 export type SourceClaimTask = Readonly<{ id: string; sourceIndex: number; sourceDigest: string; claimNo: number;
-  partitioned: boolean; outputTokenLimit?: number; system: string; prompt: string; schema: Schema<unknown> }>;
+  partitioned: boolean; compactBatchEligible?: boolean; outputTokenLimit?: number; system: string; prompt: string; schema: Schema<unknown> }>;
 export type SourceClaimPlan = Readonly<{ tasks: readonly SourceClaimTask[] }>;
 const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonChunk[];
   input: ReturnType<typeof propositionSourceInput>; schema: ReturnType<typeof sourceIdentifiedPropositionModelSchemaFor>;
@@ -82,6 +82,12 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     const canonicalSetInstruction=source.source.literalStructure?.modes.some(([no])=>no===claimNo)?"Skip a set ONLY when its subject, selection, extent and complete members exactly match a supplied sourceContext target claim canonicalModeSets entry; code adds those exact sets separately. Emit every other noncanonical set, including a set differing in any of those fields, and retain all nearby functions, actions, routes and guards. Never omit a set merely because it mentions a supplied mode or member.":"";
     const modeActorInstruction=canonicalSetInstruction?"For the separately defined modes, distinguish possession, an active defining function, and an action inside a mode. A later apparatus head licenses has.u when it governs the possession verb, and licenses a function actor when that function directly defines that head. The apparatus head after separate mode definitions does not by itself name the actor of their internal valve or process actions. Retain any explicitly printed governing actor, including a continuing controller, when it governs those actions; use u:null only when no such actor is printed, preserving the mode, complete guards, objects and full actions. Never borrow an actor from referenced claims, a possession, a route or another fact. A canonical mode set supplies no actor. Keep possession separate: 備える/備え owns every coordinated component head, including earlier function-defined heads. Null mode-action actors remove neither has members nor component-function actors. For repeated text, choose its exact occurrence yourself with {reference,focus}: a unique enclosing original quote and unique inner focus. Never use a bare repeated term or invent locator text.":"";
     const allObligations = sourceClaimObligations(c), allClauseIds=c.clauses.map((_,i)=>i);
+    const maintainedStates = sourceCompoundMaintainedStates(c);
+    const branchClauses = c.clauses.flatMap((span,clause)=>/^[^「」『』“”"、，。]{1,80}の上流側で分岐し[、，]$/u.test(c.grid.text.slice(...span)) ? [{clause,literal:c.grid.text.slice(...span)}] : []);
+    const continuityCues = branchClauses.length && maintainedStates.length ? {
+      instruction: "Read these exact original spans with their unchanged full context. Preserve each branching definition separately from its route, including the printed subject and branch location. For the maintained state, retain ALL coordinated states and the maintenance verb together in the maintains J/a. These spans supply no inferred actors, conditions or meanings; the model must quote and extract them from the original.",
+      branchClauses, maintainedSpans: maintainedStates.map(({clause,span})=>({firstClause:clause-1,lastClause:clause,literal:c.grid.text.slice(...span)}))
+    } : null;
     const causalGuards = sourceCausalModeGuards(c);
     const terminalRoutes = sourceTerminalRoutes(c);
     // Limit responsibility, never source context. A small, unambiguous terminal
@@ -300,6 +306,8 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
             if (m.P === "maintains" && (!action || !objects.some(term => term.length === 1 &&
                 term[0][0] === action[0] && term[0][1] === action[1]) ||
                 !/[^、，。]+(?:を|に)[^、，。]*維持/u.test(c.grid.text.slice(...action)))) throw invalid();
+            if (m.P === "maintains" && maintainedStates.some(({span}) => action &&
+                action[0] <= span[1]-"維持する".length && action[1] >= span[1] && action[0] > span[0])) throw invalid();
           }
           checked.push({ kind: String(m.k), predicate: m.P as string | undefined, action, polarity: String(m.p),
             polarityProof: O.polarity === null ? null : q(O.polarity), evidence: ids.map(id => c.clauses[id]),
@@ -333,8 +341,10 @@ For opens_one, a must quote the COMPLETE obligation.literal, including the choic
 Keep every structural definition alongside its routes. A path's endpoints, via and bypass components do not express where a pipe branches or is installed. Fictional "青弁の上流側で分岐し、液を青槽から赤槽へ流す白管": a route from 青槽 to 赤槽 via 白管 alone loses the upstream branch relation. Retain the complete quoted definition including 青弁の上流側で分岐し in a correctly typed fact with its printed subject, as well as the route. Account for every original clause, including structural clauses without an obligation; an empty fN is allowed only when its complete meaning is explicitly retained in another correctly scoped fact. Check every requiredRouteClauses occurrence using that clause's actual endpoint/via quotes; a combined path citing only earlier occurrences does not cover later route clauses.
 `:"");
     tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: claimSystem+(fixedModeIdentityInstruction?"\n"+fixedModeIdentityInstruction:"")+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
-      partitioned: split, ...(fixedModeIdentityInstruction&&!split&&c.clauses.length<=8?{outputTokenLimit:LIMITS.azureReasoningOutputTokens}:{}), prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
+      partitioned: split, compactBatchEligible: !split && !fixedModeIdentityInstruction && c.clauses.length<=4 && c.grid.text.length<=100 && !sourceReadingTasks(c,true,true).some(t=>t.kind==="path") && !ownedTerminals.length,
+      ...(fixedModeIdentityInstruction&&!split&&c.clauses.length<=8?{outputTokenLimit:LIMITS.azureReasoningOutputTokens}:{}), prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
+          ...(continuityCues?{continuityCues}:{}),
           ...(literalReferenceChoices.length?{literalReferenceChoices:{
             instruction:"Exact locator alternatives for repeated text in the owned clauses, not facts or required meanings. Select the occurrence supported by the original assertion using the existing {reference,focus} form. A narrower focus is allowed only if unique inside that reference. These choices are not exhaustive; other exact unique references remain allowed. Context adds no semantic evidence. Never substitute another mode's or clause's occurrence.",
             choices:literalReferenceChoices}}:{}),

@@ -6,6 +6,16 @@ const response=(usage:unknown={input_tokens:10,output_tokens:5})=>Response.json(
 describe("finite per-claim comparison scope (fictional transport only)",()=>{
  beforeEach(()=>{vi.useFakeTimers();vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});});
  afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.clearAllTimers();vi.useRealTimers();});
+ it.each(["compare","review","after_complete"])("counts a source pair once and rejects another pair at %s",async position=>{
+  const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
+  await withPriorArtClaimComparisonBudget(1,async()=>{
+   const send=boundedAzureFetch("normal");await send(url,request("extract_source_propositions_pair"));
+   if(position!=="compare")await send(url,request("compare"));
+   if(position==="after_complete")await send(url,request("review"));
+   await expect(send(url,request("extract_source_propositions_pair"))).rejects.toThrow("ai_operation_stopped");
+   await expect(send(url,request("review"))).rejects.toThrow("ai_operation_stopped");
+  });expect(transport).toHaveBeenCalledTimes(position==="compare"?1:position==="review"?2:3);
+ });
  it.each([false,true])("admits exactly19source plus fixed later stages, diagnostic=%s",async diagnostic=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
   await withPriorArtClaimComparisonBudget(19,async()=>{const send=boundedAzureFetch("normal");for(let n=0;n<19;n++)await send(url,request());if(!diagnostic)await send(url,request("compare"));await send(url,request("review"));await expect(send(url,request("review"))).rejects.toThrow("ai_operation_stopped");},diagnostic);

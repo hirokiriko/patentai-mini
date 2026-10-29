@@ -13,6 +13,37 @@ import {sourceReadingClaim} from "./source-clause-coverage";
 import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
+import {sourceCompoundMaintainedStates} from "./source-claim-obligations";
+
+it.each(["。","ことを特徴とする装置。"])("preserves the complete branching function and maintained state before %s",async ending=>{
+ const text="青弁の上流側で分岐し、液を青槽から赤槽へ流す白管と、制御器を備える装置。制御器は、青弁が閉じ、赤弁が開いた状態を維持する"+ending;
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const rel=(u:string,P:string,J:string[],a:string,x="capability")=>({s:null,m:{u:[u],x,p:"positive",k:"relation",P,J:J.map(q=>[q]),a},O:[null,null,null,null],F:null});
+ const full="4-5:青弁が閉じ、赤弁が開いた状態を維持する";
+ const c1={possessions:[{R:2,...rel("2-2:装置","has",["1-1:白管","2-2:制御器"],"2-2:備える")}],sets:[],f0:[],
+  f1:[rel("1-1:白管","executes",["0-1:青弁の上流側で分岐し、液を青槽から赤槽へ流す"],"1-1:流す"),
+   {s:null,m:{u:null,x:"capability",p:"positive",k:"path",i:["1-1:青槽"],j:["1-1:赤槽"],V:[["1-1:白管"]],B:[],e:"whole",r:"route"},O:[null,null,null,null],F:null}],
+  f2:[],f3:[],f4:[],f5:[rel("3-3:制御器","maintains",[full],full,"operation")],T:["f5:0","f5:0","f5:0"]};
+ const answers=plan.tasks.map(t=>({taskId:t.id,value:{v:34,sourceDigest:t.sourceDigest,claimNo:1,d:t.sourceDigest,scopes:[],c1:structuredClone(c1)}}));
+ expect(JSON.parse(plan.tasks[0].prompt).target.continuityCues.maintainedSpans[0].literal).toBe(full.slice(4));
+ expect(decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers)).facts).toHaveLength(12);
+ const shortened=structuredClone(answers[0].value);shortened.c1.f5[0].m.J=[["5-5:赤弁が開いた状態を維持する"]];shortened.c1.f5[0].m.a="5-5:赤弁が開いた状態を維持する";
+ expect((await plan.tasks[0].schema.validate!(shortened)).success).toBe(false);
+ if(ending.startsWith("こと")){
+  const extended=structuredClone(shortened),tail="5-5:赤弁が開いた状態を維持することを特徴とする";
+  extended.c1.f5[0].m.J=[[tail]];extended.c1.f5[0].m.a=tail;
+  expect((await plan.tasks[0].schema.validate!(extended)).success).toBe(false);
+ }
+ const noBranch=structuredClone(answers[0].value);
+ (noBranch.c1.f1[0].m as {J:string[][]}).J=[["1-1:液を青槽から赤槽へ流す"]];
+ expect((await plan.tasks[0].schema.validate!(noBranch)).success).toBe(false);
+});
+
+it.each(["維持する場合、弁を開く。","維持しない。","維持する必要がある。","維持するとは限らない。"])("does not force a compound maintained state for %s",tail=>{
+ expect(sourceCompoundMaintainedStates(sourceReadingClaim(1,`青弁が閉じ、赤弁が開いた状態を${tail}`))).toEqual([]);
+});
 
 it("retains a coordinated placement and its direction beside a fixed singleton mode through full assembly",async()=>{
  const text="補助器は、通路の空気の流れに対して、熱交換器の上流側に設けられると共に、前記第２の運転モードは、光モードである。";

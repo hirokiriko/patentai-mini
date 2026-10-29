@@ -1,5 +1,6 @@
 import type { SourceReadingClaim } from "./source-clause-coverage";
 import { sourceReadingTasks, type SourceReadingTask } from "./source-reading-tasks";
+import type { Span } from "./propositions";
 
 // Accept only an assertion boundary or a printed postposed subject. Matching
 // a prefix such as 特徴とする must not consume its subsequent negation/condition.
@@ -16,6 +17,21 @@ export function assertedModeAfter(tail: string): string | null {
   const predicate = /^(?:を(?:切り換えて)?実行する|である)/u.exec(ending)?.[0];
   return /^(?:と[、，]|のうち|であり[、，])/u.test(ending) ||
     !!predicate && assertedEnding(ending.slice(predicate.length)) ? mode : null;
+}
+
+/** Exact printed conjunctions only; do not infer states or extend a conditional
+ * or negative maintenance phrase into a positive assertion. */
+export function sourceCompoundMaintainedStates(c: SourceReadingClaim): { clause: number; span: Span }[] {
+  const found: { clause: number; span: Span }[] = [];
+  for (let i = 1; i < c.clauses.length; i++) {
+    const previous = c.grid.text.slice(...c.clauses[i-1]);
+    const current = c.grid.text.slice(...c.clauses[i]);
+    if (!/^[^「」『』“”"、，。]{1,80}が(?:(?:開いた|閉じた)状態で|閉じ|開き)[、，]$/u.test(previous)) continue;
+    const match = /^[^「」『』“”"、，。]{1,80}が(?:開いた|閉じた)状態を維持する/u.exec(current);
+    if (!match || !assertedEnding(current.slice(match[0].length)) || /場合|とき|なら|限り|ない|なく|禁止/u.test(previous + match[0])) continue;
+    found.push({ clause: i, span: [c.clauses[i-1][0], c.clauses[i][0] + match[0].length] });
+  }
+  return found;
 }
 
 /** Positions of printed actions, never completed meanings. Required response

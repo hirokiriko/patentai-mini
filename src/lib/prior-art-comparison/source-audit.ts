@@ -5,7 +5,8 @@ import { LIMITS } from "./limits";
 export const SOURCE_AUDIT_MAX_BYTES = 2_500_000;
 export type SourceAuditTask = { -readonly [K in "id" | "sourceIndex" | "sourceDigest" | "claimNo"]: SourceClaimTask[K] };
 export type SourceAudit = { version: 1; operationId: string; inputDigest: string; tasks: SourceAuditTask[];
-  // Unmodified SDK structured objects; these are not provider HTTP envelopes.
+  // Unmodified SDK objects, or exact members of a fully validated pair wrapper.
+  // These are not provider HTTP envelopes or independent usage records.
   answers: { taskId: string; value: unknown }[];
   failure?: { taskId: string; text: string };
   auditDigest: string };

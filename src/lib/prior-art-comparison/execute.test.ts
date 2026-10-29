@@ -8,12 +8,18 @@ import { SYSTEM } from "./comparison";
 import type { propositionTargetTransport } from "./proposition-extraction";
 import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
 import {sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {sourceRequestPlan} from "./source-request-plan";
+import type { SourceAudit } from "./source-audit";
 import { parseComparisonSource } from "./source";
 import { fictionalInputs as longFictionalInputs } from "./fixtures.test-support";
 
-const sourceCallCount=(inputs:Parameters<typeof makePlan>[0],selection:Parameters<typeof makePlan>[1])=>sourceClaimExtractionPlan(makePlan(inputs,selection)).tasks.length;
+const sourceCallCount=(inputs:Parameters<typeof makePlan>[0],selection:Parameters<typeof makePlan>[1])=>sourceRequestPlan(sourceClaimExtractionPlan(makePlan(inputs,selection))).length;
+type FictionalPairRequest={task:"extract_source_propositions_pair";targets:{first:FictionalClaimRequest["target"];second:FictionalClaimRequest["target"]};sourceContext:FictionalClaimRequest["sourceContext"]};
+const fictionalPair=(input:FictionalPairRequest)=>({first:fictionalSourceAnalysis({task:"extract_source_propositions",target:input.targets.first,sourceContext:input.sourceContext}),
+  second:fictionalSourceAnalysis({task:"extract_source_propositions",target:input.targets.second,sourceContext:input.sourceContext})});
 
-function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | FictionalClaimRequest) {
+function stageAnswer(input: ReturnType<typeof batchInput> | ReturnType<typeof propositionTargetTransport> | FictionalClaimRequest | FictionalPairRequest) {
+  if(input.task==="extract_source_propositions_pair")return fictionalPair(input);
   return input.task === "extract_source_propositions" ? fictionalSourceAnalysis(input) : input.task === "review" ? fictionalReview(input) : fictionalBatch(input);
 }
 
@@ -38,6 +44,36 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
   });
   afterEach(() => { expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(SECRET); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+  it.each(["valid","bad_second","swapped","missing_second","extra","incomplete"])("uses one SDK call for a pair with atomic audit adoption: %s",async mode=>{
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","patentai-gpt54");
+    const f=compactFour(),requests=sourceRequestPlan(sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)));
+    const firstPair=requests.findIndex(r=>r.tasks.length===2),audits:SourceAudit[]=[],rawMembers:unknown[]=[];
+    expect(firstPair).toBeGreaterThanOrEqual(0);
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const body=JSON.parse(String(init?.body)),input=JSON.parse(body.input[1].content[0].text);
+      if(input.task!=="extract_source_propositions_pair")return response(stageAnswer(input));
+      expect(body.max_output_tokens).toBe(22528);
+      expect(body.text.format.schema.required).toEqual(["first","second"]);
+      const answer=fictionalPair(input);rawMembers.push(structuredClone(answer.first),structuredClone(answer.second));
+      if(mode==="bad_second")answer.second.claimNo=999;
+      if(mode==="swapped")[answer.first,answer.second]=[answer.second,answer.first];
+      if(mode==="missing_second")return response({first:answer.first});
+      if(mode==="extra")return response({...answer,extra:{}});
+      if(mode==="incomplete"){const outer=await response(answer).json();outer.status="incomplete";outer.incomplete_details={reason:"max_output_tokens"};return Response.json(outer);}
+      return response(answer);
+    });vi.stubGlobal("fetch",transport);
+    const pending=executeComparison(f.inputs,f.selection,async audit=>{audits.push(structuredClone(audit));});
+    if(mode==="valid"){
+      expect((await pending).status).toBe("complete");expect(transport).toHaveBeenCalledTimes(requests.length+2);
+      expect(audits).toHaveLength(1);expect(audits[0].answers).toHaveLength(7);
+      expect(audits[0].answers.slice(1,3).map(a=>a.value)).toEqual(rawMembers.slice(0,2));
+      expect(vi.mocked(console.info).mock.calls.filter(r=>r[0]==="prior_art_comparison_usage")).toHaveLength(requests.length+2);
+    }else{
+      await expect(pending).rejects.toThrow();expect(transport).toHaveBeenCalledTimes(firstPair+1);
+      expect(audits).toHaveLength(1);expect(audits[0].answers).toHaveLength(firstPair);
+      if(mode!=="incomplete")expect(audits[0].failure?.taskId).toBe(requests[firstPair].tasks[0].id);
+    }
+  });
   it.each([["patentai-gpt54",22528],["fictional",8192]])("uses the smaller task/provider output bound on %s without retrying an incomplete answer",async(model,limit)=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
     const f=fictionalInputs(),text="【請求項1】前記第２の運転モードは、光モードである。";
@@ -60,6 +96,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(body.max_output_tokens).toBe(8192);
       expect(Buffer.byteLength(String(init?.body), "utf8") + 8192).toBeLessThan(150_000);
       if (chunk.task === "extract_source_propositions") return response(fictionalSourceAnalysis(chunk));
+      if (chunk.task === "extract_source_propositions_pair") return response(fictionalPair(chunk));
       if (chunk.task === "review") {
         const expanded=chunk.originals;
         const full=(claim:typeof expanded.base.claims[number])=>claim.segments.map(([,index])=>chunk.textParts[index]).join("");
@@ -142,7 +179,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     const {inputs,selection}=compactFour(),phases:string[]=[];
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);phases.push(input.task);
-      expect(input.task).toBe("extract_source_propositions");
+      expect(input.task.startsWith("extract_source_propositions")).toBe(true);
+      if(input.task==="extract_source_propositions_pair")return response(fictionalPair(input));
       const answer=fictionalSourceAnalysis(input);
       if(phases.length===3){
         if(mode==="missing_claim")delete answer[`c${input.target.claimNo}`];
@@ -152,7 +190,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch",transport);
     await expect(executeComparison(inputs,selection)).rejects.toMatchObject({stage:"source_reading",kind:"protocol_invalid"});
-    expect(transport).toHaveBeenCalledTimes(3);expect(phases).toEqual(Array(3).fill("extract_source_propositions"));
+    expect(transport).toHaveBeenCalledTimes(3);expect(phases).toEqual(["extract_source_propositions","extract_source_propositions_pair","extract_source_propositions"]);
   });
   it.each(["http", "length", "coverage", "rejected"])("classifies a %s review without exposing raw errors or claiming semantic truth", async mode => {
     const { inputs, selection } = fictionalInputs();
@@ -193,7 +231,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text); phases.push(input.task);
       if (input.task === "review") { expect(input.originals.targets).toHaveLength(20); return response(fictionalReview(input)); }
-      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
+      if (input.task === "extract_source_propositions" || input.task === "extract_source_propositions_pair") return response(stageAnswer(input));
       expect(body.max_output_tokens).toBe(8192);
       expect(body.text.format.schema.properties.results.maxItems).toBeUndefined();
       expect(body.text.format.schema.properties.results.description).toContain('"maxItems":4');
@@ -205,7 +243,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     });
     vi.stubGlobal("fetch", transport);
     const saved = await executeComparison(inputs, selection);
-    expect(phases).toEqual([...Array(sourceCallCount(inputs,selection)).fill("extract_source_propositions"), "compare", "review"]); expect(saved.pairs).toHaveLength(4);
+    expect(phases).toEqual([...sourceRequestPlan(sourceClaimExtractionPlan(makePlan(inputs,selection))).map(r=>JSON.parse(r.prompt).task), "compare", "review"]); expect(saved.pairs).toHaveLength(4);
     expect(saved.pairs.map(p => [p.docId, p.candidateClaimNo])).toEqual([[21, 2], [21, 3], [22, 2], [22, 3]]);
     expect(validateSaved(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
   });
@@ -213,7 +251,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const { inputs, selection } = compactFour();
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
-      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
+      if (input.task === "extract_source_propositions" || input.task === "extract_source_propositions_pair") return response(stageAnswer(input));
       const answer = fictionalBatch(input);
       if (mode === "missing") answer.results.pop();
       if (mode === "duplicate") answer.results[3] = { ...answer.results[0] };
@@ -268,7 +306,7 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task === "compare") return response(fictionalBatch(input));
-      if (input.task === "extract_source_propositions") return response(fictionalSourceAnalysis(input));
+      if (input.task === "extract_source_propositions" || input.task === "extract_source_propositions_pair") return response(stageAnswer(input));
       const value = fictionalReview(input);
       const first=value.targets[0].parts[0],atom=first.atoms[0];
       if (mode === "http") return new Response(SECRET, { status: 429 });

@@ -59,7 +59,7 @@ const comparisonCapability = Symbol("prior_art_comparison");
 
 /** Identify an exact comparison wire stage. This is a transport allowance;
  * the stage schema and semantic gates still validate its contents. */
-function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_propositions" | "compare"): boolean {
+function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_propositions" | "extract_source_propositions_pair" | "compare"): boolean {
   if (!Array.isArray(input)) return false;
   const users = input.filter(message => message?.role === "user");
   if (users.length !== 1) return false;
@@ -69,6 +69,8 @@ function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_
   if (typeof text !== "string") return false;
   try { return JSON.parse(text)?.task === task; } catch { return false; }
 }
+const isComparisonSourceInput = (input: unknown) => isComparisonTaskInput(input, "extract_source_propositions") ||
+  isComparisonTaskInput(input, "extract_source_propositions_pair");
 type ComparisonBudgetOptions = {
   capability: typeof comparisonCapability;
   deadline: AbortSignal;
@@ -179,7 +181,7 @@ export class AiOperationBudget {
           const plan = this.comparison.claimPlan, at = this.consumed.normal;
           const expected = at < plan.sourceClaims ? "extract_source_propositions" :
             at === plan.sourceClaims && !plan.diagnostic ? "compare" : "review";
-          if (role !== "normal" || !isComparisonTaskInput(body.input, expected)) throw stop("request_rejected");
+          if (role !== "normal" || !(expected === "extract_source_propositions" ? isComparisonSourceInput(body.input) : isComparisonTaskInput(body.input, expected))) throw stop("request_rejected");
         }
         const keys = new Set(["model", "input", "max_output_tokens", "temperature", "top_p", "text", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "include"]);
         if (this.comparison && role === "normal" && body?.service_tier === "default" &&
@@ -188,10 +190,10 @@ export class AiOperationBudget {
         if (!body || Object.keys(body).some(k => !keys.has(k)) || typeof body.model !== "string" ||
             (body.include !== undefined && (!Array.isArray(body.include) || body.include.length > 0))) throw stop("request_rejected");
         if (this.comparison?.claimPlan && role === "normal" && ["medium", "high"].includes(body.reasoning?.effort) &&
-            isComparisonTaskInput(body.input,"extract_source_propositions"))
+            isComparisonSourceInput(body.input))
           requestMilliseconds = comparisonRequestMilliseconds({ provider: "azure.responses", modelId: body.model }, "source");
         const outputLimit = this.comparison && role === "normal" && ["low","medium","high"].includes(body.reasoning?.effort) &&
-          isComparisonTaskInput(body.input,"extract_source_propositions")
+          isComparisonSourceInput(body.input)
           ? Math.min(comparisonOutputTokens({ provider: "azure.responses", modelId: body.model }, "source"),
             comparisonLimits.azureSourceLowOutputTokens)
           : this.comparison && role === "normal" && ["low", "medium"].includes(body.reasoning?.effort) &&
