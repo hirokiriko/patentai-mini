@@ -5,6 +5,7 @@ import { comparisonCatalog, listComparisons } from "@/lib/prior-art-comparison/r
 import { comparisonBlocks, SCOPE_NOTICE } from "@/lib/prior-art-comparison/report";
 import { SelectionForm } from "./selection-form";
 import { DownloadLink } from "./download-link";
+import { comparisonEnabled } from "@/lib/prior-art-comparison/availability";
 
 export const dynamic = "force-dynamic";
 export default async function ComparisonPage({ params }: { params: Promise<{ caseId: string }> }) {
@@ -15,7 +16,7 @@ export default async function ComparisonPage({ params }: { params: Promise<{ cas
   return <main className="mx-auto max-w-5xl space-y-7 p-6 text-slate-900">
     <Link href={`/cases/${caseId}`} className="text-blue-700 underline">案件に戻る</Link>
     <header className="space-y-3"><h1 className="text-2xl font-bold">根拠付き指定文献比較</h1><p className="text-lg">{catalog.title}</p><p>{SCOPE_NOTICE}</p></header>
-    <SelectionForm catalog={catalog} completedIds={saved.results.map(r => r.operationId)} pendingIds={saved.pendingOperationIds} blocked={saved.reservedCount > 0 || saved.invalidCount > 0} />
+    <SelectionForm enabled={comparisonEnabled()} catalog={catalog} completedIds={saved.results.map(r => r.operationId)} pendingIds={saved.pendingOperationIds} blocked={saved.reservedCount > 0 || saved.invalidCount > 0} />
     <section className="space-y-5" aria-label="保存済み比較結果">
       <h2 className="text-xl font-bold">保存済み比較結果</h2>
       {saved.legacyCount > 0 && <p>旧形式の比較結果が{saved.legacyCount}件あります。旧AI部分比較または単語一致fallbackであり、全文・根拠を再検証していません。案件画面で閲覧できます。</p>}

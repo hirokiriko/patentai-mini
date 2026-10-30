@@ -4,6 +4,7 @@ import { selectionSchema } from "@/lib/prior-art-comparison/comparison";
 import { comparisonCatalog, listComparisons, reserveComparison, completeReservedComparison } from "@/lib/prior-art-comparison/repository";
 import { caseNumber, comparisonFailure } from "@/lib/prior-art-comparison/http";
 import { ComparisonError } from "@/lib/prior-art-comparison/source";
+import { comparisonEnabled } from "@/lib/prior-art-comparison/availability";
 
 // Deployment metadata; the comparison scope also enforces its own deadline.
 export const maxDuration = 5640;
@@ -19,11 +20,12 @@ export const GET = withOwnerRoute(async (request: Request, { params }: Context) 
       const failed = saved.failedOperations.find(result => result.operationId === operationId);
       return Response.json({ operationId, ...(failed ? { failure: failed.failure } : {}), status: complete ? "complete" : failed ? "failed" : saved.pendingOperationIds.includes(operationId) ? "reserved" : "unconfirmed" });
     }
-    return Response.json({ catalog: await comparisonCatalog(id), saved: await listComparisons(id) });
+    return Response.json({ enabled: comparisonEnabled(), catalog: await comparisonCatalog(id), saved: await listComparisons(id) });
   } catch (error) { return comparisonFailure(error); }
 });
 export const POST = withOwnerRoute(async (request: Request, { params }: Context) => {
   try {
+    if (!comparisonEnabled()) return Response.json({ code: "comparison_disabled", error: "新しい比較の受付を停止しています。保存結果の表示・取得と実行中操作の状態確認は利用できます。" }, { status: 503 });
     const id = caseNumber((await params).caseId);
     const reader = request.body?.getReader();
     if (!reader) throw new ComparisonError("selection_invalid");

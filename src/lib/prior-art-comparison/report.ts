@@ -3,7 +3,7 @@ import { generateReportBlocksPdf, type ReportBlock } from "../patent-watch/perio
 import { validateSaved, type SavedComparison } from "./comparison";
 import { managedClaimContext } from "../patent-watch/managed-claims";
 
-export const SCOPE_NOTICE = "指定文献・指定請求項と必要な従属参照の比較です。検索の網羅性、明細書全頁・図面・非選択請求項は対象外です。説明は法的判断ではなく、専門家による原文と意味の確認が必要です。";
+export const SCOPE_NOTICE = "OWNER限定の試験版です。比較の誤りや処理停止があり得るため、原文と照合して確認してください。指定文献・指定請求項と必要な従属参照の比較です。検索の網羅性、明細書全頁・図面・非選択請求項は対象外です。説明は法的判断ではなく、専門家による原文と意味の確認が必要です。";
 export function comparisonBlocks(value: SavedComparison, stale: boolean): ReportBlock[] {
   const saved = validateSaved(value);
   const blocks: ReportBlock[] = [

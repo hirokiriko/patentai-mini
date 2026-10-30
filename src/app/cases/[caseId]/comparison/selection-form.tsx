@@ -3,10 +3,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { comparisonCatalog } from "@/lib/prior-art-comparison/repository";
+import { LIMITS } from "@/lib/prior-art-comparison/limits";
 
 type Catalog = Awaited<ReturnType<typeof comparisonCatalog>>;
 const field = "rounded border border-slate-400 bg-white p-2 text-slate-900";
-export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { catalog: Catalog; completedIds: string[]; pendingIds: string[]; blocked: boolean }) {
+export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enabled }: { catalog: Catalog; completedIds: string[]; pendingIds: string[]; blocked: boolean; enabled: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
@@ -29,7 +30,7 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { 
     if (busy || !operation || completedIds.includes(operation)) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
-    const until = Date.now() + 75 * 60_000;
+    const until = Date.now() + LIMITS.claimOperationMilliseconds;
     async function read() {
       try {
         const response = await fetch(`/api/cases/${catalog.caseId}/analyze?operationId=${encodeURIComponent(operation!)}`, { cache: "no-store" });
@@ -64,7 +65,7 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { 
   }, [busy, operation, completedIds, catalog.caseId, pendingKey, router]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy || uncertain || blocked || sessionStorage.getItem(pendingKey)) return;
+    if (!enabled || busy || uncertain || blocked || sessionStorage.getItem(pendingKey)) return;
     const data = new FormData(event.currentTarget);
     const operationId = crypto.randomUUID();
     sessionStorage.setItem(pendingKey, operationId);
@@ -101,8 +102,9 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { 
   }
   return <form onSubmit={submit} className="space-y-6 rounded-xl border border-slate-300 bg-slate-50 p-5">
     <h2 className="text-xl font-semibold">比較する原文と範囲</h2>
+    {!enabled && <p role="status">新しい比較の受付を停止しています。保存結果の表示・取得と実行中操作の状態確認は利用できます。実行中の処理が直ちに停止するわけではありません。</p>}
     <p>日本語の「【請求項1】」形式の保存原文を使います。原本と末尾・番号・従属参照を照合してください。画像・数式・欠落がある資料は比較を開始できません。抽出済みの要約は比較入力に使いません。</p>
-    <fieldset disabled={busy || uncertain || blocked} className="space-y-5">
+    <fieldset disabled={!enabled || busy || uncertain || blocked} className="space-y-5">
       <legend className="font-semibold">基準文献</legend>
       <div className="flex flex-wrap gap-3">
         <label className="grid gap-1">文献名・公開番号<input name="draft-publication" required maxLength={100} className={field} /></label>
@@ -110,7 +112,7 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked }: { 
       </div>
       {catalog.draft?.source ? <ClaimSelection name="draft-claims" source={catalog.draft.source} /> : <p role="alert">基準文献の原文を確認できません。案件画面で、請求項番号と全文を含む資料を取り込んでください。</p>}
       <h3 className="font-semibold">対象文献を2〜3件選択</h3>
-      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大4組です。原文を請求項ごとに抽出し、比較と照合を行います。対象は参照先を含め最大19請求項、AI呼出しは最大21回です。処理は最大75分で停止し、失敗・中断時の自動再送は行いません。</p>
+      <p>各文献の対象請求項も選択してください。選ばない請求項は比較対象外です。必要な参照先の全文は自動的に含めます。全体で最大{LIMITS.reviewPairs}組です。原文を請求項ごとに抽出し、比較と照合を行います。対象は参照先を含め最大{LIMITS.sourceClaims}請求項です。処理時間は指定範囲によって変わり、最大{Math.ceil(LIMITS.claimOperationMilliseconds / 60_000)}分以内の上限で停止します。失敗・中断時の自動再送は行いません。</p>
       {catalog.documents.map(doc => <fieldset key={doc.id} className="space-y-3 rounded border border-slate-300 bg-white p-4">
         <legend className="px-2"><label><input type="checkbox" name={`doc-${doc.id}`} disabled={!doc.source} /> {doc.publicationNo || doc.title || `文献 ${doc.id}`}</label></legend>
         <div className="flex flex-wrap gap-3">
