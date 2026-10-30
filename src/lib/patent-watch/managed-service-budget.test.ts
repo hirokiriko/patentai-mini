@@ -4,7 +4,7 @@ import { managedDigest } from "./managed-claims";
 import { MANAGED_SERVICE_KEY, managedReleaseCaps, emptyManagedBudgetUnits, managedBudgetStateSchema,
   managedBudgetForecast, reserveManagedBudget, claimManagedBudgetPhase, confirmManagedBudgetStage,
   markManagedBudgetUnknown, settleManagedBudget as settleSequence, setManagedMonthPlan, activateManagedBudgetProfile,
-  managedCompletionAllowanceSchema, checkManagedCompletionBudget,
+  managedCompletionAllowanceSchema, managedStandardMonthAdjustmentSchema, checkManagedCompletionBudget, checkManagedStandardBudget, checkManagedExecutionBudget,
   type ManagedBudgetState, type ManagedBudgetProfile } from "./managed-service-budget";
 import { validateManagedBudgetState } from "./managed-service-budget";
 
@@ -50,6 +50,95 @@ function completionFixture() {
   const r = request({ scope: "standard", profileDigest: managedDigest(p), cases: [1] });
   return { p, now, september, s, allowance, input, allowed, r };
 }
+it("checks ordinary cost and every ordinary unit even under an installed completion allowance", () => {
+  const f = completionFixture();
+  expect(() => checkManagedStandardBudget(f.allowed, f.p, f.now)).toThrow(); // 31,200 exceeds the ordinary 30,000
+  const s = structuredClone(f.allowed); s.plans[1].baseYen = 10_000;
+  checkManagedStandardBudget(s, f.p, f.now);
+  for (const unit of Object.keys(emptyManagedBudgetUnits()) as Array<keyof typeof f.p.monthlyUnits>) {
+    const original = structuredClone(s), p = { ...f.p, monthlyUnits: { ...f.p.monthlyUnits, [unit]: 0 } };
+    original.activeProfileDigest = managedDigest(p);
+    // Unresolved prior-month units carry forward; no historical use is dropped.
+    original.operations[0].knownUnits = {}; original.operations[0].units[unit] = 1;
+    const o = original.operations[0];
+    o.intentDigest = managedDigest({ operationId: o.operationId, requestDigest: o.requestDigest, scope: o.scope,
+      kind: o.kind, profileDigest: o.profileDigest, pricingDigest: o.pricingDigest, cases: o.cases, reservationYen: o.reservationYen, units: o.units });
+    original.plans[1].completionAllowance!.profileDigest = managedDigest(p);
+    const positive = structuredClone(original), allowed = { ...p, monthlyUnits: { ...p.monthlyUnits, [unit]: 1 } };
+    positive.activeProfileDigest = managedDigest(allowed);
+    positive.plans[1].completionAllowance!.profileDigest = managedDigest(allowed);
+    checkManagedStandardBudget(positive, allowed, f.now);
+    expect(() => checkManagedStandardBudget(original, p, f.now)).toThrow();
+  }
+});
+function standardAdjustment(p: ManagedBudgetProfile) {
+  return managedStandardMonthAdjustmentSchema.parse({ scope: "ISSUE150_STANDARD_MONTH_V1", month: "2026-10",
+    ownerApprovalDigest: digest(400), profileDigest: managedDigest(p), monthlyCapYen: 38331, jobs: 25, minutes: 3000, forward: 9 });
+}
+it("applies only the signed ordinary month limits and keeps unknown usage and base caps", () => {
+  const f = completionFixture(), adjustment = standardAdjustment(f.p);
+  const s = setManagedMonthPlan(f.allowed, { ...f.input, standardMonthAdjustment: adjustment }, f.now);
+  checkManagedStandardBudget(s, f.p, f.now);
+  expect(s.operations).toEqual(f.allowed.operations);
+  expect(s.legacyUnknownYen).toBe(f.allowed.legacyUnknownYen);
+  expect(s.plans[0]).toEqual(f.allowed.plans[0]);
+  expect(s.plans[1].completionAllowance).toEqual(f.allowance);
+  expect(f.p.monthlyCapYen).toBe(30000);
+  expect(managedReleaseCaps).toMatchObject({ jobs: 24, minutes: 2880, forward: 8 });
+  const one = reserveManagedBudget(s, f.r, f.p, f.now).state;
+  expect(() => reserveManagedBudget(one, { ...f.r, operationId: randomUUID(), requestDigest: digest(401) }, f.p, f.now)).toThrow();
+  for (const unit of ["starts", "normal", "fast", "packages", "bytes", "rollback"] as const) {
+    const next = { ...f.r, operationId: randomUUID(), requestDigest: digest(402), units: { ...emptyManagedBudgetUnits(), [unit]: f.p.monthlyUnits[unit] + 1 } };
+    expect(() => reserveManagedBudget(s, next, f.p, f.now)).toThrow();
+  }
+  const bad = structuredClone(s); bad.plans[1].standardMonthAdjustment!.profileDigest = digest(999);
+  expect(() => checkManagedStandardBudget(bad, f.p, f.now)).toThrow();
+  const expired = structuredClone(s); expired.plans[1].completionAllowance!.validUntil = "2026-10-01T01:00:00Z";
+  expect(() => checkManagedStandardBudget(expired, f.p, f.now)).toThrow();
+});
+it("activates a new ordinary profile without retargeting an old completion signature", () => {
+  const f = completionFixture(), p = { ...f.p, goEvidenceDigest: digest(410) }, before = structuredClone(f.allowed);
+  expect(() => activate(f.allowed, p, f.now)).toThrow();
+  const s = setManagedMonthPlan(f.allowed, { ...f.input, standardMonthAdjustment: standardAdjustment(p) }, f.now);
+  const activated = activate(s, p, f.now);
+  checkManagedStandardBudget(activated, p, f.now);
+  expect(activated.plans[1].completionAllowance).toEqual(f.allowance);
+  expect(activated.operations).toEqual(before.operations);
+  expect(activated.legacyUnknownYen).toBe(before.legacyUnknownYen);
+  expect(() => checkManagedCompletionBudget(activated, f.allowance, f.now)).toThrow();
+  const limit = structuredClone(activated); limit.plans[1].baseYen += 38331 - managedBudgetForecast(limit, "2026-10");
+  checkManagedStandardBudget(limit, p, f.now);
+  limit.plans[1].baseYen++;
+  expect(() => checkManagedStandardBudget(limit, p, f.now)).toThrow();
+  const november = clock("2026-11-01T00:00:00Z");
+  expect(() => setManagedMonthPlan(activated, { ...f.input, completionAllowance: undefined, standardMonthAdjustment: standardAdjustment(p) }, november)).toThrow();
+  const restored = setManagedMonthPlan(activated, { ...f.input, completionAllowance: undefined }, november);
+  expect(restored.plans[1]).toEqual(activated.plans[1]);
+  expect(restored.plans[2].standardMonthAdjustment).toBeUndefined();
+  expect(restored.operations).toEqual(activated.operations);
+  expect(() => checkManagedStandardBudget(restored, p, november)).toThrow();
+});
+it("rechecks all nine ordinary execution limits without inheriting another profile's completion expiry", () => {
+  const f = completionFixture(), p = { ...f.p, goEvidenceDigest: digest(411) };
+  const s = activate(setManagedMonthPlan(f.allowed, { ...f.input,
+    completionAllowance: { ...f.allowance, validUntil: "2026-10-01T01:00:00Z" },
+    standardMonthAdjustment: standardAdjustment(p) }, f.now), p, f.now);
+  expect(checkManagedExecutionBudget(s, p, f.now)).toBeUndefined();
+  expect(() => checkManagedExecutionBudget(s, f.p, f.now)).toThrow();
+  expect(() => checkManagedExecutionBudget(s, null, f.now)).toThrow();
+  const r = { ...f.r, profileDigest: managedDigest(p), kind: "watch", units: emptyManagedBudgetUnits() };
+  const reserved = reserveManagedBudget(s, r, p, f.now).state;
+  const limits = { ...p.monthlyUnits, jobs: 25, minutes: 3000, forward: 9 };
+  for (const unit of Object.keys(limits) as Array<keyof typeof limits>) {
+    const over = structuredClone(reserved);
+    over.operations[1].knownUnits[unit] = limits[unit] + 1;
+    expect(() => checkManagedExecutionBudget(over, p, f.now)).toThrow();
+  }
+  const overCost = structuredClone(reserved); overCost.plans[1].baseYen = 38331;
+  expect(() => checkManagedExecutionBudget(overCost, p, f.now)).toThrow();
+  const missing = structuredClone(reserved); delete missing.plans[1].standardMonthAdjustment;
+  expect(() => checkManagedExecutionBudget(missing, p, f.now)).toThrow();
+});
 it("uses the signed completion allowance for the whole history while retaining ordinary profiles and old plans", () => {
   const f = completionFixture(), before = structuredClone(f.allowed);
   const first = reserveManagedBudget(f.allowed, f.r, f.p, f.now).state;

@@ -1,0 +1,62 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { comparisonProviderOptions } from "./provider-options";
+import { comparisonOutputTokens, comparisonRequestMilliseconds } from "./limits";
+
+afterEach(()=>vi.unstubAllEnvs());
+describe("comparison-only reasoning",()=>{
+  it.each(["azure.responses", "openai.responses"])("reserves whole-claim answer capacity without changing part or later-phase settings on %s", provider => {
+    vi.stubEnv("AI_PROVIDER", provider.split(".")[0]);
+    const model={provider,modelId:provider==="azure.responses"?"patentai-gpt54":"gpt-5.4"};
+    const key=provider.split(".")[0];
+    expect(comparisonProviderOptions(model,"source",false)?.[key]?.reasoningEffort).toBe("medium");
+    expect(comparisonProviderOptions(model,"source",true)).toEqual(comparisonProviderOptions(model,"source"));
+    for(const phase of ["generation","review"] as const)
+      expect(comparisonProviderOptions(model,phase,false)).toEqual(comparisonProviderOptions(model,phase));
+    expect(comparisonOutputTokens(model,"source")).toBe(provider==="azure.responses"?32400:8192);
+    expect(comparisonRequestMilliseconds(model,"source")).toBe(provider==="azure.responses"?420000:210000);
+  });
+  it.each(["azure.responses","openai.responses"])("scopes reasoning to identified GPT-5.4 responses on %s",provider=>{
+    vi.stubEnv("AI_PROVIDER",provider.split(".")[0]);
+    for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId})).toEqual({[provider.split(".")[0]]:{reasoningEffort:"low",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
+    for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId},"review")).toEqual({[provider.split(".")[0]]:{reasoningEffort:"low",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
+    for(const modelId of ["gpt-5.4","gpt-5.4-2026-03-05"]) expect(comparisonProviderOptions({provider,modelId},"source")).toEqual({[provider.split(".")[0]]:{reasoningEffort:"high",...(provider==="azure.responses"?{serviceTier:"default"}:{})}});
+    for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini"]) expect(comparisonProviderOptions({provider,modelId})).toBeUndefined();
+    expect(comparisonProviderOptions({provider:"unknown",modelId:"gpt-5.4"})).toBeUndefined();
+  });
+  it("recognizes only the documented Azure normal alias, preserving mini and unknown aliases",()=>{
+    vi.stubEnv("AI_PROVIDER","azure");
+    expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"})).toEqual({azure:{reasoningEffort:"low",forceReasoning:true,serviceTier:"default"}});
+    expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"},"review")).toEqual({azure:{reasoningEffort:"low",forceReasoning:true,serviceTier:"default"}});
+    expect(comparisonProviderOptions({provider:"azure.responses",modelId:"patentai-gpt54"},"source")).toEqual({azure:{reasoningEffort:"high",forceReasoning:true,serviceTier:"default"}});
+    for(const modelId of ["patentai-gpt54-mini","custom-alias","patentai-gpt54-other"]) expect(comparisonProviderOptions({provider:"azure.responses",modelId})).toBeUndefined();
+    expect(comparisonProviderOptions({provider:"openai.responses",modelId:"patentai-gpt54"})).toBeUndefined();
+  });
+  it("preserves the existing Google options and does not force Azure reasoning",()=>{
+    vi.stubEnv("AI_PROVIDER","google");
+    expect(comparisonProviderOptions({provider:"google.generative-ai",modelId:"gemini-3.1-flash-lite"})).toEqual({google:{thinkingConfig:{thinkingLevel:"minimal"}}});
+  });
+  it("reserves reasoning output only for identified Azure GPT-5.4 comparisons",()=>{
+    for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"]) {
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId})).toBe(8192);
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"review")).toBe(22528);
+      expect(comparisonOutputTokens({provider:"azure.responses",modelId},"source")).toBe(32400);
+      expect(comparisonProviderOptions({provider:"azure.responses",modelId},"source")?.azure?.reasoningEffort).toBe("high");
+    }
+    for(const provider of ["openai.responses","google.generative-ai","unknown"])
+      expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"})).toBe(8192);
+    for(const provider of ["openai.responses","google.generative-ai","unknown"])
+      expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"review")).toBe(8192);
+    for(const provider of ["openai.responses","google.generative-ai","unknown"])
+      expect(comparisonOutputTokens({provider,modelId:"gpt-5.4"},"source")).toBe(8192);
+    expect(comparisonProviderOptions({provider:"openai.responses",modelId:"gpt-5.4"},"source")).toEqual({openai:{reasoningEffort:"high"}});
+    for(const modelId of ["custom-alias","gpt-4o","gpt-5.4-pro","gpt-5.4-mini","patentai-gpt54-mini"])
+      for(const phase of ["generation","source","review"] as const)
+        expect(comparisonOutputTokens({provider:"azure.responses",modelId},phase)).toBe(8192);
+  });
+});
+
+it("extends only known Azure source request waits, preserving all other phases/providers/models",()=>{
+ for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"])for(const phase of ["source","generation","review"] as const)expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},phase)).toBe(phase==="source"?420000:210000);
+ for(const provider of ["openai.responses","google.generative-ai","unknown"])expect(comparisonRequestMilliseconds({provider,modelId:"gpt-5.4"},"source")).toBe(210000);
+ for(const modelId of ["custom-alias","gpt-5.4-mini","patentai-gpt54-mini"])expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},"source")).toBe(210000);
+});

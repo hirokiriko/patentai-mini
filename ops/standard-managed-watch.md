@@ -518,3 +518,11 @@ profile改版や月替わりで過去台帳、未精算額、不明usage、予�
 
 Azure AIへの送信は必要な公開請求項に限定する。Microsoftの[データ保護説明](https://learn.microsoft.com/en-us/azure/foundry/responsible-ai/openai/data-privacy)に従い、
 他顧客/基盤モデル学習への提供とは区別し、abuse monitoringやGlobal処理場所の条件も記録する。保持0を未確認のまま表示しない。
+
+### Issue #150の期限経過後の準備
+
+[完遂案](../docs/prior-art-comparison-completion-plan.md)は未承認である。
+V7とLocal限定の鍵置換互換処理を実装しても、新鍵・pin・送信権は有効にならない。
+旧署名の固定履歴、UNKNOWN、月次poolと全9単位、#140 allowanceを保持する。
+通常配備時のApp二設定・pricing/profile・Local GO pinの整合は同案の限定手順に従う。
+#148試用を変更せず、その完了や新watch開始を比較機能の追加受入条件にしない。

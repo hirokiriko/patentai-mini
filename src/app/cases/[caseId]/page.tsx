@@ -18,6 +18,7 @@ import { UploadCsvForm } from "./upload-csv-form";
 import { UploadPatentFilesForm } from "./upload-patent-files-form";
 import { KohoCorpusPicker } from "./koho-corpus-picker";
 import { AnalyzeButton } from "./analyze-button";
+import { hasSavedComparisonMarker } from "@/lib/prior-art-comparison/marker";
 import type { ExtractedClaims } from "@/lib/extract-claims";
 import { StepProgressBar } from "@/components/step-progress-bar";
 import { NextActionBanner } from "@/components/next-action-banner";
@@ -234,7 +235,8 @@ export default async function CaseDetailPage({
   const hasAnalysis = analysisResults.length > 0;
 
   let currentStep: number;
-  if (!hasDraft || !hasParsedText || !hasExtracted) currentStep = 1;
+  if (!hasDraft || !hasParsedText) currentStep = 1;
+  else if (!hasExtracted) currentStep = hasPriorArts ? 5 : 4;
   else if (!hasQueries && !hasPriorArts) currentStep = 3;
   else if (!hasPriorArts) currentStep = 4;
   else if (!hasAnalysis) currentStep = 5;
@@ -334,7 +336,7 @@ export default async function CaseDetailPage({
           <p className="font-medium">現在の比較・ウォッチ対象: {mainDraft
             ? getOriginalFileDisplayName(mainDraft.sourceFilePath ?? "（ファイル名不明）")
             : "未登録"}</p>
-          <p className="mt-1">新たな検索式生成・比較・ウォッチには、最新の対象資料を使います。未抽出の場合は、その資料の請求項を抽出してください。</p>
+          <p className="mt-1">新たな検索式生成・比較・ウォッチには、最新の対象資料を使います。指定文献比較は保存した原文を使います。検索式生成・ウォッチで請求項が未抽出の場合は、その資料の請求項を抽出してください。</p>
           <p className="mt-1">保存済み結果と現在の資料の対応は未確認です。以前の結果を現在の資料による結果として扱わないでください。</p>
         </div>
 
@@ -1091,7 +1093,7 @@ export default async function CaseDetailPage({
       )}
 
       {/* ── Step 4: 先行技術文献の取り込み ── */}
-      {extracted && (
+      {hasParsedText && (
         <section
           id="step-4"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(4)}`}
@@ -1099,6 +1101,9 @@ export default async function CaseDetailPage({
           <h2 className="text-xl font-bold">4. 先行技術文献の取り込み</h2>
           <p className="mt-2 text-sm text-gray-600">
             方法 A・方法 B・取り込み済み公報からの追加は併用可。いずれか一つだけでも分析に進めます。
+          </p>
+          <p className="mt-2 text-sm text-gray-600">
+            指定文献比較は原稿と文献の原文を使います。検索式生成用の「請求項を抽出」を先に実行する必要はありません。
           </p>
 
           <div className="mt-4 space-y-4">
@@ -1124,7 +1129,7 @@ export default async function CaseDetailPage({
       )}
 
       {/* ── Step 5: 重なり比較レポート ── */}
-      {priorArts.length > 0 && extracted && (
+      {(priorArts.length > 0 || analysisResults.some(r => hasSavedComparisonMarker(r.matchedElementsJson))) && (
         <section
           id="step-5"
           className={`mt-6 scroll-mt-36 rounded-xl border-2 px-6 py-5 ${stepCardClass(5)}`}
@@ -1140,10 +1145,11 @@ export default async function CaseDetailPage({
           {analysisResults.length > 0 && (
             <div className="mt-4 space-y-4">
               <p className="text-base text-gray-600 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3">
-                ※ 類似度が高い＝新規性なし ではありません。最終判断には専門家の確認が必要です。
+                根拠付き比較の保存結果・原文・版・PDF/CSVは上のボタンから確認できます。以下にある旧形式の比較は部分比較または単語一致であり、全文・根拠を再検証していません。
               </p>
 
               {analysisResults
+                .filter(r => !hasSavedComparisonMarker(r.matchedElementsJson))
                 .sort((a, b) => {
                   return comparePublicationNumbers(docMap.get(a.priorDocId ?? 0)?.publicationNo ?? "", docMap.get(b.priorDocId ?? 0)?.publicationNo ?? "") || comparePublicationNumbers(a.draftClaimId ?? "", b.draftClaimId ?? "") || a.resultId - b.resultId;
                 })
