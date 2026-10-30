@@ -231,3 +231,11 @@ Other route clauses and temporal/causal guards remain independently required.
 These pairs request at most 30,720 output tokens or the provider's smaller cap,
 validate both complete members before projection, and never mix with short
 claim batches. Fixed-mode identities remain required closed singleton sets.
+
+An explicitly printed, bounded state phrase immediately before a predicate
+must be cited at that occurrence in both its condition terms and guard proof.
+The same words beside another component's predicate cannot replace that local
+evidence. This rejection check does not infer subjects or conditions, rewrite
+answers, or require every shared mode/timing/OR scope to be local. Quoted and
+unrecognized syntax still require original-source QA. Only tasks with these
+local state phrases receive the corresponding quotation guidance.

@@ -6,7 +6,7 @@ import { PROPOSITION_SOURCE_IDENTIFIED_SYSTEM } from "./source-task-prompt";
 import { sourceReadingClaim } from "./source-clause-coverage";
 import { sourceIdentifiedQuoteDictionary, sourceIdentifiedFact, sourceQuoteDictionary, sourceDictionaryFact,
   sourceDeclaredOrderedEvidence, resolveSourceOrderedQuote, sourceReadingTasks, sourceMatchedTasks } from "./source-reading-tasks";
-import { assertSourceSemanticReading, sourceFullActionCues, type CheckedSourceFact } from "./source-semantic-check";
+import { assertSourceSemanticReading, sourceFullActionCues, sourceLocalStateGuard, type CheckedSourceFact } from "./source-semantic-check";
 import { assertSourceGridProviderSchema } from "./source-grid-wire";
 import { SOURCE_CAPACITY } from "./source-capacity";
 import { LIMITS } from "./limits";
@@ -345,7 +345,9 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
     } });
     normalize.set(taskId, normalizeAnswer);
     const baseClaimSystem=focusedHeatObjects?CLAIM_SYSTEM.replace("prefer a plain string;", "heat J requires {reference,focus}; other references prefer a plain string;").replace("Prefer plain strings when already unique.", "Heat J always uses {reference,focus}; other references prefer plain strings when already unique."):CLAIM_SYSTEM;
-    const claimSystem=baseClaimSystem+(powerReceiverInstruction?"\n"+powerReceiverInstruction:"")+(boundedModeInstruction?"\n"+boundedModeInstruction:"")+(focusedHeatObjects&&!split?`
+    const localStateInstruction=sourceFullActionCues(c).some(cue=>clauseIds.includes(cue.clause)&&sourceLocalStateGuard(c,cue.span))
+      ? "A state phrase printed immediately before an action belongs to that occurrence. Cite its own clause in both scope.G and scope.proof. Repeated identical state phrases beside different predicates require separate scopes with their respective original coordinates; do not reuse an earlier component's state phrase. This does not forbid sharing a single printed mode, timing or alternative condition that actually governs several actions. Never repair missing or misplaced citations after extraction." : "";
+    const claimSystem=baseClaimSystem+(localStateInstruction?"\n"+localStateInstruction:"")+(powerReceiverInstruction?"\n"+powerReceiverInstruction:"")+(boundedModeInstruction?"\n"+boundedModeInstruction:"")+(focusedHeatObjects&&!split?`
 Heat-object locators must satisfy TWO independent uniqueness checks: the outer reference identifies one exact original occurrence, and focus occurs exactly once INSIDE that reference. A unique full-clause reference is invalid if its focus occurs twice within it. When a component appears in both a route and its heat action, select the occurrence that actually performs that heat action. Use a narrower exact outer reference from literalReferenceChoices, or another exact unique original substring, containing that occurrence only. Fictional original="青熱交換器から青熱交換器にて液を放熱させる。": {reference:"0-0:青熱交換器から青熱交換器にて液を放熱させる。",focus:"青熱交換器"} is ambiguous; {reference:"0-0:青熱交換器にて液を放熱させる",focus:"青熱交換器"} selects the heat-action occurrence. Never resolve ambiguity by choosing the first match, normalizing text, inventing an occurrence index, or citing another mode's occurrence. Keep every original action and route independently represented.
 `:"")+(obligations.some(t=>t.kind==="opens_one")?`
 Selection and extent are independent. In a set, S=one selects one of the listed alternatives; it does not mean e=partial. If the original gives the complete alternatives for that choice, use e=closed and retain every alternative. e=partial instead asserts that the list itself is nonexhaustive and requires the original limiting words in O[1]; a one-of phrase belongs in O[0] and cannot supply that extent evidence. Preserve an explicitly nonexhaustive list when the original supports it. Keep the separate opens_one action, its printed actor and full governing conditions; a set does not discharge the action obligation.

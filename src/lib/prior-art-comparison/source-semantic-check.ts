@@ -119,17 +119,37 @@ export type CheckedSourceFact={
   // and the action occurrence, so unrelated facts cannot complete a group.
   identity:string;
 };
+
+/** Only a bounded state phrase immediately before this action is recognized.
+ * Its occurrence is required; no subject, condition or replacement is inferred.
+ * Earlier shared mode/timing scopes and ambiguous syntax remain original QA. */
+export function sourceLocalStateGuard(c:SourceReadingClaim,action:Span):Span|null{
+  const clause=c.clauses.find(s=>contains(s,action));if(!clause)return null;
+  const prefix=c.grid.text.slice(clause[0],action[0]);
+  if(/[「」『』“”"]/u.test(c.grid.text.slice(...clause)))return null;
+  const match=/(?:^|[はが])([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]{1,24}状態(?:では|で|において))$/u.exec(prefix);
+  return match?[action[0]-match[1].length,action[0]]:null;
+}
+
 export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[],cues=sourceActionCues(c),requireAllOrGroups=true){
   const text=c.grid.text;
   for(const fact of facts){
     if(fact.kind!=="relation")continue;
     if(!fact.action)throw invalid();
     const action=text.slice(...fact.action);
+    const local=cues.filter(cue=>contains(fact.action!,cue.span));
+    // A broad action quote may include the state phrase. Check the actual
+    // printed predicate positions too, so widening a cannot hide its guard.
+    const guardActions=[fact.action,...local.filter(cue=>cue.predicate===fact.predicate).map(cue=>cue.span)];
+    for(const guardAction of guardActions){
+      const localGuard=sourceLocalStateGuard(c,guardAction);
+      if(localGuard&&(!fact.guardSpans.flat().some(s=>contains(s,localGuard))||
+        !fact.guardProof||!contains(fact.guardProof,localGuard)))throw invalid();
+    }
     if(fact.predicate==="is_state"&&(!isLiteralSourceState(action)||fact.objectSpans.length!==1||fact.objectSpans[0].length!==1||
       !contains(fact.objectSpans[0][0],fact.action)||!isLiteralSourceState(text.slice(...fact.objectSpans[0][0]))))throw invalid();
     // A close cannot be accepted as stopping merely because both its noun and
     // its broad W happen to quote the source. Preserve the exact action word.
-    const local=cues.filter(cue=>contains(fact.action!,cue.span));
     // The literal checklist is partial. An AI-supplied placement can directly
     // define a numbered component without being a checklist obligation. Check
     // this exact occurrence and assertion ending; never supply a missing fact.
