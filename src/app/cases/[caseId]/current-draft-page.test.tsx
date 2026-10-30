@@ -53,7 +53,10 @@ describe("actual case page source selection", () => {
     const html = await render();
     expect(html).toContain("現在の比較・ウォッチ対象: fictional-main-8.txt");
     expect(html).not.toContain("抽出結果1の架空請求項"); expect(html).not.toContain("抽出結果8の架空請求項");
-    expect(html).toContain("その資料の請求項を抽出してください"); await optionalPreview("unextracted", html);
+    expect(html).toContain('id="step-4"');
+    expect(html).toContain("検索式生成用の「請求項を抽出」を先に実行する必要はありません");
+    expect(html).not.toContain('次に「請求項を抽出」ボタンを押してください');
+    expect(seam.request).not.toHaveBeenCalled(); await optionalPreview("unextracted", html);
   });
   it("uses current base and addition in base mode without inferring main", async () => {
     seam.case.mockResolvedValue({ caseId: 7, title: "完全架空の統合試験", baseApplicationMode: true });
@@ -71,6 +74,7 @@ describe("actual case page source selection", () => {
     expect(html).toContain("現在の比較・ウォッチ対象: 未登録");
     expect(html).not.toContain('次に「請求項を抽出」');
     expect(html).toContain("まず、特許案のファイルをアップロードしてください");
+    expect(html).not.toContain('id="step-4"');
     await optionalPreview("normal", html);
   });
 });

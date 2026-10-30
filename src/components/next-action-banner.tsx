@@ -80,7 +80,7 @@ function getAction(
   }
   if (currentStep === 5) {
     return {
-      message: "「重なり分析を実行」ボタンを押してください",
+      message: "指定文献比較を開き、比較する請求項と文献を選んでください",
       target: "step-5",
     };
   }
