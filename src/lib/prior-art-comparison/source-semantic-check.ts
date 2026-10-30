@@ -1,6 +1,6 @@
 import type { Span } from "./propositions";
 import type { SourceReadingClaim } from "./source-clause-coverage";
-import {isLiteralSourceState,SOURCE_STATE_PATTERN} from "./literal-source-state";
+import {isLiteralSourceState,isLiteralComponentType,SOURCE_STATE_PATTERN} from "./literal-source-state";
 
 const invalid=()=>new Error("comparison_source_semantic_incomplete");
 const contains=([a,b]:Span,[x,y]:Span)=>a<=x&&b>=y;
@@ -41,7 +41,7 @@ export function sourceCompleteActionCues(c:SourceReadingClaim):SourceActionCue[]
   // These literal tails describe a premise, negation or modality; they do not
   // assert the matched state/action. Leave ambiguous prose to original QA.
   const unasserted=(end:number,clause:number)=>/^(?:ない|なかった|ず|ていない|ていなかった|ません|な(?:[。！、]|$)|必要|と(?=[、，])|れば|ても|たら|こと(?:は|が|も|なく)|(?:状態)?(?:の)?(?:場合|とき|時|際|なら|後))/u.test(text.slice(end,c.clauses[clause][1]));
-  const allStates=[...text.matchAll(SOURCE_STATE_PATTERN)].map(m=>{
+  const allStates=[...text.matchAll(SOURCE_STATE_PATTERN)].filter(m=>!isLiteralComponentType(m[0])||!/[「」『』“”"]/u.test(text)).map(m=>{
     const span:Span=[m.index,m.index+m[0].length],clause=c.clauses.findIndex(s=>contains(s,span));if(clause<0)throw invalid();
     return {span,clause,predicate:"is_state",polarity:"positive" as const};
   });
@@ -49,6 +49,7 @@ export function sourceCompleteActionCues(c:SourceReadingClaim):SourceActionCue[]
   // component name. Unknown inflections/conditions remain original-QA work;
   // they never force a positive state from an arbitrary matched prefix.
   const states=allStates.filter(s=>/^(?:[、，。]|$|ことを特徴)/u.test(text.slice(s.span[1]))||
+    isLiteralComponentType(text.slice(...s.span))&&/^と共に[、，]/u.test(text.slice(s.span[1],c.clauses[s.clause][1]))||
     /接続された$/u.test(text.slice(...s.span))&&/^[\p{Script=Katakana}ー]+(?:と|を|が|は)(?:[、，。]|$)/u.test(text.slice(s.span[1],c.clauses[s.clause][1]))||
     // A passive placement may directly define a printed component. Require a
     // bounded component noun and list/subject ending, never a condition tail.

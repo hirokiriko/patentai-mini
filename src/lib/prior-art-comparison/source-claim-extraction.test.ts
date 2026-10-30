@@ -15,6 +15,54 @@ import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
 import {sourceCompoundMaintainedStates} from "./source-claim-obligations";
 
+it.each([
+ ["前記運転モードは、青弁を閉じ、液を白管に流して放熱させ、液を減圧した後、冷却器にて吸熱させる光モードである。",true],
+ ["前記運転モードは、光モード又は音モードである。",false],
+ ["前記運転モードは、光モードである場合、弁を閉じる。",false],
+ [`前記運転モードは、${"弁を閉じ、".repeat(8)}光モードである。`,false],
+ [`前記運転モードは、${"青".repeat(220)}モードである。`,false],
+ ["「前記運転モードは、光モードである。」という例。",false],
+])("bounds the complete mode batch without removing route or time clauses: %s",(text,eligible)=>{
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ for(const task of sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks){
+  expect(task.modeBatchEligible).toBe(eligible);
+  expect(JSON.parse(task.prompt).sourceContext.source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(text);
+ }
+});
+
+it("preserves independent component types and power recipients through the complete decoder",async()=>{
+ const text="青弁は電磁弁であり、赤弁は電磁弁であると共に、制御器は、電源が供給され、電源供給が絶たれ、青弁が非通電とされ、赤弁も非通電とされる。";
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const rel=(u:string|null,P:string,object:string,a=object,x="operation")=>({s:null,m:{u:u?[u]:null,x,p:"positive",k:"relation",P,J:[[object]],a},O:[null,null,null,null],F:null});
+ const c1={possessions:[],sets:[],f0:[rel("0-0:青弁","is_state","0-0:電磁弁であり",undefined,"capability")],
+  f1:[rel("1-1:赤弁","is_state","1-1:電磁弁である",undefined,"capability")],f2:[],
+  f3:[rel("2-2:制御器","is_state","3-3:電源が供給され")],
+  f4:[rel(null,"power_ends","2-2:制御器","4-4:電源供給が絶たれ")],
+  f5:[rel("5-5:青弁","is_state","5-5:非通電とされ")],f6:[rel("6-6:赤弁","is_state","6-6:非通電とされる")],T:[] as string[]};
+ const answers=plan.tasks.map(t=>{
+  const value=structuredClone(c1),obligations=JSON.parse(t.prompt).target.obligations;
+  value.T=obligations.map((o:{clause:number})=>`f${o.clause}:0`);
+  expect(t.system).toContain("actual receiving device/topic");
+  return {taskId:t.id,value:{v:34,sourceDigest:t.sourceDigest,claimNo:1,d:t.sourceDigest,scopes:[],c1:value}};
+ });
+ const before=JSON.stringify(answers),decoded=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers));
+ expect(JSON.stringify(answers)).toBe(before);
+ const meanings=decoded.facts.filter(p=>p.scope==="base:1").map(p=>p.meaning);
+ expect(meanings).toEqual(expect.arrayContaining([
+  expect.objectContaining({subject:"制御器",predicate:"is_state",objects:["電源が供給され"]}),
+  expect.objectContaining({subject:null,predicate:"power_ends",objects:["制御器"]}),
+  expect.objectContaining({subject:"赤弁",predicate:"is_state",objects:["非通電とされる"]}),
+ ]));
+ const missingType=structuredClone(answers[0].value);missingType.c1.f1=[];
+ expect((await plan.tasks[0].schema.validate!(missingType)).success).toBe(false);
+ const subjectInState=structuredClone(answers[0].value);
+ subjectInState.c1.f6[0].m.a="6-6:赤弁も非通電とされる";subjectInState.c1.f6[0].m.J=[["6-6:赤弁も非通電とされる"]];
+ expect((await plan.tasks[0].schema.validate!(subjectInState)).success).toBe(false);
+});
+
 it.each(["。","ことを特徴とする装置。"])("preserves the complete branching function and maintained state before %s",async ending=>{
  const text="青弁の上流側で分岐し、液を青槽から赤槽へ流す白管と、制御器を備える装置。制御器は、青弁が閉じ、赤弁が開いた状態を維持する"+ending;
  const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");

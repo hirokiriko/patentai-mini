@@ -38,6 +38,27 @@ function literalSource(phrase: string) {
 }
 
 describe("literal passive states (fictional fixtures, not AI quality)", () => {
+  it.each(["電磁弁であり","パイロット式電磁弁である","光センサである","停止装置である"])("retains the explicit component type %s",phrase=>{
+    const f=literalSource(phrase),before=JSON.stringify(f.raw);
+    expect(isLiteralSourceState(phrase)).toBe(true);
+    expect(decodeSourcePropositions(f.plan,f.raw).facts[0].meaning).toEqual(state(phrase));
+    expect(JSON.stringify(f.raw)).toBe(before);
+  });
+  it.each([`青弁は${"青".repeat(41)}弁である。`,"「青弁は電磁弁である。」という例。"])("does not force a truncated or quoted component type: %s",text=>{
+    expect(sourceCompleteActionCues(sourceReadingClaim(1,text)).some(t=>t.predicate==="is_state")).toBe(false);
+  });
+  it.each(["暖房モードである","電磁弁ではない","電磁弁である場合","電磁弁であるはず","弁を開く電磁弁である","赤弁も非通電とされる"])("rejects unsupported state syntax %s",phrase=>{
+    expect(isLiteralSourceState(phrase)).toBe(false);
+  });
+  it.each(["電磁弁である場合、","電磁弁であるなら、","電磁弁であるはずだ。","電磁弁であるを開く。","電磁弁ではない。"])("does not force a component type from %s",tail=>{
+    expect(sourceCompleteActionCues(sourceReadingClaim(1,`青弁は、${tail}`)).some(c=>c.predicate==="is_state")).toBe(false);
+  });
+  it("requires both printed type occurrences without swallowing their valve actions",()=>{
+    const c=sourceReadingClaim(1,"青弁は、開く電磁弁であり、赤弁は、閉じる電磁弁であると共に、制御器を備える。"),cues=sourceCompleteActionCues(c);
+    expect(cues.filter(t=>t.predicate==="is_state").map(t=>c.grid.text.slice(...t.span))).toEqual(["電磁弁であり","電磁弁である"]);
+    expect(cues.filter(t=>t.predicate!=="is_state").map(t=>t.predicate)).toEqual(["opens","closes"]);
+    expect(()=>assertSourceSemanticReading(c,[],cues)).toThrow();
+  });
   function placementReading(tail:string) {
     const phrase="箱の外に設けられた", claim=sourceReadingClaim(1,phrase+tail);
     const fact:CheckedSourceFact={kind:"relation",predicate:"is_state",polarity:"positive",polarityProof:null,

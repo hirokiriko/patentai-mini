@@ -51,3 +51,14 @@ it("namespaces changed definitions and their transitive parents while sharing id
   expect((defs.member1_Parent as JSONSchema7).properties?.common).toEqual({$ref:"#/definitions/Common"});
   expect(((schema.properties?.first as JSONSchema7).properties?.value)).toEqual({$ref:"#/definitions/member0_Parent"});
 });
+
+it("keeps complete mode batches distinct from short batches and validates both members",async()=>{
+  const first=task(1,{compactBatchEligible:false,modeBatchEligible:true});
+  const second=task(2,{compactBatchEligible:false,modeBatchEligible:true});
+  const [request]=sourceRequestPlan({tasks:[first,second]});
+  expect(request.tasks).toHaveLength(2);expect(request.outputTokenLimit).toBe(30720);
+  expect(await sourceRequestPieces(request,{first:{claimNo:1},second:{claimNo:2}})).toHaveLength(2);
+  await expect(sourceRequestPieces(request,{first:{claimNo:1},second:{claimNo:1}})).rejects.toThrow();
+  for(const other of [task(2),{...second,partitioned:true},{...second,system:"other"},{...second,sourceDigest:"other"},{...second,claimNo:3}])
+    expect(sourceRequestPlan({tasks:[first,other]})).toHaveLength(2);
+});

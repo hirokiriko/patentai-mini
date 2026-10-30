@@ -193,7 +193,7 @@ uses this same task cap; incomplete answers and semantic omissions still fail.
 
 Very short adjacent whole claims can share one physical request. The source
 plan groups at most two claims from the same source, in original order, only
-when each has at most four clauses and 100 characters, no required route, and
+when each has at most five clauses and 120 UTF-16 characters, no required route, and
 identical system instructions. Fixed-mode definitions stay separate. Both
 targets retain the unchanged complete source context and their own strict
 schemas, quotation coordinates and obligations. The wrapper is accepted only
@@ -207,3 +207,27 @@ maintained state receive exact original span reminders. These do not construct
 facts. The decoder also rejects a maintained-state quotation that drops the
 preceding coordinated valve state, including when its tail quotation is longer.
 Full original assembly and independent semantic QA remain necessary.
+
+Explicit positive component-type definitions such as `電磁弁である` are literal
+states, separate from their powered opening and closing behavior. Bounded
+equipment nouns and affirmative copula endings are required; quoted examples,
+conditional endings, negative definitions and truncated long nouns do not
+create positive checklist obligations. The strict target checklist requires
+each asserted occurrence. Versioned shared-context hints retain their existing
+partial list, while target obligations and complete-source validation include
+the type definitions. No fact or subject is supplied by these checks.
+
+Tasks containing both component types and continued/cutoff power receive
+reading advice to retain the actual power receiver, distinguish it from the
+supplied power and subsequently deenergized components, and quote bare passive
+state phrases with separate subjects. Common conditions and alternative timing
+remain distinct. Acquired answers are never repaired to satisfy these rules.
+
+A separate batch category permits two adjacent complete single-mode
+definitions, each at most nine clauses and 220 UTF-16 characters, with matching
+source and instructions. Quoted/conditional definitions, alternatives,
+partitioned claims, closed loops and explicit terminal routes are excluded.
+Other route clauses and temporal/causal guards remain independently required.
+These pairs request at most 30,720 output tokens or the provider's smaller cap,
+validate both complete members before projection, and never mix with short
+claim batches. Fixed-mode identities remain required closed singleton sets.

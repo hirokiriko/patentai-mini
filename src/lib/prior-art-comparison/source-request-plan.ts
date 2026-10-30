@@ -56,7 +56,9 @@ export function sourceRequestPlan(plan: SourceClaimPlan): readonly SourceRequest
   const requests: SourceRequest[] = [];
   for (let i = 0; i < plan.tasks.length; i++) {
     const first = plan.tasks[i], second = plan.tasks[i + 1];
-    if (!first.compactBatchEligible || !second?.compactBatchEligible || first.partitioned || second.partitioned ||
+    const modePair=!!first.modeBatchEligible&&!!second?.modeBatchEligible;
+    const compactPair=!!first.compactBatchEligible&&!!second?.compactBatchEligible&&!first.modeBatchEligible&&!second.modeBatchEligible;
+    if (!second || (!modePair&&!compactPair) || first.partitioned || second.partitioned ||
       first.sourceDigest !== second.sourceDigest || first.sourceIndex !== second.sourceIndex ||
       second.claimNo !== first.claimNo + 1 || first.system !== second.system) {
       requests.push(Object.freeze({ ...first, tasks: Object.freeze([first]) })); continue;
@@ -81,7 +83,7 @@ export function sourceRequestPlan(plan: SourceClaimPlan): readonly SourceRequest
     } });
     if (Buffer.byteLength(JSON.stringify({ system, prompt, schema: schema.jsonSchema }), "utf8") + 8192 > LIMITS.inputBytes) throw new ComparisonError("plan_limit");
     requests.push(Object.freeze({ id: `${first.id}+${second.claimNo}`, tasks, system, prompt, schema,
-      partitioned: false, outputTokenLimit: LIMITS.azureReasoningOutputTokens }));
+      partitioned: false, outputTokenLimit: modePair?30720:LIMITS.azureReasoningOutputTokens }));
     i++;
   }
   return Object.freeze(requests);

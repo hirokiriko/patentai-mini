@@ -9,6 +9,7 @@ import { SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceFullActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
 import type { Span } from "./propositions";
 import {sourceCellRef} from "./source-citation-grid";
+import {isLiteralComponentType} from "./literal-source-state";
 import {expandSourceWire} from "./source-wire-compact";
 import {validateDirectSourceClaim} from "./source-direct-quotes";
 import {assertSourceTaskBindings,resolveSourceTaskQuote,sourceConsecutiveIds,sourceReadingTasks,sourceDeclaredEvidence,sourceMatchedTasks,sourceOrderedQuote,resolveSourceOrderedQuote,sourceDeclaredOrderedEvidence,sourceOrderedFactRows,sourceQuoteDictionary,sourceDictionaryFact,sourceIdentifiedQuoteDictionary,sourceIdentifiedFact} from "./source-reading-tasks";
@@ -20,6 +21,12 @@ const enumKeys:Record<string,string>={x:"context",g:"guardRelation",p:"polarity"
 const operatorKeys=["selection","extent","polarity","guard","context"] as const;
 const quoteRef={$ref:"#/definitions/PriorArtSourceCellQuote"};
 const evidenceRef={$ref:"#/definitions/PriorArtSourceEvidence"};
+
+// Preserve the versioned, partial context hint list. The stronger component
+// type checklist belongs to each target's obligations and strict validation;
+// it does not rewrite the shared context of unrelated extraction requests.
+const contextReadingTasks=(c:SourceReadingClaim,complete=false,functions=false)=>sourceReadingTasks(c,complete,functions)
+  .filter(t=>t.kind!=="is_state"||!isLiteralComponentType(c.grid.text.slice(...t.span)));
 
 export function propositionSourceSemanticTransport(input:ReturnType<typeof propositionSourceInput>){
   const old=propositionSourceClauseTransport(input);
@@ -44,7 +51,7 @@ export function propositionSourceCitedTransport(input:ReturnType<typeof proposit
   const old=propositionSourceTaskTransport(input);
   return {...old,citationClauses:{version:4},sources:old.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>{
     const reading=sourceReadingClaim(c.claimNo,c.clauses.map(([,text])=>text).join(""));
-    return {...c,readingTasks:sourceReadingTasks(reading,true).map(t=>[t.clause,t.kind,t.polarity])};
+    return {...c,readingTasks:contextReadingTasks(reading,true).map(t=>[t.clause,t.kind,t.polarity])};
   })}}))};
 }
 export const sourceCitedPropositionModelSchemaFor=(chunks:readonly ManagedComparisonChunk[])=>sourceSemanticPropositionModelSchemaFor(chunks,19);
@@ -52,7 +59,7 @@ export function propositionSourceOrderedTransport(input:ReturnType<typeof propos
   const old=propositionSourceCitedTransport(input);
   return {...old,citationClauses:{version:5},sources:old.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>{
     const reading=sourceReadingClaim(c.claimNo,c.clauses.map(([,text])=>text).join(""));
-    return {...c,readingTasks:sourceReadingTasks(reading,true,true).map(t=>[t.clause,t.kind,t.polarity])};
+    return {...c,readingTasks:contextReadingTasks(reading,true,true).map(t=>[t.clause,t.kind,t.polarity])};
   })}}))};
 }
 export const sourceOrderedPropositionModelSchemaFor=(chunks:readonly ManagedComparisonChunk[])=>sourceSemanticPropositionModelSchemaFor(chunks,20);
