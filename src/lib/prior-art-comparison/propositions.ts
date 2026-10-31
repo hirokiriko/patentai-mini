@@ -64,11 +64,21 @@ const equalSet = (a: readonly string[], b: readonly string[]) => {
 };
 const sameSubject = (a: string | null, b: string | null) => a === null ? b === null : b !== null && propositionKey(a) === propositionKey(b);
 
+// In these explicit comparison clauses, the terminal conditional particle is
+// already represented by `when`. Keep the literal meanings/bindings unchanged;
+// never strip a general final と (which may be coordination or quotation).
+const guardConditionKey = (relation: Guard["relation"], text: string) => {
+  const key = propositionKey(text);
+  return relation === "when" ? key.replace(/(を超える|を下回る)と$/u, "$1") : key;
+};
+const guardKeys = (guard: Guard) => [...new Set(guard.conditions.map(c => guardConditionKey(guard.relation, c)))].sort();
+const sameGuard = (a: Guard, b: Guard) => a.relation === b.relation && JSON.stringify(guardKeys(a)) === JSON.stringify(guardKeys(b));
+
 export function meaningKey(m: Meaning): string {
   // Sets and conjunctive conditions are unordered; route order remains material.
   const sorted = (xs: string[]) => [...new Set(xs.map(propositionKey))].sort();
   const common = {kind:m.kind,subject:m.subject === null ? null : propositionKey(m.subject),context:m.context,
-    guard:{relation:m.guard.relation,conditions:sorted(m.guard.conditions)},polarity:m.polarity};
+    guard:{relation:m.guard.relation,conditions:guardKeys(m.guard)},polarity:m.polarity};
   return JSON.stringify(m.kind === "set" ? {...common,selection:m.selection,extent:m.extent,members:sorted(m.members)} : m.kind === "path"
     ? {...common,origin:m.origin === null ? null : propositionKey(m.origin),destination:m.destination === null ? null : propositionKey(m.destination),
       via:m.via.map(propositionKey),bypass:sorted(m.bypass),extent:m.extent,relation:m.relation}
@@ -104,7 +114,7 @@ export function compareProposition(target: TargetProposition, available: readonl
   if (t.context === "unresolved" || sources.some(s => s.meaning.context !== t.context)) return result("unresolved", "context_mismatch");
   if (t.polarity !== "positive" || sources.some(s => s.meaning.polarity !== "positive")) return result("unresolved", "polarity_mismatch");
   if (t.guard.relation === "unresolved" || sources.some(s => s.meaning.guard.relation === "unresolved")) return result("unresolved", "guard_mismatch");
-  if (sources.some(s => s.meaning.guard.relation !== t.guard.relation || !equalSet(s.meaning.guard.conditions, t.guard.conditions))) {
+  if (sources.some(s => !sameGuard(s.meaning.guard, t.guard))) {
     // A conditional sufficient statement does not prove that its effect is
     // impossible outside the condition. Do not invent an iff implication.
     return result("unresolved", t.guard.relation === "unconditional" ? "guard_lost" : "guard_mismatch");
@@ -153,7 +163,7 @@ export function compareProposition(target: TargetProposition, available: readonl
     for(const f of constraints){
       if(!sources.some(s=>s.id===f.id))sources.push(f);
       const c=f.meaning;if(c.kind!=="path")continue;
-      if(c.context!==s.context||c.polarity!==s.polarity||c.guard.relation!==s.guard.relation||!equalSet(c.guard.conditions,s.guard.conditions))
+      if(c.context!==s.context||c.polarity!==s.polarity||!sameGuard(c.guard,s.guard))
         return result("unresolved", "branch_mismatch");
       if(meaningKey(c)===meaningKey(s))continue;
       const nodes=keys([...(s.origin?[s.origin]:[]),...s.via,...(s.destination?[s.destination]:[])]);

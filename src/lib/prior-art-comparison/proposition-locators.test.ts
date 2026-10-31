@@ -7,7 +7,7 @@ import { decodeGeneration } from "./generation";
 import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceInput, propositionSourceTransport,
   propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
-import { resolvePropositionQuote, sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
+import { resolvePropositionQuote, resolveTargetLocator, sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
 
 function setup(){
   const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceTransport(propositionSourceInput(plan));
@@ -24,6 +24,22 @@ it("resolves exact repeated/overlapping quotes and UTF16 positions without norma
   expect(resolvePropositionQuote("甲😀甲甲甲","甲甲",1)).toEqual([4,6]);
   expect(resolvePropositionQuote("甲😀甲甲甲","😀",0)).toEqual([1,3]);
   expect(()=>resolvePropositionQuote("Ａ　甲","A 甲",0)).toThrow();
+});
+it("resolves inline target quotes with repeated, overlapping, delimited and Unicode text",()=>{
+  expect(resolveTargetLocator("甲😀甲甲甲","1|甲甲")).toEqual([4,6]);
+  expect(resolveTargetLocator("甲😀甲","0|😀")).toEqual([1,3]);
+  expect(resolveTargetLocator("甲|乙\n甲|乙","1|甲|乙")).toEqual([4,7]);
+});
+it.each(["甲","0|","-1|甲","0.5|甲","01|甲","999999999999999999999|甲","1|甲","0|乙"])("rejects invalid inline target locator %s",value=>{
+  expect(()=>resolveTargetLocator("甲",value)).toThrow("comparison_locator_invalid");
+});
+it("has no orphan locator table and still rejects unrequested answer fields",async()=>{
+  const f=setup(),wire=fixturePropositionWire(f.target);
+  expect(wire.locatorVersion).toBe(3);
+  expect(wire.targets.every((t:Record<string,unknown>)=>!("locators" in t))).toBe(true);
+  expect((await f.targetSchema.validate!(wire)).success).toBe(true);
+  Object.assign(wire.targets[0],{locators:[{quote:"青色弁",occurrence:0}]});
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
 });
 it.each(["empty","absent","negative","fraction","exhausted","surrogate_start","surrogate_end"])("rejects invalid exact locator %s",mode=>{
   const quote=mode==="empty"?"":mode==="absent"?"乙":mode==="surrogate_start"?"\ude00":mode==="surrogate_end"?"\ud83d":"甲";
@@ -78,15 +94,66 @@ it("decodes the instructed sentence partition and exact nominal topic without ab
 it.each(["legacy","other_target","gap","basis_outside","sentence_crossing"])("retains target boundary checks after resolving %s",async mode=>{
   const f=setup();
   if(mode==="legacy"){expect((await f.targetSchema.validate!(f.target)).success).toBe(false);return;}
-  const t=f.target.targets.find(t=>t.id.endsWith(":common"))!,p=t.parts[0];
-  if(mode==="gap")p.span[0]++;
-  if(mode==="basis_outside")p.atoms[0].basis=[t.parts[1].span];
-  if(mode==="sentence_crossing")p.span[1]=t.parts[1].span[1];
   const w=fixturePropositionWire(f.target);
+  const t=w.targets.find((t:{id:string})=>t.id.endsWith(":common"))!,p=t.parts[0];
+  if(mode==="gap")p.span=p.span.slice(1);
+  if(mode==="basis_outside")p.atoms[0].basis=[`0|${t.parts[1].span}`];
+  if(mode==="sentence_crossing"){p.span+=t.parts[1].span;t.parts.splice(1,1);}
   if(mode==="other_target")w.targets[0].id=w.targets[1].id;
   const result=await f.targetSchema.validate!(w);
-  if(mode==="other_target")expect(result.success).toBe(false);
-  else {expect(result.success).toBe(true);if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow();}
+  if(mode!=="sentence_crossing")expect(result.success).toBe(false);
+  else if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow();
+});
+it("resolves repeated part text and its zero-occurrence bindings at each absolute position",async()=>{
+  const f=setup(),answer=f.target.targets.find(t=>t.id.endsWith(":common"))!;
+  const original=f.targetInput.originals.targets.find(t=>t.id===answer.id)!,first=answer.parts[0];
+  const text=original.text.slice(...first.span),length=text.length;
+  original.text=text+text;original.unitStarts=[0,length];
+  answer.parts=[first,structuredClone(first)];
+  const shift=([a,b]:[number,number]):[number,number]=>[a+length,b+length];
+  const second=answer.parts[1];second.span=shift(second.span);
+  for(const a of second.atoms){
+    a.basis=a.basis.map(shift);a.bindings=a.bindings.map(b=>({...b,spans:b.spans.map(shift)}));
+    for(const key of Object.keys(a.operators) as (keyof typeof a.operators)[]){const span=a.operators[key];if(span)a.operators[key]=shift(span);}
+    if(a.attribution)a.attribution=shift(a.attribution);
+  }
+  const wire=fixturePropositionWire(f.target,propositionTargetTransport(f.targetInput));
+  const parts=wire.targets.find((t:{id:string})=>t.id===answer.id)!.parts;
+  expect(parts[0].span).toBe(parts[1].span);
+  expect(parts[0].atoms[0].bindings).toEqual(parts[1].atoms[0].bindings);
+  const result=await targetPropositionModelSchemaFor(f.targetInput).validate!(wire);
+  expect(result).toEqual({success:true,value:f.target});
+  if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).not.toThrow();
+});
+it.each(["wrong_marker","particle","missing_marker"])("preserves attribution checks for %s",async mode=>{
+  const f=setup(),wire=fixturePropositionWire(f.target),atom=wire.targets[0].parts[0].atoms[0];
+  atom.attribution=mode==="wrong_marker"?"候補側":mode==="particle"?"基準側は":null;
+  const result=await f.targetSchema.validate!(wire);
+  if(mode==="missing_marker"){
+    expect(result.success).toBe(true);
+    if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow();
+  }else expect(result.success).toBe(false);
+});
+it.each([1,2])("rejects retired target locator version %i",async locatorVersion=>{
+  const f=setup(),wire=fixturePropositionWire(f.target);wire.locatorVersion=locatorVersion;
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+});
+it("counts only an independently verified leading attribution prefix beside the technical basis",async()=>{
+  const f=setup(),part=f.target.targets[0].parts[0],atom=part.atoms[0];
+  expect(atom.attribution).toEqual([part.span[0],part.span[0]+3]);
+  atom.basis=[[part.span[0]+4,part.span[1]]];
+  const before=JSON.stringify(f.target),result=await f.targetSchema.validate!(fixturePropositionWire(f.target));
+  expect(result.success).toBe(true);
+  if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).not.toThrow();
+  expect(JSON.stringify(f.target)).toBe(before);
+  // A missing action is still uncovered even though all term bindings exist.
+  const missingAction=structuredClone(f.target),a=missingAction.targets[0].parts[0].atoms[0];
+  a.basis=[[part.span[0]+4,Math.max(...a.bindings.flatMap(b=>b.spans.map(s=>s[1])))]];
+  expect(()=>decodeTargetPropositions(f.targetInput,missingAction)).toThrow();
+  for(const attribution of [null,[0,2] as [number,number],[1,3] as [number,number]]){
+    const wrong=structuredClone(f.target);wrong.targets[0].parts[0].atoms[0].attribution=attribution;
+    expect(()=>decodeTargetPropositions(f.targetInput,wrong)).toThrow();
+  }
 });
 it("keeps complete source/target wire schemas within five object levels",()=>{
   const f=setup();

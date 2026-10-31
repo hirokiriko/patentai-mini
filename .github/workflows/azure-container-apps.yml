@@ -64,6 +64,9 @@ jobs:
 
           az acr login --name "${AZURE_ACR_NAME}"
           docker build --pull --build-arg MANAGED_BUILD_SHA="${GITHUB_SHA}" -t "${sha_image}" -t "${latest_image}" .
+          image_bytes="$(docker image inspect --format '{{.Size}}' "${sha_image}")"
+          [[ "${image_bytes}" =~ ^[0-9]+$ ]]
+          (( image_bytes > 0 && image_bytes <= 8589934592 ))
           docker push "${sha_image}"
           docker push "${latest_image}"
 

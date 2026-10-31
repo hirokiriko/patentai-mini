@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareProposition, explainProposition, meaningSchema, type Meaning, type SourceProposition, type TargetProposition } from "./propositions";
+import { compareProposition, explainProposition, meaningKey, meaningSchema, type Meaning, type SourceProposition, type TargetProposition } from "./propositions";
 import { renderMeaning } from "./proposition-result";
 
 const guard = { relation: "unconditional" as const, conditions: [] };
@@ -25,6 +25,46 @@ const target = (meaning: Meaning, sourceIds = ["s1"]): TargetProposition =>
   ({ id:"t1",targetId:"1:3:7:differences",span:[0,40],sourceIds,scope:"base:3",claimNo:3,meaning });
 const path = (via: string[], bypass: string[]): Meaning => ({kind:"path",subject:"第1運転モード",context:"operation",guard,polarity:"positive",
   origin:"出口",destination:"入口",via,bypass,extent:"segment",relation:"route"});
+
+it.each(["圧力が九単位を超える","流量が三単位を下回る"])("compares a terminal conditional particle without rewriting the evidence: %s",condition=>{
+  for(const m of [set("補助系",["白","黒"]),path(["中間槽"],[])] as Meaning[]){
+    const s=source("s1",{...m,guard:{relation:"when",conditions:[condition+"と"]}});
+    const t=target({...m,guard:{relation:"when",conditions:[condition]}}),before=JSON.stringify([s,t]);
+    expect(compareProposition(t,[s]).relation).toBe("entailed");
+    expect(meaningKey(s.meaning)).toBe(meaningKey(t.meaning));
+    expect(JSON.stringify([s,t])).toBe(before);
+    // A literal duplicate must use the same guard equivalence during branch/path checks.
+    const literal=source("literal",structuredClone(t.meaning));literal.authority="literal";
+    expect(compareProposition(t,[s,literal]).relation).toBe("entailed");
+  }
+});
+it.each([
+  "圧力が八単位を超える","流量が九単位を超える","圧力が九単位を下回る",
+  "圧力が九単位を超えない","圧力が九単位を超えるとき","圧力が九単位を超えるとだけ",
+  "圧力が九単位を超えると同時に","圧力が九単位を超えるとされる",
+  "圧力が九単位を超える又は始動中","圧力が九単位を超えるかつ始動中",
+])("does not weaken a guarded comparison into %s",condition=>{
+  const m=set("補助系",["白","黒"]),s=source("s1",{...m,guard:{relation:"when",conditions:["圧力が九単位を超えると"]}});
+  const t=target({...m,guard:{relation:"when",conditions:[condition]}});
+  expect(compareProposition(t,[s])).toMatchObject({relation:"unresolved",rule:"guard_mismatch"});
+  expect(meaningKey(s.meaning)).not.toBe(meaningKey(t.meaning));
+});
+it("retains condition sets, relation kinds and non-comparative terminal particles",()=>{
+  const m=set("補助系",["白","黒"]),condition="圧力が九単位を超える";
+  const s=source("s1",{...m,guard:{relation:"when",conditions:[condition+"と","始動中"]}});
+  for(const conditions of [[condition],[condition,"始動中","信号受信時"],[]])
+    expect(compareProposition(target({...m,guard:{relation:"when",conditions}}),[s]).relation).toBe("unresolved");
+  for(const relation of ["only_when","unresolved","unconditional"] as const){
+    const a={...m,guard:{relation,conditions:[condition]}},b={...m,guard:{relation,conditions:[condition+"と"]}};
+    expect(meaningKey(a)).not.toBe(meaningKey(b));
+    expect(compareProposition(target(a),[source("s1",b)]).relation).toBe("unresolved");
+    expect(compareProposition(target({...a,guard:{relation,conditions:[condition+"と","始動中"]}}),[s]).relation).toBe("unresolved");
+  }
+  for(const condition of ["A","する","信号を受ける","圧力が九単位を超えると"]){
+    const a={...m,guard:{relation:"when" as const,conditions:[condition]}},b={...m,guard:{relation:"when" as const,conditions:[condition+"と"]}};
+    expect(compareProposition(target(a),[source("s1",b)]).relation).toBe("unresolved");
+  }
+});
 
 describe("position-bound proposition comparison (fictional extraction, not AI quality)",()=>{
   it.each([
