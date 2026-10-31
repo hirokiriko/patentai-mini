@@ -33,11 +33,21 @@ export const managedCompletionAllowanceSchema = z.object({
 export type ManagedCompletionAllowance = z.infer<typeof managedCompletionAllowanceSchema>;
 // A signed, profile-bound supplement for this processing month only. It does
 // not change the base profile, historical release caps, or Issue140 authority.
-export const managedStandardMonthAdjustmentSchema = z.object({
+const ordinaryStandardMonthAdjustmentSchema = z.object({
   scope: z.literal("ISSUE150_STANDARD_MONTH_V1"), month: z.literal("2026-10"),
   ownerApprovalDigest: hash, profileDigest: hash, monthlyCapYen: z.literal(38331),
   jobs: z.literal(25), minutes: z.literal(3000), forward: z.literal(9),
 }).strict();
+// The additional repair deployment retains unresolved prior-month units.
+// This decoder is not admission: the signed Local review binds the exact epoch,
+// previous plan, profile, code and one new release operation.
+export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope", [
+  ordinaryStandardMonthAdjustmentSchema,
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_REPAIR_STANDARD_MONTH_V1"), forward: z.literal(10),
+    repairEpochDigest: hash, priorPlanDigest: hash,
+  }).strict(),
+]);
 export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
   fast: 0, packages: 0, bytes: 0, forward: 0, rollback: 0 });
@@ -231,6 +241,13 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
   releaseMonthlyCapYen?: number; completionAllowance?: ManagedCompletionAllowance;
   standardMonthAdjustment?: ManagedStandardMonthAdjustment }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_REPAIR_STANDARD_MONTH_V1") {
+    check(old !== undefined && managedDigest(old) === input.standardMonthAdjustment.priorPlanDigest);
+    check(input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
+      input.releaseTailYen === s.releaseTailYen &&
+      managedDigest(input.completionAllowance ?? null) === managedDigest(old.completionAllowance ?? null) &&
+      (input.reviewedOperationIds?.length ?? 0) === 0);
+  }
   const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
     ...(input.releaseMonthlyCapYen === undefined ? {} : { releaseMonthlyCapYen: input.releaseMonthlyCapYen }),
     ...(input.completionAllowance === undefined ? {} : { completionAllowance: input.completionAllowance }),

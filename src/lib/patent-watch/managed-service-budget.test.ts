@@ -75,6 +75,33 @@ function standardAdjustment(p: ManagedBudgetProfile) {
   return managedStandardMonthAdjustmentSchema.parse({ scope: "ISSUE150_STANDARD_MONTH_V1", month: "2026-10",
     ownerApprovalDigest: digest(400), profileDigest: managedDigest(p), monthlyCapYen: 38331, jobs: 25, minutes: 3000, forward: 9 });
 }
+it("admits only the repair month supplement while retaining unresolved prior-month deployment units", () => {
+  const f = completionFixture(), unresolved = structuredClone(f.allowed);
+  unresolved.operations[0].knownUnits = {};
+  const ordinary = setManagedMonthPlan(unresolved, { ...f.input, standardMonthAdjustment: standardAdjustment(f.p) }, f.now);
+  const deployment = () => ({ ...f.r, operationId: randomUUID(), requestDigest: managedDigest(randomUUID()),
+    kind: "deploy", reservationYen: 1, units: { ...emptyManagedBudgetUnits(), forward: 1 } });
+  const ninth = reserveManagedBudget(ordinary, deployment(), f.p, f.now).state;
+  expect(() => reserveManagedBudget(ninth, deployment(), f.p, f.now)).toThrow();
+  const priorPlan = ninth.plans.find(p => p.month === "2026-10")!;
+  const supplement = managedStandardMonthAdjustmentSchema.parse({ ...standardAdjustment(f.p),
+    scope: "ISSUE150_REPAIR_STANDARD_MONTH_V1", forward: 10,
+    repairEpochDigest: digest(420), priorPlanDigest: managedDigest(priorPlan) });
+  if (supplement.scope !== "ISSUE150_REPAIR_STANDARD_MONTH_V1") throw new Error("repair supplement required");
+  const input = { ...f.input, evidenceDigest: digest(421), standardMonthAdjustment: supplement };
+  const repaired = setManagedMonthPlan(ninth, input, f.now);
+  const tenth = reserveManagedBudget(repaired, deployment(), f.p, f.now).state;
+  expect(tenth.operations.slice(0, ninth.operations.length)).toEqual(ninth.operations);
+  expect(tenth.legacyUnknownYen).toBe(ninth.legacyUnknownYen);
+  expect(() => reserveManagedBudget(tenth, deployment(), f.p, f.now)).toThrow();
+  for (const change of [{ forward: 11 }, { jobs: 26 }, { minutes: 3001 }, { monthlyCapYen: 38332 }, { month: "2026-11" }]) {
+    expect(() => managedStandardMonthAdjustmentSchema.parse({ ...supplement, ...change })).toThrow();
+  }
+  expect(() => managedStandardMonthAdjustmentSchema.parse({ ...standardAdjustment(f.p), forward: 10 })).toThrow();
+  expect(() => setManagedMonthPlan(ninth, { ...input, standardMonthAdjustment: { ...supplement, priorPlanDigest: digest(999) } }, f.now)).toThrow();
+  expect(() => setManagedMonthPlan(ninth, { ...input, baseYen: input.baseYen - 1 }, f.now)).toThrow();
+  expect(() => setManagedMonthPlan(ninth, { ...input, reviewedOperationIds: [ninth.operations[0].operationId] }, f.now)).toThrow();
+});
 it("applies only the signed ordinary month limits and keeps unknown usage and base caps", () => {
   const f = completionFixture(), adjustment = standardAdjustment(f.p);
   const s = setManagedMonthPlan(f.allowed, { ...f.input, standardMonthAdjustment: adjustment }, f.now);
