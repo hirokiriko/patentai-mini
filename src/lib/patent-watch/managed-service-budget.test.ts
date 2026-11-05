@@ -123,6 +123,85 @@ it("applies only the signed ordinary month limits and keeps unknown usage and ba
   const expired = structuredClone(s); expired.plans[1].completionAllowance!.validUntil = "2026-10-01T01:00:00Z";
   expect(() => checkManagedStandardBudget(expired, f.p, f.now)).toThrow();
 });
+function novemberRepairFixture() {
+  const f = completionFixture(), unresolved = structuredClone(f.allowed);
+  unresolved.operations[0].knownUnits = {};
+  const ordinary = setManagedMonthPlan(unresolved, { ...f.input,
+    standardMonthAdjustment: standardAdjustment(f.p) }, f.now);
+  const october = reserveManagedBudget(ordinary, { ...f.r, kind: "deploy", reservationYen: 100,
+    units: { ...emptyManagedBudgetUnits(), jobs: 1, minutes: 120, forward: 1 } }, f.p, f.now).state;
+  const p = { ...f.p, pricingDigest: digest(501), goEvidenceDigest: digest(502) };
+  const now = clock("2026-11-05T00:00:00Z"), prior = october.plans[1];
+  const adjustment = managedStandardMonthAdjustmentSchema.parse({
+    scope: "ISSUE150_NOVEMBER_REPAIR_MONTH_V1", month: "2026-11", ownerApprovalDigest: digest(503),
+    profileDigest: managedDigest(p), monthlyCapYen: 53607, jobs: 25, minutes: 3000, forward: 10,
+    repairEpochDigest: digest(504), priorPlanDigest: managedDigest(prior), validUntil: "2026-11-06T00:00:00Z" });
+  if (adjustment.scope !== "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") throw new Error("November supplement required");
+  const input = { baseYen: prior.baseYen, pools: { remaining: 8900, storage: 1000, recovery: 100 },
+    pricingDigest: p.pricingDigest, evidenceDigest: digest(505), releaseTailYen: october.releaseTailYen,
+    standardMonthAdjustment: adjustment };
+  return { f, october, p, now, input, adjustment };
+}
+it("rolls only unreserved pools into November while retaining every old operation and unit", () => {
+  const f = novemberRepairFixture(), before = structuredClone(f.october);
+  const planned = setManagedMonthPlan(f.october, f.input, f.now);
+  const active = activate(planned, f.p, f.now);
+  checkManagedStandardBudget(active, f.p, f.now);
+  expect(active.operations).toEqual(before.operations);
+  expect(active.plans.slice(0, 2)).toEqual(before.plans);
+  expect(active.legacyUnknownYen).toBe(before.legacyUnknownYen);
+  expect(active.releaseTailYen).toBe(before.releaseTailYen);
+  expect(managedBudgetForecast(active, "2026-11")).toBe(31_200);
+  const deploy = () => request({ scope: "standard", kind: "deploy", profileDigest: managedDigest(f.p),
+    pricingDigest: f.p.pricingDigest, reservationYen: 100, units: { ...emptyManagedBudgetUnits(), forward: 1 } });
+  const tenth = reserveManagedBudget(active, deploy(), f.p, f.now).state;
+  expect(() => reserveManagedBudget(tenth, deploy(), f.p, f.now)).toThrow();
+  expect(tenth.operations.slice(0, before.operations.length)).toEqual(before.operations);
+  const restored = setManagedMonthPlan(tenth, { ...f.input, evidenceDigest: digest(506),
+    standardMonthAdjustment: { ...f.adjustment, forward: 9, priorPlanDigest: managedDigest(tenth.plans[2]) } }, f.now);
+  expect(restored.operations).toEqual(tenth.operations);
+  expect(() => checkManagedStandardBudget(restored, f.p, f.now)).toThrow();
+});
+it("rejects replenishment, old exceptions, stale links and a financial rewrite during November repair", () => {
+  const f = novemberRepairFixture();
+  for (const patch of [
+    { pools: { ...f.input.pools, remaining: 9000 } },
+    { baseYen: f.input.baseYen - 1 },
+    { completionAllowance: f.f.allowance },
+    { releaseTailYen: f.input.releaseTailYen + 1 },
+    { reviewedOperationIds: [f.october.operations[0].operationId] },
+    { standardMonthAdjustment: { ...f.adjustment, priorPlanDigest: digest(999) } },
+  ]) expect(() => setManagedMonthPlan(f.october, { ...f.input, ...patch }, f.now)).toThrow();
+  const s = setManagedMonthPlan(f.october, f.input, f.now);
+  expect(() => setManagedMonthPlan(s, { ...f.input, standardMonthAdjustment: undefined }, f.now)).toThrow();
+  const linked = { ...f.input, standardMonthAdjustment: { ...f.adjustment, priorPlanDigest: managedDigest(s.plans[2]) } };
+  for (const patch of [{ baseYen: f.input.baseYen + 1 }, { pools: { ...f.input.pools, storage: 999 } },
+    { standardMonthAdjustment: { ...linked.standardMonthAdjustment, monthlyCapYen: 53606 } }]) {
+    expect(() => setManagedMonthPlan(s, { ...linked, ...patch }, f.now)).toThrow();
+  }
+});
+it("bounds the November supplement and rejects execution crossing its expiry", () => {
+  const f = novemberRepairFixture();
+  for (const patch of [{ month: "2026-12" }, { monthlyCapYen: 53608 }, { forward: 11 },
+    { jobs: 26 }, { minutes: 3001 }, { validUntil: "2026-12-01T00:00:00Z" }]) {
+    expect(() => managedStandardMonthAdjustmentSchema.parse({ ...f.adjustment, ...patch })).toThrow();
+  }
+  const active = activate(setManagedMonthPlan(f.october, f.input, f.now), f.p, f.now);
+  expect(() => checkManagedStandardBudget(active, f.p, clock("2026-11-05T22:00:00Z"))).toThrow();
+  expect(() => checkManagedExecutionBudget(active, f.p, clock("2026-11-06T00:00:00Z", 1))).toThrow();
+  for (const p of [null, undefined]) {
+    expect(() => checkManagedExecutionBudget(active, p, f.now)).toThrow();
+    expect(() => checkManagedExecutionBudget(active, p, clock("2026-11-06T00:00:00Z", 1))).toThrow();
+  }
+  // Keep this fixture below the generic release ceiling so rejection cannot
+  // be explained by the unrelated 30,000-yen check.
+  const lowCost = structuredClone(active); lowCost.plans[2].baseYen = 10_000;
+  const release = request({ kind: "validation", pricingDigest: f.p.pricingDigest, units: emptyManagedBudgetUnits() });
+  const generic = structuredClone(lowCost); delete generic.plans[2].standardMonthAdjustment;
+  expect(() => reserveManagedBudget(generic, release, null, f.now)).not.toThrow();
+  expect(() => reserveManagedBudget(lowCost, release, null, f.now)).toThrow();
+  expect(() => checkManagedStandardBudget(active, f.f.p, f.now)).toThrow();
+});
 it("activates a new ordinary profile without retargeting an old completion signature", () => {
   const f = completionFixture(), p = { ...f.p, goEvidenceDigest: digest(410) }, before = structuredClone(f.allowed);
   expect(() => activate(f.allowed, p, f.now)).toThrow();
