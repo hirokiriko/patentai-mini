@@ -135,9 +135,10 @@ function novemberRepairFixture() {
   const adjustment = managedStandardMonthAdjustmentSchema.parse({
     scope: "ISSUE150_NOVEMBER_REPAIR_MONTH_V1", month: "2026-11", ownerApprovalDigest: digest(503),
     profileDigest: managedDigest(p), monthlyCapYen: 53607, jobs: 25, minutes: 3000, forward: 10,
-    repairEpochDigest: digest(504), priorPlanDigest: managedDigest(prior), validUntil: "2026-11-06T00:00:00Z" });
+    repairEpochDigest: digest(504), priorPlanDigest: managedDigest(prior), validUntil: "2026-11-06T00:00:00Z",
+    executionEarmark: { forecastBaseYen: prior.baseYen, productionAiYen: 1238, imageRetentionYen: 1115 } });
   if (adjustment.scope !== "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") throw new Error("November supplement required");
-  const input = { baseYen: prior.baseYen, pools: { remaining: 8900, storage: 1000, recovery: 100 },
+  const input = { baseYen: prior.baseYen + 2353, pools: { remaining: 6547, storage: 1000, recovery: 100 },
     pricingDigest: p.pricingDigest, evidenceDigest: digest(505), releaseTailYen: october.releaseTailYen,
     standardMonthAdjustment: adjustment };
   return { f, october, p, now, input, adjustment };
@@ -152,6 +153,9 @@ it("rolls only unreserved pools into November while retaining every old operatio
   expect(active.legacyUnknownYen).toBe(before.legacyUnknownYen);
   expect(active.releaseTailYen).toBe(before.releaseTailYen);
   expect(managedBudgetForecast(active, "2026-11")).toBe(31_200);
+  expect(active.plans[2].baseYen - before.plans[1].baseYen).toBe(2353);
+  expect(active.plans[2].standardMonthAdjustment).toMatchObject({ executionEarmark: {
+    productionAiYen: 1238, imageRetentionYen: 1115 } });
   const deploy = () => request({ scope: "standard", kind: "deploy", profileDigest: managedDigest(f.p),
     pricingDigest: f.p.pricingDigest, reservationYen: 100, units: { ...emptyManagedBudgetUnits(), forward: 1 } });
   const tenth = reserveManagedBudget(active, deploy(), f.p, f.now).state;
@@ -160,17 +164,21 @@ it("rolls only unreserved pools into November while retaining every old operatio
   const restored = setManagedMonthPlan(tenth, { ...f.input, evidenceDigest: digest(506),
     standardMonthAdjustment: { ...f.adjustment, forward: 9, priorPlanDigest: managedDigest(tenth.plans[2]) } }, f.now);
   expect(restored.operations).toEqual(tenth.operations);
+  expect(restored.plans[2].standardMonthAdjustment).toMatchObject({ executionEarmark: f.adjustment.executionEarmark });
   expect(() => checkManagedStandardBudget(restored, f.p, f.now)).toThrow();
 });
 it("rejects replenishment, old exceptions, stale links and a financial rewrite during November repair", () => {
   const f = novemberRepairFixture();
   for (const patch of [
     { pools: { ...f.input.pools, remaining: 9000 } },
+    { pools: { ...f.input.pools, remaining: 8900 } },
     { baseYen: f.input.baseYen - 1 },
     { completionAllowance: f.f.allowance },
     { releaseTailYen: f.input.releaseTailYen + 1 },
     { reviewedOperationIds: [f.october.operations[0].operationId] },
     { standardMonthAdjustment: { ...f.adjustment, priorPlanDigest: digest(999) } },
+    { standardMonthAdjustment: { ...f.adjustment, executionEarmark: {
+      ...f.adjustment.executionEarmark, forecastBaseYen: f.adjustment.executionEarmark.forecastBaseYen - 1 } } },
   ]) expect(() => setManagedMonthPlan(f.october, { ...f.input, ...patch }, f.now)).toThrow();
   const s = setManagedMonthPlan(f.october, f.input, f.now);
   expect(() => setManagedMonthPlan(s, { ...f.input, standardMonthAdjustment: undefined }, f.now)).toThrow();
@@ -183,7 +191,10 @@ it("rejects replenishment, old exceptions, stale links and a financial rewrite d
 it("bounds the November supplement and rejects execution crossing its expiry", () => {
   const f = novemberRepairFixture();
   for (const patch of [{ month: "2026-12" }, { monthlyCapYen: 53608 }, { forward: 11 },
-    { jobs: 26 }, { minutes: 3001 }, { validUntil: "2026-12-01T00:00:00Z" }]) {
+    { jobs: 26 }, { minutes: 3001 }, { validUntil: "2026-12-01T00:00:00Z" },
+    { executionEarmark: undefined },
+    { executionEarmark: { ...f.adjustment.executionEarmark, productionAiYen: 1237 } },
+    { executionEarmark: { ...f.adjustment.executionEarmark, imageRetentionYen: 1114 } }]) {
     expect(() => managedStandardMonthAdjustmentSchema.parse({ ...f.adjustment, ...patch })).toThrow();
   }
   const active = activate(setManagedMonthPlan(f.october, f.input, f.now), f.p, f.now);
