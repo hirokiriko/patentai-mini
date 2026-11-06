@@ -271,6 +271,13 @@ export function targetAttributionMarker(text:string,part:Span,a:Pick<z.infer<typ
   const marker=own.filter(m=>m.index+m[0].length<=position).at(-1)??own[0]??prior.at(-1);
   return marker?{text:marker[0],span:[marker.index,marker.index+marker[0].length] as Span}:null;
 }
+function isNominalReservationTopic(topic:string):boolean {
+  // A leading relative modifier still names an uncertain topic. Do not admit
+  // arbitrary verbal clauses, or remove any text from the retained answer.
+  const nominal=topic.startsWith("相違する")?topic.slice("相違する".length):topic;
+  if(nominal!==topic&&!/^[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９]/u.test(nominal))return false;
+  return /^(?:[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９・／/\s-]|の|と|および|または|における|への|での|からの|までの|など)+$/u.test(nominal);
+}
 export function decodeTargetPropositions(input:PropositionTargetInput,value:unknown){
   try{
     const raw=targetPropositionSchemaFor(input).parse(value),seen=new Set<string>(),atoms:TargetProposition[]=[];
@@ -288,7 +295,7 @@ export function decodeTargetPropositions(input:PropositionTargetInput,value:unkn
           // Only a nominal uncertainty topic can bypass factual comparison.
           // A preceding factual clause must be a separate assertion part.
           const topic=part.reservation.topic,[start,end]=part.reservation.basis;
-          if(part.atoms.length||! /^(?:[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９・／/\s-]|の|と|および|または|における|への|での|からの|までの|など)+$/u.test(topic)||
+          if(part.atoms.length||!isNominalReservationTopic(topic)||
             !/^(?:未確認事項[：:])?\s*$/u.test(target.text.slice(part.span[0],start))||
             !/^(?:は|については|までは|について)?(?:未確認|未検証|未評価|要確認|不明)(?:である|です)?[。\s]*$/u.test(target.text.slice(end,part.span[1])))throw Error();
         }

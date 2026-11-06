@@ -121,8 +121,12 @@ export function renderPropositionDrafts(input:PropositionTargetInput,assessment:
       const answer=assessment.raw.targets.find(t=>t.id===id);if(!answer)throw new ComparisonError("ai_incomplete");
       const records=assessment.records.filter(r=>r.target.targetId===id);
       if((field==="baseObservation"||field==="candidateObservation")&&!records.length)throw new ComparisonError("ai_incomplete");
+      // A verified uncertainty-only differences field asserts no comparison.
+      // Preserve that reservation without inventing an agreement or difference.
+      const reservedDifference=field==="differences"&&!records.length&&answer.parts.length>0&&
+        answer.parts.every(p=>p.form==="reservation"&&p.reservation);
       const statements=field==="common"||field==="differences"?[
-        ...comparisonSentences(field,records),
+        ...(reservedDifference?[]:comparisonSentences(field,records)),
         ...answer.parts.filter(p=>p.form!=="assertion").flatMap(p=>renderPart(p,[],d[field])),
       ]:answer.parts.flatMap((p,partIndex)=>renderPart(p,records.filter(r=>r.target.id.startsWith(`${id}/${partIndex}/`)),d[field]));
       const text=[...new Set(statements)].join("");
