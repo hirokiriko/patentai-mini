@@ -120,6 +120,82 @@ it("retains reservations without treating them as proved factual assertions",()=
   const f=setup(),assessment=assessPropositions(f.input,f.raw);
   expect(assessment.targets.filter(t=>t.id.endsWith(":unconfirmed")).map(t=>t.relation)).toEqual(["nonassertive","nonassertive"]);
 });
+it.each(["相違する技術条件","相違する配置","相違する装置の青色弁"])("retains a bounded nominal uncertainty topic: %s",topic=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!;
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  const assessment=assessPropositions(f.input,f.raw);
+  assertPropositionTargetCoverage(f.input,assessment);
+  expect(assessment.targets.find(t=>t.id===target.id)!.relation).toBe("nonassertive");
+  expect(renderPropositionDrafts(f.input,assessment,f.drafts)[0].unconfirmed).toBe(`未確認事項：${topic}。`);
+  expect(target.text).toBe(topic+"は未確認。");
+});
+it.each(["相違する","相違するの","相違する相違する技術条件","技術条件が相違する",
+  "装置が青色弁を制御する","相違する温度が七度を超える","相違する装置は青色弁を備える",
+  "温度が上昇する条件","弁を閉鎖する構成","性能が相違する技術条件"])("rejects a verbal clause disguised as an uncertainty topic: %s",topic=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!;
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  expect(()=>decodeTargetPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+});
+it.each(["basis","asserted_prefix","asserted_suffix","atoms"])("keeps reservation bounds and assertion checks with a nominal modifier: %s",mode=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!,topic="相違する技術条件";
+  const prefix=mode==="asserted_prefix"?"基準側は青色弁を備える。":"";
+  target.text=prefix+topic+(mode==="asserted_suffix"?"は一致する。":"は未確認。");
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",
+    atoms:mode==="atoms"?structuredClone(f.raw.targets[0].parts[0].atoms):[],reference:null,
+    reservation:{topic,basis:[prefix.length,mode==="basis"?prefix.length+topic.length-1:prefix.length+topic.length]}}];
+  expect(()=>decodeTargetPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+});
+it("renders an uncertainty-only differences field without asserting agreement or difference",()=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":differences"))!,topic="相違する配置";
+  const before=renderPropositionDrafts(f.input,assessPropositions(f.input,f.raw),f.drafts);
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  const assessment=assessPropositions(f.input,f.raw);
+  assertPropositionTargetCoverage(f.input,assessment);
+  expect(assessment.targets.find(t=>t.id===target.id)!.relation).toBe("nonassertive");
+  const rendered=renderPropositionDrafts(f.input,assessment,f.drafts);
+  expect(rendered[0].differences).toBe(`未確認事項：${topic}。`);
+  expect(rendered[0].common).toBe(before[0].common);
+});
+it.each(["common","baseObservation","candidateObservation"])("still requires factual records in %s",field=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(`:${field}`))!,topic="相違する配置";
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  const assessment=assessPropositions(f.input,f.raw);
+  assertPropositionTargetCoverage(f.input,assessment);
+  expect(()=>renderPropositionDrafts(f.input,assessment,f.drafts)).toThrow("ai_incomplete");
+});
+it.each(["empty","reference","unresolved","empty_assertion","overflow"])("does not treat an incomplete differences field as uncertainty-only: %s",mode=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":differences"))!,answer=f.raw.targets.find(t=>t.id===target.id)!;
+  const topic="相違する"+"技術条件".repeat(50);
+  target.text=mode==="reference"?"基準側の請求項1の参照。":mode==="overflow"?topic+"は未確認。":"配置は未確認。";
+  answer.parts=mode==="empty"?[]:mode==="reference"?[{span:[0,target.text.length],form:"reference",atoms:[],reservation:null,
+    reference:{side:"base",claimNos:[1],relation:"unspecified"}}]:mode==="overflow"?[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}]:[{span:[0,target.text.length],form:mode==="unresolved"?"unresolved":"assertion",atoms:[],reference:null,reservation:null}];
+  expect(()=>{
+    const assessment=assessPropositions(f.input,f.raw);
+    assertPropositionTargetCoverage(f.input,assessment);
+    renderPropositionDrafts(f.input,assessment,f.drafts);
+  }).toThrow("ai_incomplete");
+});
+it("still rejects a one-sided comparison followed by a valid reservation",()=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":differences"))!,answer=f.raw.targets.find(t=>t.id===target.id)!;
+  const first=answer.parts[0],topic="相違する配置";
+  expect(first.atoms.every(a=>a.scope.startsWith("base:"))).toBe(true);
+  target.text=target.text.slice(...first.span);const start=target.text.length;
+  target.text+=topic+"は未確認。";
+  answer.parts=[first,{span:[start,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[start,start+topic.length]}}];
+  const assessment=assessPropositions(f.input,f.raw);
+  assertPropositionTargetCoverage(f.input,assessment);
+  expect(()=>renderPropositionDrafts(f.input,assessment,f.drafts)).toThrow("ai_incomplete");
+});
 it("prefers a current part's explicit postposed side over the previous clause",()=>{
   const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":common"))!;
   const answer=f.raw.targets.find(t=>t.id===target.id)!,prototype=answer.parts[0].atoms[0];
