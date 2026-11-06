@@ -85,6 +85,17 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reservationRepairProductionAiYen: z.literal(1238), reservationRepairImageRetentionYen: z.literal(1115) }).strict(),
   }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
     Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_NOVEMBER_BINDING_REPAIR_V1"), month: z.literal("2026-11"),
+    monthlyCapYen: z.literal(70000), forward: z.union([z.literal(12), z.literal(13)]),
+    repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    executionEarmark: z.object({ forecastBaseYen: z.number().int().nonnegative(),
+      productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115),
+      additionalProductionAiYen: z.literal(1238), additionalImageRetentionYen: z.literal(1115),
+      reservationRepairProductionAiYen: z.literal(1238), reservationRepairImageRetentionYen: z.literal(1115),
+      bindingRepairProductionAiYen: z.literal(1238), bindingRepairImageRetentionYen: z.literal(1115) }).strict(),
+  }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
+    Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
 ]);
 export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
@@ -227,7 +238,8 @@ function executionCompletion(s: ManagedBudgetState, m: string, hasAdjustment: bo
 function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile, maximumActionMs = 1) {
   check(!s.operations.some(o => o.reviewRequired));
   const plan = s.plans.find(p => p.month === m);
-  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
+  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1") {
     // Twelve is an explicit stopped plan, even when observed consumption fits.
     check(plan.standardMonthAdjustment.forward === 13);
   }
@@ -235,7 +247,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
       plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
-      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1") {
     check(profile !== undefined &&
       Date.parse(s.lastTrustedAt) + maximumActionMs < Date.parse(plan.standardMonthAdjustment.validUntil));
   }
@@ -273,7 +286,8 @@ export function checkManagedExecutionBudget(value: unknown, profile: ManagedBudg
   if (adjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       adjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
       adjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
-      adjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") check(profile !== null && profile !== undefined);
+      adjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
+      adjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1") check(profile !== null && profile !== undefined);
   const hasAdjustment = !!profile && !!adjustment;
   if (hasAdjustment) checkManagedStandardBudget(s, profile, clock);
   const completion = executionCompletion(s, m, hasAdjustment);
@@ -302,7 +316,33 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       managedDigest(input.completionAllowance ?? null) === managedDigest(old.completionAllowance ?? null) &&
       (input.reviewedOperationIds?.length ?? 0) === 0);
   }
-  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1" ||
+      old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1") {
+    const adjustment = input.standardMonthAdjustment, previous = old?.standardMonthAdjustment;
+    check(adjustment?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1" &&
+      old !== undefined && managedDigest(old) === adjustment.priorPlanDigest &&
+      adjustment.priorProfileDigest === s.activeProfileDigest);
+    check(input.completionAllowance === undefined && input.releaseMonthlyCapYen === undefined &&
+      input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0);
+    const { bindingRepairProductionAiYen, bindingRepairImageRetentionYen, ...priorEarmark } = adjustment.executionEarmark;
+    if (previous?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
+      // Keep every prior hold and add only this trial's AI/image reservation
+      // and the bounded shortfall in the existing release pool.
+      check(previous.profileDigest === s.activeProfileDigest &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest &&
+        Date.parse(adjustment.validUntil) <= Date.parse(previous.validUntil) &&
+        managedDigest(priorEarmark) === managedDigest(previous.executionEarmark) &&
+        input.baseYen === old.baseYen + bindingRepairProductionAiYen + bindingRepairImageRetentionYen &&
+        managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 389 }));
+    } else {
+      check(previous?.scope === "ISSUE150_NOVEMBER_BINDING_REPAIR_V1" &&
+        input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
+        adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark));
+    }
+  } else if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
       old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
     // Carry existing reservations, including an uncertain release, without
     // adding another AI/image earmark. The signed review binds the whole state.
