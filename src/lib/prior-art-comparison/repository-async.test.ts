@@ -9,6 +9,7 @@ vi.mock("./proposition-plan", () => ({ assertPropositionPlan: seam.preflight }))
 vi.mock("./source-separation", () => ({ separatedGenerationPlan: () => [] }));
 vi.mock("./source-claim-extraction", () => ({ sourceClaimExtractionPlan: () => ({ tasks: [{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}] }) }));
 import { sourceAudit } from "./source-audit";
+import { retainReviewFailure } from "./review-failure-audit";
 import { reserveComparison, completeReservedComparison, listComparisons, getComparisonSourceAudit } from "./repository";
 import { ComparisonExecutionError } from "./failure";
 import { digest } from "./source";
@@ -125,6 +126,47 @@ it("persists source evidence before a later quality failure and retrieves it wit
   expect(seam.executeAI).toHaveBeenCalledOnce();
   seam.rows.pop();
   await expect(getComparisonSourceAudit(1,selected.operationId)).rejects.toThrow();
+});
+it("appends review diagnostics inside the existing failure transaction and keeps public failure narrow",async()=>{
+ const {selected,reservation}=await freshReservation();
+ const audit=sourceAudit(selected.operationId,selected.inputDigest,[{id:"b".repeat(64)+":1",sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],
+   [{taskId:"b".repeat(64)+":1",value:{source:"unchanged"}}]);
+ seam.executeAI.mockImplementation(async(inputs,selection,sink)=>{
+   await sink(audit);
+   const error=new ComparisonExecutionError("review","protocol_invalid");
+   retainReviewFailure(error,{step:"assessment",inputs,selection,generation:{results:[]},review:{privateText:"PRIVATE_REVIEW"}});
+   throw error;
+ });
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toThrow();
+ expect(seam.delete).toHaveBeenCalledTimes(2); // Existing source write + existing failure write.
+ const stored=await getComparisonSourceAudit(1,selected.operationId);
+ expect(stored.version).toBe(2);expect(stored.previousAuditDigest).toBe(audit.auditDigest);
+ expect(stored.answers).toEqual(audit.answers);
+ expect(stored.reviewFailure?.review).toMatchObject({status:"captured",value:{privateText:"PRIVATE_REVIEW"}});
+ const publicState=await listComparisons(1);
+ expect(JSON.stringify(publicState)).not.toContain("PRIVATE_REVIEW");
+ expect(publicState.failedOperations).toEqual([{operationId:selected.operationId,failure:{stage:"review",kind:"protocol_invalid"}}]);
+ await expect(reserveComparison(1,selected)).resolves.toEqual({pending:true});
+ expect(seam.executeAI).toHaveBeenCalledOnce();
+});
+it("preserves the original audit and known failure when diagnostic append is rejected",async()=>{
+ const {selected,reservation}=await freshReservation();
+ const audit=sourceAudit(selected.operationId,selected.inputDigest,[{id:"b".repeat(64)+":1",sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],
+   [{taskId:"b".repeat(64)+":1",value:{source:"unchanged"}}]);
+ seam.executeAI.mockImplementation(async(inputs,selection,sink)=>{
+   await sink(audit);
+   const error=new ComparisonExecutionError("review","protocol_invalid");
+   retainReviewFailure(error,{step:"assessment",inputs,selection:{...selection,operationId:"different-operation"},generation:{results:[]},review:{privateText:"PRIVATE_REVIEW"}});
+   throw error;
+ });
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toMatchObject({stage:"review",kind:"protocol_invalid"});
+ expect(seam.delete).toHaveBeenCalledTimes(2);
+ expect(await getComparisonSourceAudit(1,selected.operationId)).toEqual(audit);
+ const publicState=await listComparisons(1);
+ expect(publicState.failedOperations).toEqual([{operationId:selected.operationId,failure:{stage:"review",kind:"protocol_invalid"}}]);
+ expect(JSON.stringify(publicState)).not.toContain("PRIVATE_REVIEW");
+ await expect(reserveComparison(1,selected)).resolves.toEqual({pending:true});
+ expect(seam.executeAI).toHaveBeenCalledOnce();
 });
 it("an audit transaction unknown ACK stops before any continuation and never permits replay",async()=>{
  const { selected,reservation }=await freshReservation();

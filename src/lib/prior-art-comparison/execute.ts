@@ -20,6 +20,7 @@ import { sourceClaimExtractionPlan, assembleSourceClaims } from "./source-claim-
 import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
+import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-audit";
 
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+`
 出力文は後段で各語句をその文内の根拠へ結び付ける。各文は自立した具体的な技術事実にする。『規定する』『対象とする』『同じ条件』『その条件』『差分は確認できない』『条件方向が異なる』等の照応やメタ総括を加えない。
@@ -37,6 +38,8 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
   return withPriorArtClaimComparisonBudget(sourceRequests.length, async absolute => {
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
+    let reviewStep: ReviewFailureStep | undefined;
+    let generationAnswer: unknown, reviewAnswer: unknown;
     try {
       const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string, partitionedSource?: boolean, outputTokenLimit?: number) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
@@ -100,6 +103,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
         const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch)), "generation"));
+        generationAnswer = structuredClone(answer);
         const key = (docId: number, p: { baseClaimNo: number; candidateClaimNo: number }) => `${docId}:${p.baseClaimNo}:${p.candidateClaimNo}`;
         const expected = new Set(plan.flatMap(c => c.pairs.map(p => key(c.candidateId, p))));
         const received = answer.results.map(r => key(r.docId, r));
@@ -122,12 +126,16 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const schema = targetPropositionModelSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
       if(modelRequestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
       const rawReview = await generate(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema,"review");
+      reviewAnswer = structuredClone(rawReview);
+      reviewStep = "assessment";
       const assessed = assessPropositions(review,rawReview);
       let rendered:ReviewDraft[];
+      reviewStep = "coverage_render";
       try { assertPropositionTargetCoverage(review,assessed);rendered=renderPropositionDrafts(review,assessed,drafts); }
       catch { throw new ComparisonExecutionError(stage, "review_rejected"); }
       // Re-validate the generated sentences and original literal quotes through
       // the unchanged save-v1 adapter. No old free-form verdict reaches save.
+      reviewStep = "final_answer";
       const finalPairs=plan.flatMap(chunk=>validateAnswer(chunk,{results:rendered.filter(d=>d.docId===chunk.candidateId&&
         chunk.pairs.some(p=>p.baseClaimNo===d.baseClaimNo&&p.candidateClaimNo===d.candidateClaimNo)).map(d=>({
           baseClaimNo:d.baseClaimNo,candidateClaimNo:d.candidateClaimNo,common:d.common,differences:d.differences,unconfirmed:d.unconfirmed,
@@ -136,7 +144,12 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),
         inputs, selection, pairs:finalPairs, status: "complete" as const, review: "human_review_required" as const };
+      reviewStep = "saved_envelope";
       return validateSaved({ ...saved, snapshotDigest: savedDigest(saved) });
-    } catch (error) { throw comparisonExecutionFailure(error, stage); }
+    } catch (error) {
+      const failure = comparisonExecutionFailure(error, stage);
+      if (reviewStep) retainReviewFailure(failure, { step: reviewStep, inputs, selection, generation: generationAnswer, review: reviewAnswer });
+      throw failure;
+    }
   });
 }

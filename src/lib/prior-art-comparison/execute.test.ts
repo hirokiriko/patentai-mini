@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { executeComparison } from "./execute";
+import { executeComparison, PROPOSITION_GENERATION_SYSTEM } from "./execute";
 import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
-import { makePlan, validateSaved } from "./comparison";
-import { batchInput, generationBatches } from "./generation-batch";
+import { makePlan, validateAnswer, validateSaved, type ComparisonInputs, type Selection } from "./comparison";
+import { batchInput, batchSchema, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
-import type { propositionTargetTransport } from "./proposition-extraction";
+import { decodeSourcePropositions, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
-import {sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {assembleSourceClaims, sourceClaimExtractionPlan} from "./source-claim-extraction";
 import {sourceRequestPlan} from "./source-request-plan";
-import type { SourceAudit } from "./source-audit";
+import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
+import { takeReviewFailure } from "./review-failure-audit";
+import { separatedGenerationPlan } from "./source-separation";
+import { decodeGeneration } from "./generation";
+import { assessPropositions } from "./proposition-result";
 import { parseComparisonSource } from "./source";
 import { fictionalInputs as longFictionalInputs } from "./fixtures.test-support";
 
@@ -211,6 +215,60 @@ describe("real installed SDK, guarded fictional transport", () => {
       kind: mode === "http" ? "transport_unknown" : mode === "length" ? "output_incomplete" : mode === "rejected" ? "review_rejected" : "protocol_invalid" });
     expect(JSON.stringify(error)).not.toContain(SECRET);
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
+  });
+  it("replays a post-SDK protocol failure from the downloaded v2 audit without network or public raw data",async()=>{
+    const {inputs,selection}=fictionalInputs();
+    const audits:SourceAudit[]=[];
+    let expectedGeneration:unknown,expectedReview:unknown,expectedReviewInput:unknown;
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      const answer=stageAnswer(input);
+      if(input.task==="compare")expectedGeneration=structuredClone(answer);
+      if(input.task==="review"){
+        expectedReviewInput=structuredClone(input);
+        const review=answer as ReturnType<typeof fictionalReview>;
+        review.targets[0].parts[0].atoms[0].sourceIds=["nonexistent-private-source"];
+        expectedReview=structuredClone(review);
+      }
+      return response(answer);
+    });vi.stubGlobal("fetch",transport);
+    const error=await executeComparison(inputs,selection,async audit=>{audits.push(structuredClone(audit));}).catch(error=>error);
+    expect(error).toMatchObject({stage:"review",kind:"protocol_invalid"});
+    const captured=takeReviewFailure(error)!;
+    expect(captured.step).toBe("assessment");
+    expect(captured.generation).toMatchObject({status:"captured",value:expectedGeneration});
+    expect(captured.review).toMatchObject({status:"captured",value:expectedReview});
+    expect(captured.inputs).toMatchObject({status:"captured",value:inputs});
+    expect(captured.selection).toMatchObject({status:"captured",value:selection});
+    expect(JSON.stringify(error)).not.toContain("nonexistent-private-source");
+    const usage=vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage");
+    expect(JSON.parse(usage.at(-1)![1]).phase).toBe("review");
+    expect(JSON.stringify(usage)).not.toContain("nonexistent-private-source");
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
+    const downloaded=validateSourceAudit(JSON.parse(JSON.stringify(appendReviewFailureAudit(audits[0],captured))),selection.operationId,inputs.inputDigest);
+    expect(downloaded.previousAuditDigest).toBe(audits[0].auditDigest);
+    const offlineFetch=vi.fn<typeof fetch>().mockRejectedValue(Error("offline replay must not send"));
+    vi.stubGlobal("fetch",offlineFetch);
+    const retained=downloaded.reviewFailure!;
+    for(const field of [retained.inputs,retained.selection,retained.generation,retained.review])expect(field.status).toBe("captured");
+    if(retained.inputs.status!=="captured"||retained.selection.status!=="captured"||retained.generation.status!=="captured"||retained.review.status!=="captured")throw Error("missing fixture capture");
+    const replayPlan=makePlan(retained.inputs.value as ComparisonInputs,retained.selection.value as Selection);
+    const replayBatch=separatedGenerationPlan(replayPlan,PROPOSITION_GENERATION_SYSTEM);
+    const reading=await assembleSourceClaims(sourceClaimExtractionPlan(replayBatch),downloaded.answers);
+    const analyses=decodeSourcePropositions(replayBatch,reading);
+    const generated=batchSchema.parse(retained.generation.value);
+    const drafts=replayPlan.flatMap(chunk=>{
+      const results=generated.results.filter(r=>r.docId===chunk.candidateId&&chunk.pairs.some(p=>p.baseClaimNo===r.baseClaimNo&&p.candidateClaimNo===r.candidateClaimNo))
+        .map(({docId:ignored,...result})=>{void ignored;return result;});
+      return validateAnswer(chunk,decodeGeneration(chunk,{results})).map(pair=>{
+        const row=results.find(r=>r.baseClaimNo===pair.baseClaimNo&&r.candidateClaimNo===pair.candidateClaimNo)!;
+        return {...pair,baseObservation:row.baseObservation,candidateObservation:row.candidateObservation};
+      });
+    });
+    const reviewInput=propositionTargetInput(replayPlan,drafts,analyses);
+    expect(propositionTargetTransport(reviewInput)).toEqual(expectedReviewInput);
+    expect(()=>assessPropositions(reviewInput,retained.review.status==="captured"?retained.review.value:null)).toThrow("ai_incomplete");
+    expect(offlineFetch).not.toHaveBeenCalled();
   });
   it("keeps cross-document generated results attached to their own source", async()=>{
     const {inputs,selection}=fictionalInputs();

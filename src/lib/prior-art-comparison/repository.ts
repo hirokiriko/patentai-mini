@@ -8,7 +8,8 @@ import { ComparisonExecutionError, type ComparisonStage } from "./failure";
 import { separatedGenerationPlan } from "./source-separation";
 import { assertPropositionPlan } from "./proposition-plan";
 
-import { validateSourceAudit, type SourceAudit } from "./source-audit";
+import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
+import { takeReviewFailure, type ReviewFailureEvidence } from "./review-failure-audit";
 import { sourceClaimExtractionPlan } from "./source-claim-extraction";
 
 type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
@@ -217,7 +218,8 @@ export async function completeReservedComparison(caseId: number, selection: Sele
     }
     const failure = knownFailure(error);
     if (failure) {
-      try { await recordReservedFailure(caseId, selection, reservation.ids!, failure); }
+      const reviewFailure = error instanceof ComparisonExecutionError ? takeReviewFailure(error) : undefined;
+      try { await recordReservedFailure(caseId, selection, reservation.ids!, failure, reviewFailure); }
       catch { /* Unknown write ACK remains a durable unconfirmed reservation. */ }
     }
     if (error instanceof ComparisonError) throw error;
@@ -225,7 +227,7 @@ export async function completeReservedComparison(caseId: number, selection: Sele
   }
 }
 
-async function recordReservedFailure(caseId: number, selection: Selection, ids: number[], failure: KnownFailure) {
+async function recordReservedFailure(caseId: number, selection: Selection, ids: number[], failure: KnownFailure, reviewFailure?: ReviewFailureEvidence) {
   await db.transaction(async tx => {
     await tx.execute(sql`set local lock_timeout = '3s'`);
     await lockManagedCase(tx, caseId);
@@ -236,10 +238,15 @@ async function recordReservedFailure(caseId: number, selection: Selection, ids: 
     if (new Set(own.map(row => digest(auditProperty(row)))).size !== 1) throw new ComparisonError("save_unconfirmed");
     if (own.length !== ids.length || own.some(row => !ids.includes(row.resultId) || digest(envelope(row)) !== digest(marker) ||
         !expected.delete(`${row.draftClaimId}:${row.priorDocId}`)) || expected.size) throw new ComparisonError("save_unconfirmed");
+    let audit = auditProperty(own[0]);
+    if (reviewFailure && audit.priorArtComparisonSourceAudit) {
+      try { audit = { priorArtComparisonSourceAudit: appendReviewFailureAudit(audit.priorArtComparisonSourceAudit, reviewFailure) }; }
+      catch { /* Diagnostic overflow/invalid data must not discard the known failure or existing source audit. */ }
+    }
     const removed = await tx.delete(comparisonResults).where(and(eq(comparisonResults.caseId, caseId), inArray(comparisonResults.resultId, ids))).returning();
     if (removed.length !== ids.length || digest([...removed].sort((a,b)=>a.resultId-b.resultId)) !== digest([...own].sort((a,b)=>a.resultId-b.resultId))) throw new ComparisonError("save_unconfirmed");
     await tx.insert(comparisonResults).values(removed.map(row => ({ ...row,
-      matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "品質検証で停止しました。予約を保持し、自動再送しません。", priorArtComparison: { ...marker, failure }, ...auditProperty(row) }),
+      matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "品質検証で停止しました。予約を保持し、自動再送しません。", priorArtComparison: { ...marker, failure }, ...audit }),
     })));
   });
 }
