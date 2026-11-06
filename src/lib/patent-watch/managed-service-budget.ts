@@ -227,6 +227,10 @@ function executionCompletion(s: ManagedBudgetState, m: string, hasAdjustment: bo
 function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile, maximumActionMs = 1) {
   check(!s.operations.some(o => o.reviewRequired));
   const plan = s.plans.find(p => p.month === m);
+  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
+    // Twelve is an explicit stopped plan, even when observed consumption fits.
+    check(plan.standardMonthAdjustment.forward === 13);
+  }
   const limits = profile && standardMonthLimits(s, m, profile);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||

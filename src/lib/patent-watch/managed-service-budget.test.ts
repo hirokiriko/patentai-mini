@@ -438,6 +438,20 @@ it("rejects stale storage-history bindings, extended expiry, changed financials 
     expect(() => managedStandardMonthAdjustmentSchema.parse({ ...f.adjustment, ...change })).toThrow();
   }
 });
+it.each([false, true])("records stop12 but rejects admission even with consumption within twelve CAS=%s", applied => {
+  const f = storageHistoryFixture(applied);
+  const active = activate(setManagedMonthPlan(f.previous, f.input, f.now), f.p, f.now);
+  const stopped = setManagedMonthPlan(active, { ...f.input, standardMonthAdjustment: { ...f.adjustment,
+    forward: 12, priorPlanDigest: managedDigest(active.plans[2]), priorProfileDigest: managedDigest(f.p) } }, f.now);
+  expect(stopped.operations).toEqual(active.operations);
+  expect(stopped.plans[2].baseYen).toBe(active.plans[2].baseYen);
+  expect(stopped.plans[2].standardMonthAdjustment?.forward).toBe(12);
+  expect(() => checkManagedStandardBudget(stopped, f.p, f.now)).toThrow();
+  expect(() => checkManagedExecutionBudget(stopped, f.p, f.now)).toThrow();
+  expect(() => activate(stopped, f.p, f.now)).toThrow();
+  expect(() => reserveManagedBudget(stopped, { ...f.f.deployment(), profileDigest: managedDigest(f.p),
+    units: emptyManagedBudgetUnits() }, f.p, f.now)).toThrow();
+});
 it("pins the storage-history epoch and prevents scope removal, re-addition or profile-less expiry bypass", () => {
   const f = storageHistoryFixture(false), planned = setManagedMonthPlan(f.previous, f.input, f.now);
   const linked = { ...f.input, standardMonthAdjustment: { ...f.adjustment, priorPlanDigest: managedDigest(planned.plans[2]) } };
