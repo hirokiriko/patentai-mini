@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { fictionalInputs } from "./fixtures.test-support";
-import { makePlan, validateAnswer } from "./comparison";
+import { makePlan, savedDigest, validateAnswer, validateSaved } from "./comparison";
 import { batchInput } from "./generation-batch";
 import { decodeGeneration } from "./generation";
 import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceInput, propositionSourceTransport, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
@@ -34,6 +34,59 @@ it("decodes both anchored extractions and renders the computed records",()=>{
   expect(rendered[1].differences).toContain("下回る");
   expect(rendered[1].differences).toContain("開く機能を備える");
   expect(rendered[1].differences).toContain("閉じる機能を備える");
+});
+function repeatedBinding(){
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":baseObservation"))!;
+  target.text="装置は青色弁を備え青色弁を備える。";
+  const answer=f.raw.targets.find(t=>t.id===target.id)!,atom=structuredClone(answer.parts[0].atoms[0]);
+  atom.meaning={kind:"relation",subject:"装置",context:"capability",guard:{relation:"unconditional",conditions:[]},
+    polarity:"positive",predicate:"has",objects:["青色弁"]};
+  atom.basis=[[0,target.text.length]];atom.attribution=null;
+  const first=target.text.indexOf("青色弁"),second=target.text.lastIndexOf("青色弁");
+  atom.bindings=[{term:"装置",spans:[[0,2]]},{term:"青色弁",spans:[[first,first+3],[second,second+3]]}];
+  atom.operators={selection:null,extent:null,polarity:null,guard:null,context:null};
+  atom.sourceIds=[f.facts.facts.find(s=>s.scope===atom.scope&&s.meaning.kind==="relation"&&s.meaning.predicate==="has")!.id];
+  answer.parts=[{span:[0,target.text.length],form:"assertion",atoms:[atom],reference:null,reservation:null}];
+  return {...f,target,atom,answer};
+}
+it("accepts distinct complete occurrences of a literal binding without changing the answer",()=>{
+  const f=repeatedBinding(),before=JSON.stringify(f.raw),assessment=assessPropositions(f.input,f.raw);
+  assertPropositionTargetCoverage(f.input,assessment);
+  expect(assessment.targets.find(t=>t.id===f.target.id)!.relation).toBe("entailed");
+  const rendered=renderPropositionDrafts(f.input,assessment,f.drafts);
+  expect(rendered[0].baseObservation).toContain("青色弁を備える");
+  const pairs=f.plan.flatMap(chunk=>validateAnswer(chunk,{results:rendered.filter(d=>d.docId===chunk.candidateId).map(d=>({
+    baseClaimNo:d.baseClaimNo,candidateClaimNo:d.candidateClaimNo,common:d.common,differences:d.differences,unconfirmed:d.unconfirmed,
+    baseEvidence:{claimNo:d.baseEvidence.claimNo,quote:d.baseEvidence.quote},candidateEvidence:{claimNo:d.candidateEvidence.claimNo,quote:d.candidateEvidence.quote}}))}));
+  const saved={version:1 as const,operationId:f.selection.operationId,generatedAt:"2026-11-06T00:00:00.000Z",inputs:f.inputs,selection:f.selection,
+    pairs,status:"complete" as const,review:"human_review_required" as const};
+  expect(validateSaved(JSON.parse(JSON.stringify({...saved,snapshotDigest:savedDigest(saved)}))).pairs).toEqual(pairs);
+  expect(JSON.stringify(f.raw)).toBe(before);
+});
+it("preserves the concatenated-pieces binding form",()=>{
+  const f=repeatedBinding(),binding=f.atom.bindings[1],start=binding.spans[0][0];
+  binding.spans=[[start,start+1],[start+1,start+3]];
+  expect(()=>decodeTargetPropositions(f.input,f.raw)).not.toThrow();
+});
+it.each(["different_word","extra_character","duplicate_position","outside_basis","outside_part","duplicate_term","missing_term"])(
+  "rejects malformed repeated bindings: %s",mode=>{
+    const f=repeatedBinding(),binding=f.atom.bindings[1],first=binding.spans[0],second=binding.spans[1];
+    if(mode==="different_word")binding.spans[1]=[0,2];
+    if(mode==="extra_character")binding.spans[1]=[second[0],second[1]+1];
+    if(mode==="duplicate_position")binding.spans[1]=[...first];
+    if(mode==="outside_basis")f.atom.basis=[[0,second[0]]];
+    if(mode==="outside_part")binding.spans[1]=[f.target.text.length,f.target.text.length+1];
+    if(mode==="duplicate_term")f.atom.bindings.push(structuredClone(binding));
+    if(mode==="missing_term")f.atom.bindings.splice(1,1);
+    expect(()=>decodeTargetPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+  });
+it("keeps an unspecified source subject unresolved after accepting repeated bindings",()=>{
+  const f=repeatedBinding(),source=f.input.sourcePropositions.find(s=>s.id===f.atom.sourceIds[0])!;
+  source.meaning.subject=null;
+  const assessment=assessPropositions(f.input,f.raw);
+  expect(assessment.records.find(r=>r.target.targetId===f.target.id)).toMatchObject({relation:"unresolved",rule:"subject_mismatch"});
+  expect(()=>assertPropositionTargetCoverage(f.input,assessment)).toThrow("ai_incomplete");
+  expect(()=>renderPropositionDrafts(f.input,assessment,f.drafts)).toThrow("ai_incomplete");
 });
 it.each<Meaning>([
   {kind:"relation",subject:"制御器",context:"capability",guard:{relation:"only_when",conditions:["高温"]},polarity:"positive",predicate:"opens",objects:["青色弁"]},

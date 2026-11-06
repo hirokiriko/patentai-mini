@@ -85,8 +85,8 @@ function meaningTerms(m:Meaning):string[] {
   return [...(m.subject?[m.subject]:[]),...m.guard.conditions,...(m.kind==="set"?m.members:m.kind==="path"?
     [...(m.origin?[m.origin]:[]),...(m.destination?[m.destination]:[]),...m.via,...m.bypass]:m.objects)];
 }
-/** Every semantic term is tied to literal words. A composed mention can reuse
- * a shared suffix (e.g. first/second mode) but cannot add an unprinted name. */
+/** Every semantic term is tied to literal words. Spans may compose one mention
+ * (e.g. a shared suffix) or cite distinct complete occurrences of the same term. */
 function validateExtraction(text:string,raw:z.infer<typeof extractionSchema>,range:Span=[0,text.length]) {
   if(raw.meaning.kind==="relation"&&raw.meaning.predicate==="is_state"&&
     (raw.meaning.objects.length!==1||!isLiteralSourceState(raw.meaning.objects[0])))throw new ComparisonError("ai_incomplete");
@@ -97,9 +97,12 @@ function validateExtraction(text:string,raw:z.infer<typeof extractionSchema>,ran
   const bindings=new Map<string,string>();
   for(const binding of raw.bindings){
     if(binding.spans.some(s=>!inside(s)||!raw.basis.some(([a,b])=>s[0]>=a&&s[1]<=b)))throw new ComparisonError("ai_incomplete");
-    const value=binding.spans.map(s=>spanText(text,s)).join("");
-    if(propositionKey(value)!==propositionKey(binding.term)||bindings.has(binding.term))throw new ComparisonError("ai_incomplete");
-    bindings.set(binding.term,value);
+    const mentions=binding.spans.map(s=>spanText(text,s)),value=mentions.join(""),key=propositionKey(binding.term);
+    const composed=propositionKey(value)===key;
+    const repeated=mentions.length>1&&mentions.every(mention=>propositionKey(mention)===key)&&
+      new Set(binding.spans.map(([start,end])=>`${start}:${end}`)).size===binding.spans.length;
+    if(!composed&&!repeated||bindings.has(binding.term))throw new ComparisonError("ai_incomplete");
+    bindings.set(binding.term,composed?value:binding.term);
   }
   if(meaningTerms(raw.meaning).some(t=>!bindings.has(t)))throw new ComparisonError("ai_incomplete");
   if(raw.meaning.kind==="path"){
