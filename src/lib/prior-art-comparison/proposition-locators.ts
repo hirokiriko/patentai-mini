@@ -52,9 +52,11 @@ export function resolveTargetLocator(text:string,value:string):Span {
 
 export function targetPropositionModelSchemaFor(input:PropositionTargetInput) {
   const local=targetPropositionSchemaFor(input);
+  const scopedAtom=wireAtom.extend({scope:z.enum(input.referenceScopes.map(s=>s.id))
+    .describe("Exact source reference-scope ID from scopes, never a target ID. Target-side and claim ownership remain independently checked.")});
   const schema=z.object({locatorVersion:z.literal(3),draftDigest:local.shape.draftDigest,
     targets:z.array(z.object({id:local.shape.targets.element.shape.id,
-      parts:z.array(wirePart).min(1).max(32)}).strict()).length(input.originals.targets.length)}).strict();
+      parts:z.array(wirePart.extend({atoms:z.array(scopedAtom).max(12)})).min(1).max(32)}).strict()).length(input.originals.targets.length)}).strict();
   const originals=new Map(input.originals.targets.map(t=>[t.id,t.text]));
   return comparisonModelSchema(schema,raw=>{
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>TARGET_LOCATOR_MAX_BYTES)throw invalid();

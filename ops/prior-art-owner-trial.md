@@ -164,3 +164,20 @@ image保持1,115円を再加算しない。旧UNKNOWNと使用済み操作、全
 状態照合で旧適用の成否が判明しても、失敗・UNKNOWNの権利を再利用しない。
 継続には新しい一回限りの実行承認と、照合したstateに対する署名付きreviewが必要である。
 この補足やLocal検証の追加だけでは配備・AI送信・予算拡張を許可しない。
+
+## Review scopeのwire契約
+
+reviewのatom.scopeは、その入力のreferenceScopesに列挙された原文側scope IDだけを
+wire schemaのenumで許可する。比較文のtarget IDは別の識別子であり、scopeへ変換しない。
+受信後も対象欄の基準側・候補側、原文claimの所属、帰属・意味・coverageを独立検査する。
+保存済みの不正回答を置換・再解釈して成功扱いにはしない。この制約追加はLocal修正であり、
+再送・配備・新たな実AIの承認を兼ねない。
+
+この契約修正の追加検証には、別の有限補足
+`ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1` を用いる。直前のBINDING_REPAIR planと
+実active profile、新しい承認・epochを束縛し、月次70,000円、jobs 25、minutes 3,000、
+forward 14（停止時13）を上限とする。旧留保を全て保持し、新しい実AI 1,238円と
+image保持1,115円をbaseへ、release不足535円をremaining poolへ一度だけ追加する。
+旧実行の開始期限は失効しているため、新しい有限期限への明示承認を別途必要とする。
+後続planの金額・留保・承認・epoch・期限は固定し、旧scopeへの降格や二重追加を拒否する。
+旧署名・UNKNOWN・使用済み権利は変更せず、この補足だけでは新しい実行を開始しない。
