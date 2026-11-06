@@ -56,6 +56,15 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115) }).strict(),
   }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
     Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1"), month: z.literal("2026-11"),
+    monthlyCapYen: z.literal(70000), forward: z.union([z.literal(10), z.literal(11)]),
+    repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    executionEarmark: z.object({ forecastBaseYen: z.number().int().nonnegative(),
+      productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115),
+      additionalProductionAiYen: z.literal(1238), additionalImageRetentionYen: z.literal(1115) }).strict(),
+  }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
+    Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
 ]);
 export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
@@ -199,7 +208,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   check(!s.operations.some(o => o.reviewRequired));
   const plan = s.plans.find(p => p.month === m);
   const limits = profile && standardMonthLimits(s, m, profile);
-  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") {
+  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1") {
     check(profile !== undefined &&
       Date.parse(s.lastTrustedAt) + maximumActionMs < Date.parse(plan.standardMonthAdjustment.validUntil));
   }
@@ -234,7 +244,8 @@ export function checkManagedStandardBudget(value: unknown, profile: unknown, clo
 export function checkManagedExecutionBudget(value: unknown, profile: ManagedBudgetProfile | null | undefined, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock);
   const adjustment = s.plans.find(p => p.month === m)?.standardMonthAdjustment;
-  if (adjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") check(profile !== null && profile !== undefined);
+  if (adjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
+      adjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1") check(profile !== null && profile !== undefined);
   const hasAdjustment = !!profile && !!adjustment;
   if (hasAdjustment) checkManagedStandardBudget(s, profile, clock);
   const completion = executionCompletion(s, m, hasAdjustment);
@@ -263,7 +274,35 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       managedDigest(input.completionAllowance ?? null) === managedDigest(old.completionAllowance ?? null) &&
       (input.reviewedOperationIds?.length ?? 0) === 0);
   }
-  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
+      old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1") {
+    const adjustment = input.standardMonthAdjustment, previous = old?.standardMonthAdjustment;
+    check(adjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" &&
+      old !== undefined && managedDigest(old) === adjustment.priorPlanDigest &&
+      adjustment.priorProfileDigest === s.activeProfileDigest);
+    check(input.completionAllowance === undefined && input.releaseMonthlyCapYen === undefined &&
+      input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0 &&
+      managedDigest(input.pools) === managedDigest(old.pools));
+    const earmark = adjustment.executionEarmark;
+    check(input.baseYen === earmark.forecastBaseYen + earmark.productionAiYen + earmark.imageRetentionYen +
+      earmark.additionalProductionAiYen + earmark.additionalImageRetentionYen);
+    if (previous?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") {
+      // One new finite approval adds only the new AI/image hold. The prior
+      // failed trial and every unresolved operation retain their whole costs.
+      check(previous.profileDigest === s.activeProfileDigest &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest &&
+        input.baseYen === old.baseYen + 2353 &&
+        managedDigest({ forecastBaseYen: earmark.forecastBaseYen, productionAiYen: earmark.productionAiYen,
+          imageRetentionYen: earmark.imageRetentionYen }) === managedDigest(previous.executionEarmark));
+    } else {
+      check(previous?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" &&
+        input.baseYen === old.baseYen && adjustment.monthlyCapYen === previous.monthlyCapYen &&
+        adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(earmark) === managedDigest(previous.executionEarmark));
+    }
+  } else if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
     old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") {
     check(input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1");
     // Rollover carries every unresolved operation. Only the unreserved October

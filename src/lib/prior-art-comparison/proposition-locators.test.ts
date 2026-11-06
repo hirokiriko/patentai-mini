@@ -55,6 +55,22 @@ it("round-trips source and target quotes through the actual model schemas withou
   if(s.success)expect(decodeSourcePropositions(f.plan,s.value)).toEqual(decodeSourcePropositions(f.plan,f.source));
   if(t.success)expect(decodeTargetPropositions(f.targetInput,t.value)).toEqual(decodeTargetPropositions(f.targetInput,f.target));
 });
+it("requires assertion syntax as well as bound terms after model-schema acceptance",async()=>{
+  const f=setup(),part=f.target.targets[0].parts[0],atom=part.atoms[0];
+  const text=f.targetInput.originals.targets[0].text;
+  const particle=text.indexOf("は",part.span[0]+4);
+  expect(particle).toBeGreaterThan(part.span[0]+3);
+  expect(particle).toBeLessThan(part.span[1]-1);
+  const original=structuredClone(f.target);
+  // Keep every factual term and predicate, but omit a topic particle.
+  atom.basis=[[part.span[0],particle],[particle+1,part.span[1]]];
+  const accepted=await f.targetSchema.validate!(fixturePropositionWire(f.target));
+  expect(accepted.success).toBe(true);
+  if(accepted.success)expect(()=>decodeTargetPropositions(f.targetInput,accepted.value)).toThrow("ai_incomplete");
+  const complete=await f.targetSchema.validate!(fixturePropositionWire(original,propositionTargetTransport(f.targetInput)));
+  expect(complete.success).toBe(true);
+  if(complete.success)expect(()=>decodeTargetPropositions(f.targetInput,complete.value)).not.toThrow();
+});
 it("converts all frame/operator/attribution fields without rewriting selection or guard",async()=>{
   const f=setup(),a=f.target.targets[0].parts[0].atoms[0],s=a.basis[0];
   a.routeFrame={entry:s,exit:s,route:s,exclusions:[s],controls:[s]};

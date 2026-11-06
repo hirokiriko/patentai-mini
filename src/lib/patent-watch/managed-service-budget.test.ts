@@ -213,6 +213,94 @@ it("bounds the November supplement and rejects execution crossing its expiry", (
   expect(() => reserveManagedBudget(lowCost, release, null, f.now)).toThrow();
   expect(() => checkManagedStandardBudget(active, f.f.p, f.now)).toThrow();
 });
+function reviewFailureRepairFixture() {
+  const f = novemberRepairFixture();
+  const active = activate(setManagedMonthPlan(f.october, f.input, f.now), f.p, f.now);
+  const deployment = () => request({ scope: "standard", kind: "deploy", profileDigest: managedDigest(f.p),
+    pricingDigest: f.p.pricingDigest, reservationYen: 100, units: { ...emptyManagedBudgetUnits(), forward: 1 } });
+  const previous = reserveManagedBudget(active, deployment(), f.p, f.now).state;
+  previous.operations[0].unknown = true;
+  const p = { ...f.p, goEvidenceDigest: digest(601) }, old = previous.plans[2];
+  const adjustment = managedStandardMonthAdjustmentSchema.parse({ ...f.adjustment,
+    scope: "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1", monthlyCapYen: 70000, forward: 11,
+    ownerApprovalDigest: digest(602), repairEpochDigest: digest(603),
+    priorPlanDigest: managedDigest(old), priorProfileDigest: managedDigest(f.p),
+    profileDigest: managedDigest(p), validUntil: "2026-11-07T00:00:00Z",
+    executionEarmark: { ...f.adjustment.executionEarmark, additionalProductionAiYen: 1238, additionalImageRetentionYen: 1115 } });
+  if (adjustment.scope !== "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1") throw Error("review repair required");
+  const now = clock("2026-11-06T12:00:00Z");
+  const input = { ...f.input, baseYen: old.baseYen + 2353, evidenceDigest: digest(604), standardMonthAdjustment: adjustment };
+  return { f, previous, p, adjustment, now, input, deployment };
+}
+it("adds one new AI/image hold without clearing the failed trial, unknowns or old units", () => {
+  const f = reviewFailureRepairFixture(), before = structuredClone(f.previous);
+  const planned = setManagedMonthPlan(f.previous, f.input, f.now), active = activate(planned, f.p, f.now);
+  expect(active.operations).toEqual(before.operations);
+  expect(active.plans.slice(0, 2)).toEqual(before.plans.slice(0, 2));
+  expect(active.legacyUnknownYen).toBe(before.legacyUnknownYen);
+  expect(active.releaseTailYen).toBe(before.releaseTailYen);
+  expect(active.plans[2].pools).toEqual(before.plans[2].pools);
+  expect(managedBudgetForecast(active, "2026-11") - managedBudgetForecast(before, "2026-11")).toBe(2353);
+  const deploy = () => ({ ...f.deployment(), profileDigest: managedDigest(f.p) });
+  const eleventh = reserveManagedBudget(active, deploy(), f.p, f.now).state;
+  expect(() => reserveManagedBudget(eleventh, deploy(), f.p, f.now)).toThrow();
+  const stopped = setManagedMonthPlan(eleventh, { ...f.input, standardMonthAdjustment: { ...f.adjustment,
+    forward: 10, priorPlanDigest: managedDigest(eleventh.plans[2]), priorProfileDigest: managedDigest(f.p) } }, f.now);
+  expect(stopped.operations).toEqual(eleventh.operations);
+  expect(stopped.plans[2].baseYen).toBe(active.plans[2].baseYen);
+  expect(stopped.plans[2].standardMonthAdjustment?.scope).toBe("ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1");
+  expect(() => checkManagedStandardBudget(stopped, f.p, f.now)).toThrow();
+});
+it("rejects stale plan/profile, reused approval, altered holds, pools and history in the new repair", () => {
+  const f = reviewFailureRepairFixture();
+  for (const change of [
+    { priorPlanDigest: digest(999) }, { priorProfileDigest: digest(999) },
+    { ownerApprovalDigest: f.f.adjustment.ownerApprovalDigest }, { repairEpochDigest: f.f.adjustment.repairEpochDigest },
+    { executionEarmark: { ...f.adjustment.executionEarmark, forecastBaseYen: f.adjustment.executionEarmark.forecastBaseYen - 1 } },
+  ]) expect(() => setManagedMonthPlan(f.previous, { ...f.input, standardMonthAdjustment: { ...f.adjustment, ...change } }, f.now)).toThrow();
+  for (const change of [
+    { baseYen: f.input.baseYen - 1 }, { baseYen: f.input.baseYen + 1 },
+    { pools: { ...f.input.pools, remaining: f.input.pools.remaining + 1 } },
+    { pools: { ...f.input.pools, recovery: f.input.pools.recovery - 1 } },
+    { releaseTailYen: f.input.releaseTailYen - 1 }, { completionAllowance: f.f.f.allowance },
+    { releaseMonthlyCapYen: 40000 }, { reviewedOperationIds: [f.previous.operations[0].operationId] },
+  ]) expect(() => setManagedMonthPlan(f.previous, { ...f.input, ...change }, f.now)).toThrow();
+});
+it("cannot add the hold twice, remove it, downgrade scope, or extend the same repair epoch", () => {
+  const f = reviewFailureRepairFixture(), planned = setManagedMonthPlan(f.previous, f.input, f.now);
+  const linked = { ...f.input, standardMonthAdjustment: { ...f.adjustment, priorPlanDigest: managedDigest(planned.plans[2]) } };
+  // A stopped activation may return the target profile to the still-active old
+  // profile, without pretending that the unactivated target was ever active.
+  const stopped = setManagedMonthPlan(planned, { ...linked, standardMonthAdjustment: {
+    ...linked.standardMonthAdjustment, profileDigest: managedDigest(f.f.p), forward: 10 } }, f.now);
+  expect(stopped.plans[2].baseYen).toBe(planned.plans[2].baseYen);
+  expect(stopped.operations).toEqual(planned.operations);
+  checkManagedStandardBudget(stopped, f.f.p, f.now);
+  for (const change of [
+    { baseYen: f.input.baseYen + 2353 }, { baseYen: f.input.baseYen - 2353 },
+    { standardMonthAdjustment: undefined }, { standardMonthAdjustment: f.f.adjustment },
+    ...[{ validUntil: "2026-11-08T00:00:00Z" }, { ownerApprovalDigest: digest(700) }, { repairEpochDigest: digest(701) },
+      { priorProfileDigest: managedDigest(f.p) }].map(p => ({ standardMonthAdjustment: { ...linked.standardMonthAdjustment, ...p } })),
+  ]) expect(() => setManagedMonthPlan(planned, { ...linked, ...change }, f.now)).toThrow();
+});
+it("bounds new repair cost, holds and units and requires the active profile before the deadline", () => {
+  const f = reviewFailureRepairFixture();
+  for (const change of [
+    { monthlyCapYen: 70001 }, { monthlyCapYen: 69999 }, { forward: 12 }, { forward: 9 }, { jobs: 26 }, { minutes: 3001 },
+    { month: "2026-12" }, { validUntil: "2026-12-01T00:00:00Z" }, { priorProfileDigest: undefined },
+    ...["productionAiYen","imageRetentionYen","additionalProductionAiYen","additionalImageRetentionYen"].map(key => ({
+      executionEarmark: { ...f.adjustment.executionEarmark, [key]: 0 } })),
+  ]) expect(() => managedStandardMonthAdjustmentSchema.parse({ ...f.adjustment, ...change })).toThrow();
+  const active = activate(setManagedMonthPlan(f.previous, f.input, f.now), f.p, f.now);
+  checkManagedExecutionBudget(active, f.p, f.now);
+  for (const p of [null, undefined, f.f.p]) expect(() => checkManagedExecutionBudget(active, p, f.now)).toThrow();
+  expect(() => checkManagedExecutionBudget(active, f.p, clock("2026-11-06T22:00:00Z"))).toThrow();
+  expect(() => checkManagedStandardBudget(active, f.p, clock("2026-11-07T00:00:00Z", 1))).toThrow();
+  const atCap = structuredClone(active); atCap.plans[2].baseYen += 70000 - managedBudgetForecast(atCap, "2026-11");
+  checkManagedStandardBudget(atCap, f.p, f.now);
+  atCap.plans[2].baseYen++;
+  expect(() => checkManagedStandardBudget(atCap, f.p, f.now)).toThrow();
+});
 it("activates a new ordinary profile without retargeting an old completion signature", () => {
   const f = completionFixture(), p = { ...f.p, goEvidenceDigest: digest(410) }, before = structuredClone(f.allowed);
   expect(() => activate(f.allowed, p, f.now)).toThrow();
