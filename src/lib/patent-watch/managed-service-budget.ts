@@ -75,6 +75,16 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reservationRepairProductionAiYen: z.literal(1238), reservationRepairImageRetentionYen: z.literal(1115) }).strict(),
   }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
     Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1"), month: z.literal("2026-11"),
+    monthlyCapYen: z.literal(70000), forward: z.union([z.literal(12), z.literal(13)]),
+    repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    executionEarmark: z.object({ forecastBaseYen: z.number().int().nonnegative(),
+      productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115),
+      additionalProductionAiYen: z.literal(1238), additionalImageRetentionYen: z.literal(1115),
+      reservationRepairProductionAiYen: z.literal(1238), reservationRepairImageRetentionYen: z.literal(1115) }).strict(),
+  }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
+    Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
 ]);
 export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
@@ -220,7 +230,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   const limits = profile && standardMonthLimits(s, m, profile);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
-      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1") {
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
+      plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
     check(profile !== undefined &&
       Date.parse(s.lastTrustedAt) + maximumActionMs < Date.parse(plan.standardMonthAdjustment.validUntil));
   }
@@ -257,7 +268,8 @@ export function checkManagedExecutionBudget(value: unknown, profile: ManagedBudg
   const adjustment = s.plans.find(p => p.month === m)?.standardMonthAdjustment;
   if (adjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       adjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
-      adjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1") check(profile !== null && profile !== undefined);
+      adjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
+      adjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") check(profile !== null && profile !== undefined);
   const hasAdjustment = !!profile && !!adjustment;
   if (hasAdjustment) checkManagedStandardBudget(s, profile, clock);
   const completion = executionCompletion(s, m, hasAdjustment);
@@ -286,7 +298,31 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       managedDigest(input.completionAllowance ?? null) === managedDigest(old.completionAllowance ?? null) &&
       (input.reviewedOperationIds?.length ?? 0) === 0);
   }
-  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" ||
+      old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") {
+    // Carry existing reservations, including an uncertain release, without
+    // adding another AI/image earmark. The signed review binds the whole state.
+    const adjustment = input.standardMonthAdjustment, previous = old?.standardMonthAdjustment;
+    check(adjustment?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" &&
+      old !== undefined && managedDigest(old) === adjustment.priorPlanDigest &&
+      adjustment.priorProfileDigest === s.activeProfileDigest);
+    check(input.completionAllowance === undefined && input.releaseMonthlyCapYen === undefined &&
+      input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0 &&
+      input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools));
+    check((previous?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
+      previous?.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1") &&
+      managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark));
+    if (previous.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1") {
+      check(previous.profileDigest === s.activeProfileDigest &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest &&
+        Date.parse(adjustment.validUntil) <= Date.parse(previous.validUntil));
+    } else {
+      check(previous.scope === "ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1" &&
+        adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil);
+    }
+  } else if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" ||
       old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1") {
     const adjustment = input.standardMonthAdjustment, previous = old?.standardMonthAdjustment;
     check(adjustment?.scope === "ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1" &&

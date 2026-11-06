@@ -143,10 +143,24 @@ review失敗後の追加検証では、旧補足を変更せず、
 片側だけの比較・未解決・参照だけの差異欄の拒否、表示文字数と保存形式の検査は維持する。
 保持した失敗回答のLocal再生は回帰検証に限り、過去の失敗を成功保存・本番受入に変更しない。
 
-この修正の追加検証用補足は `ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1` とする。
+ここまでの修正の追加検証で用いた補足（履歴）は `ISSUE150_NOVEMBER_RESERVATION_REPAIR_V1` とする。
 直前のREVIEW_FAILURE補足・実active profile・新承認・新epochを束縛し、月次70,000円、
 forward 12（停止時11）、jobs 25、minutes 3,000に限定する。旧補足の全留保を保持し、
 実AI 1,238円とimage保持1,115円をbaseへ一度だけ追加する。poolと履歴は変更せず、
 元期限の延長も許可しない。後続変更ではbase・全留保・承認・epoch・期限を固定し、
 旧scopeへの降格や二重追加を拒否する。既存補足の値・署名・許容量は変更しない。
 旧契約の記述は履歴として保持し、このschemaだけでは新たな配備や実AIを許可しない。
+
+## Storage履歴検証停止後の有限継続
+
+追加の有限補足 `ISSUE150_NOVEMBER_STORAGE_HISTORY_REPAIR_V1` は、直前の
+RESERVATION_REPAIR planと実active profile、新承認・新epochを束縛する。
+月次70,000円、jobs 25、minutes 3,000を維持し、forwardは13（停止側12）に限定する。
+base・pool・既存の全AI/image留保を同値で繰り越し、未使用の実AI 1,238円と
+image保持1,115円を再加算しない。旧UNKNOWNと使用済み操作、全履歴も保持する。
+元期限は延長せず、後続planでも承認・epoch・期限・財務値を固定する。
+停止側で既消費が12を超えていても履歴を減らさず、新しい管理対象処理を停止する。
+
+状態照合で旧適用の成否が判明しても、失敗・UNKNOWNの権利を再利用しない。
+継続には新しい一回限りの実行承認と、照合したstateに対する署名付きreviewが必要である。
+この補足やLocal検証の追加だけでは配備・AI送信・予算拡張を許可しない。

@@ -526,3 +526,8 @@ V7とLocal限定の鍵置換互換処理を実装しても、新鍵・pin・送�
 旧署名の固定履歴、UNKNOWN、月次poolと全9単位、#140 allowanceを保持する。
 通常配備時のApp二設定・pricing/profile・Local GO pinの整合は同案の限定手順に従う。
 #148試用を変更せず、その完了や新watch開始を比較機能の追加受入条件にしない。
+
+比較試用のStorage履歴停止後のforward 13/12の有限継続は、
+[有限補足の手順](prior-art-owner-trial.md#storage履歴検証停止後の有限継続)に限定する。
+既存AI/image留保は同値で繰り越し、旧実行権・UNKNOWN・月次消費を復活・消去しない。
+通常watchの枠や開始承認をこの補足から導かない。
