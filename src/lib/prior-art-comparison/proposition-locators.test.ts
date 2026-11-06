@@ -55,6 +55,44 @@ it("round-trips source and target quotes through the actual model schemas withou
   if(s.success)expect(decodeSourcePropositions(f.plan,s.value)).toEqual(decodeSourcePropositions(f.plan,f.source));
   if(t.success)expect(decodeTargetPropositions(f.targetInput,t.value)).toEqual(decodeTargetPropositions(f.targetInput,f.target));
 });
+it("publishes only the finite source reference scopes in the target wire schema",async()=>{
+  const f=setup(),expected=f.targetInput.referenceScopes.map(s=>s.id),enums:unknown[][]=[];
+  function visit(value:unknown){
+    if(!value||typeof value!=="object")return;
+    const node=value as {properties?:{scope?:{enum?:unknown[]}}};
+    if(node.properties?.scope?.enum)enums.push(node.properties.scope.enum);
+    for(const child of Object.values(value))visit(child);
+  }
+  visit(f.targetSchema.jsonSchema);
+  expect(enums.length).toBeGreaterThan(0);
+  for(const values of enums)expect(values).toEqual(expected);
+  expect(expected.every(id=>/^base:\d+$|^candidate:\d+:\d+$/.test(id))).toBe(true);
+  const wire=fixturePropositionWire(f.target),before=JSON.stringify(wire);
+  expect(await f.targetSchema.validate!(wire)).toEqual({success:true,value:f.target});
+  expect(JSON.stringify(wire)).toBe(before);
+});
+it("rejects target IDs used as atom scopes at the model boundary without rewriting the answer",async()=>{
+  const f=setup(),wire=fixturePropositionWire(f.target);
+  let count=0;
+  for(const target of wire.targets)for(const part of target.parts)for(const atom of part.atoms){atom.scope=target.id;count++;}
+  expect(count).toBeGreaterThan(0);
+  const before=JSON.stringify(wire);
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+  expect(JSON.stringify(wire)).toBe(before);
+});
+it.each(["base:999999","candidate:999999:1","base:1:common","BASE:1"])("rejects an unrequested wire scope %s",async scope=>{
+  const f=setup(),wire=fixturePropositionWire(f.target);
+  wire.targets[0].parts[0].atoms[0].scope=scope;
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+});
+it("keeps target-side domain checks after accepting an existing source scope",async()=>{
+  const f=setup(),target=f.target.targets.find(t=>t.id.endsWith(":baseObservation"))!;
+  const atom=target.parts[0].atoms[0];
+  atom.scope=f.targetInput.referenceScopes.find(s=>s.id.startsWith("candidate:"))!.id;
+  const wire=fixturePropositionWire(f.target),result=await f.targetSchema.validate!(wire);
+  expect(result.success).toBe(true);
+  if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow("ai_incomplete");
+});
 it("requires assertion syntax as well as bound terms after model-schema acceptance",async()=>{
   const f=setup(),part=f.target.targets[0].parts[0],atom=part.atoms[0];
   const text=f.targetInput.originals.targets[0].text;
