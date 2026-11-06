@@ -159,11 +159,19 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     });return {sourceDigest:s.sourceDigest,coverage:claims.map(({claimNo,unresolved})=>({claimNo,unresolved})),
       facts:claims.flatMap(c=>c.facts)};
   })}));
-  if(input.task==="review")return flattenGuards({...value,locatorVersion:1,targets:value.targets.map(target=>{
-    const t=table(()=>input.originals.targets.find(x=>x.id===target.id).text),add=r=>t.add(r);
-    const parts=target.parts.map(p=>({...p,span:add(p.span),atoms:p.atoms.map(a=>({...fact(a,add),attribution:a.attribution===null?null:add(a.attribution)})),
-      reservation:p.reservation?{...p.reservation,basis:add(p.reservation.basis)}:null}));
-    return {...target,locators:t.locators,parts};
+  if(input.task==="review")return flattenGuards({...value,locatorVersion:3,targets:value.targets.map(target=>{
+    const text=input.originals.targets.find(x=>x.id===target.id).text,global=table(()=>text);
+    const quote=r=>global.locators[global.add(r)].quote;
+    const parts=target.parts.map(p=>{
+      const partText=quote(p.span),t=table(()=>partText),add=r=>{
+        // Numeric fixture mistakes cannot be silently moved into another part.
+        if(!Array.isArray(r)||r.length!==2||r.some(n=>!Number.isSafeInteger(n)))throw Error("fictional_locator_invalid");
+        const at=t.add(r.map(n=>n-p.span[0])),entry=t.locators[at];return `${entry.occurrence}|${entry.quote}`;
+      };
+      return {...p,span:partText,atoms:p.atoms.map(a=>({...fact(a,add),attribution:a.attribution===null?null:quote(a.attribution)})),
+        reservation:p.reservation?{...p.reservation,basis:add(p.reservation.basis)}:null};
+    });
+    return {...target,parts};
   })});
   return flattenGuards(value);
 }

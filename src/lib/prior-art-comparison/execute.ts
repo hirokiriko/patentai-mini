@@ -21,7 +21,11 @@ import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 
-export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+"\n各断定では基準側・候補側・両側の帰属を明示し、側が変わる断定を分ける。事実を含む文を未確認の一語で留保扱いにしない。純粋な未確認事項は対象となる名詞句と未確認状態を分けて述べる。これは条件の省略や断定の弱化を許可しない。";
+export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+`
+出力文は後段で各語句をその文内の根拠へ結び付ける。各文は自立した具体的な技術事実にする。『規定する』『対象とする』『同じ条件』『その条件』『差分は確認できない』『条件方向が異なる』等の照応やメタ総括を加えない。
+各断定では基準側・候補側・両側ともで帰属を明示する。側が変わる断定は句点で別文にし、各文に必要な対象・条件・動作を繰り返す。『候補側も』で省略しない。同一条件にも両側の具体的な条件を明示する。
+対象・条件・動作は原文の正確な表記を保ち、条件を略記しない。原文にない主語・機能・条件を補わない。例えば『部品は緑色栓を備える。圧力が四を超えると緑色栓を開く。』の観察は『基準側の部品は緑色栓を備える。基準側は圧力が四を超えると緑色栓を開く。』とする。commonもdifferencesも具体的な両側事実で表す。
+純粋な未確認事項は『配置は未確認。』のように正確な名詞句＋は未確認。とし、前置きや事実節を含めない。追加の具体的な留保がない場合も完璧・不存在を宣言せず、この試験版で常に必要な人による確認として『比較結果の原文照合は要確認。』と記す。これは条件の省略、断定の弱化、未確認の事実の創作を許可しない。`;
 
 /** One finite serial operation. No fallback and no partial successful save. */
 export async function executeComparison(inputs: ComparisonInputs, selection: Selection, auditSink?: SourceAuditSink): Promise<SavedComparison> {

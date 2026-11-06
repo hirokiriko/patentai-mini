@@ -33,11 +33,30 @@ export const managedCompletionAllowanceSchema = z.object({
 export type ManagedCompletionAllowance = z.infer<typeof managedCompletionAllowanceSchema>;
 // A signed, profile-bound supplement for this processing month only. It does
 // not change the base profile, historical release caps, or Issue140 authority.
-export const managedStandardMonthAdjustmentSchema = z.object({
+const ordinaryStandardMonthAdjustmentSchema = z.object({
   scope: z.literal("ISSUE150_STANDARD_MONTH_V1"), month: z.literal("2026-10"),
   ownerApprovalDigest: hash, profileDigest: hash, monthlyCapYen: z.literal(38331),
   jobs: z.literal(25), minutes: z.literal(3000), forward: z.literal(9),
 }).strict();
+// The additional repair deployment retains unresolved prior-month units.
+// This decoder is not admission: the signed Local review binds the exact epoch,
+// previous plan, profile, code and one new release operation.
+export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope", [
+  ordinaryStandardMonthAdjustmentSchema,
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_REPAIR_STANDARD_MONTH_V1"), forward: z.literal(10),
+    repairEpochDigest: hash, priorPlanDigest: hash,
+  }).strict(),
+  ordinaryStandardMonthAdjustmentSchema.extend({
+    scope: z.literal("ISSUE150_NOVEMBER_REPAIR_MONTH_V1"), month: z.literal("2026-11"),
+    monthlyCapYen: z.number().int().min(38331).max(53607),
+    forward: z.union([z.literal(9), z.literal(10)]),
+    repairEpochDigest: hash, priorPlanDigest: hash, validUntil: z.iso.datetime(),
+    executionEarmark: z.object({ forecastBaseYen: z.number().int().nonnegative(),
+      productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115) }).strict(),
+  }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
+    Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
+]);
 export type ManagedStandardMonthAdjustment = z.infer<typeof managedStandardMonthAdjustmentSchema>;
 export const emptyManagedBudgetUnits = (): ManagedBudgetUnits => ({ jobs: 0, minutes: 0, starts: 0, normal: 0,
   fast: 0, packages: 0, bytes: 0, forward: 0, rollback: 0 });
@@ -180,6 +199,10 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   check(!s.operations.some(o => o.reviewRequired));
   const plan = s.plans.find(p => p.month === m);
   const limits = profile && standardMonthLimits(s, m, profile);
+  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") {
+    check(profile !== undefined &&
+      Date.parse(s.lastTrustedAt) + maximumActionMs < Date.parse(plan.standardMonthAdjustment.validUntil));
+  }
   // A prior profile's completion allowance remains immutable history. A new
   // profile may start only under its own signed ordinary month supplement.
   const completion = executionCompletion(s, m, !!limits?.adjustment);
@@ -210,7 +233,9 @@ export function checkManagedStandardBudget(value: unknown, profile: unknown, clo
  * its expiry still bounds executions for the profile it actually authorizes. */
 export function checkManagedExecutionBudget(value: unknown, profile: ManagedBudgetProfile | null | undefined, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock);
-  const hasAdjustment = !!profile && !!s.plans.find(p => p.month === m)?.standardMonthAdjustment;
+  const adjustment = s.plans.find(p => p.month === m)?.standardMonthAdjustment;
+  if (adjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") check(profile !== null && profile !== undefined);
+  const hasAdjustment = !!profile && !!adjustment;
   if (hasAdjustment) checkManagedStandardBudget(s, profile, clock);
   const completion = executionCompletion(s, m, hasAdjustment);
   if (completion) checkManagedCompletionBudget(s, completion, clock);
@@ -231,6 +256,39 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
   releaseMonthlyCapYen?: number; completionAllowance?: ManagedCompletionAllowance;
   standardMonthAdjustment?: ManagedStandardMonthAdjustment }, clock: ManagedBudgetClock) {
   const { s, month: m } = current(value, clock), old = s.plans.find(p => p.month === m);
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_REPAIR_STANDARD_MONTH_V1") {
+    check(old !== undefined && managedDigest(old) === input.standardMonthAdjustment.priorPlanDigest);
+    check(input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
+      input.releaseTailYen === s.releaseTailYen &&
+      managedDigest(input.completionAllowance ?? null) === managedDigest(old.completionAllowance ?? null) &&
+      (input.reviewedOperationIds?.length ?? 0) === 0);
+  }
+  if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
+    old?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1") {
+    check(input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1");
+    // Rollover carries every unresolved operation. Only the unreserved October
+    // pools become November plans. The fixed AI/image hold moves from unused
+    // remaining funds into base, without replenishing units or raising forecast.
+    const prior = old ?? s.plans.find(p => p.month === "2026-10");
+    check(prior !== undefined && managedDigest(prior) === input.standardMonthAdjustment.priorPlanDigest);
+    check(input.completionAllowance === undefined && input.releaseMonthlyCapYen === undefined &&
+      input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0);
+    const earmark = input.standardMonthAdjustment.executionEarmark;
+    const held = earmark.productionAiYen + earmark.imageRetentionYen;
+    check(input.baseYen === earmark.forecastBaseYen + held);
+    if (old) {
+      check(old.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" &&
+        input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
+        input.standardMonthAdjustment.monthlyCapYen === old.standardMonthAdjustment.monthlyCapYen &&
+        managedDigest(earmark) === managedDigest(old.standardMonthAdjustment.executionEarmark));
+    } else {
+      check(prior.standardMonthAdjustment?.scope === "ISSUE150_STANDARD_MONTH_V1" ||
+        prior.standardMonthAdjustment?.scope === "ISSUE150_REPAIR_STANDARD_MONTH_V1");
+      check(earmark.forecastBaseYen >= prior.baseYen);
+      for (const pool of poolKeys) check(input.pools[pool] ===
+        prior.pools[pool] - poolUsed(s, prior.month, pool) - (pool === "remaining" ? held : 0));
+    }
+  }
   const plan = planSchema.parse({ month: m, baseYen: input.baseYen, pools: input.pools, pricingDigest: input.pricingDigest,
     ...(input.releaseMonthlyCapYen === undefined ? {} : { releaseMonthlyCapYen: input.releaseMonthlyCapYen }),
     ...(input.completionAllowance === undefined ? {} : { completionAllowance: input.completionAllowance }),
