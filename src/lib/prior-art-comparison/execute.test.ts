@@ -11,6 +11,8 @@ import {assembleSourceClaims, sourceClaimExtractionPlan} from "./source-claim-ex
 import {sourceRequestPlan} from "./source-request-plan";
 import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
 import { takeReviewFailure } from "./review-failure-audit";
+import { validateReviewSdkFailure } from "./review-sdk-failure";
+import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { separatedGenerationPlan } from "./source-separation";
 import { decodeGeneration } from "./generation";
 import { assessPropositions } from "./proposition-result";
@@ -215,6 +217,73 @@ describe("real installed SDK, guarded fictional transport", () => {
       kind: mode === "http" ? "transport_unknown" : mode === "length" ? "output_incomplete" : mode === "rejected" ? "review_rejected" : "protocol_invalid" });
     expect(JSON.stringify(error)).not.toContain(SECRET);
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
+  });
+  it.each(["invalid_json", "schema", "locator", "empty", "no_text", "oversized", "sensitive", "length"])("retains the actual SDK review failure before structured return: %s", async mode => {
+    const { inputs, selection } = fictionalInputs(), audits: SourceAudit[] = [];
+    let rawText: string | undefined;
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (url, init) => {
+      expect(String(url)).toMatch(/^https:\/\/example\.invalid\/openai\//);
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      if (input.task !== "review") return response(stageAnswer(input));
+      const outer = await response(fictionalReview(input)).json();
+      const original = JSON.parse(outer.output[0].content[0].text);
+      if (mode === "locator") original.targets[0].parts[0].span = "not the original target";
+      rawText = mode === "schema" ? '{"wrong":true}' : mode === "locator" ? JSON.stringify(original)
+        : mode === "empty" ? "" : mode === "no_text" ? undefined : mode === "oversized" ? "界".repeat(22_000)
+        : mode === "sensitive" ? '{"api_key":"' + SECRET + '"}' : '{"targets":';
+      if (rawText === undefined) outer.output = [];
+      else outer.output[0].content[0].text = rawText;
+      if (mode === "length") { outer.status = "incomplete"; outer.incomplete_details = { reason: "max_output_tokens" }; }
+      // SDK exception response envelopes may contain these; the audit must not.
+      outer.metadata = { private: SECRET };
+      return Response.json(outer, { headers: { "x-private-sentinel": SECRET } });
+    });
+    vi.stubGlobal("fetch", transport);
+    const error = await executeComparison(inputs, selection, async a => { audits.push(a); }).catch(error => error);
+    expect(error).toMatchObject({ stage: "review", kind: mode === "length" ? "output_incomplete" : "protocol_invalid" });
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs, selection) + 2);
+    expect(audits).toHaveLength(1);
+    const retained = takeReviewFailure(error)!;
+    expect(retained.step).toBe("sdk_object");
+    expect(retained.review.status).toBe("captured");
+    if (retained.review.status !== "captured") throw Error("missing SDK metadata");
+    const sdk = validateReviewSdkFailure(retained.review.value);
+    expect(sdk.finishReason).toBe(mode === "length" ? "length" : "stop");
+    if (mode === "no_text") expect(sdk.text).toEqual({ status: "unavailable", reason: "missing_text" });
+    else if (mode === "oversized" || mode === "sensitive")
+      expect(sdk.text).toMatchObject({ status: "omitted", reason: mode === "oversized" ? "size_limit" : "sensitive_content" });
+    else expect(sdk.text).toMatchObject({ status: "captured", value: rawText });
+    const next = appendReviewFailureAudit(audits[0], retained);
+    expect(validateSourceAudit(JSON.parse(JSON.stringify(next)), selection.operationId, inputs.inputDigest)).toEqual(next);
+    expect(next.previousAuditDigest).toBe(audits[0].auditDigest);
+    expect(next.answers).toEqual(audits[0].answers);
+    expect(JSON.stringify([next, error, vi.mocked(console.info).mock.calls])).not.toContain(SECRET);
+    // No new UUID-correlated review usage or synthetic reconciliation is added.
+    const logs = vi.mocked(console.info).mock.calls.filter(row => row[0] === "prior_art_comparison_usage").map(row => JSON.parse(row[1]));
+    expect(logs.map(row => row.phase)).toEqual([...Array(sourceCallCount(inputs, selection)).fill("source"), "generation"]);
+    expect(takeReviewFailure(error)).toBeUndefined();
+    // Rebuild the real receiving schema from immutable evidence. SDK metadata
+    // is never supplied to assessment as if it were a structured review answer.
+    if (mode === "schema" || mode === "locator") {
+      if (retained.inputs.status !== "captured" || retained.selection.status !== "captured" || retained.generation.status !== "captured" || sdk.text.status !== "captured") throw Error("missing replay input");
+      const replayPlan = makePlan(retained.inputs.value as ComparisonInputs, retained.selection.value as Selection);
+      const replayBatch = separatedGenerationPlan(replayPlan, PROPOSITION_GENERATION_SYSTEM);
+      const reading = await assembleSourceClaims(sourceClaimExtractionPlan(replayBatch), next.answers);
+      const analyses = decodeSourcePropositions(replayBatch, reading), generated = batchSchema.parse(retained.generation.value);
+      const drafts = replayPlan.flatMap(chunk => {
+        const results = generated.results.filter(r => r.docId === chunk.candidateId && chunk.pairs.some(p => p.baseClaimNo === r.baseClaimNo && p.candidateClaimNo === r.candidateClaimNo))
+          .map(({ docId: ignored, ...row }) => { void ignored; return row; });
+        return validateAnswer(chunk, decodeGeneration(chunk, { results })).map(pair => {
+          const row = results.find(r => r.baseClaimNo === pair.baseClaimNo && r.candidateClaimNo === pair.candidateClaimNo)!;
+          return { ...pair, baseObservation: row.baseObservation, candidateObservation: row.candidateObservation };
+        });
+      });
+      const offlineFetch = vi.fn(() => { throw Error("offline replay network denied"); }); vi.stubGlobal("fetch", offlineFetch);
+      const schema = targetPropositionModelSchemaFor(propositionTargetInput(replayPlan, drafts, analyses));
+      const result = await schema.validate!(JSON.parse(sdk.text.value));
+      expect(result.success).toBe(false);
+      expect(offlineFetch).not.toHaveBeenCalled();
+    }
   });
   it("replays a post-SDK protocol failure from the downloaded v2 audit without network or public raw data",async()=>{
     const {inputs,selection}=fictionalInputs();

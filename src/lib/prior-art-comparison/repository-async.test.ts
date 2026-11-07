@@ -10,6 +10,8 @@ vi.mock("./source-separation", () => ({ separatedGenerationPlan: () => [] }));
 vi.mock("./source-claim-extraction", () => ({ sourceClaimExtractionPlan: () => ({ tasks: [{id:("b".repeat(64)+":1"),sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}] }) }));
 import { sourceAudit } from "./source-audit";
 import { retainReviewFailure } from "./review-failure-audit";
+import { captureReviewSdkFailure } from "./review-sdk-failure";
+import { NoObjectGeneratedError } from "ai";
 import { reserveComparison, completeReservedComparison, listComparisons, getComparisonSourceAudit } from "./repository";
 import { ComparisonExecutionError } from "./failure";
 import { digest } from "./source";
@@ -194,6 +196,37 @@ it("keeps the exact audit through completed-result replacement and later GETs",a
  await expect(getComparisonSourceAudit(1,selected.operationId)).rejects.toThrow();
 });
 
+it.each(["saved", "append_rejected", "write_unknown"] as const)("keeps SDK failure and no-retry reservation through diagnostic %s", async mode => {
+ const {selected,reservation}=await freshReservation();
+ const audit=sourceAudit(selected.operationId,selected.inputDigest,[{id:"b".repeat(64)+":1",sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],
+   [{taskId:"b".repeat(64)+":1",value:{source:"unchanged"}}]);
+ seam.executeAI.mockImplementation(async(inputs,selection,sink)=>{
+   await sink(audit);
+   if(mode==="write_unknown") seam.insert.mockImplementation(()=>{throw Error("fictional unknown write");});
+   const error=new ComparisonExecutionError("review","output_incomplete");
+   const sdk = new NoObjectGeneratedError({ text: '{"targets":', finishReason: "length",
+     response: { id: "fictional", timestamp: new Date(0), modelId: "fictional" },
+     usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130, inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 }, outputTokenDetails: { textTokens: 30, reasoningTokens: 0 } } });
+   retainReviewFailure(error,{step:"sdk_object",inputs,selection:mode==="append_rejected"?{...selection,operationId:"wrong"}:selection,
+     generation:{results:[]},review:captureReviewSdkFailure(sdk)});
+   throw error;
+ });
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toMatchObject({stage:"review",kind:"output_incomplete"});
+ const stored=await getComparisonSourceAudit(1,selected.operationId);
+ if(mode==="saved"){
+   expect(stored.version).toBe(2);
+   expect(stored.reviewFailure).toMatchObject({step:"sdk_object",review:{status:"captured",value:{kind:"no_object_generated",finishReason:"length",text:{status:"captured",value:'{"targets":'}}}});
+   expect(stored.previousAuditDigest).toBe(audit.auditDigest);
+ } else expect(stored).toEqual(audit);
+ const state=await listComparisons(1);
+ expect(state.reservedCount).toBe(1);expect(state.results).toEqual([]);
+ expect(state.failedOperations).toEqual(mode==="write_unknown"?[]:[{operationId:selected.operationId,failure:{stage:"review",kind:"output_incomplete"}}]);
+ expect(JSON.stringify(state)).not.toMatch(/sdk_object|no_object_generated|targets/);
+ await expect(reserveComparison(1,selected)).resolves.toEqual({pending:true});
+ await expect(completeReservedComparison(1,selected,reservation)).rejects.toThrow();
+ expect(seam.executeAI).toHaveBeenCalledOnce();
+ expect(seam.delete).toHaveBeenCalledTimes(2); // Original source audit and the existing failure transaction only.
+});
 it("revalidates complete snapshot and source-task roster before private readback",async()=>{
  const {fictionalSaved,fictionalAnswer}=await import("./fixtures.test-support");
  const saved=fictionalSaved();
