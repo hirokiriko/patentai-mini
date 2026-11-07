@@ -80,6 +80,44 @@ bytes以内。追記できない場合は元のsource auditを保ち、既知の
 review回答は復元できず、今回のプロンプト修正だけで過去の原因確定・本番解消とはしない。
 実AIの再検証には、消費済み権利を保持した新しい有限の実行条件が必要。
 
+### SDKの構造化応答処理で停止した場合
+
+reviewの `generateObject` が `NoObjectGeneratedError` を返す場合は、後段の
+assessmentと区別した `sdk_object` 工程を同じ非公開v2監査に保持する。
+`review.value` は変換済み回答ではなく、`kind: no_object_generated`、allowlist化した
+`finishReason`、SDKが返したモデル本文の保持状態である。例外のmessage/cause/stack、
+response/request/headers、provider認証情報は読取り・列挙・保存しない。
+SDK移行、validator緩和、応答の補修、再送、追加AI、DB schema変更は行わない。
+
+本文は改変せず、JSON escaping込み60,000 bytesまで保持し、metadataを含むreview項目を
+既存の64,000 bytes以内に収める。UTF-8 bytes・JSON bytes・本文SHA-256を記録する。
+超過時は全文省略、本文欠落時はmissing_textを明記し、空文字とは区別する。
+資格情報名・Bearer/API key/JWT/秘密鍵・認証付きURL等の既知パターンを検出した本文も
+全文省略し、部分redactionした本文を原応答とは扱わない。SDK診断の入力・選択・生成項目
+にも同じ秘匿パターンの省略を適用する。値の照合のために環境変数や資格情報を取得しない。
+この検出は完全な匿名化保証ではない。保持対象は承認された案件の比較再現に必要な情報
+だけで、既存のOWNER認可・private監査・通常ログ非掲載を必須とする。
+
+SDK本文を再現するときは `sdk_object` を先に分岐し、captured本文だけを無変更でJSON解析し、
+保持されたsource/inputs/selection/generationから再構成した実model schemaで検証する。
+診断metadataをdomain reviewとしてassessmentへ渡してはならない。本文・必要な入力の
+省略/欠落は証拠不足で停止する。JSON/schema検証に通ってもfinishReasonや通信状態、
+実操作の成功を立証したことにはならない。旧v1/v2・旧工程は従来どおり読み取れるが、
+新工程非対応の旧replayをそのまま使わず、対応コードの固定とオフライン検証を先に行う。
+
+診断に失敗しても元の失敗分類、timeout優先順位、費用予約、再送禁止を維持する。
+追記拒否/容量超過では元監査を残す。既存失敗記録のDB書込みが不明なら予約も不明のまま
+保持し、保存成功や0円を推定しない。診断だけのための追加DB往復はない。
+
+診断sidecarの保持・削除は既存comparison_resultsと同じ案件生命周期に従う。
+新しいTTL job・永続アクセス・自動削除は追加しない。明示的な案件削除時は既存の削除経路
+でsidecarも削除されるが、backupの残存期間は既存DB運用に従い即時消去を保証しない。
+ダウンロード済みLocalコピーは別管理であり、案件削除だけでは消えない。診断削除を目的に
+費用留保・UNKNOWN・必要な旧成功証拠を削除しない。
+
+これは将来の証拠不足を補う診断追加であり、原応答が残っていない過去の
+review/protocol_invalidの直接原因を確定・解消した修正ではない。
+
 ## 生成文・条件の表記
 
 生成文は各側の主体・動作・条件を文中に明記し、「同じ条件」等への省略を避ける。
