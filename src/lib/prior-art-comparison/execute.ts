@@ -21,6 +21,7 @@ import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-audit";
+import { captureReviewSdkFailure } from "./review-sdk-failure";
 
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+`
 出力文は後段で各語句をその文内の根拠へ結び付ける。各文は自立した具体的な技術事実にする。『規定する』『対象とする』『同じ条件』『その条件』『差分は確認できない』『条件方向が異なる』等の照応やメタ総括を加えない。
@@ -53,6 +54,10 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           ...(options ? { providerOptions: options } : {}),
         }).catch(error => {
           if (signal.aborted) throw new ComparisonExecutionError(stage, "timeout");
+          if (phase === "review") {
+            const diagnostic = captureReviewSdkFailure(error);
+            if (diagnostic) { reviewStep = "sdk_object"; reviewAnswer = diagnostic; }
+          }
           throw error;
         });
         // A syntactically complete object can still accompany a provider's
