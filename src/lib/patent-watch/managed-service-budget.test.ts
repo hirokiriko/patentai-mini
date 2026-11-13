@@ -861,10 +861,10 @@ function practitionerEvaluationFixture() {
     ownerApprovalDigest: digest(961), repairEpochDigest: digest(962),
     priorPlanDigest: managedDigest(old), priorProfileDigest: managedDigest(f.p), profileDigest: managedDigest(p),
     validUntil: "2026-11-16T00:00:00Z",
-    executionEarmark: { ...f.adjustment.executionEarmark, evaluationAiYen: 5100, evaluationImageRetentionYen: 2230,
+    executionEarmark: { ...f.adjustment.executionEarmark, evaluationAiYen: 6000, evaluationImageRetentionYen: 2230,
       evaluationNonAiYen: 2434, evaluationStorageYen: 800 } });
   if (adjustment.scope !== "ISSUE150_PRACTITIONER_EVALUATION_V1") throw Error("evaluation required");
-  const input = { ...f.input, baseYen: old.baseYen + 10564, pools: { ...old.pools, remaining: old.pools.remaining + 1070 }, standardMonthAdjustment: adjustment };
+  const input = { ...f.input, baseYen: old.baseYen + 11464, pools: { ...old.pools, remaining: old.pools.remaining + 1070 }, standardMonthAdjustment: adjustment };
   return { f, previous, p, adjustment, input, now: clock("2026-11-13T12:00:00Z") };
 }
 it("reserves the bounded practitioner evaluation without reusing old holds or release units", () => {
@@ -875,7 +875,7 @@ it("reserves the bounded practitioner evaluation without reusing old holds or re
   expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
   expect(active.legacyUnknownYen).toBe(before.legacyUnknownYen);
   expect(active.releaseTailYen).toBe(before.releaseTailYen);
-  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(11634);
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(12534);
   for (let i=0;i<2;i++) active=reserveManagedBudget(active,{...f.f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now).state;
   expect(()=>reserveManagedBudget(active,{...f.f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now)).toThrow();
 });
@@ -898,7 +898,7 @@ it("preserves evaluation funding across rebinds and retains a hard stop and fini
   const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(active.plans[2]),priorProfileDigest:managedDigest(f.p)}};
   for(const change of [undefined,f.f.adjustment,...[{validUntil:"2026-11-17T00:00:00Z"},{ownerApprovalDigest:digest(999)},{repairEpochDigest:digest(999)}].map(c=>({...linked.standardMonthAdjustment,...c}))])
     expect(()=>setManagedMonthPlan(active,{...linked,standardMonthAdjustment:change},f.now)).toThrow();
-  expect(()=>setManagedMonthPlan(active,{...linked,baseYen:linked.baseYen+10564},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(active,{...linked,baseYen:linked.baseYen+11464},f.now)).toThrow();
   const stopped=setManagedMonthPlan(active,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:14}},f.now);
   expect(stopped.operations).toEqual(active.operations);
   expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();

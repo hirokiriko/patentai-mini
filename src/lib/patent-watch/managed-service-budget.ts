@@ -53,7 +53,7 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reservationRepairProductionAiYen: z.literal(1238), reservationRepairImageRetentionYen: z.literal(1115),
       bindingRepairProductionAiYen: z.literal(1238), bindingRepairImageRetentionYen: z.literal(1115),
       reviewScopeRepairProductionAiYen: z.literal(1238), reviewScopeRepairImageRetentionYen: z.literal(1115),
-      evaluationAiYen: z.literal(5100), evaluationImageRetentionYen: z.literal(2230),
+      evaluationAiYen: z.literal(6000), evaluationImageRetentionYen: z.literal(2230),
       evaluationNonAiYen: z.literal(2434), evaluationStorageYen: z.literal(800) }).strict(),
   }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
     Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
