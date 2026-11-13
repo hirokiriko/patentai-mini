@@ -225,8 +225,9 @@ image保持1,115円をbaseへ、release不足535円をremaining poolへ一度だ
 `ISSUE150_PRACTITIONER_EVALUATION_V1` は、直前のREVIEW_SCOPE_REPAIR planと
 実active profile、新しい直接承認・epochへ束縛する今回限定の補足である。
 旧全留保・operations・UNKNOWNを保持し、AIは評価最大2回と引渡し後OWNER小例1回の
-計5,100円、image保持2,230円、非AI2,434円、保存800円をbaseへ一度だけ追加する。
-release不足1,070円をremaining poolへ追加し、増額は合計11,634円に限定する。
+計6,000円（通常入力の基準1件＋候補2件、最大8送信の小例を1回2,000円で3回分）、
+image保持2,230円、非AI2,434円、保存800円をbaseへ一度だけ追加する。
+release不足1,070円をremaining poolへ追加し、増額は合計12,534円に限定する。
 月次上限100,000円、jobs 25、minutes 3,000、forward 16（停止側14）を固定する。
 これは上限のデコード仕様であり、直接承認前の課金・配備・設定変更を許可しない。
 
