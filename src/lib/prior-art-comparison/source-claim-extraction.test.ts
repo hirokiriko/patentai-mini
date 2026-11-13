@@ -14,6 +14,32 @@ import {SOURCE_CAPACITY} from "./source-capacity";
 import {resolveClaimLiteralReference} from "./source-claim-literal-refs";
 import type {JSONSchema7} from "ai";
 import {sourceCompoundMaintainedStates} from "./source-claim-obligations";
+import {compareProposition} from "./propositions";
+
+it("keeps a threshold-governed operation distinct from capability without repairing provider answers",async()=>{
+ const text="圧力が閾値を超える場合、青弁を閉じることである。",f=fictionalInputs();
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const original={Q:["q0|0-0:圧力が閾値を超える場合","q1|1-1:青弁","q2|1-1:閉じる"],facts:[
+  {R:1,m:{u:null,x:"operation",g:"when",G:[["q0"]],p:"positive",k:"relation",P:"closes",J:[["q1"]],a:"q2"},O:[null,null,null,"q0",null],F:null}]};
+ const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(sourceReadingClaim(1,text),structuredClone(original));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
+ const before=JSON.stringify(answers),decoded=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers));
+ const fact=decoded.facts.find(row=>row.meaning.kind==="relation"&&row.meaning.predicate==="closes")!;
+ expect(fact.meaning).toMatchObject({context:"operation",guard:{relation:"when",conditions:["圧力が閾値を超える場合"]}});
+ const target={id:"t1",targetId:"1:1:1:observation",span:[0,text.length] as [number,number],sourceIds:[fact.id],scope:fact.scope,claimNo:fact.claimNo,meaning:fact.meaning};
+ expect(compareProposition(target,[fact]).relation).toBe("entailed");
+ expect(compareProposition({...target,meaning:{...fact.meaning,context:"capability"}},[fact])).toMatchObject({relation:"unresolved",rule:"context_mismatch"});
+ expect(JSON.stringify(answers)).toBe(before);
+ for(const task of plan.tasks){
+  expect(JSON.parse(task.prompt).sourceContext.source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(text);
+  expect(task.system).toContain("threshold condition without a named operating mode");
+  expect(task.system).toContain("青弁を閉じる機能を備える装置。");
+  const defs=(task.schema.jsonSchema as JSONSchema7).definitions!;
+  for(const branch of (defs.PriorArtSourceMeaning as JSONSchema7).anyOf as JSONSchema7[])
+   expect((branch.properties!.x as JSONSchema7).description).toContain("Nominalized することである and apparatus claim wording alone do not assert capability");
+ }
+});
 
 it.each([
  ["前記運転モードは、青弁を閉じ、液を白管に流して放熱させ、液を減圧した後、冷却器にて吸熱させる光モードである。",true],
