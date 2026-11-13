@@ -45,8 +45,10 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
   ordinaryStandardMonthAdjustmentSchema,
   ordinaryStandardMonthAdjustmentSchema.extend({
     scope: z.literal("ISSUE150_PRACTITIONER_EVALUATION_V1"), month: z.literal("2026-11"),
-    monthlyCapYen: z.literal(100000), forward: z.union([z.literal(14), z.literal(16)]),
+    monthlyCapYen: z.literal(100000), forward: z.union([z.literal(14), z.literal(16), z.literal(17)]),
     repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    branchRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
+      nonAiYen: z.literal(1217), storageYen: z.literal(400) }).strict().optional(),
     executionEarmark: z.object({ forecastBaseYen: z.number().int().nonnegative(),
       productionAiYen: z.literal(1238), imageRetentionYen: z.literal(1115),
       additionalProductionAiYen: z.literal(1238), additionalImageRetentionYen: z.literal(1115),
@@ -55,7 +57,8 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reviewScopeRepairProductionAiYen: z.literal(1238), reviewScopeRepairImageRetentionYen: z.literal(1115),
       evaluationAiYen: z.literal(6000), evaluationImageRetentionYen: z.literal(2230),
       evaluationNonAiYen: z.literal(2434), evaluationStorageYen: z.literal(800) }).strict(),
-  }).strict().refine(a => Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
+  }).strict().refine(a => (a.branchRepairEarmark ? [16,17] : [14,16]).includes(a.forward) &&
+    Date.parse(a.validUntil) > Date.parse("2026-10-31T15:00:00Z") &&
     Date.parse(a.validUntil) <= Date.parse("2026-11-30T15:00:00Z")),
   ordinaryStandardMonthAdjustmentSchema.extend({
     scope: z.literal("ISSUE150_REPAIR_STANDARD_MONTH_V1"), forward: z.literal(10),
@@ -270,7 +273,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
     check(plan.standardMonthAdjustment.forward === 13);
   }
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1") check(plan.standardMonthAdjustment.forward === 14);
-  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1") check(plan.standardMonthAdjustment.forward === 16);
+  if (plan?.standardMonthAdjustment?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1")
+    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.branchRepairEarmark ? 17 : 16));
   const limits = profile && standardMonthLimits(s, m, profile);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REPAIR_MONTH_V1" ||
       plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_FAILURE_REPAIR_V1" ||
@@ -362,17 +366,29 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed evaluation supplement: preserve every historical
       // hold, reserve two evaluation attempts plus one OWNER use, and at most
       // two deployment shortfalls. Rebinding never replenishes these amounts.
-      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 14 &&
+      check(adjustment.branchRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 14 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest &&
         managedDigest(priorEarmark) === managedDigest(previous.executionEarmark) &&
         input.baseYen === old.baseYen + evaluationAiYen + evaluationImageRetentionYen + evaluationNonAiYen + evaluationStorageYen &&
         managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 1070 }));
+    } else if (previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
+        previous.branchRepairEarmark === undefined && adjustment.branchRepairEarmark !== undefined) {
+      // One further signed branch-repair trial. Retain the failed evaluations
+      // and the unused OWNER hold; later rebinds cannot replenish this addition.
+      const extra = adjustment.branchRepairEarmark;
+      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 16 && adjustment.forward === 17 &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark) &&
+        input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
+        managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 535 }));
     } else {
       check(previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
         input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
         adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.branchRepairEarmark ?? null) === managedDigest(previous.branchRepairEarmark ?? null) &&
         managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark));
     }
   } else if (input.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1" ||
