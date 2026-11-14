@@ -431,3 +431,40 @@ it.each(["missing_close","guard","mode","possession","outside","other_fixed","re
   expect(()=>renderPropositionDrafts(f.input,f.assessment,f.drafts)).toThrow("ai_incomplete");
   expect(f.drafts[0].baseObservation).toBe(semanticExamples[name].target.map(t=>t.text).join(""));
 });
+
+it.each(["claim1","claim2","base:1","not_in_source"])("rejects invented target source IDs at the model boundary: %s",async id=>{
+  const f=setup(),raw=structuredClone(f.raw);raw.targets[0].parts[0].atoms[0].sourceIds=[id];
+  const wire=fixturePropositionWire(raw,f.targetWire),before=JSON.stringify(wire);
+  const result=await targetPropositionModelSchemaFor(f.input).validate!(wire);
+  expect(result.success).toBe(false);expect(JSON.stringify(wire)).toBe(before);
+  expect(()=>decodeTargetPropositions(f.input,raw)).toThrow("ai_incomplete");
+});
+it("accepts exact fact IDs without changing the target response",async()=>{
+  const f=setup(),wire=fixturePropositionWire(f.raw,f.targetWire),before=JSON.stringify(wire);
+  const result=await targetPropositionModelSchemaFor(f.input).validate!(wire);
+  expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
+  if(!result.success)throw result.error;
+  expect(()=>decodeTargetPropositions(f.input,result.value)).not.toThrow();
+});
+it("keeps an empty fact catalog provider-valid without allowing invented atom evidence",async()=>{
+  const f=setup(),input={...f.input,sourcePropositions:[]},schema=targetPropositionModelSchemaFor(input);
+  expect(JSON.stringify(schema.jsonSchema)).not.toContain('"enum":[]');
+  const wire=fixturePropositionWire(f.raw,f.targetWire);
+  expect((await schema.validate!(wire)).success).toBe(false);
+  for(const target of wire.targets)for(const part of target.parts){
+    part.form="unresolved";part.atoms=[];part.reference=null;part.reservation=null;
+  }
+  const result=await schema.validate!(wire);expect(result.success).toBe(true);
+  if(!result.success)throw result.error;
+  const assessment=assessPropositions(input,result.value);
+  expect(assessment.records).toEqual([]);
+  expect(assessment.targets.every(t=>t.relation==="unresolved")).toBe(true);
+});
+it.each(["scope","claim"])("keeps source-ID ownership checks after accepting an existing ID: %s",async mode=>{
+  const f=setup(),raw=structuredClone(f.raw),atom=raw.targets[0].parts[0].atoms[0];
+  if(mode==="scope")atom.sourceIds=[f.input.sourcePropositions.find(s=>s.scope!==atom.scope)!.id];
+  else atom.claimNo=2;
+  const result=await targetPropositionModelSchemaFor(f.input).validate!(fixturePropositionWire(raw,f.targetWire));
+  expect(result.success).toBe(true);if(!result.success)throw result.error;
+  expect(()=>decodeTargetPropositions(f.input,result.value)).toThrow("ai_incomplete");
+});

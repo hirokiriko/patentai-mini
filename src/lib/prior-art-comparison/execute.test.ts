@@ -296,7 +296,9 @@ describe("real installed SDK, guarded fictional transport", () => {
       if(input.task==="review"){
         expectedReviewInput=structuredClone(input);
         const review=answer as ReturnType<typeof fictionalReview>;
-        review.targets[0].parts[0].atoms[0].sourceIds=["nonexistent-private-source"];
+        // Invented IDs are now rejected by the SDK schema. Wrong claim ownership
+        // retains this independent post-SDK assessment regression.
+        review.targets[0].parts[0].atoms[0].claimNo=999;
         expectedReview=structuredClone(review);
       }
       return response(answer);
@@ -309,10 +311,10 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(captured.review).toMatchObject({status:"captured",value:expectedReview});
     expect(captured.inputs).toMatchObject({status:"captured",value:inputs});
     expect(captured.selection).toMatchObject({status:"captured",value:selection});
-    expect(JSON.stringify(error)).not.toContain("nonexistent-private-source");
+    expect(JSON.stringify(error)).not.toContain('"claimNo":999');
     const usage=vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage");
     expect(JSON.parse(usage.at(-1)![1]).phase).toBe("review");
-    expect(JSON.stringify(usage)).not.toContain("nonexistent-private-source");
+    expect(JSON.stringify(usage)).not.toContain('"claimNo":999');
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
     const downloaded=validateSourceAudit(JSON.parse(JSON.stringify(appendReviewFailureAudit(audits[0],captured))),selection.operationId,inputs.inputDigest);
     expect(downloaded.previousAuditDigest).toBe(audits[0].auditDigest);
