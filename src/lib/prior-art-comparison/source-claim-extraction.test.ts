@@ -212,6 +212,37 @@ it("keeps one-of selection independent from list extent without relaxing quotati
  expect(task.system).toContain("each alternative separate");
 });
 
+it("retains a branching definition without requiring one-of selection or a maintained state",async()=>{
+ const text="青弁の上流側で分岐し、液を青槽から赤槽へ流す白管を備える。";
+ const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const chunks=makePlan(f.inputs,f.selection),plan=sourceClaimExtractionPlan(chunks);
+ const answers=plan.tasks.map(task=>{
+  const request=JSON.parse(task.prompt);
+  expect(request.target.obligations).toEqual([]);
+  expect(request.target.continuityCues.branchClauses).toEqual([{clause:0,literal:"青弁の上流側で分岐し、"}]);
+  expect(request.target.continuityCues.maintainedSpans).toEqual([]);
+  expect(request.target.continuityCues.instruction).not.toContain("For the maintained state");
+  expect(task.system).toContain("do not express where a pipe branches");
+  expect(task.system).not.toContain("Selection and extent are independent.");
+  expect(request.sourceContext.source.claims[0].clauses.map(([,v]:[number,string])=>v).join("")).toBe(text);
+  const rel=(u:string|null,P:string,J:string[],a:string)=>({s:null,m:{u:u?[u]:null,x:"capability",p:"positive",k:"relation",P,J:J.map(q=>[q]),a},O:[null,null,null,null],F:null});
+  return {taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:[],c1:{
+   possessions:[{R:1,...rel(null,"has",["1-1:白管"],"1-1:備える")}],sets:[],f0:[],
+   f1:[rel("1-1:白管","executes",["0-1:青弁の上流側で分岐し、液を青槽から赤槽へ流す"],"1-1:流す"),
+    {s:null,m:{u:null,x:"capability",p:"positive",k:"path",i:["1-1:青槽"],j:["1-1:赤槽"],V:[["1-1:白管"]],B:[],e:"whole",r:"route"},O:[null,null,null,null],F:null}],T:[]}}};
+ });
+ const before=JSON.stringify(answers),facts=decodeSourcePropositions(chunks,await assembleSourceClaims(plan,answers)).facts;
+ expect(facts.filter(f=>f.scope==="base:1").map(f=>f.meaning)).toContainEqual(expect.objectContaining({
+  kind:"relation",subject:"白管",predicate:"executes",objects:["青弁の上流側で分岐し、液を青槽から赤槽へ流す"]}));
+ expect(JSON.stringify(answers)).toBe(before);
+ const omitted=structuredClone(answers[0].value);
+ (omitted.c1.f1[0].m as {J:string[][]}).J=[["1-1:液を青槽から赤槽へ流す"]];
+ const rejected=JSON.stringify(omitted);
+ expect((await plan.tasks[0].schema.validate!(omitted)).success).toBe(false);
+ expect(JSON.stringify(omitted)).toBe(rejected);
+});
+
 it("retains an upstream branch definition alongside the route in a one-of task",async()=>{
  const text="青弁の上流側で分岐し、液を青槽から赤槽へ流す白管を備える。制御器は、青弁と赤弁の何れか一方を開く。";
  const f=fictionalInputs();f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");

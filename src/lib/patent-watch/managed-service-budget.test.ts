@@ -907,6 +907,69 @@ it("preserves evaluation funding across rebinds and retains a hard stop and fini
   expect(()=>checkManagedExecutionBudget(active,f.p,clock("2026-11-16T00:00:00Z"))).toThrow();
   expect(()=>checkManagedExecutionBudget(active,f.p,clock("2026-11-15T23:59:59Z"))).toThrow();
 });
+function practitionerBranchRepairFixture() {
+  const f=practitionerEvaluationFixture();
+  let previous=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now);
+  for(let i=0;i<2;i++)previous=reserveManagedBudget(previous,{...f.f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now).state;
+  const old=previous.plans[2],p={...f.p,goEvidenceDigest:digest(970)};
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:17,
+    ownerApprovalDigest:digest(971),repairEpochDigest:digest(972),priorPlanDigest:managedDigest(old),
+    priorProfileDigest:managedDigest(f.p),profileDigest:managedDigest(p),
+    branchRepairEarmark:{aiYen:2000,imageRetentionYen:1115,nonAiYen:1217,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {f,previous,p,adjustment,now:f.now,input:{...f.input,baseYen:old.baseYen+4732,
+    pools:{...old.pools,remaining:old.pools.remaining+535},standardMonthAdjustment:adjustment}};
+}
+it("adds only one branch-repair reservation while retaining both failed trials and the OWNER hold",()=>{
+  const f=practitionerBranchRepairFixture(),before=structuredClone(f.previous);
+  const planned=setManagedMonthPlan(before,f.input,f.now),active=activate(planned,f.p,f.now);
+  for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen"] as const)expect(active[key]).toEqual(before[key]);
+  expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
+  expect(active.plans[2].standardMonthAdjustment).toMatchObject({executionEarmark:f.f.adjustment.executionEarmark});
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(5267);
+  const deploy=()=>({...f.f.f.deployment(),profileDigest:managedDigest(f.p)});
+  const full=reserveManagedBudget(active,deploy(),f.p,f.now).state;
+  expect(()=>reserveManagedBudget(full,deploy(),f.p,f.now)).toThrow();
+});
+it("rejects stale branch-repair authority, changed old holds and any additional replenishment",()=>{
+  const f=practitionerBranchRepairFixture();
+  for(const change of [{priorPlanDigest:digest(999)},{priorProfileDigest:digest(999)},
+    {ownerApprovalDigest:f.f.adjustment.ownerApprovalDigest},{repairEpochDigest:f.f.adjustment.repairEpochDigest},
+    {validUntil:"2026-11-17T00:00:00Z"},{forward:16 as const},
+    {executionEarmark:{...f.adjustment.executionEarmark,forecastBaseYen:f.adjustment.executionEarmark.forecastBaseYen+1}}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+  for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+    ...["remaining","storage","recovery"].map(pool=>({pools:{...f.input.pools,[pool]:f.input.pools[pool as keyof typeof f.input.pools]+1}})),
+    {reviewedOperationIds:[f.previous.operations[0].operationId]},{releaseTailYen:f.input.releaseTailYen+1}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,...change},f.now)).toThrow();
+  for(const change of [{forward:18},{forward:14},{monthlyCapYen:100001},{month:"2026-12"},
+    {validUntil:"2026-12-01T00:00:00Z"},...["aiYen","imageRetentionYen","nonAiYen","storageYen"].map(k=>({
+      branchRepairEarmark:{...f.adjustment.branchRepairEarmark,[k]:0}}))])
+    expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,...change})).toThrow();
+});
+it("preserves the branch-repair hold on rebind and stopped restoration without reopening a spent unit",()=>{
+  const f=practitionerBranchRepairFixture(),planned=setManagedMonthPlan(f.previous,f.input,f.now);
+  const link={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(planned.plans[2])}};
+  const restored=setManagedMonthPlan(planned,{...link,standardMonthAdjustment:{...link.standardMonthAdjustment,
+    profileDigest:managedDigest(f.f.p),forward:16}},f.now);
+  expect(restored.operations).toEqual(f.previous.operations);
+  expect(restored.plans[2].baseYen).toBe(planned.plans[2].baseYen);
+  expect(restored.plans[2].pools).toEqual(planned.plans[2].pools);
+  expect(()=>checkManagedExecutionBudget(restored,f.f.p,f.now)).toThrow();
+  const active=activate(planned,f.p,f.now),full=reserveManagedBudget(active,{...f.f.f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now).state;
+  const rebind={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(full.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+  for(const change of [{branchRepairEarmark:undefined},{ownerApprovalDigest:digest(999)},{repairEpochDigest:digest(999)},
+    {validUntil:"2026-11-17T00:00:00Z"}])
+    expect(()=>setManagedMonthPlan(full,{...rebind,standardMonthAdjustment:{...rebind.standardMonthAdjustment,...change}},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(full,{...rebind,baseYen:rebind.baseYen+4732},f.now)).toThrow();
+  const stopped=setManagedMonthPlan(full,{...rebind,standardMonthAdjustment:{...rebind.standardMonthAdjustment,forward:16}},f.now);
+  const again=setManagedMonthPlan(stopped,{...rebind,standardMonthAdjustment:{...rebind.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+  const rebound=activate(again,f.p,f.now);
+  expect(rebound.operations).toEqual(full.operations);
+  expect(()=>reserveManagedBudget(rebound,{...f.f.f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now)).toThrow();
+  for(const profile of [null,undefined,f.f.p])expect(()=>checkManagedExecutionBudget(active,profile,f.now)).toThrow();
+  expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+});
 it("retains prior review failures and funds only one fourteenth deployment", () => {
   const f = reviewScopeRepairFixture(), before = structuredClone(f.previous);
   const active = activate(setManagedMonthPlan(before, f.input, f.now), f.p, f.now);
