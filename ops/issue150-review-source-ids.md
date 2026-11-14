@@ -1,0 +1,15 @@
+# Issue #150: review fact-ID binding and one proposed repair supplement
+
+The public three-document evaluation completed all six source readings, then failed before review coverage. The review invented claim1 / claim2 source IDs instead of using supplied fact IDs such as s0.37. The unchanged decoder correctly rejected the missing source references.
+
+The model schema now restricts sourceIds to the request's exact fact-ID set. Instructions identify facts.rows column 0 and scopes.factIds, separately from claim numbers, scope IDs and target IDs. Scope/claim ownership, quotation, attribution and semantic coverage checks remain unchanged. No retained response is repaired or remapped. On the retained input, the request grows from 39,620 to 40,451 bytes, below the unchanged 120,000-byte guard.
+
+A proposed, not yet approved, one-time reviewSourceIdsRepairEarmark retains the entire executionEarmark, branchRepairEarmark, OWNER reservation, failure/UNKNOWN holds, history and month-end boundary. Only the exact new supplement permits a 102,000-yen monthly cap and forward 18; its stopped value is 17. Legacy plans retain their 100,000-yen cap and prior stopped/active values. The signed predecessor plan, active profile, new owner approval and new repair epoch must match. Rebinding cannot replenish the supplement or release earlier reservations.
+
+Proposed addition: 5,267 yen = AI 2,000 + image 1,115 + non-AI 1,217 + storage 400 + remaining pool 535. This is one agent comparison of at most eight sends and one deployment; the separate OWNER 2,000-yen hold is not transferred. Product signed forecast: 81,744 -> 87,011. Outer Issue forecast: 85,807.5555 -> 91,074.5555, proposed cap 92,000. November forecast: 95,177 -> 100,444, proposed cap 102,000. No old reservation is released. These schema/planner changes grant no authority, issue no receipt and authorize no live action; a new finite direct approval is required before deployment or AI use.
+
+Regression covers invented IDs, valid exact IDs, existing IDs with wrong scope/claim ownership, exact supplement amount and predecessor, legacy cap preservation, retained holds, stopped execution and replenishment rejection. The post-SDK audit regression uses wrong claim ownership with an existing ID because invented IDs now fail earlier at the SDK boundary. Representative success, general accuracy and Issue #152 full quality work remain unverified.
+
+Local source checks: 258 relevant tests passed; lint had zero errors and six existing warnings; type checking passed. The normal build could not follow the shared node_modules junction across the Turbopack root; webpack then failed fetching existing Google Fonts because DNS was unavailable. No font, dependency or build setting was changed to bypass those environmental failures. The financial target passed 67 tests, type checking and targeted lint. Empty source catalogs keep a provider-valid schema with no permitted atoms, preserving unresolved/reference/reservation behavior without invented evidence. Required CI/build, independent review, any newly approved deployment/AI run and OWNER acceptance remain pending.
+
+Refs #150, #94.
