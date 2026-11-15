@@ -11,9 +11,9 @@ type ProviderOptions = NonNullable<Parameters<typeof generateObject>[0]["provide
  * the actual model and the serialized reasoning option before sending. Pin
  * standard processing instead of inheriting a deployment's paid priority tier. */
 export function comparisonProviderOptions(model: { provider: string; modelId: string }, phase: ComparisonPhase = "generation", partitionedSource?: boolean): ProviderOptions | undefined {
-  // Whole-claim requests must leave output capacity for the structured answer.
-  // Preserve the existing setting for preplanned parts and unspecified callers.
-  const reasoningEffort = phase === "source" ? (partitionedSource === false ? "medium" : "high") : "low";
+  // Explicit source requests must leave output capacity for structured JSON.
+  // Preserve the legacy high setting only for unspecified callers.
+  const reasoningEffort = phase === "source" ? (partitionedSource === false || partitionedSource === true ? "medium" : "high") : "low";
   if (model.provider === "azure.responses" && model.modelId === "patentai-gpt54") {
     return { azure: { reasoningEffort, forceReasoning: true, serviceTier: "default" } };
   }
