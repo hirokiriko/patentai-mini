@@ -459,6 +459,26 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
 
   });
+  it("sends partitioned source at medium and retains truncated JSON as failed without retry",async()=>{
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","patentai-gpt54");
+    const f=fictionalInputs(),text="制御器により、"+Array.from({length:29},(_,i)=>`青弁${i+1}を開く、`).join("")+"冬モード。";
+    f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+    f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+    const requests=sourceRequestPlan(sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)));
+    expect(requests[0].partitioned).toBe(true);
+    const raw='{"v":34,"sourceDigest":"4583810bfef',audits:SourceAudit[]=[];
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const body=JSON.parse(String(init?.body));
+      expect(body.reasoning).toEqual({effort:"medium"});expect(body.max_output_tokens).toBe(32400);
+      expect(body.service_tier).toBe("default");
+      const outer=await response({}).json();outer.status="incomplete";outer.incomplete_details={reason:"max_output_tokens"};
+      outer.output[0].content[0].text=raw;outer.usage={input_tokens:100,output_tokens:32400};
+      return Response.json(outer);
+    });vi.stubGlobal("fetch",transport);
+    await expect(executeComparison(f.inputs,f.selection,async a=>{audits.push(structuredClone(a));})).rejects.toMatchObject({stage:"source_reading",kind:"output_incomplete"});
+    expect(transport).toHaveBeenCalledTimes(1);expect(audits).toHaveLength(1);expect(audits[0].answers).toEqual([]);
+    expect(audits[0].failure).toEqual({taskId:requests[0].tasks[0].id,text:raw});
+  });
   it.each(["gpt-5.4","gpt-5.4-2026-03-05","patentai-gpt54"])("sends phase-specific reasoning and output through the actual guarded SDK on %s",async model=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME",model);
     const {inputs,selection}=fictionalInputs();
@@ -466,7 +486,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const body=JSON.parse(String(init?.body));
       expect(body.model).toBe(model);
       const input=JSON.parse(body.input[1].content[0].text),phase=input.task;
-      expect(body.reasoning).toEqual({effort:phase === "extract_source_propositions" ? (input.target.partition ? "high" : "medium") : "low"});
+      expect(body.reasoning).toEqual({effort:phase === "extract_source_propositions" ? "medium" : "low"});
       expect(body.max_output_tokens).toBe(phase === "extract_source_propositions" ? 32400 : phase === "review" ? 22528 : 8192);
       expect(body.service_tier).toBe("default");
       expect(Object.keys(body).sort()).toEqual(["input","max_output_tokens","model","reasoning","service_tier","text"]);

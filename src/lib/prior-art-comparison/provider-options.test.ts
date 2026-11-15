@@ -4,12 +4,13 @@ import { comparisonOutputTokens, comparisonRequestMilliseconds } from "./limits"
 
 afterEach(()=>vi.unstubAllEnvs());
 describe("comparison-only reasoning",()=>{
-  it.each(["azure.responses", "openai.responses"])("reserves whole-claim answer capacity without changing part or later-phase settings on %s", provider => {
+  it.each(["azure.responses", "openai.responses"])("reserves explicit whole-claim and partition answer capacity without changing later phases on %s", provider => {
     vi.stubEnv("AI_PROVIDER", provider.split(".")[0]);
     const model={provider,modelId:provider==="azure.responses"?"patentai-gpt54":"gpt-5.4"};
     const key=provider.split(".")[0];
     expect(comparisonProviderOptions(model,"source",false)?.[key]?.reasoningEffort).toBe("medium");
-    expect(comparisonProviderOptions(model,"source",true)).toEqual(comparisonProviderOptions(model,"source"));
+    expect(comparisonProviderOptions(model,"source",true)?.[key]?.reasoningEffort).toBe("medium");
+    expect(comparisonProviderOptions(model,"source")?.[key]?.reasoningEffort).toBe("high");
     for(const phase of ["generation","review"] as const)
       expect(comparisonProviderOptions(model,phase,false)).toEqual(comparisonProviderOptions(model,phase));
     expect(comparisonOutputTokens(model,"source")).toBe(provider==="azure.responses"?32400:8192);
@@ -59,4 +60,13 @@ it("extends only known Azure source request waits, preserving all other phases/p
  for(const modelId of ["patentai-gpt54","gpt-5.4","gpt-5.4-2026-03-05"])for(const phase of ["source","generation","review"] as const)expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},phase)).toBe(phase==="source"?420000:210000);
  for(const provider of ["openai.responses","google.generative-ai","unknown"])expect(comparisonRequestMilliseconds({provider,modelId:"gpt-5.4"},"source")).toBe(210000);
  for(const modelId of ["custom-alias","gpt-5.4-mini","patentai-gpt54-mini"])expect(comparisonRequestMilliseconds({provider:"azure.responses",modelId},"source")).toBe(210000);
+});
+
+it("changes only explicit partition effort, preserving tier, forceReasoning and bounded output",()=>{
+ const model={provider:"azure.responses",modelId:"patentai-gpt54"};
+ expect(comparisonProviderOptions(model,"source",true)).toEqual({azure:{reasoningEffort:"medium",forceReasoning:true,serviceTier:"default"}});
+ expect(comparisonProviderOptions(model,"source",false)).toEqual(comparisonProviderOptions(model,"source",true));
+ expect(comparisonOutputTokens(model,"source")).toBe(32400);
+ expect(comparisonRequestMilliseconds(model,"source")).toBe(420000);
+ for(const phase of ["generation","review"] as const) expect(comparisonProviderOptions(model,phase,true)).toEqual(comparisonProviderOptions(model,phase));
 });
