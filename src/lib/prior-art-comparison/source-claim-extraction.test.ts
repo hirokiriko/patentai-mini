@@ -913,3 +913,35 @@ it("limits the canonical set exception to exact supplied sets and preserves othe
  expect(ordinary.system).not.toContain(instruction);
  expect(ordinarySchema.definitions.PriorArtSourceDictionaryClaim.properties.sets.description).toBe("Every quantified member/alternative set assertion, including any/combinations/all. Only set facts with explicit selection and original R nondecreasing. Enumeration of operations never replaces selection.");
 });
+
+it("keeps a unique heat-action locator invalid instead of accepting or repairing it as a component",async()=>{
+ const f=fictionalInputs(),text="制御器は、冷媒を青放熱器にて放熱させる。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ const claim=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:["q0|0-0:制御器","q1|1-1:青放熱器","q2|1-1:放熱させる"],facts:[{R:1,m:{u:["q0"],x:"operation",g:"unconditional",G:[],p:"positive",k:"relation",P:"releases_heat",J:[["q1"]],a:"q2"},O:[null,null,null,null,null],F:null}]});
+ const raw={v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(claim),c1:claim};
+ expect((await task.schema.validate!(raw)).success).toBe(true);
+ const bad=structuredClone(raw);
+ (bad.c1.f1 as unknown as {m:{J:unknown[][]}}[])[0].m.J=[[{reference:"1-1:放熱さ",focus:"放熱"}]];
+ const original=JSON.stringify(bad);
+ expect((await task.schema.validate!(bad)).success).toBe(false);
+ expect(JSON.stringify(bad)).toBe(original);
+});
+
+it("gives partitioned heat tasks the same component-locator instructions without removing source context",()=>{
+ const f=fictionalInputs(),text="制御器により、"+Array.from({length:29},(_,i)=>`青放熱器${i+1}から青放熱器${i+1}にて液を放熱させ、`).join("")+"冬モード。";
+ f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");
+ f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
+ const plan=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection));
+ const draftTasks=plan.tasks.filter(t=>t.sourceIndex===0);
+ expect(draftTasks).toHaveLength(3);
+ for(const task of draftTasks){
+  expect(task.partitioned).toBe(true);
+  expect(task.system).toContain("complete printed heat COMPONENT name");
+  expect(task.system).toContain("This rule also applies inside a preplanned part");
+  expect(task.system).toContain("TWO independent uniqueness checks");
+  const request=JSON.parse(task.prompt);
+  expect(request.sourceContext.source.claims[0].clauses.map((c:[number,string])=>c[1]).join("")).toBe(text);
+ }
+});
