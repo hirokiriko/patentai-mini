@@ -1211,3 +1211,74 @@ it("keeps heat stop nineteen inert and never replenishes a spent twentieth unit 
   expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
   expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
 });
+
+function practitionerReviewPossessionRepairFixture() {
+  const f=practitionerSourceHeatRepairFixture();
+  const output=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now);
+  const previous=reserveManagedBudget(output,{...f.deployment(),profileDigest:managedDigest(f.p)},f.p,f.now).state;
+  const old=previous.plans[2],p={...f.p,goEvidenceDigest:digest(2000)};
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:21,monthlyCapYen:103000,
+    ownerApprovalDigest:digest(2001),repairEpochDigest:digest(2002),priorPlanDigest:managedDigest(old),
+    priorProfileDigest:managedDigest(f.p),profileDigest:managedDigest(p),
+    reviewPossessionRepairEarmark:{aiYen:2000,imageRetentionYen:1115,nonAiYen:1217,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {f,previous,p,adjustment,now:f.now,input:{...f.input,baseYen:old.baseYen+4732,
+    pools:{...old.pools,remaining:old.pools.remaining+535},standardMonthAdjustment:adjustment},
+    deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:535})};
+}
+it("adds exactly one review-possession repair unit while retaining source-output, old trials and OWNER funds",()=>{
+  const f=practitionerReviewPossessionRepairFixture(),before=structuredClone(f.previous);
+  expect(managedBudgetStateSchema.parse(before)).toEqual(before);
+  const active=activate(setManagedMonthPlan(before,f.input,f.now),f.p,f.now);
+  for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen","cases"] as const)expect(active[key]).toEqual(before[key]);
+  expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
+  expect(active.plans[2].standardMonthAdjustment).toMatchObject({monthlyCapYen:103000,forward:21,
+    sourceOutputRepairEarmark:f.f.adjustment.sourceOutputRepairEarmark,
+    reviewSourceIdsRepairEarmark:f.f.adjustment.reviewSourceIdsRepairEarmark,
+    branchRepairEarmark:f.f.adjustment.branchRepairEarmark,executionEarmark:f.f.adjustment.executionEarmark,
+    validUntil:f.f.adjustment.validUntil});
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(5267);
+  expect(active.plans[2].pools.remaining-before.plans[2].pools.remaining).toBe(535);
+  const full=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  expect(full.operations.at(-1)?.reservationYen).toBe(535);
+  expect(()=>reserveManagedBudget(full,f.deployment(),f.p,f.now)).toThrow();
+});
+it("requires the exact source-output predecessor, fresh signed possession epoch and fixed one-time amounts",()=>{
+  const f=practitionerReviewPossessionRepairFixture();
+  for(const change of [{priorPlanDigest:digest(1999)},{priorProfileDigest:digest(1999)},
+    {ownerApprovalDigest:f.f.adjustment.ownerApprovalDigest},{repairEpochDigest:f.f.adjustment.repairEpochDigest},
+    {validUntil:"2026-11-17T00:00:00Z"},{forward:20 as const},
+    ...["sourceHeatRepairEarmark","sourceOutputRepairEarmark","reviewSourceIdsRepairEarmark","branchRepairEarmark"].map(k=>({[k]:undefined})),
+    {executionEarmark:{...f.adjustment.executionEarmark,forecastBaseYen:f.adjustment.executionEarmark.forecastBaseYen+1}}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+  for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+    ...["remaining","storage","recovery"].map(pool=>({pools:{...f.input.pools,[pool]:f.input.pools[pool as keyof typeof f.input.pools]+1}})),
+    {reviewedOperationIds:[f.previous.operations[0].operationId]},{releaseTailYen:f.input.releaseTailYen+1}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,...change},f.now)).toThrow();
+  for(const change of [{forward:22},{forward:19},{monthlyCapYen:100000},{month:"2026-12"},
+    {validUntil:"2026-12-01T00:00:00Z"},...["aiYen","imageRetentionYen","nonAiYen","storageYen"].map(k=>({
+      reviewPossessionRepairEarmark:{...f.adjustment.reviewPossessionRepairEarmark,[k]:0}}))])
+    expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,...change})).toThrow();
+  // The decoder cannot combine source-output and heat supplements in one transition.
+  const prior=f.f.previous,priorProfileDigest=prior.activeProfileDigest;if(!priorProfileDigest)throw Error("active predecessor required");
+  expect(()=>setManagedMonthPlan(prior,{...f.input,standardMonthAdjustment:{...f.adjustment,
+    priorPlanDigest:managedDigest(prior.plans[2]),priorProfileDigest}},f.now)).toThrow();
+});
+it("keeps possession stop twenty inert and never replenishes a spent twenty-first unit during rebind",()=>{
+  const f=practitionerReviewPossessionRepairFixture(),planned=setManagedMonthPlan(f.previous,f.input,f.now);
+  expect(()=>checkManagedExecutionBudget(planned,f.p,f.now)).toThrow();
+  const active=activate(planned,f.p,f.now),full=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(full.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+  for(const change of [{reviewPossessionRepairEarmark:undefined},{sourceHeatRepairEarmark:undefined},{sourceOutputRepairEarmark:undefined},
+    {reviewSourceIdsRepairEarmark:undefined},{branchRepairEarmark:undefined},
+    {ownerApprovalDigest:digest(1999)},{repairEpochDigest:digest(1999)},{validUntil:"2026-11-17T00:00:00Z"}])
+    expect(()=>setManagedMonthPlan(full,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,...change}},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(full,{...linked,baseYen:linked.baseYen+4732},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(full,{...linked,pools:{...linked.pools,remaining:linked.pools.remaining+535}},f.now)).toThrow();
+  const stopped=setManagedMonthPlan(full,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:20}},f.now);
+  expect(stopped.operations).toEqual(full.operations);expect(stopped.plans[2].pools).toEqual(full.plans[2].pools);
+  expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();
+  const again=setManagedMonthPlan(stopped,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+  expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
+  expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+});

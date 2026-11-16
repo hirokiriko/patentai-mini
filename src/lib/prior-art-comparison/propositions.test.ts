@@ -26,6 +26,35 @@ const target = (meaning: Meaning, sourceIds = ["s1"]): TargetProposition =>
 const path = (via: string[], bypass: string[]): Meaning => ({kind:"path",subject:"第1運転モード",context:"operation",guard,polarity:"positive",
   origin:"出口",destination:"入口",via,bypass,extent:"segment",relation:"route"});
 
+it("keeps complete startup and post-stop conditions instead of accepting abbreviated generated prose",()=>{
+  for(const conditions of [
+    ["第３の運転モードから駆動機を起動する際","起動後の所定期間"],
+    ["青色弁を開いた状態で駆動機を運転している状態から運転を停止する際","駆動機を停止した後も"],
+  ]){
+    const m:Meaning={kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions},
+      polarity:"positive",predicate:"maintains",objects:["青色弁の開度"]};
+    const s=source("s1",m),before=JSON.stringify(s);
+    expect(compareProposition(target(structuredClone(m)),[s]).relation).toBe("entailed");
+    for(const short of [[conditions[0]],[conditions[1]],["起動時"],["運転遷移時"]])
+      expect(compareProposition(target({...m,guard:{relation:"when",conditions:short}}),[s]))
+        .toMatchObject({relation:"unresolved",rule:"guard_mismatch"});
+    expect(compareProposition(target({...m,subject:null}),[s]))
+      .toMatchObject({relation:"unresolved",rule:"subject_mismatch"});
+    expect(compareProposition(target({...m,predicate:"opens"}),[s]).relation).toBe("unresolved");
+    expect(JSON.stringify(s)).toBe(before);
+  }
+});
+it("does not prove possession by mixing a component function and a mode's operation",()=>{
+  const possession:Meaning={kind:"relation",subject:"装置",context:"capability",guard,polarity:"positive",predicate:"has",objects:["青色弁"]};
+  const sources=[source("s1",possession),source("function",{...possession,subject:"青色弁",predicate:"executes",objects:["流路を切り換える"]}),
+    source("mode",{...possession,subject:"第３の運転モード",context:"operation",predicate:"opens"})];
+  expect(compareProposition(target(possession),sources).relation).toBe("entailed");
+  expect(compareProposition(target(possession,["s1","mode"]),sources))
+    .toMatchObject({relation:"unresolved",rule:"context_mismatch"});
+  expect(compareProposition(target(possession,["function"]),sources))
+    .toMatchObject({relation:"unresolved",rule:"subject_mismatch"});
+});
+
 it.each(["圧力が九単位を超える","流量が三単位を下回る"])("compares a terminal conditional particle without rewriting the evidence: %s",condition=>{
   for(const m of [set("補助系",["白","黒"]),path(["中間槽"],[])] as Meaning[]){
     const s=source("s1",{...m,guard:{relation:"when",conditions:[condition+"と"]}});
