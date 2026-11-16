@@ -468,3 +468,27 @@ it.each(["scope","claim"])("keeps source-ID ownership checks after accepting an 
   expect(result.success).toBe(true);if(!result.success)throw result.error;
   expect(()=>decodeTargetPropositions(f.input,result.value)).toThrow("ai_incomplete");
 });
+it("rejects possession mislabeled as a partial set without repairing the retained answer",()=>{
+  const f=repeatedBinding();
+  f.atom.meaning={kind:"set",subject:"装置",context:"capability",guard:{relation:"unconditional",conditions:[]},
+    polarity:"positive",selection:"all",extent:"partial",members:["青色弁"]};
+  const before=JSON.stringify(f.raw);
+  expect(()=>assessPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+  expect(JSON.stringify(f.raw)).toBe(before);
+});
+it.each(["第１、第２の栓の対応関係","弁の配置、配管の接続関係"])("accepts an exact nominal enumeration reservation: %s",topic=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!;
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  const before=JSON.stringify(f.raw),assessment=assessPropositions(f.input,f.raw);
+  expect(assessment.targets.find(t=>t.id===target.id)!.relation).toBe("nonassertive");
+  expect(JSON.stringify(f.raw)).toBe(before);
+});
+it.each(["、弁の対応","弁の対応、","弁、、配管","弁、 、配管","の、弁の配置","と、弁の配置","弁の配置、および","弁を開く、配管の配置","弁の配置、圧縮機が停止する"])("does not admit empty or verbal enumeration members: %s",topic=>{
+  const f=setup(),target=f.input.originals.targets.find(t=>t.id.endsWith(":unconfirmed"))!;
+  target.text=topic+"は未確認。";
+  f.raw.targets.find(t=>t.id===target.id)!.parts=[{span:[0,target.text.length],form:"reservation",atoms:[],reference:null,
+    reservation:{topic,basis:[0,topic.length]}}];
+  expect(()=>assessPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+});
