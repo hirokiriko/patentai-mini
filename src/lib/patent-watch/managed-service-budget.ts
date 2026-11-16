@@ -45,9 +45,11 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
   ordinaryStandardMonthAdjustmentSchema,
   ordinaryStandardMonthAdjustmentSchema.extend({
     scope: z.literal("ISSUE150_PRACTITIONER_EVALUATION_V1"), month: z.literal("2026-11"),
-    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000)]),
-    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22)]),
+    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000), z.literal(114000)]),
+    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23)]),
     repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    reviewLiteralConditionsRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
+      nonAiYen: z.literal(1217), storageYen: z.literal(400) }).strict().optional(),
     reviewClaimScopeRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
       nonAiYen: z.literal(1217), storageYen: z.literal(400) }).strict().optional(),
     reviewPossessionRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
@@ -68,7 +70,9 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reviewScopeRepairProductionAiYen: z.literal(1238), reviewScopeRepairImageRetentionYen: z.literal(1115),
       evaluationAiYen: z.literal(6000), evaluationImageRetentionYen: z.literal(2230),
       evaluationNonAiYen: z.literal(2434), evaluationStorageYen: z.literal(800) }).strict(),
-  }).strict().refine(a => (a.reviewClaimScopeRepairEarmark
+  }).strict().refine(a => (a.reviewLiteralConditionsRepairEarmark
+      ? a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 114000 && [22,23].includes(a.forward)
+      : a.reviewClaimScopeRepairEarmark
       ? a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 109000 && [21,22].includes(a.forward)
       : a.reviewPossessionRepairEarmark
       ? a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 103000 && [20,21].includes(a.forward)
@@ -295,7 +299,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   }
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1") check(plan.standardMonthAdjustment.forward === 14);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1")
-    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.reviewClaimScopeRepairEarmark ? 22 :
+    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.reviewLiteralConditionsRepairEarmark ? 23 :
+      plan.standardMonthAdjustment.reviewClaimScopeRepairEarmark ? 22 :
       plan.standardMonthAdjustment.reviewPossessionRepairEarmark ? 21 :
       plan.standardMonthAdjustment.sourceHeatRepairEarmark ? 20 :
       plan.standardMonthAdjustment.sourceOutputRepairEarmark ? 19 :
@@ -392,7 +397,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed evaluation supplement: preserve every historical
       // hold, reserve two evaluation attempts plus one OWNER use, and at most
       // two deployment shortfalls. Rebinding never replenishes these amounts.
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && adjustment.reviewSourceIdsRepairEarmark === undefined && adjustment.branchRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 14 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && adjustment.reviewSourceIdsRepairEarmark === undefined && adjustment.branchRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 14 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest &&
         managedDigest(priorEarmark) === managedDigest(previous.executionEarmark) &&
@@ -403,7 +408,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One further signed branch-repair trial. Retain the failed evaluations
       // and the unused OWNER hold; later rebinds cannot replenish this addition.
       const extra = adjustment.branchRepairEarmark;
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && adjustment.reviewSourceIdsRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 16 && adjustment.forward === 17 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && adjustment.reviewSourceIdsRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 16 && adjustment.forward === 17 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
         managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark) &&
@@ -415,7 +420,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately approved fact-ID repair trial. Preserve the branch
       // repair and OWNER holds; subsequent rebinds cannot replenish it.
       const extra = adjustment.reviewSourceIdsRepairEarmark;
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 17 && adjustment.forward === 18 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && adjustment.sourceOutputRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 17 && adjustment.forward === 18 &&
         previous.monthlyCapYen === 100000 && adjustment.monthlyCapYen === 102000 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
@@ -429,7 +434,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed source-output repair supplement. Preserve every
       // old hold and the OWNER reserve; rebinds cannot replenish this addition.
       const extra = adjustment.sourceOutputRepairEarmark;
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 18 && adjustment.forward === 19 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && adjustment.sourceHeatRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 18 && adjustment.forward === 19 &&
         previous.monthlyCapYen === 102000 && adjustment.monthlyCapYen === 102000 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
@@ -444,7 +449,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed heat-object repair supplement. Retain all prior
       // unresolved trials and the OWNER hold; no rebind replenishes this unit.
       const extra = adjustment.sourceHeatRepairEarmark;
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 19 && adjustment.forward === 20 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && adjustment.reviewPossessionRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 19 && adjustment.forward === 20 &&
         previous.monthlyCapYen === 102000 && adjustment.monthlyCapYen === 102000 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
@@ -460,7 +465,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed review-possession repair supplement. Retain all prior
       // unresolved trials and the OWNER hold; no rebind replenishes this unit.
       const extra = adjustment.reviewPossessionRepairEarmark;
-      check(adjustment.reviewClaimScopeRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 20 && adjustment.forward === 21 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && adjustment.reviewClaimScopeRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 20 && adjustment.forward === 21 &&
         previous.monthlyCapYen === 102000 && adjustment.monthlyCapYen === 103000 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
@@ -477,10 +482,29 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       // One separately signed review claim-scope repair supplement. Retain all prior
       // unresolved trials and the OWNER hold; no rebind replenishes this unit.
       const extra = adjustment.reviewClaimScopeRepairEarmark;
-      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 21 && adjustment.forward === 22 &&
+      check(adjustment.reviewLiteralConditionsRepairEarmark === undefined && previous.profileDigest === s.activeProfileDigest && previous.forward === 21 && adjustment.forward === 22 &&
         previous.monthlyCapYen === 103000 && adjustment.monthlyCapYen === 109000 &&
         adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.reviewPossessionRepairEarmark) === managedDigest(previous.reviewPossessionRepairEarmark) &&
+        managedDigest(adjustment.sourceHeatRepairEarmark) === managedDigest(previous.sourceHeatRepairEarmark) &&
+        managedDigest(adjustment.sourceOutputRepairEarmark) === managedDigest(previous.sourceOutputRepairEarmark) &&
+        managedDigest(adjustment.reviewSourceIdsRepairEarmark) === managedDigest(previous.reviewSourceIdsRepairEarmark) &&
+        managedDigest(adjustment.branchRepairEarmark) === managedDigest(previous.branchRepairEarmark) &&
+        managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark) &&
+        input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
+        managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 535 }));
+    } else if (previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
+        previous.reviewClaimScopeRepairEarmark !== undefined && previous.reviewLiteralConditionsRepairEarmark === undefined &&
+        adjustment.reviewLiteralConditionsRepairEarmark !== undefined) {
+      // One signed literal/condition repair unit. Keep every earlier reservation,
+      // including the separate OWNER use; stopped plans cannot replenish it.
+      const extra = adjustment.reviewLiteralConditionsRepairEarmark;
+      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 22 && adjustment.forward === 23 &&
+        previous.monthlyCapYen === 109000 && adjustment.monthlyCapYen === 114000 &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.reviewClaimScopeRepairEarmark) === managedDigest(previous.reviewClaimScopeRepairEarmark) &&
         managedDigest(adjustment.reviewPossessionRepairEarmark) === managedDigest(previous.reviewPossessionRepairEarmark) &&
         managedDigest(adjustment.sourceHeatRepairEarmark) === managedDigest(previous.sourceHeatRepairEarmark) &&
         managedDigest(adjustment.sourceOutputRepairEarmark) === managedDigest(previous.sourceOutputRepairEarmark) &&
@@ -495,6 +519,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
         adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
         adjustment.monthlyCapYen === previous.monthlyCapYen &&
+        managedDigest(adjustment.reviewLiteralConditionsRepairEarmark ?? null) === managedDigest(previous.reviewLiteralConditionsRepairEarmark ?? null) &&
         managedDigest(adjustment.reviewClaimScopeRepairEarmark ?? null) === managedDigest(previous.reviewClaimScopeRepairEarmark ?? null) &&
         managedDigest(adjustment.reviewPossessionRepairEarmark ?? null) === managedDigest(previous.reviewPossessionRepairEarmark ?? null) &&
         managedDigest(adjustment.sourceHeatRepairEarmark ?? null) === managedDigest(previous.sourceHeatRepairEarmark ?? null) &&

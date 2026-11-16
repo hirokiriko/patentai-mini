@@ -68,6 +68,35 @@ it("preserves the concatenated-pieces binding form",()=>{
   binding.spans=[[start,start+1],[start+1,start+3]];
   expect(()=>decodeTargetPropositions(f.input,f.raw)).not.toThrow();
 });
+it("requires complete terms when different numbered names share printed suffixes",async()=>{
+  const f=repeatedBinding(),text="装置は第１・第２の開閉弁と第１・第２の運転モードを備える。";
+  f.target.text=text;f.target.unitStarts=[0];f.answer.parts[0].span=[0,text.length];f.atom.basis=[[0,text.length]];
+  f.atom.meaning={kind:"relation",subject:"装置",context:"capability",guard:{relation:"unconditional",conditions:[]},
+    polarity:"positive",predicate:"has",objects:["第１の開閉弁","第２の開閉弁","第１の運転モード","第２の運転モード"]};
+  const span=(term:string,n=0)=>resolvePropositionQuote(text,term,n);
+  f.atom.bindings=[{term:"装置",spans:[span("装置")]},
+    {term:"第１の開閉弁",spans:[span("第１"),span("の開閉弁")]},
+    {term:"第２の開閉弁",spans:[span("第２"),span("の開閉弁")]},
+    {term:"第１の運転モード",spans:[span("第１",1),span("の運転モード")]},
+    {term:"第２の運転モード",spans:[span("第２",1),span("の運転モード")]}];
+  const wire=fixturePropositionWire(f.raw,propositionTargetTransport(f.input)),before=JSON.stringify(wire);
+  const decoded=await targetPropositionModelSchemaFor(f.input).validate!(wire);
+  expect(decoded.success).toBe(true);if(!decoded.success)throw decoded.error;
+  expect(()=>decodeTargetPropositions(f.input,decoded.value)).not.toThrow();
+  expect(JSON.stringify(wire)).toBe(before);
+  // Coordinates alone are not a verdict: these added names have no source proof.
+  expect(()=>assertPropositionTargetCoverage(f.input,assessPropositions(f.input,decoded.value))).toThrow("ai_incomplete");
+  for(const mode of ["bare_prefix","wrong_suffix"]){
+    const bad=structuredClone(decoded.value),b=bad.targets.find(t=>t.id===f.target.id)!.parts[0].atoms[0].bindings[3];
+    b.spans=mode==="bare_prefix"?[span("第１",1)]:[span("第１",1),span("の開閉弁")];
+    expect(()=>decodeTargetPropositions(f.input,bad)).toThrow("ai_incomplete");
+  }
+  const bad=structuredClone(wire),atom=bad.targets.find((t:{id:string})=>t.id===f.target.id).parts[0].atoms[0];
+  atom.bindings[3].spans=["2|第１"];atom.bindings[4].spans=["3|第２"];
+  const badBefore=JSON.stringify(bad);
+  expect((await targetPropositionModelSchemaFor(f.input).validate!(bad)).success).toBe(false);
+  expect(JSON.stringify(bad)).toBe(badBefore);
+});
 it.each(["different_word","extra_character","duplicate_position","outside_basis","outside_part","duplicate_term","missing_term"])(
   "rejects malformed repeated bindings: %s",mode=>{
     const f=repeatedBinding(),binding=f.atom.bindings[1],first=binding.spans[0],second=binding.spans[1];
@@ -307,6 +336,21 @@ it.each(["reduced_numbers","other_side"])("does not silently change a bare refer
 const plain={context:"capability" as const,guard:{relation:"unconditional" as const,conditions:[]},polarity:"positive" as const};
 type SemanticExample={sourceText:string;sourceFacts:Meaning[];target:{text:string;meaning:Meaning}[]};
 const semanticExamples:Record<string,SemanticExample>={
+  threshold:{sourceText:"制御器は第２の運転モードにおいてかつ回転数が所定値以下に低下した場合、青色弁を開く。",sourceFacts:[
+    {...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["第２の運転モードにおいて","回転数が所定値以下に低下した場合"]},predicate:"opens",objects:["青色弁"]},
+  ],target:[
+    {text:"制御器は第２の運転モードにおいてかつ回転数が所定値以下に低下した場合、青色弁を開く。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["第２の運転モードにおいて","回転数が所定値以下に低下した場合"]},predicate:"opens",objects:["青色弁"]}},
+  ]},
+  startup:{sourceText:"制御器は第１の運転モードから起動する際かつ起動後の所定期間、青色弁の開度を所定の大きい値に維持する。",sourceFacts:[
+    {...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["第１の運転モードから起動する際","起動後の所定期間"]},predicate:"maintains",objects:["青色弁の開度を所定の大きい値"]},
+  ],target:[
+    {text:"制御器は第１の運転モードから起動する際かつ起動後の所定期間、青色弁の開度を所定の大きい値に維持する。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["第１の運転モードから起動する際","起動後の所定期間"]},predicate:"maintains",objects:["青色弁の開度を所定の大きい値"]}},
+  ]},
+  shutdown:{sourceText:"制御器は青色弁を開いた状態で駆動機を運転している状態から停止する際かつ停止後も、青色弁を開いた状態に維持する。",sourceFacts:[
+    {...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["青色弁を開いた状態で駆動機を運転している状態から停止する際","停止後も"]},predicate:"maintains",objects:["青色弁を開いた状態"]},
+  ],target:[
+    {text:"制御器は青色弁を開いた状態で駆動機を運転している状態から停止する際かつ停止後も、青色弁を開いた状態に維持する。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["青色弁を開いた状態で駆動機を運転している状態から停止する際","停止後も"]},predicate:"maintains",objects:["青色弁を開いた状態"]}},
+  ]},
   maintenance:{sourceText:"制御器は停止後も赤弁が閉じた状態を維持する。",sourceFacts:[
     {...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["停止後も"]},predicate:"maintains",objects:["赤弁が閉じた状態"]},
   ],target:[
@@ -334,8 +378,8 @@ const semanticExamples:Record<string,SemanticExample>={
     {text:"分岐点は赤弁の上流に位置する。",meaning:{...plain,kind:"relation",subject:"分岐点",predicate:"upstream",objects:["赤弁"]}},
   ]},
 };
-async function semanticConnection(name:string,changedSource?:Pick<SemanticExample,"sourceText"|"sourceFacts">){
-  const example=semanticExamples[name],base=changedSource??example,f=fictionalInputs();
+async function semanticConnection(name:string,changedSource?:Pick<SemanticExample,"sourceText"|"sourceFacts">,targetOverride?:SemanticExample["target"]){
+  const example={...semanticExamples[name],target:targetOverride??semanticExamples[name].target},base=changedSource??example,f=fictionalInputs();
   f.inputs.draft=parseComparisonSource("【請求項1】"+base.sourceText,11,"架空基準");
   f.inputs.documents=[parseComparisonSource("【請求項1】"+example.sourceText,21,"架空候補")];
   f.selection.documents=f.selection.documents.slice(0,1);
@@ -347,7 +391,8 @@ async function semanticConnection(name:string,changedSource?:Pick<SemanticExampl
     c1:(i===0?base:example).sourceFacts.map((m,at)=>{
       // These two heat assertions deliberately mention the same component.
       // Their hand-authored readings select their own original clause.
-      const context=name==="heat"?(i===0?base:example).sourceText.split("。")[at]:null;
+      const context=name==="heat"?(i===0?base:example).sourceText.split("。")[at]:
+        name==="shutdown"?(i===0?base:example).sourceText:null;
       const {guard,...rest}=m,term=(v:string)=>[q(v,context)];
       return {meaning:{...rest,subject:m.subject===null?null:term(m.subject),guardRelation:guard.relation,guardConditions:guard.conditions.map(term),
           ...(m.kind==="set"?{members:m.members.map(term)}:m.kind==="relation"?{objects:m.objects.map(term)}:{})},
@@ -388,7 +433,7 @@ async function semanticConnection(name:string,changedSource?:Pick<SemanticExampl
   const assessment=assessPropositions(input,answer.value);
   return {input,drafts,raw:answer.value,assessment};
 }
-it.each(["valves","heat","fixed","maintenance"])("connects independent source and target readings through comparison and display: %s",async name=>{
+it.each(["valves","heat","fixed","maintenance","threshold","startup","shutdown"])("connects independent source and target readings through comparison and display: %s",async name=>{
   const f=await semanticConnection(name);assertPropositionTargetCoverage(f.input,f.assessment);
   expect(f.assessment.records.every(r=>r.relation==="entailed")).toBe(true);
   const result=renderPropositionDrafts(f.input,f.assessment,f.drafts)[0];
@@ -399,6 +444,26 @@ it.each(["valves","heat","fixed","maintenance"])("connects independent source an
   const changed=structuredClone(f.raw),atom=changed.targets[0].parts[0].atoms[0];
   atom.scope="candidate:21:1";atom.sourceIds=[f.input.sourcePropositions.find(p=>p.scope===atom.scope)!.id];
   expect(()=>assessPropositions(f.input,changed)).toThrow("ai_incomplete");
+});
+it.each([
+  {name:"threshold",text:"制御器は第２の運転モードで回転数低下時、青色弁を開く。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["第２の運転モードで回転数低下時"]},predicate:"opens",objects:["青色弁"]}},
+  {name:"startup",text:"制御器は起動時、青色弁の開度を所定の大きい値に維持する。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["起動時"]},predicate:"maintains",objects:["青色弁の開度を所定の大きい値"]}},
+  {name:"shutdown",text:"制御器は停止後も、青色弁を開いた状態に維持する。",meaning:{...plain,kind:"relation",subject:"制御器",context:"operation",guard:{relation:"when",conditions:["停止後も"]},predicate:"maintains",objects:["青色弁を開いた状態"]}},
+] satisfies {name:string;text:string;meaning:Meaning}[])("rejects shortened printed conditions even with valid target locators: $name",async ({name,text,meaning})=>{
+  const f=await semanticConnection(name,undefined,[{text,meaning}]);
+  expect(f.assessment.records.every(r=>r.relation==="unresolved"&&r.rule==="guard_mismatch")).toBe(true);
+  expect(()=>renderPropositionDrafts(f.input,f.assessment,f.drafts)).toThrow("ai_incomplete");
+});
+it.each(["guard_headings","bare_maintained_object"])("does not use full operator quotes to hide incomplete extracted meaning: %s",async mode=>{
+  const f=await semanticConnection("startup"),raw=structuredClone(f.raw),atom=raw.targets[0].parts[0].atoms[0];
+  const text=f.input.originals.targets[0].text,span=(q:string)=>resolvePropositionQuote(text,q,0);
+  if(mode==="guard_headings")atom.meaning.guard.conditions=["第１の運転モード"];
+  else {if(atom.meaning.kind!=="relation")throw Error();atom.meaning.objects=["青色弁"];}
+  atom.bindings.push(mode==="guard_headings"?{term:"第１の運転モード",spans:[span("第１の運転モード")]}:{term:"青色弁",spans:[span("青色弁")]});
+  const before=JSON.stringify(raw),assessment=assessPropositions(f.input,raw);
+  expect(assessment.records.find(r=>r.target.targetId===raw.targets[0].id)!.relation).toBe("unresolved");
+  expect(()=>renderPropositionDrafts(f.input,assessment,f.drafts)).toThrow("ai_incomplete");
+  expect(JSON.stringify(raw)).toBe(before);
 });
 it.each(["missing_close","guard","mode","possession","outside","other_fixed","reverse_direction","missing_subject","state_to_action"])("does not erase an independent target assertion when source proof changes: %s",async change=>{
   const name=change==="state_to_action"?"maintenance":["missing_close","guard","mode"].includes(change)?"valves":["possession","outside"].includes(change)?"heat":"fixed";
