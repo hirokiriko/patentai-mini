@@ -52,15 +52,23 @@ export function resolveTargetLocator(text:string,value:string):Span {
 
 export function targetPropositionModelSchemaFor(input:PropositionTargetInput) {
   const local=targetPropositionSchemaFor(input);
-  const factIds=[...new Set(input.sourcePropositions.map(f=>f.id))];
-  const scopedAtom=wireAtom.extend({
-    sourceIds:(factIds.length?z.array(z.enum(factIds)).min(1).max(16):wireAtom.shape.sourceIds)
-      .describe("Exact fact IDs from facts.rows column 0 / scopes.factIds, never claim labels or reference-scope IDs."),
+  const groups=new Map<string,string[]>();
+  for(const fact of input.sourcePropositions){
+    const key=JSON.stringify([fact.scope,fact.claimNo]),ids=groups.get(key)??[];
+    if(!ids.includes(fact.id))ids.push(fact.id);
+    groups.set(key,ids);
+  }
+  // Constrain the ID array, not the whole atom: duplicating every atom field
+  // for each claim would exceed the provider's object-property limit.
+  const choices=[...groups.values()].map(ids=>z.array(z.enum(ids)).min(1).max(16));
+  const sourceIds=choices.length>1?z.union([choices[0],choices[1],...choices.slice(2)]):choices[0]??wireAtom.shape.sourceIds;
+  const scopedAtom=wireAtom.omit({claimNo:true}).extend({
+    sourceIds:sourceIds.describe("Exact fact IDs from ONE original claim in the declared scope. Copy facts.rows column 0; all selected rows must share column 1. Never mix claims, claim labels or scope/target IDs."),
     scope:z.enum(input.referenceScopes.map(s=>s.id))
     .describe("Exact source reference-scope ID from scopes, never a target ID. Target-side and claim ownership remain independently checked.")});
-  const schema=z.object({locatorVersion:z.literal(3),draftDigest:local.shape.draftDigest,
+  const schema=z.object({locatorVersion:z.literal(4),draftDigest:local.shape.draftDigest,
     targets:z.array(z.object({id:local.shape.targets.element.shape.id,
-      parts:z.array(wirePart.extend({atoms:z.array(scopedAtom).max(factIds.length?12:0)})).min(1).max(32)}).strict()).length(input.originals.targets.length)}).strict();
+      parts:z.array(wirePart.extend({atoms:z.array(scopedAtom).max(choices.length?12:0)})).min(1).max(32)}).strict()).length(input.originals.targets.length)}).strict();
   const originals=new Map(input.originals.targets.map(t=>[t.id,t.text]));
   return comparisonModelSchema(schema,raw=>{
     if(Buffer.byteLength(JSON.stringify(raw),"utf8")>TARGET_LOCATOR_MAX_BYTES)throw invalid();
@@ -73,7 +81,12 @@ export function targetPropositionModelSchemaFor(input:PropositionTargetInput) {
         const start=cursor,span:Span=[start,start+p.span.length];cursor=span[1];
         const get=(value:string):Span=>{const [a,b]=resolveTargetLocator(p.span,value);return [start+a,start+b];};
         const atoms=p.atoms.map(a=>{
-          const atom={...expandExtraction(a,get),scope:a.scope,claimNo:a.claimNo,sourceIds:a.sourceIds};
+          // An ID can be shared by several reference scopes. Preserve the
+          // declared scope and derive only its original claim from the facts.
+          const proof=input.sourcePropositions.find(f=>f.scope===a.scope&&f.id===a.sourceIds[0]);
+          if(!proof||a.sourceIds.some(id=>!input.sourcePropositions.some(f=>
+            f.id===id&&f.scope===a.scope&&f.claimNo===proof.claimNo)))throw invalid();
+          const atom={...expandExtraction(a,get),scope:a.scope,claimNo:proof.claimNo,sourceIds:a.sourceIds};
           const marker=a.attribution===null?null:targetAttributionMarker(text,span,atom);
           if(a.attribution!==null&&marker?.text!==a.attribution)throw invalid();
           return {...atom,attribution:marker?.span??null};

@@ -460,13 +460,15 @@ it("keeps an empty fact catalog provider-valid without allowing invented atom ev
   expect(assessment.records).toEqual([]);
   expect(assessment.targets.every(t=>t.relation==="unresolved")).toBe(true);
 });
-it.each(["scope","claim"])("keeps source-ID ownership checks after accepting an existing ID: %s",async mode=>{
+it.each(["scope","claim"])("keeps source-ID ownership checks and rejects contradictory wire ownership: %s",async mode=>{
   const f=setup(),raw=structuredClone(f.raw),atom=raw.targets[0].parts[0].atoms[0];
   if(mode==="scope")atom.sourceIds=[f.input.sourcePropositions.find(s=>s.scope!==atom.scope)!.id];
   else atom.claimNo=2;
-  const result=await targetPropositionModelSchemaFor(f.input).validate!(fixturePropositionWire(raw,f.targetWire));
-  expect(result.success).toBe(true);if(!result.success)throw result.error;
-  expect(()=>decodeTargetPropositions(f.input,result.value)).toThrow("ai_incomplete");
+  const wire=fixturePropositionWire(raw,f.targetWire);
+  if(mode==="claim")wire.targets[0].parts[0].atoms[0].claimNo=2;
+  const before=JSON.stringify(wire),result=await targetPropositionModelSchemaFor(f.input).validate!(wire);
+  expect(result.success).toBe(false);expect(JSON.stringify(wire)).toBe(before);
+  expect(()=>decodeTargetPropositions(f.input,raw)).toThrow("ai_incomplete");
 });
 it("rejects possession mislabeled as a partial set without repairing the retained answer",()=>{
   const f=repeatedBinding();

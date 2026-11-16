@@ -159,7 +159,7 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
     });return {sourceDigest:s.sourceDigest,coverage:claims.map(({claimNo,unresolved})=>({claimNo,unresolved})),
       facts:claims.flatMap(c=>c.facts)};
   })}));
-  if(input.task==="review")return flattenGuards({...value,locatorVersion:3,targets:value.targets.map(target=>{
+  if(input.task==="review")return flattenGuards({...value,locatorVersion:4,targets:value.targets.map(target=>{
     const text=input.originals.targets.find(x=>x.id===target.id).text,global=table(()=>text);
     const quote=r=>global.locators[global.add(r)].quote;
     const parts=target.parts.map(p=>{
@@ -168,7 +168,10 @@ export function fixturePropositionWire(value,input=fixtureInputs.get(value)) {
         if(!Array.isArray(r)||r.length!==2||r.some(n=>!Number.isSafeInteger(n)))throw Error("fictional_locator_invalid");
         const at=t.add(r.map(n=>n-p.span[0])),entry=t.locators[at];return `${entry.occurrence}|${entry.quote}`;
       };
-      return {...p,span:partText,atoms:p.atoms.map(a=>({...fact(a,add),attribution:a.attribution===null?null:quote(a.attribution)})),
+      return {...p,span:partText,atoms:p.atoms.map(a=>{
+        const {claimNo,...encoded}=fact(a,add);void claimNo;
+        return {...encoded,attribution:a.attribution===null?null:quote(a.attribution)};
+      }),
         reservation:p.reservation?{...p.reservation,basis:add(p.reservation.basis)}:null};
     });
     return {...target,parts};
