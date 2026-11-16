@@ -296,9 +296,11 @@ describe("real installed SDK, guarded fictional transport", () => {
       if(input.task==="review"){
         expectedReviewInput=structuredClone(input);
         const review=answer as ReturnType<typeof fictionalReview>;
-        // Invented IDs are now rejected by the SDK schema. Wrong claim ownership
-        // retains this independent post-SDK assessment regression.
-        review.targets[0].parts[0].atoms[0].claimNo=999;
+        // A valid candidate proof still cannot support a base-side assertion.
+        // Keep this independent post-SDK assessment regression after claim
+        // ownership is derived from the declared scope and source IDs.
+        const candidate=input.scopes.find((s:{id:string})=>s.id.startsWith("candidate:"));
+        Object.assign(review.targets[0].parts[0].atoms[0],{scope:candidate.id,sourceIds:[candidate.factIds[0]]});
         expectedReview=structuredClone(review);
       }
       return response(answer);
@@ -311,10 +313,10 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(captured.review).toMatchObject({status:"captured",value:expectedReview});
     expect(captured.inputs).toMatchObject({status:"captured",value:inputs});
     expect(captured.selection).toMatchObject({status:"captured",value:selection});
-    expect(JSON.stringify(error)).not.toContain('"claimNo":999');
+    expect(JSON.stringify(error)).not.toContain('"sourceIds":');
     const usage=vi.mocked(console.info).mock.calls.filter(row=>row[0]==="prior_art_comparison_usage");
     expect(JSON.parse(usage.at(-1)![1]).phase).toBe("review");
-    expect(JSON.stringify(usage)).not.toContain('"claimNo":999');
+    expect(JSON.stringify(usage)).not.toContain('"sourceIds":');
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+2);
     const downloaded=validateSourceAudit(JSON.parse(JSON.stringify(appendReviewFailureAudit(audits[0],captured))),selection.operationId,inputs.inputDigest);
     expect(downloaded.previousAuditDigest).toBe(audits[0].auditDigest);

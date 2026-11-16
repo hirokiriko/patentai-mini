@@ -3,14 +3,24 @@ import type { JSONSchema7 } from "ai";
 import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { makePlan, validateAnswer } from "./comparison";
 import { batchInput } from "./generation-batch";
+import { parseComparisonSource } from "./source";
 import { decodeGeneration } from "./generation";
 import { decodeSourcePropositions, decodeTargetPropositions, propositionSourceInput, propositionSourceTransport,
   propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { fictionalPropositionSource, fictionalPropositionGeneration, fictionalPropositionTarget, fixturePropositionWire } from "./proposition-fixtures.test-support";
 import { resolvePropositionQuote, resolveTargetLocator, sourcePropositionModelSchemaFor, targetPropositionModelSchemaFor } from "./proposition-locators";
 
-function setup(){
-  const f=fictionalInputs(),plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceTransport(propositionSourceInput(plan));
+function setup(withDependency=false){
+  const f=fictionalInputs();
+  if(withDependency){
+    const original=f.inputs.documents[0];
+    f.inputs.documents[0]=parseComparisonSource(
+      "【請求項1】装置は青色弁を備える。末尾条件は温度が七度を超えると青色弁を閉じることである。\n"+
+      "【請求項2】請求項1に記載の装置であって、装置は青色弁を備える。末尾条件は温度が七度を下回ると青色弁を開くことである。",
+      original.id,original.label);
+    f.selection.documents[0].claimNos=[1,2];
+  }
+  const plan=makePlan(f.inputs,f.selection),sourceInput=propositionSourceTransport(propositionSourceInput(plan));
   const source=fictionalPropositionSource(sourceInput),sources=decodeSourcePropositions(plan,source);
   const generation=fictionalPropositionGeneration(batchInput(plan));
   const drafts=plan.flatMap(c=>{
@@ -35,7 +45,7 @@ it.each(["甲","0|","-1|甲","0.5|甲","01|甲","999999999999999999999|甲","1|�
 });
 it("has no orphan locator table and still rejects unrequested answer fields",async()=>{
   const f=setup(),wire=fixturePropositionWire(f.target);
-  expect(wire.locatorVersion).toBe(3);
+  expect(wire.locatorVersion).toBe(4);
   expect(wire.targets.every((t:Record<string,unknown>)=>!("locators" in t))).toBe(true);
   expect((await f.targetSchema.validate!(wire)).success).toBe(true);
   Object.assign(wire.targets[0],{locators:[{quote:"青色弁",occurrence:0}]});
@@ -89,9 +99,65 @@ it("keeps target-side domain checks after accepting an existing source scope",as
   const f=setup(),target=f.target.targets.find(t=>t.id.endsWith(":baseObservation"))!;
   const atom=target.parts[0].atoms[0];
   atom.scope=f.targetInput.referenceScopes.find(s=>s.id.startsWith("candidate:"))!.id;
+  atom.sourceIds=[f.targetInput.sourcePropositions.find(p=>p.scope===atom.scope)!.id];
   const wire=fixturePropositionWire(f.target),result=await f.targetSchema.validate!(wire);
   expect(result.success).toBe(true);
   if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow("ai_incomplete");
+});
+it("derives only the original claim and preserves a shared fact's declared reference scope",async()=>{
+  const f=setup(true),shared=f.targetInput.sourcePropositions.find(p=>p.scope==="candidate:21:1"&&p.claimNo===1)!;
+  expect(f.targetInput.sourcePropositions.some(p=>p.id===shared.id&&p.scope==="candidate:21:2"&&p.claimNo===1)).toBe(true);
+  for(const scope of ["candidate:21:1","candidate:21:2"]){
+    const wire=fixturePropositionWire(f.target),atom=wire.targets[0].parts[0].atoms[0];
+    Object.assign(atom,{scope,sourceIds:[shared.id]});
+    expect(atom).not.toHaveProperty("claimNo");
+    const before=JSON.stringify(wire),result=await f.targetSchema.validate!(wire);
+    expect(result.success).toBe(true);expect(JSON.stringify(wire)).toBe(before);
+    if(result.success){
+      expect(result.value.targets[0].parts[0].atoms[0]).toMatchObject({scope,claimNo:1,sourceIds:[shared.id]});
+      // Valid ownership is not a verdict: this remains a wrong-side assertion.
+      expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow("ai_incomplete");
+    }
+  }
+});
+it.each(["mixed_claims","wrong_scope","invented_claim"])("rejects %s without rewriting the target response",async mode=>{
+  const f=setup(true),wire=fixturePropositionWire(f.target),atom=wire.targets[0].parts[0].atoms[0];
+  const own=f.targetInput.sourcePropositions.filter(p=>p.scope==="candidate:21:2");
+  const first=own.find(p=>p.claimNo===1)!,second=own.find(p=>p.claimNo===2)!;
+  Object.assign(atom,{scope:"candidate:21:2",sourceIds:[second.id]});
+  if(mode==="mixed_claims")atom.sourceIds=[first.id,second.id];
+  if(mode==="wrong_scope")atom.scope="candidate:21:1";
+  if(mode==="invented_claim")atom.claimNo=2;
+  const before=JSON.stringify(wire);
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+  expect(JSON.stringify(wire)).toBe(before);
+});
+it("retains evidence and atom limits for one original-claim group",async()=>{
+  const f=setup(),wire=fixturePropositionWire(f.target),part=wire.targets[0].parts[0],atom=part.atoms[0];
+  atom.sourceIds=Array(16).fill(atom.sourceIds[0]);
+  expect((await f.targetSchema.validate!(wire)).success).toBe(true);
+  atom.sourceIds.push(atom.sourceIds[0]);
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+  atom.sourceIds.pop();part.atoms=Array.from({length:13},()=>structuredClone(atom));
+  expect((await f.targetSchema.validate!(wire)).success).toBe(false);
+});
+it("keeps one-group and many-claim schemas within the provider's object-property budget",()=>{
+  const f=setup(),proof=f.targetInput.sourcePropositions[0];
+  for(const count of [1,96]){
+    const sourcePropositions=Array.from({length:count},(_,i)=>({...proof,id:`proof-${i}`,claimNo:i+1}));
+    const schema=targetPropositionModelSchemaFor({...f.targetInput,sourcePropositions}).jsonSchema;
+    let properties=0;
+    function visit(value:unknown){
+      if(!value||typeof value!=="object")return;
+      const node=value as {properties?:Record<string,unknown>};
+      properties+=Object.keys(node.properties??{}).length;
+      for(const child of Object.values(value))visit(child);
+    }
+    visit(schema);
+    expect(properties).toBeLessThanOrEqual(100);
+    expect(JSON.stringify(schema)).not.toContain('"enum":[]');
+    expect(JSON.stringify(schema)).not.toContain('"claimNo":');
+  }
 });
 it("requires assertion syntax as well as bound terms after model-schema acceptance",async()=>{
   const f=setup(),part=f.target.targets[0].parts[0],atom=part.atoms[0];
@@ -188,7 +254,7 @@ it.each(["wrong_marker","particle","missing_marker"])("preserves attribution che
     if(result.success)expect(()=>decodeTargetPropositions(f.targetInput,result.value)).toThrow();
   }else expect(result.success).toBe(false);
 });
-it.each([1,2])("rejects retired target locator version %i",async locatorVersion=>{
+it.each([1,2,3])("rejects retired target locator version %i",async locatorVersion=>{
   const f=setup(),wire=fixturePropositionWire(f.target);wire.locatorVersion=locatorVersion;
   expect((await f.targetSchema.validate!(wire)).success).toBe(false);
 });
