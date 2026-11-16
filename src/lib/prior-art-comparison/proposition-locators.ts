@@ -10,11 +10,11 @@ export { sourceIdentifiedPropositionModelSchemaFor as sourcePropositionModelSche
 // Ordered exact parts remove global occurrence counting. Nested locators are
 // relative to their own part; all existing absolute-domain checks still run.
 const locator = z.string().min(3).max(12_020)
-  .describe('Occurrence WITHIN THIS PART, then |, then the exact nonempty quote; e.g. 0|青色弁. Preserve every space and punctuation mark.');
+  .describe('Zero-based occurrence of THIS IDENTICAL QUOTE within this part, then |, then exact nonempty quote. Count each different quote independently, NOT binding array order. Example: in 甲乙甲乙, use 0|甲, 0|乙, 1|甲, 1|乙. Preserve every space and punctuation mark.');
 const spans = {
   basis: z.array(locator).min(1).max(12),
   bindings: z.array(z.object({ term: extractionSchema.shape.bindings.element.shape.term,
-    spans: z.array(locator).min(1).max(4) }).strict()).max(48),
+    spans: z.array(locator).min(1).max(4).describe('Select the COMPLETE term: either each quote is the full term, or quotes concatenate to the full term in order. A bare 第１ cannot bind 第１の運転モード; also quote its printed の運転モード suffix. Never substitute another occurrence or invent missing text.') }).strict()).max(48),
   operators: z.object({ selection:locator.nullable(), extent:locator.nullable(), polarity:locator.nullable(),
     guard:locator.nullable(), context:locator.nullable() }).strict(),
   routeFrame: z.object({ entry:locator, exit:locator, route:locator,

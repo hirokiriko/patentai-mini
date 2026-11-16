@@ -40,6 +40,17 @@ it("resolves inline target quotes with repeated, overlapping, delimited and Unic
   expect(resolveTargetLocator("甲😀甲","0|😀")).toEqual([1,3]);
   expect(resolveTargetLocator("甲|乙\n甲|乙","1|甲|乙")).toEqual([4,7]);
 });
+it("counts identical quotes independently instead of using binding array positions",()=>{
+  const part="第１・第２の開閉弁で第１・第２の運転モードを切換える。";
+  const quotes=["0|第１","0|第２","1|第１","1|第２"];
+  expect(quotes.map(q=>resolveTargetLocator(part,q))).toEqual([[0,2],[3,5],[10,12],[13,15]]);
+  for(const q of ["2|第１","3|第２"])expect(()=>resolveTargetLocator(part,q)).toThrow("comparison_locator_invalid");
+  // A complete name on each mention needs no shared-suffix composition.
+  const full="第１の開閉弁と第２の開閉弁で第１の運転モードと第２の運転モードを切換える。";
+  for(const term of ["第１の開閉弁","第２の開閉弁","第１の運転モード","第２の運転モード"]){
+    const [a,b]=resolveTargetLocator(full,"0|"+term);expect(full.slice(a,b)).toBe(term);
+  }
+});
 it.each(["甲","0|","-1|甲","0.5|甲","01|甲","999999999999999999999|甲","1|甲","0|乙"])("rejects invalid inline target locator %s",value=>{
   expect(()=>resolveTargetLocator("甲",value)).toThrow("comparison_locator_invalid");
 });
