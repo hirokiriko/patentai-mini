@@ -73,3 +73,20 @@ changing a deadline. Before any separately authorized new comparison, establish
 the old cloud operation's termination or the applicable runbook isolation
 conditions. A new diagnostic deployment cannot reconstruct events that an old
 deployment never recorded.
+
+## Signed diagnostic trial allowance
+
+The separately approved diagnostic continuation uses one new signed
+`comparisonDiagnosticsEarmark` after the exact active forward25/cap124000
+predecessor. The decoder admits forward26/cap136000 only with the unchanged
+earlier earmarks, new approval and epoch digests, exact predecessor plan/profile
+and the same November deadline. It adds base4742 (AI2000, image1115, other1227,
+storage400) and remaining pool525, totaling5267. All earlier operations,
+UNKNOWN reservations and the separate OWNER allowance remain intact.
+
+Stop25 is inert for this supplement. Rebinding, stopping or reactivation cannot
+replenish a consumed unit. This change neither issues forward27 nor funds the
+conditional corrective trial in advance. Code support and the monthly ceiling
+are not execution authority: the existing Local approval, actual retained
+state, exact candidate, required CI/review and old-worker termination or
+applicable runbook isolation must be bound before a new comparison.
