@@ -7,7 +7,7 @@ import { batchInput, batchSchema, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
 import { decodeSourcePropositions, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
-import {assembleSourceClaims, sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {assembleSourceClaims, assembleSourceClaimsWithLocators, sourceClaimExtractionPlan} from "./source-claim-extraction";
 import {sourceRequestPlan} from "./source-request-plan";
 import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
 import { takeReviewFailure } from "./review-failure-audit";
@@ -285,6 +285,27 @@ describe("real installed SDK, guarded fictional transport", () => {
       expect(offlineFetch).not.toHaveBeenCalled();
     }
   });
+  it("retains a rejected generation verbatim and never sends its review",async()=>{
+    const {inputs,selection}=fictionalInputs(),audits:SourceAudit[]=[];
+    let original:unknown;
+    const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
+      const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      const answer=stageAnswer(input);
+      if(input.task==="compare"){
+        const generated=answer as ReturnType<typeof fictionalBatch>;
+        generated.results[0].unconfirmed="弁を開く際の候補側の制御は未確認。";original=structuredClone(generated);
+      }
+      return response(answer);
+    });vi.stubGlobal("fetch",transport);
+    const error=await executeComparison(inputs,selection,async audit=>{audits.push(structuredClone(audit));}).catch(error=>error);
+    expect(error).toMatchObject({stage:"generation",kind:"protocol_invalid"});
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(inputs,selection)+1);
+    const retained=takeReviewFailure(error)!;
+    expect(retained).toMatchObject({step:"generation_check",generation:{status:"captured",value:original},review:{status:"captured",value:null}});
+    const downloaded=validateSourceAudit(appendReviewFailureAudit(audits[0],retained),selection.operationId,inputs.inputDigest);
+    expect(downloaded.answers).toEqual(audits[0].answers);expect(downloaded.reviewFailure).toEqual(retained);
+    expect(JSON.stringify(error)).not.toContain("弁を開く際");
+  });
   it("replays a post-SDK protocol failure from the downloaded v2 audit without network or public raw data",async()=>{
     const {inputs,selection}=fictionalInputs();
     const audits:SourceAudit[]=[];
@@ -327,8 +348,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     if(retained.inputs.status!=="captured"||retained.selection.status!=="captured"||retained.generation.status!=="captured"||retained.review.status!=="captured")throw Error("missing fixture capture");
     const replayPlan=makePlan(retained.inputs.value as ComparisonInputs,retained.selection.value as Selection);
     const replayBatch=separatedGenerationPlan(replayPlan,PROPOSITION_GENERATION_SYSTEM);
-    const reading=await assembleSourceClaims(sourceClaimExtractionPlan(replayBatch),downloaded.answers);
-    const analyses=decodeSourcePropositions(replayBatch,reading);
+    const reading=await assembleSourceClaimsWithLocators(sourceClaimExtractionPlan(replayBatch),downloaded.answers);
+    const analyses=decodeSourcePropositions(replayBatch,reading.extraction,reading.locators);
     const generated=batchSchema.parse(retained.generation.value);
     const drafts=replayPlan.flatMap(chunk=>{
       const results=generated.results.filter(r=>r.docId===chunk.candidateId&&chunk.pairs.some(p=>p.baseClaimNo===r.baseClaimNo&&p.candidateClaimNo===r.candidateClaimNo))

@@ -1429,3 +1429,64 @@ it("keeps literal-condition stop twenty-two inert and never replenishes a spent 
   expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
   expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
 });
+
+function practitionerReviewEvidenceLocatorsFixture(){
+  const f=practitionerReviewLiteralConditionsRepairFixture();
+  const active=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now);
+  const previous=reserveManagedBudget(active,f.deployment(),f.p,f.now).state,old=previous.plans[2];
+  const p={...f.p,goEvidenceDigest:digest(2300)};
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:24,monthlyCapYen:119000,
+    ownerApprovalDigest:digest(2301),repairEpochDigest:digest(2302),priorPlanDigest:managedDigest(old),
+    priorProfileDigest:managedDigest(f.p),profileDigest:managedDigest(p),
+    reviewEvidenceLocatorsRepairEarmark:{aiYen:2000,imageRetentionYen:1115,nonAiYen:1217,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {f,previous,p,adjustment,now:f.now,input:{...f.input,baseYen:old.baseYen+4732,
+    pools:{...old.pools,remaining:old.pools.remaining+535},standardMonthAdjustment:adjustment},
+    deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:535})};
+}
+it("adds only the signed locator repair unit and preserves every earlier trial, unknown and OWNER hold",()=>{
+  const f=practitionerReviewEvidenceLocatorsFixture(),before=structuredClone(f.previous);
+  const active=activate(setManagedMonthPlan(before,f.input,f.now),f.p,f.now);
+  for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen","cases"] as const)expect(active[key]).toEqual(before[key]);
+  expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(5267);
+  expect(active.plans[2].standardMonthAdjustment).toMatchObject({forward:24,monthlyCapYen:119000,
+    reviewLiteralConditionsRepairEarmark:f.f.adjustment.reviewLiteralConditionsRepairEarmark,validUntil:f.f.adjustment.validUntil});
+  const spent=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  expect(()=>reserveManagedBudget(spent,f.deployment(),f.p,f.now)).toThrow();
+});
+it("requires the exact literal-condition predecessor, new approval/epoch and fixed locator amounts",()=>{
+  const f=practitionerReviewEvidenceLocatorsFixture();
+  for(const change of [{priorPlanDigest:digest(2399)},{priorProfileDigest:digest(2399)},
+    {ownerApprovalDigest:f.f.adjustment.ownerApprovalDigest},{repairEpochDigest:f.f.adjustment.repairEpochDigest},
+    {validUntil:"2026-11-17T00:00:00Z"},{forward:23},
+    ...["reviewLiteralConditionsRepairEarmark","reviewClaimScopeRepairEarmark","reviewPossessionRepairEarmark","sourceHeatRepairEarmark",
+      "sourceOutputRepairEarmark","reviewSourceIdsRepairEarmark","branchRepairEarmark"].map(k=>({[k]:undefined}))])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+  for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+    {pools:{...f.input.pools,remaining:f.input.pools.remaining+1}},{reviewedOperationIds:[f.previous.operations[0].operationId]}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,...change},f.now)).toThrow();
+  for(const change of [{forward:25},{monthlyCapYen:114000},{month:"2026-12"},{validUntil:"2026-12-01T00:00:00Z"},
+    ...["aiYen","imageRetentionYen","nonAiYen","storageYen"].map(k=>({reviewEvidenceLocatorsRepairEarmark:{...f.adjustment.reviewEvidenceLocatorsRepairEarmark,[k]:0}}))])
+    expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,...change})).toThrow();
+  const prior=f.f.previous;
+  expect(()=>setManagedMonthPlan(prior,{...f.input,standardMonthAdjustment:{...f.adjustment,
+    priorPlanDigest:managedDigest(prior.plans[2]),priorProfileDigest:prior.activeProfileDigest}},f.now)).toThrow();
+});
+it("keeps locator stop twenty-three inert and prevents replenishment or changing old earmarks on rebind",()=>{
+  const f=practitionerReviewEvidenceLocatorsFixture(),planned=setManagedMonthPlan(f.previous,f.input,f.now);
+  expect(()=>checkManagedExecutionBudget(planned,f.p,f.now)).toThrow();
+  const active=activate(planned,f.p,f.now),spent=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(spent.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+  for(const change of [{reviewEvidenceLocatorsRepairEarmark:undefined},{reviewLiteralConditionsRepairEarmark:undefined},
+    {ownerApprovalDigest:digest(2399)},{repairEpochDigest:digest(2399)},{validUntil:"2026-11-17T00:00:00Z"}])
+    expect(()=>setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,...change}},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(spent,{...linked,baseYen:linked.baseYen+4732},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(spent,{...linked,pools:{...linked.pools,remaining:linked.pools.remaining+535}},f.now)).toThrow();
+  const stopped=setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:23}},f.now);
+  expect(stopped.operations).toEqual(spent.operations);expect(stopped.plans[2].pools).toEqual(spent.plans[2].pools);
+  expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();
+  const again=setManagedMonthPlan(stopped,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+  expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
+  expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+});

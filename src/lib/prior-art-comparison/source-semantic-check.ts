@@ -131,11 +131,34 @@ export function sourceLocalStateGuard(c:SourceReadingClaim,action:Span):Span|nul
   return match?[action[0]-match[1].length,action[0]]:null;
 }
 
+/** A literal coordinated premise of a comparative property, not two commands.
+ * The bounded syntax only locates printed conditions; it supplies no meaning,
+ * actor, or missing guard and does not cover independent stops/maintenance. */
+export function sourceConditionalPropertyGuards(c:SourceReadingClaim){
+  const text=c.grid.text,found:{parts:Span[];proof:Span;property:Span}[]=[];
+  const pattern=/([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ー]{1,24}を停止し)[、，]\s*([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９ー]{1,24}を閉じたとき)の[、，]?\s*([^。；;「」『』“”"]{1,80}?が[、，]?[^。；;「」『』“”"]{1,80}?よりも(?:速い|遅い))/gu;
+  for(const m of text.matchAll(pattern)){
+    const sentenceStart=Math.max(text.lastIndexOf("。",m.index-1),text.lastIndexOf("；",m.index-1),text.lastIndexOf(";",m.index-1))+1;
+    const tail=text.slice(m.index).search(/[。；;]/u),sentenceEnd=tail<0?text.length:m.index+tail;
+    if(/[「」『』“”"]/u.test(text.slice(sentenceStart,sentenceEnd)))continue;
+    const second=m.index+m[0].indexOf(m[2]),property=m.index+m[0].indexOf(m[3]);
+    found.push({parts:[[m.index,m.index+m[1].length],[second,second+m[2].length]],
+      proof:[m.index,second+m[2].length],property:[property,property+m[3].length]});
+  }
+  return found;
+}
+
 export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSourceFact[],cues=sourceActionCues(c),requireAllOrGroups=true){
-  const text=c.grid.text;
+  const text=c.grid.text,properties=sourceConditionalPropertyGuards(c);
   for(const fact of facts){
     if(fact.kind!=="relation")continue;
     if(!fact.action)throw invalid();
+    for(const property of properties){
+      if(["stops","closes"].includes(fact.predicate!)&&property.parts.some(s=>overlaps(s,fact.action!)))throw invalid();
+      if(overlaps(property.property,fact.action)&&
+        (!property.parts.every(part=>fact.guardSpans.flat().some(s=>contains(s,part)))||
+          !fact.guardProof||!contains(fact.guardProof,property.proof)))throw invalid();
+    }
     const action=text.slice(...fact.action);
     const local=cues.filter(cue=>contains(fact.action!,cue.span));
     // A broad action quote may include the state phrase. Check the actual

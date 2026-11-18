@@ -146,4 +146,4 @@ it("validates over512 distinct fact-scoped quotes within the new bounded capacit
   });
   const f=setup(texts.join(""),facts);expect(Buffer.byteLength(JSON.stringify(f.wire))).toBeLessThanOrEqual(64_000);
   expect((await f.model.validate!(f.wire)).success).toBe(true);
-});
+},15_000); // Large local capacity fixture; production request deadlines are unchanged.

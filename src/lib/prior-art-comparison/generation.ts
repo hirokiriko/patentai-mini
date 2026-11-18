@@ -3,6 +3,7 @@ import { managedClaimContext, type ManagedClaimSet, type ManagedComparisonChunk 
 import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
 import { compareAttributedStructure, literalStructureInput } from "./literal-structure";
+import { isNominalReservationText } from "./reservation-topic";
 
 const claimNo = z.number().int().positive();
 const text = z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f-\x9f]*$/);
@@ -12,7 +13,7 @@ const evidenceId = z.string().min(1).max(100).regex(/^[bc][a-f0-9]{64}:\d+:\d+:\
 export const generationSchema = z.object({ results: z.array(z.object({
   baseClaimNo: claimNo, candidateClaimNo: claimNo,
   baseObservation: text.max(120), candidateObservation: text.max(120),
-  common: text, differences: text, unconfirmed: text.max(120),
+  common: text, differences: text, unconfirmed: text.max(120).describe("Nominal uncertainty topics only, e.g. 候補側の起動時の制御は未確認。 or 弁の対応関係は未確認。 Keep the actual scope; do not replace it with generic uncertainty. Do not embed a factual/conditional clause such as 弁を開く際 or いずれに対応するか. Separate multiple nominal topics with 。."),
   baseEvidenceId: evidenceId, candidateEvidenceId: evidenceId,
 }).strict()).min(1).max(2) }).strict();
 export type GenerationAnswer = z.infer<typeof generationSchema>;
@@ -86,6 +87,7 @@ export function generationSchemaFor(chunk: ManagedComparisonChunk) {
 export function decodeGeneration(chunk: ManagedComparisonChunk, answer: unknown) {
   try {
     const parsed = generationSchema.parse(answer);
+    if(parsed.results.some(r=>!isNominalReservationText(r.unconfirmed)))throw Error();
     for (const result of parsed.results) for (const side of ["base", "candidate"] as const) {
       const source = managedClaimContext(chunk[side], [result[`${side}ClaimNo`]]);
       for (const field of ["baseObservation", "candidateObservation", "common", "differences", "unconfirmed"] as const) {

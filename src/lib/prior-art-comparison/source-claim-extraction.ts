@@ -1,12 +1,13 @@
 import { jsonSchema, type JSONSchema7, type Schema } from "ai";
 import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { propositionSourceInput, decodeSourcePropositions, type SourceExtraction } from "./proposition-extraction";
-import { propositionSourceIdentifiedTransport, sourceIdentifiedPropositionModelSchemaFor, validateIdentifiedSourceClaim } from "./source-semantic-wire";
+import { propositionSourceIdentifiedTransport, sourceIdentifiedModelWithLocators, validateIdentifiedSourceClaim } from "./source-semantic-wire";
+import type { SourceReadingWithLocators } from "./source-reading-locators";
 import { PROPOSITION_SOURCE_IDENTIFIED_SYSTEM } from "./source-task-prompt";
 import { sourceReadingClaim } from "./source-clause-coverage";
 import { sourceIdentifiedQuoteDictionary, sourceIdentifiedFact, sourceQuoteDictionary, sourceDictionaryFact,
   sourceDeclaredOrderedEvidence, resolveSourceOrderedQuote, sourceReadingTasks, sourceMatchedTasks } from "./source-reading-tasks";
-import { assertSourceSemanticReading, sourceFullActionCues, sourceLocalStateGuard, type CheckedSourceFact } from "./source-semantic-check";
+import { assertSourceSemanticReading, sourceFullActionCues, sourceLocalStateGuard, sourceConditionalPropertyGuards, type CheckedSourceFact } from "./source-semantic-check";
 import { assertSourceGridProviderSchema } from "./source-grid-wire";
 import { SOURCE_CAPACITY } from "./source-capacity";
 import { LIMITS } from "./limits";
@@ -28,7 +29,7 @@ export type SourceClaimTask = Readonly<{ id: string; sourceIndex: number; source
   partitioned: boolean; compactBatchEligible?: boolean; modeBatchEligible?: boolean; outputTokenLimit?: number; system: string; prompt: string; schema: Schema<unknown> }>;
 export type SourceClaimPlan = Readonly<{ tasks: readonly SourceClaimTask[] }>;
 const plans = new WeakMap<SourceClaimPlan, { chunks: readonly ManagedComparisonChunk[];
-  input: ReturnType<typeof propositionSourceInput>; schema: ReturnType<typeof sourceIdentifiedPropositionModelSchemaFor>;
+  input: ReturnType<typeof propositionSourceInput>; schema: ReturnType<typeof sourceIdentifiedModelWithLocators>;
   normalize: Map<string, (raw: Record<string, unknown>, dictionary?: ReturnType<typeof claimLiteralDictionary>) => Record<string, unknown>> }>();
 
 const CLAIM_SYSTEM = PROPOSITION_SOURCE_IDENTIFIED_SYSTEM.split("\n").map(line => {
@@ -68,7 +69,7 @@ Other claims in sourceContext are reference context, extracted separately: never
 export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChunk[]): SourceClaimPlan {
   const boundChunks = structuredClone(chunks), input = propositionSourceInput(boundChunks);
   const transport = propositionSourceIdentifiedTransport(input);
-  const fullSchema = sourceIdentifiedPropositionModelSchemaFor(boundChunks);
+  const fullSchema = sourceIdentifiedModelWithLocators(boundChunks);
   const fullJson = fullSchema.jsonSchema as JSONSchema7;
   const definitions = fullJson.definitions!;
   const tasks: SourceClaimTask[] = [];
@@ -102,6 +103,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       branchClauses, maintainedSpans: maintainedStates.map(({clause,span})=>({firstClause:clause-1,lastClause:clause,literal:c.grid.text.slice(...span)}))
     } : null;
     const causalGuards = sourceCausalModeGuards(c);
+    const conditionalPropertyCues=sourceConditionalPropertyGuards(c).map(group=>{
+      const quote=(span:Span)=>({firstClause:c.clauses.findIndex(([a,b])=>a<=span[0]&&span[0]<b),
+        lastClause:c.clauses.findIndex(([a,b])=>a<span[1]&&span[1]<=b),literal:c.grid.text.slice(...span)});
+      return {premises:group.parts.map(quote),property:quote(group.property)};
+    });
     const terminalRoutes = sourceTerminalRoutes(c);
     // Limit responsibility, never source context. A small, unambiguous terminal
     // possession declaration immediately before its named controller starts can
@@ -363,6 +369,8 @@ Keep every structural definition alongside its routes. A path's endpoints, via a
       ...(fixedModeIdentityInstruction&&!split&&c.clauses.length<=8?{outputTokenLimit:LIMITS.azureReasoningOutputTokens}:{}), prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
           ...(continuityCues?{continuityCues}:{}),
+          ...(conditionalPropertyCues.length?{conditionalPropertyCues,
+            conditionalPropertyInstruction:"These are exact original locations, not inferred facts. Read the complete original. Retain every printed premise in the property's scope.G and the whole connecting phrase in proof; do not turn a premise into an independent command. Other independent actions keep their own conditions."}:{}),
           ...(literalReferenceChoices.length?{literalReferenceChoices:{
             instruction:"Exact locator alternatives for repeated text in the owned clauses, not facts or required meanings. Select the occurrence supported by the original assertion using the existing {reference,focus} form. A narrower focus is allowed only if unique inside that reference. These choices are not exhaustive; other exact unique references remain allowed. Context adds no semantic evidence. Never substitute another mode's or clause's occurrence.",
             choices:literalReferenceChoices}}:{}),
@@ -383,6 +391,9 @@ Keep every structural definition alongside its routes. A path's endpoints, via a
 /** Exactly one fresh response for each preplanned identity. No sorting facts,
  * citation repair, omissions, ancestor substitution or old-response fallback. */
 export async function assembleSourceClaims(plan: SourceClaimPlan, answers: readonly { taskId: string; value: unknown }[]): Promise<SourceExtraction> {
+  return (await assembleSourceClaimsWithLocators(plan,answers)).extraction;
+}
+export async function assembleSourceClaimsWithLocators(plan: SourceClaimPlan, answers: readonly { taskId: string; value: unknown }[]): Promise<SourceReadingWithLocators> {
   const bound = plans.get(plan);
   if (!bound || answers.length !== plan.tasks.length || new Set(answers.map(a => a.taskId)).size !== answers.length) throw invalid();
   const sources: Record<string, unknown>[] = bound.input.sources.map(s => ({ d: s.sourceDigest }));
@@ -415,6 +426,6 @@ export async function assembleSourceClaims(plan: SourceClaimPlan, answers: reado
   if (Buffer.byteLength(JSON.stringify(raw), "utf8") > SOURCE_CAPACITY.wireBytes || !bound.schema.validate) throw invalid();
   const result = await bound.schema.validate(raw);
   if (!result.success) throw invalid();
-  decodeSourcePropositions(bound.chunks, result.value);
-  return result.value as SourceExtraction;
+  decodeSourcePropositions(bound.chunks, result.value.extraction, result.value.locators);
+  return result.value;
 }

@@ -3,12 +3,12 @@ import {fictionalInputs} from "./fixtures.test-support";
 import {makePlan} from "./comparison";
 import {parseComparisonSource} from "./source";
 import {propositionSourceInput,decodeSourcePropositions} from "./proposition-extraction";
-import {sourceIdentifiedPropositionModelSchemaFor} from "./source-semantic-wire";
+import {sourceIdentifiedPropositionModelSchemaFor,sourceIdentifiedModelWithLocators} from "./source-semantic-wire";
 import {fictionalQuotationClaim,fictionalScopesFor} from "./source-claim-fixtures.test-support";
-import {sourceClaimExtractionPlan,assembleSourceClaims} from "./source-claim-extraction";
+import {sourceClaimExtractionPlan,assembleSourceClaims,assembleSourceClaimsWithLocators} from "./source-claim-extraction";
 import {sourceReadingClaim} from "./source-clause-coverage";
 import {projectClaimScopeLanes} from "./source-claim-scope-projection";
-import {claimLiteralDictionary,mapClaimLiteralFact} from "./source-claim-literal-refs";
+import {claimLiteralDictionary,mapClaimLiteralFact,resolveClaimLiteralReference} from "./source-claim-literal-refs";
 
 function clauses(){return [
  ...Array.from({length:9},(_,i)=>`青弁${i+1}を開く、`),"白管と、",
@@ -109,6 +109,23 @@ it("assembles a complete balanced fictional answer identically to the strict who
  expect(expected.success).toBe(true);if(!expected.success)throw expected.error;
  for(const[i,task]of plan.tasks.entries())expect((await task.schema.validate!(answers[i].value)).success).toBe(true);
  const assembled=await assembleSourceClaims(plan,answers);expect(decodeSourcePropositions(chunks,assembled)).toEqual(decodeSourcePropositions(chunks,expected.value));expect(JSON.stringify(answers)).toBe(before);
+ // Several same-predicate facts share a claim/basis/actor. The exact action
+ // occurrence must follow its own fact, even when loop/object keys are reversed.
+ const located=await assembleSourceClaimsWithLocators(plan,[...answers].reverse());
+ const reordered=await sourceIdentifiedModelWithLocators(chunks).validate!({v:22,s:input.sources.map(s=>({loop0:loop,c1:legacy,d:s.sourceDigest}))});
+ expect(reordered.success).toBe(true);if(!reordered.success)throw reordered.error;
+ expect(reordered.value).toEqual(located);
+ const expectedActions=[null,...facts.map(f=>{
+  const m=f.m as {k:string;a?:string};if(m.k!=="relation")return null;
+  const entry=Q.find(row=>row.startsWith(m.a+"|"))!;
+  return resolveClaimLiteralReference(reading,entry.slice(entry.indexOf("|")+1));
+ })];
+ for(const s of located.locators)expect(s.facts.map(f=>f.action)).toEqual(expectedActions);
+ const locatedDecoded=decodeSourcePropositions(chunks,located.extraction,located.locators);
+ expect(locatedDecoded.facts).toEqual(decodeSourcePropositions(chunks,assembled).facts);
+ const swapped=structuredClone(located);
+ [swapped.locators[0].facts[1],swapped.locators[0].facts[2]]=[swapped.locators[0].facts[2],swapped.locators[0].facts[1]];
+ expect(()=>decodeSourcePropositions(chunks,swapped.extraction,swapped.locators)).toThrow("ai_incomplete");
  const missingCause=structuredClone(answers);
  for(const answer of missingCause)for(const s of answer.value.scopes){const scope=s as {G:string[][]};scope.G=scope.G.filter(term=>!term.some(quote=>/^(?:14|15)-(?:14|15):/u.test(quote)));}
  const missingBefore=JSON.stringify(missingCause);
