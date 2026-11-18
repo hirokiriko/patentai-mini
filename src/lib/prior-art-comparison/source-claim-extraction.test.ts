@@ -5,7 +5,7 @@ import {makePlan} from "./comparison";
 import {parseComparisonSource} from "./source";
 import {decodeSourcePropositions,propositionSourceInput} from "./proposition-extraction";
 import {sourceIdentifiedPropositionModelSchemaFor} from "./source-semantic-wire";
-import {sourceClaimExtractionPlan,assembleSourceClaims} from "./source-claim-extraction";
+import {sourceClaimExtractionPlan,assembleSourceClaims,assembleSourceClaimsWithLocators} from "./source-claim-extraction";
 import {fictionalQuotationClaim,fictionalScopesFor} from "./source-claim-fixtures.test-support";
 import {decodeClaimQuotationQuotes} from "./source-claim-quotations";
 import {resolveSourceOrderedQuote} from "./source-reading-tasks";
@@ -353,6 +353,28 @@ function setup(actor="制御器"){
  const answers=plan.tasks.map(task=>{const c1=fictionalQuotationClaim(sourceReadingClaim(1,text.replace("【請求項1】","")),structuredClone(wire.s[task.sourceIndex].c1));return{taskId:task.id,value:{v:34,sourceDigest:task.sourceDigest,claimNo:task.claimNo,d:task.sourceDigest,scopes:fictionalScopesFor(c1),c1}};});
  return {chunks,input,wire,plan,answers};
 }
+it("retains action coordinates only after complete assembly and binds them to unchanged facts",async()=>{
+ const f=setup(),before=JSON.stringify(f.answers),reading=await assembleSourceClaimsWithLocators(f.plan,[...f.answers].reverse());
+ expect(reading.extraction).toEqual(await assembleSourceClaims(f.plan,f.answers));
+ const decoded=decodeSourcePropositions(f.chunks,reading.extraction,reading.locators);
+ for(const [i,source]of reading.extraction.sources.entries()){
+  const q=reading.locators[i].facts[0],text=f.input.sources[i].source.claims[0].segments.map(s=>s.text).join("");
+  expect(q.claimNo).toBe(source.facts[0].claimNo);expect(q.action).not.toBeNull();
+  expect(text.slice(...q.action!)).toBe("閉じる");
+  const loc=decoded.locators.find(x=>x.id===`s${i}.0`)!;
+  expect(loc.action).toEqual(q.action);
+  expect(loc.quotes.map(span=>text.slice(...span))).toContain("非通電状態の場合");
+ }
+ expect(JSON.stringify(f.answers)).toBe(before);
+ for(const mutate of [
+  (r:typeof reading)=>{r.locators[0].sourceDigest="0".repeat(64);},
+  (r:typeof reading)=>{r.locators[0].facts[0].factDigest="0".repeat(64);},
+  (r:typeof reading)=>{r.locators[0].facts[0].claimNo=2;},
+  (r:typeof reading)=>{r.locators[0].facts[0].action=null;},
+  (r:typeof reading)=>{r.locators[0].facts[0].action=[0,999999];},
+  (r:typeof reading)=>{r.locators[0].facts=[];},
+ ]){const bad=structuredClone(reading);mutate(bad);expect(()=>decodeSourcePropositions(f.chunks,bad.extraction,bad.locators)).toThrow("ai_incomplete");}
+});
 it("assembles exactly once in original source order and is equivalent to the existing strict decoder",async()=>{
  const f=setup(),before=JSON.stringify(f.answers),r=await sourceIdentifiedPropositionModelSchemaFor(f.chunks).validate!(f.wire);
  expect(r.success).toBe(true);if(!r.success)throw r.error;

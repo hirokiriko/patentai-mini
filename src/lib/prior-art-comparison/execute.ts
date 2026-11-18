@@ -16,7 +16,7 @@ import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
 import { comparisonModelSchema } from "./model-schema";
-import { sourceClaimExtractionPlan, assembleSourceClaims } from "./source-claim-extraction";
+import { sourceClaimExtractionPlan, assembleSourceClaimsWithLocators } from "./source-claim-extraction";
 import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
@@ -104,14 +104,16 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       // Commit ACK is mandatory before generation. Assembly/domain rejection
       // still leaves all original structured objects available to OWNER QA.
       await persistAudit();
-      const reading = await assembleSourceClaims(sourcePlan, pieces);
-      const analyses = decodeSourcePropositions(batch, reading);
+      const reading = await assembleSourceClaimsWithLocators(sourcePlan, pieces);
+      const analyses = decodeSourcePropositions(batch, reading.extraction, reading.locators);
       stage = "generation";
       const prompt = JSON.stringify(batchTransportInput(batch));
       if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
         const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch)), "generation"));
         generationAnswer = structuredClone(answer);
+        reviewStep = "generation_check";
+        reviewAnswer = null; // No review send has occurred; preserve the raw generation on rejection.
         const key = (docId: number, p: { baseClaimNo: number; candidateClaimNo: number }) => `${docId}:${p.baseClaimNo}:${p.candidateClaimNo}`;
         const expected = new Set(plan.flatMap(c => c.pairs.map(p => key(c.candidateId, p))));
         const received = answer.results.map(r => key(r.docId, r));

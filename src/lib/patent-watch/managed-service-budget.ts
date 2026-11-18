@@ -45,9 +45,11 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
   ordinaryStandardMonthAdjustmentSchema,
   ordinaryStandardMonthAdjustmentSchema.extend({
     scope: z.literal("ISSUE150_PRACTITIONER_EVALUATION_V1"), month: z.literal("2026-11"),
-    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000), z.literal(114000)]),
-    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23)]),
+    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000), z.literal(114000), z.literal(119000)]),
+    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24)]),
     repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
+    reviewEvidenceLocatorsRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
+      nonAiYen: z.literal(1217), storageYen: z.literal(400) }).strict().optional(),
     reviewLiteralConditionsRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
       nonAiYen: z.literal(1217), storageYen: z.literal(400) }).strict().optional(),
     reviewClaimScopeRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
@@ -70,7 +72,9 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reviewScopeRepairProductionAiYen: z.literal(1238), reviewScopeRepairImageRetentionYen: z.literal(1115),
       evaluationAiYen: z.literal(6000), evaluationImageRetentionYen: z.literal(2230),
       evaluationNonAiYen: z.literal(2434), evaluationStorageYen: z.literal(800) }).strict(),
-  }).strict().refine(a => (a.reviewLiteralConditionsRepairEarmark
+  }).strict().refine(a => (a.reviewEvidenceLocatorsRepairEarmark
+      ? a.reviewLiteralConditionsRepairEarmark !== undefined && a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 119000 && [23,24].includes(a.forward)
+      : a.reviewLiteralConditionsRepairEarmark
       ? a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 114000 && [22,23].includes(a.forward)
       : a.reviewClaimScopeRepairEarmark
       ? a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 109000 && [21,22].includes(a.forward)
@@ -299,7 +303,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   }
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1") check(plan.standardMonthAdjustment.forward === 14);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1")
-    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.reviewLiteralConditionsRepairEarmark ? 23 :
+    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.reviewEvidenceLocatorsRepairEarmark ? 24 :
+      plan.standardMonthAdjustment.reviewLiteralConditionsRepairEarmark ? 23 :
       plan.standardMonthAdjustment.reviewClaimScopeRepairEarmark ? 22 :
       plan.standardMonthAdjustment.reviewPossessionRepairEarmark ? 21 :
       plan.standardMonthAdjustment.sourceHeatRepairEarmark ? 20 :
@@ -393,6 +398,8 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0);
     const { evaluationAiYen, evaluationImageRetentionYen, evaluationNonAiYen, evaluationStorageYen,
       ...priorEarmark } = adjustment.executionEarmark;
+    if (adjustment.reviewEvidenceLocatorsRepairEarmark !== undefined)
+      check(previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" && previous.reviewLiteralConditionsRepairEarmark !== undefined);
     if (previous?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1") {
       // One separately signed evaluation supplement: preserve every historical
       // hold, reserve two evaluation attempts plus one OWNER use, and at most
@@ -513,12 +520,33 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
         managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark) &&
         input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
         managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 535 }));
+    } else if (previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
+        previous.reviewLiteralConditionsRepairEarmark !== undefined && previous.reviewEvidenceLocatorsRepairEarmark === undefined &&
+        adjustment.reviewEvidenceLocatorsRepairEarmark !== undefined) {
+      // One signed evidence-locator repair unit, preserving all earlier holds.
+      // Rebinding or stopping cannot add the fixed amounts a second time.
+      const extra = adjustment.reviewEvidenceLocatorsRepairEarmark;
+      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 23 && adjustment.forward === 24 &&
+        previous.monthlyCapYen === 114000 && adjustment.monthlyCapYen === 119000 &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest &&
+        adjustment.repairEpochDigest !== previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
+        managedDigest(adjustment.reviewLiteralConditionsRepairEarmark) === managedDigest(previous.reviewLiteralConditionsRepairEarmark) &&
+        managedDigest(adjustment.reviewClaimScopeRepairEarmark) === managedDigest(previous.reviewClaimScopeRepairEarmark) &&
+        managedDigest(adjustment.reviewPossessionRepairEarmark) === managedDigest(previous.reviewPossessionRepairEarmark) &&
+        managedDigest(adjustment.sourceHeatRepairEarmark) === managedDigest(previous.sourceHeatRepairEarmark) &&
+        managedDigest(adjustment.sourceOutputRepairEarmark) === managedDigest(previous.sourceOutputRepairEarmark) &&
+        managedDigest(adjustment.reviewSourceIdsRepairEarmark) === managedDigest(previous.reviewSourceIdsRepairEarmark) &&
+        managedDigest(adjustment.branchRepairEarmark) === managedDigest(previous.branchRepairEarmark) &&
+        managedDigest(adjustment.executionEarmark) === managedDigest(previous.executionEarmark) &&
+        input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
+        managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 535 }));
     } else {
       check(previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
         input.baseYen === old.baseYen && managedDigest(input.pools) === managedDigest(old.pools) &&
         adjustment.ownerApprovalDigest === previous.ownerApprovalDigest &&
         adjustment.repairEpochDigest === previous.repairEpochDigest && adjustment.validUntil === previous.validUntil &&
         adjustment.monthlyCapYen === previous.monthlyCapYen &&
+        managedDigest(adjustment.reviewEvidenceLocatorsRepairEarmark ?? null) === managedDigest(previous.reviewEvidenceLocatorsRepairEarmark ?? null) &&
         managedDigest(adjustment.reviewLiteralConditionsRepairEarmark ?? null) === managedDigest(previous.reviewLiteralConditionsRepairEarmark ?? null) &&
         managedDigest(adjustment.reviewClaimScopeRepairEarmark ?? null) === managedDigest(previous.reviewClaimScopeRepairEarmark ?? null) &&
         managedDigest(adjustment.reviewPossessionRepairEarmark ?? null) === managedDigest(previous.reviewPossessionRepairEarmark ?? null) &&

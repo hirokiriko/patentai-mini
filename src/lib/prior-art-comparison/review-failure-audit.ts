@@ -2,14 +2,14 @@ import { createHash } from "node:crypto";
 import type { ComparisonExecutionError } from "./failure";
 import { hasSensitiveDiagnosticText, validateReviewSdkFailure } from "./review-sdk-failure";
 
-export type ReviewFailureStep = "sdk_object" | "assessment" | "coverage_render" | "final_answer" | "saved_envelope";
+export type ReviewFailureStep = "generation_check" | "sdk_object" | "assessment" | "coverage_render" | "final_answer" | "saved_envelope";
 export type ReviewFailureContext = { step: ReviewFailureStep; inputs: unknown; selection: unknown; generation: unknown; review: unknown };
 type CapturedValue = { bytes: number; sha256: string } & (
   { status: "captured"; value: unknown } | { status: "omitted"; reason: "size_limit" | "sensitive_content" }
 );
 export type ReviewFailureEvidence = { step: ReviewFailureStep; inputs: CapturedValue; selection: CapturedValue; generation: CapturedValue; review: CapturedValue };
 const limits = { inputs: 512_000, selection: 32_000, generation: 64_000, review: 64_000 } as const;
-const steps: ReviewFailureStep[] = ["sdk_object", "assessment", "coverage_render", "final_answer", "saved_envelope"];
+const steps: ReviewFailureStep[] = ["generation_check", "sdk_object", "assessment", "coverage_render", "final_answer", "saved_envelope"];
 const fields = Object.keys(limits) as (keyof typeof limits)[];
 // Private data must not appear when an Error is serialized by a public route,
 // logger or framework. Only the repository consumes this one-shot side channel.
@@ -24,7 +24,8 @@ function capture(value: unknown, maximum: number, screenSensitive = false): Capt
 }
 export function retainReviewFailure(error: ComparisonExecutionError, context: ReviewFailureContext): void {
   const sdk = context.step === "sdk_object";
-  if (error.stage !== "review" || !(sdk ? ["protocol_invalid", "output_incomplete"] : ["protocol_invalid", "review_rejected"]).includes(error.kind)) return;
+  if (error.stage !== (context.step === "generation_check" ? "generation" : "review") ||
+    !(sdk ? ["protocol_invalid", "output_incomplete"] : ["protocol_invalid", "review_rejected"]).includes(error.kind)) return;
   try {
     const review = sdk ? validateReviewSdkFailure(context.review) : context.review;
     evidence.set(error, { step: context.step, inputs: capture(context.inputs, limits.inputs, sdk),

@@ -1,4 +1,4 @@
-import { jsonSchema, type JSONSchema7 } from "ai";
+import { jsonSchema, type JSONSchema7, type Schema } from "ai";
 import type { ManagedComparisonChunk } from "../patent-watch/managed-claims";
 import { propositionSourceInput, decodeSourcePropositions, validateSourceClaimFacts } from "./proposition-extraction";
 import { propositionSourceClauseTransport, resolveSourceEvidenceQuote, sourceClausePropositionModelSchemaFor } from "./source-clause-wire";
@@ -8,6 +8,9 @@ import { SOURCE_MEANING_ENUMS } from "./source-wire-compact";
 import { SOURCE_CAPACITY, type SourceWireCapacity } from "./source-capacity";
 import { assertSourceSemanticReading, sourceActionCues, sourceCompleteActionCues, sourceFullActionCues, sourceOrGroups, type CheckedSourceFact } from "./source-semantic-check";
 import type { Span } from "./propositions";
+import type { SourceExtraction } from "./proposition-extraction";
+import type { SourceReadingWithLocators } from "./source-reading-locators";
+import { digest } from "./source";
 import {sourceCellRef} from "./source-citation-grid";
 import {isLiteralComponentType} from "./literal-source-state";
 import {expandSourceWire} from "./source-wire-compact";
@@ -69,7 +72,14 @@ export const sourceOrderedPropositionModelSchemaFor=(chunks:readonly ManagedComp
  * meaning enums; strict context objects replace ambiguous string-array tuples.
  * The existing exact citation, domain, reference and route validators remain. */
 export function sourceSemanticPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[],version:17|18|19|20=17){
-  return sourceSemanticModel(chunks,version,SOURCE_CAPACITY);
+  return extractionOnly(sourceSemanticModel(chunks,version,SOURCE_CAPACITY));
+}
+function extractionOnly(model:Schema<SourceReadingWithLocators>):Schema<SourceExtraction>{
+  return jsonSchema<SourceExtraction>(model.jsonSchema as JSONSchema7,{validate:async raw=>{
+    if(!model.validate)throw invalid();
+    const result=await model.validate(raw);
+    return result.success?{success:true,value:result.value.extraction}:result;
+  }});
 }
 // The v21 decoder alone uses an expanded internal representation. Public old
 // wire entrypoints retain their exact transport limits, including failed raws.
@@ -124,7 +134,7 @@ function sourceSemanticModel(chunks:readonly ManagedComparisonChunk[],version:17
     Object.values(node).forEach(child=>Array.isArray(child)?child.forEach(change):change(child));
   };
   change(schema);assertSourceGridProviderSchema(schema);
-  return jsonSchema(schema,{validate:async raw=>{
+  return jsonSchema<SourceReadingWithLocators>(schema,{validate:async raw=>{
     try{
       if(!exact(raw,["v","s"])||raw.v!==version||!Array.isArray(raw.s)||raw.s.length!==input.sources.length||
         Buffer.byteLength(JSON.stringify(raw),"utf8")>capacity.wireBytes||!old.validate)throw invalid();
@@ -148,13 +158,16 @@ function sourceSemanticModel(chunks:readonly ManagedComparisonChunk[],version:17
         if(Array.isArray(v)){if(!v.length||v.some(n=>!Number.isSafeInteger(n)))throw invalid();return [...v];}
         return quote(v);
       };
+      type Citation={claimNo:number;kind:string;predicate:string|undefined;action:Span|null};
+      const citations:Map<string,Citation[]>[]=[];
       const converted={v:16,s:raw.s.map((source,i)=>{
         if(!record(source)||source.d!==input.sources[i].sourceDigest)throw invalid();
         const claims=input.sources[i].source.claims.map(c=>sourceReadingClaim(c.claimNo,c.segments.map(p=>p.text).join("")));
         const checked=new Map(claims.map(c=>[c.claimNo,[] as CheckedSourceFact[]]));
         const tasks=new Map(claims.map(c=>[c.claimNo,sourceReadingTasks(c,version>=19,version===20)]));
         const completed=new Map(claims.map(c=>[c.claimNo,new Set<number>()]));
-        const fact=(c:SourceReadingClaim,f:unknown)=>{
+        const addresses=new Map<string,Citation[]>();citations.push(addresses);
+        const fact=(c:SourceReadingClaim,f:unknown,address:string)=>{
           if(!record(f)||!record(f.m)||!exact(f.O,operatorKeys))throw invalid();
           const frame=Number.isSafeInteger(f.F)?input.sources[i].recognizedLoopRoutes[Number(f.F)]:undefined;
           if(version>=19&&frame&&frame.claimNo!==c.claimNo)throw invalid();
@@ -186,6 +199,9 @@ function sourceSemanticModel(chunks:readonly ManagedComparisonChunk[],version:17
           let action:Span|null=null;
           if(f.m.k==="relation"){action=resolveQuote(c,quote(m.a),ids);delete m.a;}
           else if(Object.hasOwn(m,"a"))throw invalid();
+          const own=addresses.get(address)??[];
+          own.push({claimNo:c.claimNo,kind:String(f.m.k),predicate:f.m.P as string|undefined,action});
+          addresses.set(address,own);
           const operators=f.O;
           const O=operatorKeys.map(k=>proof(operators[k],c,ids));
           let F=f.F;
@@ -209,8 +225,8 @@ function sourceSemanticModel(chunks:readonly ManagedComparisonChunk[],version:17
           const own=/^c([1-9]\d*)$/.exec(key),loop=/^loop(0|[1-9]\d*)$/.exec(key);
           const no=own?Number(own[1]):loop?input.sources[i].recognizedLoopRoutes[Number(loop[1])]?.claimNo:undefined;
           const c=claims.find(c=>c.claimNo===no);if(!c)throw invalid();
-          if(loop)return[key,fact(c,value)];
-          if(!Array.isArray(value))throw invalid();return[key,(version===20?sourceOrderedFactRows(c,value):value).map(v=>fact(c,v))];
+          if(loop)return[key,fact(c,value,key)];
+          if(!Array.isArray(value))throw invalid();return[key,(version===20?sourceOrderedFactRows(c,value):value).map(v=>fact(c,v,key))];
         }));
         for(const c of claims){
           if(version>=18&&completed.get(c.claimNo)!.size!==tasks.get(c.claimNo)!.length)throw invalid();
@@ -218,7 +234,25 @@ function sourceSemanticModel(chunks:readonly ManagedComparisonChunk[],version:17
         }
         return answer;
       })};
-      return await old.validate(converted);
+      const result=await old.validate(converted);
+      if(!result.success)return result;
+      // Match the existing direct decoder: original claim order, owned loops,
+      // then own fact order. Object-key insertion order is not fact identity.
+      const extraction=result.value,locators=extraction.sources.map((answer,i)=>{
+        const source=input.sources[i],addresses=citations[i];
+        const ordered=source.source.claims.flatMap(c=>[
+          ...source.recognizedLoopRoutes.flatMap((r,id)=>r.claimNo===c.claimNo?(addresses.get(`loop${id}`)??[]):[]),
+          ...(addresses.get(`c${c.claimNo}`)??[]),
+        ]);
+        if(answer.sourceDigest!==source.sourceDigest||ordered.length!==answer.facts.length)throw invalid();
+        return {sourceDigest:answer.sourceDigest,facts:answer.facts.map((f,at)=>{
+          const q=ordered[at];
+          if(q.claimNo!==f.claimNo||q.kind!==f.meaning.kind||
+            (f.meaning.kind==="relation"?q.predicate!==f.meaning.predicate||q.action===null:q.action!==null))throw invalid();
+          return {claimNo:f.claimNo,factDigest:digest(f),action:q.action===null?null:[...q.action] as Span};
+        })};
+      });
+      return {success:true,value:{extraction,locators}};
     }catch{return {success:false,error:invalid()};}
   }});
 }
@@ -229,6 +263,9 @@ export function propositionSourceDictionaryTransport(input:ReturnType<typeof pro
 /** v21 removes repeated lexical text and empty-row counting. The declared
  * meanings, all evidence/term/fact limits and final witness QA stay unchanged. */
 export function sourceDictionaryPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]){
+  return extractionOnly(sourceDictionaryModelWithLocators(chunks));
+}
+function sourceDictionaryModelWithLocators(chunks:readonly ManagedComparisonChunk[]){
   const old=sourceSemanticModel(chunks,20,{...SOURCE_CAPACITY,wireBytes:Number.MAX_SAFE_INTEGER}),input=propositionSourceInput(chunks);
   const schema=structuredClone(old.jsonSchema) as JSONSchema7;
   schema.properties!.v={type:"integer",enum:[21]};
@@ -286,7 +323,7 @@ export function sourceDictionaryPropositionModelSchemaFor(chunks:readonly Manage
         for(const d of dictionaries.values())d.assertAllUsed();return answer;
       })};
       const result=await old.validate(converted);
-      if(result.success)decodeSourcePropositions(chunks,result.value);
+      if(result.success)decodeSourcePropositions(chunks,result.value.extraction);
       return result;
     }catch{return {success:false,error:invalid()};}
   }});
@@ -298,7 +335,10 @@ export function propositionSourceIdentifiedTransport(input:ReturnType<typeof pro
 /** v22 replaces positional dictionary indices with explicit, claim-local labels.
  * Its reversible adapter never repairs a quotation, actor, guard or meaning. */
 export function sourceIdentifiedPropositionModelSchemaFor(chunks:readonly ManagedComparisonChunk[]){
-  const old=sourceDictionaryPropositionModelSchemaFor(chunks),input=propositionSourceInput(chunks);
+  return extractionOnly(sourceIdentifiedModelWithLocators(chunks));
+}
+export function sourceIdentifiedModelWithLocators(chunks:readonly ManagedComparisonChunk[]){
+  const old=sourceDictionaryModelWithLocators(chunks),input=propositionSourceInput(chunks);
   const schema=structuredClone(old.jsonSchema) as JSONSchema7;
   schema.properties!.v={type:"integer",enum:[22]};
   const declaration=schema.definitions!.PriorArtSourceDictionaryQuote as JSONSchema7;
