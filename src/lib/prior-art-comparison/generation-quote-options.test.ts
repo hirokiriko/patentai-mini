@@ -113,6 +113,7 @@ it.each([120, 121])("keeps the exact %s character quote boundary", length => {
 it("retains different end offsets for two real facts with the same start", () => {
  const f = rangeFixture(["装置は、温度が七度を超えると青色弁を閉じる。その後も赤色弁を閉じる"]);
  const first = f.raw.sources[0].facts[0];
+ if (first.meaning.kind !== "relation") throw new Error("relation_fixture_required");
  for (const s of f.raw.sources) s.facts.push({ ...first, meaning: { ...first.meaning, objects: ["赤色弁"] }, bindings: first.bindings.map(b => b.term === "青色弁" ? { term: "赤色弁", spans: [[f.plan[0].base.claims[0].text.indexOf("赤色弁"), f.plan[0].base.claims[0].text.indexOf("赤色弁") + 3]] as Span[] } : b) });
  for (const s of f.actions) { const last = s.facts[0]; s.facts.push({ ...last, factDigest: digest(f.raw.sources[0].facts[1]), action: [f.plan[0].base.claims[0].text.lastIndexOf("閉じる"), f.plan[0].base.claims[0].text.lastIndexOf("閉じる") + 3] }); }
  const options = generationQuoteOptions(f.plan, decodeSourcePropositions(f.plan, f.raw, f.actions));
