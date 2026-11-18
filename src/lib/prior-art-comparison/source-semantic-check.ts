@@ -5,6 +5,17 @@ import {isLiteralSourceState,isLiteralComponentType,SOURCE_STATE_PATTERN} from "
 const invalid=()=>new Error("comparison_source_semantic_incomplete");
 const contains=([a,b]:Span,[x,y]:Span)=>a<=x&&b>=y;
 const overlaps=([a,b]:Span,[x,y]:Span)=>a<y&&b>x;
+/** Terms concatenate quotes in their supplied order. Only adjacent positions
+ * in this same term can jointly cover a premise; never bridge a gap, reorder
+ * occurrences, or combine separate conditions. Resolved spans are claim-local. */
+function termContains(term:Span[],part:Span):boolean{
+  let run:Span|null=null;
+  for(const span of term){
+    run=run&&run[1]===span[0]?[run[0],span[1]]:span;
+    if(contains(run,part))return true;
+  }
+  return false;
+}
 export type SourceActionCue={span:Span;clause:number;predicate:string;polarity:"positive"|"negative"};
 
 /** A narrow, literal reading checklist. These are occurrences of action words,
@@ -156,7 +167,7 @@ export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSo
     for(const property of properties){
       if(["stops","closes"].includes(fact.predicate!)&&property.parts.some(s=>overlaps(s,fact.action!)))throw invalid();
       if(overlaps(property.property,fact.action)&&
-        (!property.parts.every(part=>fact.guardSpans.flat().some(s=>contains(s,part)))||
+        (!property.parts.every(part=>fact.guardSpans.some(term=>termContains(term,part)))||
           !fact.guardProof||!contains(fact.guardProof,property.proof)))throw invalid();
     }
     const action=text.slice(...fact.action);

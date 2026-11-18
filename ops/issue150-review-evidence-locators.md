@@ -39,6 +39,14 @@ Fictional decoder/SDK regressions cover complete premises, omitted parts,
 wrong occurrences, loop/key ordering, same-predicate actions, unchanged audit
 capture and no review dispatch after early rejection.
 
+The follow-up to review discussion_r4609704827 also accepts a complete premise
+split into two to four adjacent quotations within the same guard term. Coverage
+uses resolved claim-local positions in the supplied order. It does not sort
+quotes, bridge an omitted character, combine different terms, or borrow a
+fragment from another claim or another occurrence. The full connecting proof
+is still required. Production claim-decoder regressions and an in-source
+repeated-occurrence example cover these boundaries without mutating answers.
+
 Real AI, same-result exports and final OWNER-ON handoff are still unverified
 for this change. The deployed service stays OFF pending fresh bounded approval.
 Do not close #150 on code, CI or deployment success alone. #94 retains human
