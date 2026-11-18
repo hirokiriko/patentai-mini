@@ -10,6 +10,7 @@ vi.mock("@/lib/prior-art-comparison/comparison", () => import("../../../../../li
 vi.mock("@/lib/prior-art-comparison/source", () => import("../../../../../lib/prior-art-comparison/source"));
 vi.mock("@/lib/prior-art-comparison/http", () => import("../../../../../lib/prior-art-comparison/http"));
 vi.mock("@/lib/prior-art-comparison/availability", () => import("../../../../../lib/prior-art-comparison/availability"));
+vi.mock("@/lib/prior-art-comparison/observation", () => import("../../../../../lib/prior-art-comparison/observation"));
 import { GET, POST } from "./route";
 const selection = { operationId: "12345678-1234-4234-8234-123456789abc", inputDigest: "a".repeat(64),
   draftClaimNos: [1], draftIdentity: { publication: "fictional base", edition: "1" }, originalsConfirmed: true,
@@ -77,6 +78,21 @@ describe("durable comparison acceptance", () => {
     mocks.reserve.mockResolvedValue({ inputs: {}, ids: [1,2] }); mocks.complete.mockRejectedValue(Error("failed"));
     await POST(request(), context()); await expect(mocks.after.mock.calls[0][0]()).resolves.toBeUndefined();
     expect(mocks.complete).toHaveBeenCalledOnce(); expect(mocks.after).toHaveBeenCalledOnce();
+  });
+  it("records callback termination separately from a reserved status, without logging the exception", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      mocks.reserve.mockResolvedValue({ inputs: {}, ids: [1,2] }); mocks.complete.mockRejectedValue(Error("PRIVATE_PROVIDER_ERROR"));
+      expect((await POST(request(), context())).status).toBe(202);
+      await mocks.after.mock.calls[0][0]();
+      const rows = log.mock.calls.map(row => JSON.parse(String(row[1])));
+      expect(rows.map(row => row.event)).toEqual(["reservation_ack", "callback_scheduled", "callback_started", "callback_rejected"]);
+      expect(rows.every(row => row.operationId === selection.operationId)).toBe(true);
+      expect(JSON.stringify(rows)).not.toContain("PRIVATE_PROVIDER_ERROR");
+      mocks.list.mockResolvedValue({ results: [], failedOperations: [], pendingOperationIds: [selection.operationId] });
+      expect((await (await GET(getRequest(`?operationId=${selection.operationId}`), context())).json()).status).toBe("reserved");
+      expect(mocks.complete).toHaveBeenCalledOnce(); expect(mocks.after).toHaveBeenCalledOnce();
+    } finally { log.mockRestore(); }
   });
   it("status reads only read persisted results, with zero dispatch", async () => {
     vi.stubEnv("PRIOR_ART_COMPARISON_ENABLED", "0");

@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const seam = vi.hoisted(() => ({ rows: [] as unknown[], transaction: vi.fn(), select: vi.fn(), executeAI: vi.fn(), preflight: vi.fn(), insert: vi.fn(), delete: vi.fn(), inputs: false }));
 vi.mock("@/db", () => ({ db: { transaction: seam.transaction, select: seam.select } }));
 vi.mock("./execute", () => ({ executeComparison: seam.executeAI, PROPOSITION_GENERATION_SYSTEM: "fictional system" }));
@@ -28,6 +28,30 @@ beforeEach(() => {
     then: (resolve: (rows: unknown[]) => unknown) => Promise.resolve(seam.inputs ? table === tables.cases ? [{ caseId: 1, title: "fictional" }] : table === tables.draftPatents ? [{ draftId: 1, parsedText: "【請求項1】装置。" }] : table === tables.priorArtDocuments ? [1,2].map(docId => ({ docId, claimsText: "【請求項1】装置。", publicationNo: `fictional ${docId}`, title: "fictional" })) : seam.rows : seam.rows).then(resolve) }; return q; };
   seam.select.mockImplementation(query);
   seam.transaction.mockImplementation(async callback => callback({ execute: async () => ({ rows: [{ acquired: true }] }), select: query, insert: seam.insert, delete: seam.delete }));
+});
+afterEach(() => vi.restoreAllMocks());
+
+it.each([false, true])("observes prefix audit ACK=%s and retains an unknown operation without another dispatch", async ackLost => {
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  const { selected, reservation } = await freshReservation();
+  const audit = sourceAudit(selected.operationId, selected.inputDigest,
+    [{ id: "b".repeat(64) + ":1", sourceIndex: 0, sourceDigest: "b".repeat(64), claimNo: 1 }],
+    [{ taskId: "b".repeat(64) + ":1", value: { source: "PRIVATE_ORIGINAL" } }]);
+  const original = JSON.stringify(audit);
+  if (ackLost) seam.delete.mockImplementation(() => { throw Error("PRIVATE_DB_ERROR"); });
+  seam.executeAI.mockImplementation(async (_inputs, _selection, sink) => {
+    await sink(audit); throw new ComparisonExecutionError("source_reading", "timeout");
+  });
+  await expect(completeReservedComparison(1, selected, reservation)).rejects.toThrow();
+  expect(JSON.stringify(audit)).toBe(original);
+  const rows = log.mock.calls.map(row => JSON.parse(String(row[1])));
+  expect(rows.map(row => row.event)).toEqual(["source_audit_save_begin", ackLost ? "source_audit_unconfirmed" : "source_audit_saved"]);
+  expect(JSON.stringify(rows)).not.toMatch(/PRIVATE|stack|claims/);
+  expect((await listComparisons(1)).failedOperations).toEqual([]);
+  expect((await listComparisons(1)).pendingOperationIds).toContain(selected.operationId);
+  await expect(completeReservedComparison(1, selected, reservation)).rejects.toThrow();
+  await expect(reserveComparison(1, selected)).resolves.toEqual({ pending: true });
+  expect(seam.executeAI).toHaveBeenCalledOnce();
 });
 it("an existing reserved operation returns pending without AI or reservation mutation", async () => {
   await expect(reserveComparison(1, selection)).resolves.toEqual({ pending: true });
@@ -82,6 +106,24 @@ it.each(["timeout", "transport_unknown", "usage_invalid"] as const)("keeps %s un
   seam.executeAI.mockRejectedValue(new ComparisonExecutionError("source_reading", kind));
   await expect(completeReservedComparison(1, selected, reservation)).rejects.toThrow();
   expect(seam.delete).not.toHaveBeenCalled();
+});
+it("records a result write without ACK as unconfirmed and cannot redispatch", async () => {
+  const log = vi.spyOn(console, "info").mockImplementation(() => {});
+  const { selected, reservation } = await freshReservation();
+  seam.executeAI.mockImplementation(async () => {
+    seam.inputs = true;
+    return { version: 1, status: "complete", operationId: selected.operationId, selection: selected, inputs: reservation.inputs, generatedAt: "fictional" };
+  });
+  seam.delete.mockImplementation(() => { throw Error("PRIVATE_SAVE_ERROR"); });
+  await expect(completeReservedComparison(1, selected, reservation)).rejects.toMatchObject({ code: "save_unconfirmed" });
+  seam.inputs = false;
+  const events = log.mock.calls.map(row => JSON.parse(String(row[1])));
+  expect(events.map(row => row.event)).toEqual(["result_save_begin", "result_save_unconfirmed"]);
+  expect(JSON.stringify(events)).not.toContain("PRIVATE");
+  expect((await listComparisons(1)).pendingOperationIds).toContain(selected.operationId);
+  await expect(completeReservedComparison(1, selected, reservation)).rejects.toThrow();
+  await expect(reserveComparison(1, selected)).resolves.toEqual({ pending: true });
+  expect(seam.executeAI).toHaveBeenCalledOnce();
 });
 it("a failure write with an unknown ACK cannot dispatch again", async () => {
   const { selected, reservation } = await freshReservation();

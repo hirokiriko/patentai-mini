@@ -633,4 +633,38 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(transport).toHaveBeenCalledOnce();
   });
 
+  it.each(["headers", "body"])("observes a source prefix then %s timeout without fabricating an answer or retry", async waiting => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => { const c = new AbortController(); setTimeout(() => c.abort(), ms); return c.signal; });
+    vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME", "patentai-gpt54");
+    const { inputs, selection } = fictionalInputs(), audits: SourceAudit[] = [];
+    let firstAnswer: unknown;
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      if (transport.mock.calls.length === 1) {
+        const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+        firstAnswer = wireGuards(stageAnswer(input)); return response(firstAnswer);
+      }
+      return waiting === "headers" ? new Promise<Response>(() => {}) : new Response(new ReadableStream());
+    });
+    vi.stubGlobal("fetch", transport);
+    const failed = expect(executeComparison(inputs, selection, async audit => { audits.push(structuredClone(audit)); }))
+      .rejects.toMatchObject({ stage: "source_reading", kind: "timeout" });
+    await vi.advanceTimersByTimeAsync(420001); await failed;
+    expect(transport).toHaveBeenCalledTimes(2); expect(audits).toHaveLength(1);
+    expect(audits[0].answers).toHaveLength(1); expect(audits[0].answers[0].value).toEqual(firstAnswer);
+    expect(audits[0].failure).toBeUndefined();
+    const rows = vi.mocked(console.info).mock.calls.filter(row => row[0] === "prior_art_comparison_diagnostic").map(row => JSON.parse(String(row[1])));
+    expect(rows.every(row => row.operationId === selection.operationId)).toBe(true);
+    const second = rows.filter(row => row.attempt === 2);
+    expect(second.some(row => row.phase === "headers_received")).toBe(waiting === "body");
+    expect(second.some(row => row.phase === "body_complete")).toBe(false);
+    expect(second.find(row => row.phase === "stopped")?.stopReason).toMatch(/^(timeout|aborted)$/);
+    expect(rows).toContainEqual(expect.objectContaining({ event: "execution_rejected", stage: "source_reading", kind: "timeout" }));
+    expect(rows.some(row => row.event === "generation_started" || row.event === "review_started")).toBe(false);
+    expect(JSON.stringify(rows)).not.toMatch(/example.invalid|fictional|api.key|claims|原文|装置/);
+    const before = rows.length; await vi.advanceTimersByTimeAsync(600000);
+    expect(vi.mocked(console.info).mock.calls.filter(row => row[0] === "prior_art_comparison_diagnostic")).toHaveLength(before);
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
 });

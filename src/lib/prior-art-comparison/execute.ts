@@ -18,6 +18,8 @@ import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonSt
 import { comparisonModelSchema } from "./model-schema";
 import { sourceClaimExtractionPlan, assembleSourceClaimsWithLocators } from "./source-claim-extraction";
 import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
+import { withAiRequestTiming } from "../ai-request-timing";
+import { comparisonObservation } from "./observation";
 
 import { generationQuoteOptions } from "./generation-quote-options";
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
@@ -42,12 +44,17 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
   assertPropositionPlan(batch);
   const sourcePlan = sourceClaimExtractionPlan(batch);
   const sourceRequests = sourceRequestPlan(sourcePlan);
-  return withPriorArtClaimComparisonBudget(sourceRequests.length, async absolute => {
+  const observation = comparisonObservation(selection.operationId);
+  try {
+  return await withAiRequestTiming(timing => observation.emit("request_timing", { timing,
+    stage: timing.attempt <= sourceRequests.length ? "source_reading" : timing.attempt === sourceRequests.length + 1 ? "generation" : "review" }),
+  () => withPriorArtClaimComparisonBudget(sourceRequests.length, async absolute => {
     const drafts: ReviewDraft[] = [];
     let stage: ComparisonStage = "source_reading";
     let reviewStep: ReviewFailureStep | undefined;
     let generationAnswer: unknown, reviewAnswer: unknown;
     try {
+      observation.emit("source_started", { stage, tasks: sourcePlan.tasks.length });
       const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string, partitionedSource?: boolean, outputTokenLimit?: number) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
         const model = getModel();
@@ -110,6 +117,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const reading = await assembleSourceClaimsWithLocators(sourcePlan, pieces);
       const analyses = decodeSourcePropositions(batch, reading.extraction, reading.locators);
       stage = "generation";
+      observation.emit("generation_started", { stage });
       const quoteOptions = generationQuoteOptions(batch, analyses);
       const prompt = JSON.stringify(batchTransportInput(batch, [], quoteOptions));
       if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch, quoteOptions)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
@@ -136,6 +144,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
         }
       }
       stage = "review";
+      observation.emit("review_started", { stage });
       const review = propositionTargetInput(plan, drafts, analyses);
       const schema = targetPropositionModelSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
       if(modelRequestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
@@ -159,11 +168,15 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const saved = { version: 1 as const, operationId: selection.operationId, generatedAt: new Date().toISOString(),
         inputs, selection, pairs:finalPairs, status: "complete" as const, review: "human_review_required" as const };
       reviewStep = "saved_envelope";
-      return validateSaved({ ...saved, snapshotDigest: savedDigest(saved) });
+      const validated = validateSaved({ ...saved, snapshotDigest: savedDigest(saved) });
+      observation.emit("execution_completed", { stage });
+      return validated;
     } catch (error) {
       const failure = comparisonExecutionFailure(error, stage);
+      observation.emit("execution_rejected", { stage: failure.stage, kind: failure.kind });
       if (reviewStep) retainReviewFailure(failure, { step: reviewStep, inputs, selection, generation: generationAnswer, review: reviewAnswer });
       throw failure;
     }
-  });
+  }), true);
+  } finally { observation.close(); }
 }

@@ -30,7 +30,8 @@ describe("private bounded request timing (fictional transport)", () => {
     expect(events.find(event => event.phase === "abort")?.abortSource).toBe("request");
     expect(phases.at(-1)).toBe("terminal");
     expect(JSON.stringify(events)).not.toMatch(/fictional|https|input_tokens|secret/);
-    for (const event of events) expect(Object.keys(event).sort()).toEqual(["abortSource", "attempt", "elapsedMs", "phase"]);
+    expect(events.find(event => event.phase === "stopped")?.stopReason).toBe("timeout");
+    for (const event of events) expect(Object.keys(event).sort()).toEqual(["abortSource", "attempt", "elapsedMs", "phase", ...(event.phase === "stopped" ? ["stopReason"] : [])]);
   });
 
   it("records reservation wait separately before arming the transport deadline", async () => {
@@ -43,6 +44,23 @@ describe("private bounded request timing (fictional transport)", () => {
     await vi.advanceTimersByTimeAsync(1500); await run;
     expect(events.map(event => event.phase)).toEqual(["request_enter", "reservation_begin", "reservation_ack", "request_deadline_armed", "transport_begin", "headers_received", "body_begin", "body_complete", "terminal"]);
     expect(events[2].elapsedMs - events[1].elapsedMs).toBe(1500);
+  });
+
+  it.each(["transport_error", "usage_missing", "usage_invalid"] as const)("records %s without releasing the unknown send or retrying", async reason => {
+    const events: AiRequestTimingEvent[] = [], budget = new AiOperationBudget({ normal: 3, fast: 3 });
+    const transport = vi.fn<typeof fetch>().mockImplementation(async () => {
+      if (reason === "transport_error") throw new Error("PRIVATE_TRANSPORT_ERROR");
+      return Response.json(reason === "usage_missing" ? {} : { usage: { input_tokens: -1, output_tokens: 1 } });
+    });
+    await withAiRequestTiming(event => events.push(event), async () => {
+      await expect(budget.wrapFetch("normal", transport)(url, init)).rejects.toThrow("ai_operation_stopped");
+      await expect(budget.wrapFetch("fast", transport)(url, init)).rejects.toThrow("ai_operation_stopped");
+    });
+    expect(events.find(event => event.phase === "stopped")?.stopReason).toBe(reason);
+    expect(events.some(event => event.phase === "body_complete")).toBe(reason !== "transport_error");
+    expect(budget.used).toEqual({ normal: 1, fast: 0 });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE|fictional|input_tokens/);
   });
 
   it.each(["caller", "comparison", "managed"] as const)("records the first observed %s signal without exposing its reason", async source => {
@@ -107,5 +125,29 @@ describe("private bounded request timing (fictional transport)", () => {
     });
     expect(events.find(event => event.phase === "abort")?.abortSource).toBe("caller");
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the same bounded event to an existing private observer only when explicitly requested", async () => {
+    const outer: AiRequestTimingEvent[] = [], inner: AiRequestTimingEvent[] = [];
+    const dispose = installAiRequestTimingObserver(event => outer.push(event));
+    try {
+      await withAiRequestTiming(event => inner.push(event), async () => {
+        const trace = captureAiRequestTiming()!(1);
+        trace.stop("usage_missing"); trace.stop("timeout"); trace.close();
+        trace.stop("unknown");
+      }, true);
+      expect(outer).toEqual(inner);
+      expect(outer.filter(event => event.phase === "stopped")).toEqual([expect.objectContaining({ stopReason: "usage_missing" })]);
+      const before = outer.length;
+      await withAiRequestTiming(() => {}, async () => { captureAiRequestTiming()!(2).close(); });
+      expect(outer).toHaveLength(before);
+    } finally { dispose(); }
+  });
+  it("does not forward to a parent disposed by the local observer", async () => {
+    const outer = vi.fn(), dispose = installAiRequestTimingObserver(outer);
+    try {
+      await withAiRequestTiming(() => dispose(), async () => { captureAiRequestTiming()!(1).close(); }, true);
+      expect(outer).not.toHaveBeenCalled();
+    } finally { dispose(); }
   });
 });

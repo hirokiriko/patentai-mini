@@ -5,6 +5,7 @@ import { comparisonCatalog, listComparisons, reserveComparison, completeReserved
 import { caseNumber, comparisonFailure } from "@/lib/prior-art-comparison/http";
 import { ComparisonError } from "@/lib/prior-art-comparison/source";
 import { comparisonEnabled } from "@/lib/prior-art-comparison/availability";
+import { comparisonObservation } from "@/lib/prior-art-comparison/observation";
 
 // Deployment metadata; the comparison scope also enforces its own deadline.
 export const maxDuration = 5640;
@@ -46,10 +47,17 @@ export const POST = withOwnerRoute(async (request: Request, { params }: Context)
     const reservation = await reserveComparison(id, selection);
     if (reservation.existing) return Response.json({ status: "complete", operationId: reservation.existing.operationId, generatedAt: reservation.existing.generatedAt });
     if (!reservation.pending) {
-      after(async () => {
-        try { await completeReservedComparison(id, selection, reservation); }
-        catch { /* Reservation remains durable. Never retry after failure or restart. */ }
-      });
+      const observation = comparisonObservation(selection.operationId);
+      observation.emit("reservation_ack");
+      try {
+        after(async () => {
+          observation.emit("callback_started");
+          try { await completeReservedComparison(id, selection, reservation); observation.emit("callback_completed"); }
+          catch { observation.emit("callback_rejected"); /* Reservation remains durable. Never retry after failure or restart. */ }
+          finally { observation.close(); }
+        });
+        observation.emit("callback_scheduled");
+      } catch (error) { observation.close(); throw error; }
     }
     return Response.json({ status: "reserved", operationId: selection.operationId }, { status: 202 });
   } catch (error) { return comparisonFailure(error); }

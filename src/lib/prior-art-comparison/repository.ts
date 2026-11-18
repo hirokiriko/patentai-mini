@@ -11,6 +11,7 @@ import { assertPropositionPlan } from "./proposition-plan";
 import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
 import { takeReviewFailure, type ReviewFailureEvidence } from "./review-failure-audit";
 import { sourceClaimExtractionPlan } from "./source-claim-extraction";
+import { comparisonObservation } from "./observation";
 
 type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
 const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string }>();
@@ -172,15 +173,21 @@ export async function completeReservedComparison(caseId: number, selection: Sele
   const capability = reservationCapabilities.get(reservation);
   reservationCapabilities.delete(reservation);
   if (!capability || capability.caseId !== caseId || capability.selectionHash !== digest(selection) || capability.reservationHash !== digest(reservation)) throw new ComparisonError("save_unconfirmed");
+  const observation = comparisonObservation(selection.operationId);
   let saveStarted = false;
   try {
     const { inputs, ids } = reservation;
     const tasks = sourceClaimExtractionPlan(separatedGenerationPlan(makePlan(inputs!, selection), PROPOSITION_GENERATION_SYSTEM)).tasks;
     const saved = await executeComparison(inputs!, selection, async audit => {
-      await recordSourceAudit(caseId, selection, ids!, validateSourceAudit(audit, selection.operationId, inputs!.inputDigest, tasks.map(({ id, sourceIndex, sourceDigest, claimNo }) => ({ id, sourceIndex, sourceDigest, claimNo }))));
+      observation.emit("source_audit_save_begin", { answers: audit.answers.length, tasks: tasks.length });
+      try {
+        await recordSourceAudit(caseId, selection, ids!, validateSourceAudit(audit, selection.operationId, inputs!.inputDigest, tasks.map(({ id, sourceIndex, sourceDigest, claimNo }) => ({ id, sourceIndex, sourceDigest, claimNo }))));
+        observation.emit("source_audit_saved", { answers: audit.answers.length, tasks: tasks.length });
+      } catch (error) { observation.emit("source_audit_unconfirmed"); throw error; }
     });
     saveStarted = true;
-    return await db.transaction(async tx => {
+    observation.emit("result_save_begin");
+    const result = await db.transaction(async tx => {
       await tx.execute(sql`set local lock_timeout = '3s'`);
       await lockManagedCase(tx, caseId);
       const current = await rawInputs(tx, caseId, true);
@@ -206,12 +213,17 @@ export async function completeReservedComparison(caseId: number, selection: Sele
       })));
       return saved;
     });
+    observation.emit("result_saved");
+    return result;
   } catch (error) {
     if (saveStarted) {
+      observation.emit("result_save_unconfirmed");
       // Read back the operation after an uncertain COMMIT; never resend AI here.
       try {
         const saved = (await savedResults(db, caseId)).results.find(r => r.operationId === selection.operationId);
-        if (saved && digest(saved.selection) === digest(selection)) return saved;
+        if (saved && digest(saved.selection) === digest(selection)) {
+          observation.emit("result_readback_confirmed"); return saved;
+        }
       } catch { /* Keep the uncertain state explicit. */ }
       if (error instanceof ComparisonError && error.code === "stale_input") throw error;
       throw new ComparisonError("save_unconfirmed");
@@ -219,12 +231,15 @@ export async function completeReservedComparison(caseId: number, selection: Sele
     const failure = knownFailure(error);
     if (failure) {
       const reviewFailure = error instanceof ComparisonExecutionError ? takeReviewFailure(error) : undefined;
-      try { await recordReservedFailure(caseId, selection, reservation.ids!, failure, reviewFailure); }
-      catch { /* Unknown write ACK remains a durable unconfirmed reservation. */ }
+      observation.emit("failure_save_begin", failure);
+      try {
+        await recordReservedFailure(caseId, selection, reservation.ids!, failure, reviewFailure);
+        observation.emit("failure_saved", failure);
+      } catch { observation.emit("failure_save_unconfirmed", failure); /* Keep the unconfirmed reservation. */ }
     }
     if (error instanceof ComparisonError) throw error;
     throw new ComparisonError("save_unconfirmed");
-  }
+  } finally { observation.close(); }
 }
 
 async function recordReservedFailure(caseId: number, selection: Selection, ids: number[], failure: KnownFailure, reviewFailure?: ReviewFailureEvidence) {
