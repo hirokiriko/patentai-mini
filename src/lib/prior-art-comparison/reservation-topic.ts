@@ -3,8 +3,8 @@
 export function isNominalReservationTopic(topic:string):boolean {
   const nominal=topic.startsWith("相違する")?topic.slice("相違する".length):topic;
   if(nominal!==topic&&!/^[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９]/u.test(nominal))return false;
-  return nominal.split("、").every(member=>/[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９]/u.test(member)&&
-    /^(?:[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９・／/\s-]|の|と|および|または|における|への|での|からの|までの|など)+$/u.test(member));
+  return nominal.split("、").every(member=>member.split("又は").every(alternative=>/[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９]/u.test(alternative)&&
+    /^(?:[\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９・／/\s-]|の|と|および|または|における|への|での|からの|までの|など)+$/u.test(alternative)));
 }
 
 /** New generations must express uncertainty without an embedded assertion.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePlan, SYSTEM, validateAnswer, validateSaved, savedDigest, LIMITS } from "./comparison";
-import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalSaved } from "./fixtures.test-support";
+import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalReviewPlan, fictionalSaved } from "./fixtures.test-support";
 import { batchInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
 import { assertReviewPlan, assertReviewSize, inspectReviewCoverage, resolveReviewAnchor, resolveReviewSpan, reviewContrastCuts, reviewEvidenceCatalog, reviewInput, reviewSchema, reviewTargetUnits, REVIEW_SYSTEM, validateReview } from "./semantic-review";
 import { parseComparisonSource } from "./source";
@@ -18,7 +18,7 @@ function compactThree() {
 }
 function example() {
   const { inputs, selection } = compactThree();
-  const plan = makePlan(inputs, selection);
+  const plan = fictionalReviewPlan(inputs, selection);
   const drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(p => ({...p,baseObservation:"主装置は光が必須。補助装置は音又は振動。",candidateObservation:"主装置は光が必須。補助装置は音又は振動。"})));
   const input = reviewInput(plan, drafts);
   return { inputs, selection, plan, drafts, input, answer:fictionalReview(input) };
@@ -163,10 +163,11 @@ describe("complete original-text contrast review before saving", () => {
     }
     expect(() => assertReviewPlan(plan)).not.toThrow();
   });
-  it("keeps complete sources and every exact field within two generation calls plus one review", () => {
-    const { plan, input, answer } = example();
+  it("keeps the full three-document review while new generation requires separate batches", () => {
+    const { inputs, selection, plan, input, answer } = example();
     const batches = generationBatches(plan, SYSTEM);
-    expect(batches.map(b=>b.reduce((n,c)=>n+c.pairs.length,0))).toEqual([3]);
+    expect(batches.map(b=>b.reduce((n,c)=>n+c.pairs.length,0))).toEqual([2,1]);
+    expect(() => makePlan(inputs, selection)).toThrow("plan_limit");
     expect(input.targets).toHaveLength(15);
     expect(input.scopes.map(s=>s.id)).toEqual(["base:1","candidate:21:1","candidate:22:1","candidate:23:1"]);
     for (const batch of batches) expect(requestBytes(SYSTEM,JSON.stringify(batchInput(batch)),batchSchemaFor(batch))).toBeLessThan(LIMITS.inputBytes);
@@ -253,7 +254,7 @@ describe("complete original-text contrast review before saving", () => {
   });
   it("refuses a canonical catalog ID outside this pair's selected closure",()=>{
     const {inputs,selection}=compactThree();selection.documents[0].claimNos=[1,2];
-    const plan=makePlan(inputs,selection),drafts=plan.flatMap(c=>validateAnswer(c,fictionalAnswer(c)).map(p=>({...p,baseObservation:"基準条件。",candidateObservation:"候補条件。"})));
+    const plan=fictionalReviewPlan(inputs,selection),drafts=plan.flatMap(c=>validateAnswer(c,fictionalAnswer(c)).map(p=>({...p,baseObservation:"基準条件。",candidateObservation:"候補条件。"})));
     const input=reviewInput(plan,drafts),answer=fictionalReview(input),id=input.documents[0].source.claims.find(c=>c.claimNo===2)!.segments[0][0];
     const check=answer.checks.find(c=>c.id==="21:1:1:candidateObservation")!;
     expect(reviewEvidenceCatalog(input).get(id)).toMatchObject({docId:21,claimNo:2});

@@ -17,6 +17,7 @@ import { SOURCE_WIRE_GUIDE } from "./source-wire-compact";
 import { SOURCE_CAPACITY } from "./source-capacity";
 import {isLiteralSourceState} from "./literal-source-state";
 import { compactFactLocators, type FactLocators, type SourceActionLocators } from "./source-reading-locators";
+import { sealGenerationQuoteSource } from "./generation-quote-options";
 import { isNominalReservationTopic } from "./reservation-topic";
 
 const bindingSchema = z.object({ term: z.string().min(1).max(80), spans: z.array(spanSchema).min(1).max(4) }).strict();
@@ -234,7 +235,7 @@ export function decodeSourcePropositions(chunks:readonly ManagedComparisonChunk[
     }
     const extracted=[...new Map(facts.filter(f=>f.authority==="extracted").map(f=>[f.id,descriptor(f)])).values()];
     if(Buffer.byteLength(JSON.stringify({facts:compactSourceDescriptorTable(extracted),locators:compactFactLocators(locators)}),"utf8")>PROPOSITION_DESCRIPTOR_MAX_BYTES)throw Error();
-    return {raw:witness,facts,input,locators};
+    return sealGenerationQuoteSource({raw:witness,facts,input,locators});
   }catch{throw new ComparisonError("ai_incomplete");}
 }
 
