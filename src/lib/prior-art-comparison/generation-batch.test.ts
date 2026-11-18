@@ -5,6 +5,7 @@ import { fictionalInputs } from "./fixtures.test-support";
 import { batchInput, batchTransportInput, batchSchemaFor, generationBatches, requestBytes } from "./generation-batch";
 import { LIMITS } from "./limits";
 import { parseComparisonSource } from "./source";
+import { generationQuoteAllowance } from "./generation-quote-options";
 
 function compact(first = [2, 3], second = [2, 3]) {
   const f = fictionalInputs();
@@ -26,7 +27,9 @@ function prefix(plan: ManagedComparisonChunk[], n: number) {
   }
   return selected;
 }
-const bytes = (b: ManagedComparisonChunk[], system = "") => requestBytes(system, JSON.stringify(batchTransportInput(b)), batchSchemaFor(b));
+// Packing precedes source extraction, so its boundary includes every possible
+// added quote choice instead of depending on a later, smaller realized set.
+const bytes = (b: ManagedComparisonChunk[], system = "") => requestBytes(system, JSON.stringify(batchTransportInput(b)), batchSchemaFor(b)) + generationQuoteAllowance(b);
 
 describe("complete-source generation packing", () => {
   it("packs two documents with two pairs each without changing their original text, ancestors or identities", () => {
@@ -48,7 +51,7 @@ describe("complete-source generation packing", () => {
     expect(plan.map(c => c.pairs.length)).toEqual([2, 1, 1]);
     expect(generationBatches(plan, SYSTEM).map(count)).toEqual([4]);
   });
-  it.each([3, 2])("falls back from four to %i complete pairs at the actual framed byte boundary", n => {
+  it.each([3, 2])("falls back from four to %i complete pairs at the reserved framed byte boundary", n => {
     const { plan } = compact(), first = prefix(plan, n), padding = "x".repeat(LIMITS.inputBytes - bytes(first));
     expect(bytes(first, padding)).toBe(LIMITS.inputBytes);
     expect(bytes(prefix(plan, n + 1), padding)).toBeGreaterThan(LIMITS.inputBytes);

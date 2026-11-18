@@ -19,6 +19,7 @@ import { comparisonModelSchema } from "./model-schema";
 import { sourceClaimExtractionPlan, assembleSourceClaimsWithLocators } from "./source-claim-extraction";
 import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 
+import { generationQuoteOptions } from "./generation-quote-options";
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-audit";
 import { captureReviewSdkFailure } from "./review-sdk-failure";
@@ -28,6 +29,8 @@ export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+`
 各断定では基準側・候補側・両側ともで帰属を明示する。側が変わる断定は句点で別文にし、各文に必要な対象・条件・動作を繰り返す。『候補側も』で省略しない。同一条件にも両側の具体的な条件を明示する。
 対象・条件・動作は原文の正確な表記を保ち、条件を略記しない。原文にない主語・機能・条件を補わない。例えば『部品は緑色栓を備える。圧力が四を超えると緑色栓を開く。』の観察は『基準側の部品は緑色栓を備える。基準側は圧力が四を超えると緑色栓を開く。』とする。commonもdifferencesも具体的な両側事実で表す。
 各断定では原文の技術的な主語を側の印と別に記し、条件の各節を原文どおり残す。『開始する際』を『開始時』へ、『起動する際＋起動後の所定期間』を『起動時』『遷移時』へ短縮しない。維持を開くへ変えない。一文で所有、部品の機能、モードの動作を一つの列挙に混ぜず、所有者と所有物を保つ。文字数内に完全な条件を記せる具体的事実を選び、同じ主語・条件・動作の根拠だけを用いる。長い事実を略して詰め込まない。
+baseObservation、candidateObservation、common、differencesの各欄はそれぞれ独立に原文照合される。各観察欄は原則一つの完全な具体事実を選び、120文字内の主語・条件・動作を優先する。別事実の列挙を足すため条件を削らない。各動作を述べる文に技術的主語と適用モード、閾値、起点状態、開始条件、継続期間を残す。別欄の完全な条件でその欄の省略を補わない。文字数に収まらない場合は条件を削らず別の完全な根拠付き事実を選ぶ。必須従属条件を省かず、条件と追加事項の元請求項を区別する。異なる請求項を一つの原文引用範囲として連結しない。
+quoteRangesは同じ元請求項の連続原文位置[start,end)で、各IDは側とdigest:文献ID:請求項番号:start:endを表す。baseEvidenceIdとcandidateEvidenceIdには許可されたquoteRanges又はsegmentsのIDを用いる。120文字のsegmentsは全文を保持する分割であり、代表引用の全条件を示すとは限らない。適切なquoteRangesがあれば代表事実の主語・全条件・動作を示すものを優先し、無い条件を短引用に書かれているように扱わない。代表引用だけを全比較断定の完全な証明とせず、その他の断定も全原文と独立した事実・後段照合で検証する。
 機器名・モード名を『第１・第２の開閉弁』『第１・第２の運転モード』のような共有接尾辞の列挙へ新たに縮めず、『第１の開閉弁と第２の開閉弁』のように各名称を全文記す。
 common/differencesも要約見出しではない。閾値と比較方向、動作前の状態、起動/停止する動作、継続期間、維持する状態/開度を、その動作と同じ断定に残す。例えば原文が『温度が七度以下に低下した場合、青色弁を開く』なら『温度低下時に青色弁を開く』は条件を失う。『始動後の所定期間、青色弁の開度を所定の大きい値に維持する』を『始動時に青色弁を開弁側に制御する』へ変えない。『青色弁を開いた状態で駆動機を運転している状態から停止する際、停止後も青色弁を開いた状態に維持する』の起点状態を『停止後』へまとめない。原文内の別請求項から条件を移植しない。完全な断定が欄の文字数内に収まるかを先に確かめ、収まらなければ別の完全な根拠付き事実を選ぶ。条件だけ削って収めない。
 純粋な未確認事項は『配置は未確認。』のように正確な名詞句＋は未確認。とし、前置きや事実節を含めない。追加の具体的な留保がない場合も完璧・不存在を宣言せず、この試験版で常に必要な人による確認として『比較結果の原文照合は要確認。』と記す。これは条件の省略、断定の弱化、未確認の事実の創作を許可しない。`;
@@ -107,10 +110,11 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const reading = await assembleSourceClaimsWithLocators(sourcePlan, pieces);
       const analyses = decodeSourcePropositions(batch, reading.extraction, reading.locators);
       stage = "generation";
-      const prompt = JSON.stringify(batchTransportInput(batch));
-      if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
+      const quoteOptions = generationQuoteOptions(batch, analyses);
+      const prompt = JSON.stringify(batchTransportInput(batch, [], quoteOptions));
+      if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch, quoteOptions)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
-        const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch)), "generation"));
+        const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch, quoteOptions)), "generation"));
         generationAnswer = structuredClone(answer);
         reviewStep = "generation_check";
         reviewAnswer = null; // No review send has occurred; preserve the raw generation on rejection.
@@ -124,7 +128,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
           const results = answer.results.filter(r => own.has(key(r.docId, r))).map(r => ({
             baseClaimNo: r.baseClaimNo, candidateClaimNo: r.candidateClaimNo, baseObservation: r.baseObservation, candidateObservation: r.candidateObservation,
             common: r.common, differences: r.differences, unconfirmed: r.unconfirmed, baseEvidenceId: r.baseEvidenceId, candidateEvidenceId: r.candidateEvidenceId }));
-          const verified = validateAnswer(chunk, decodeGeneration(chunk, { results }));
+          const verified = validateAnswer(chunk, decodeGeneration(chunk, { results }, quoteOptions));
           for (const p of verified) {
             const r = results.find(r => r.baseClaimNo === p.baseClaimNo && r.candidateClaimNo === p.candidateClaimNo)!;
             drafts.push({ ...p, baseObservation: r.baseObservation, candidateObservation: r.candidateObservation });

@@ -7,6 +7,7 @@ import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
 import { sourceAnalysisInput, type SourceAnalysis } from "./source-analysis";
 import { literalStructureInput } from "./literal-structure";
+import { generationQuoteAllowance, generationQuoteRanges, type GenerationQuoteOptions } from "./generation-quote-options";
 import { comparisonModelSchema } from "./model-schema";
 
 // Combine only identical source versions; claim text is never summarized.
@@ -21,16 +22,16 @@ export function unionSource(sources: readonly ManagedClaimSet[]): ManagedClaimSe
   return { ...first, claims: [...claims.values()].sort((a, b) => a.claimNo - b.claimNo) };
 }
 
-export function batchInput(chunks: readonly ManagedComparisonChunk[], sourceAnalysis: SourceAnalysis = []) {
+export function batchInput(chunks: readonly ManagedComparisonChunk[], sourceAnalysis: SourceAnalysis = [], quotes?: GenerationQuoteOptions) {
   const base = unionSource(chunks.map(c => c.base));
   return { task: "compare" as const,
     sourceDigests: sourceAnalysisInput(chunks).sources.map(s => s.sourceDigest),
     sourceAnalysis,
-    base: { ...generationInput({ ...chunks[0], base }).base,
+    base: { ...generationInput({ ...chunks[0], base }, quotes).base,
       ...literalStructureInput(base),
       referenceLogic: referenceLogicInput(base, [...new Set(chunks.flatMap(c => c.pairs.map(p => p.baseClaimNo)))]) },
     documents: chunks.map(chunk => {
-      const d = generationInput(chunk);
+      const d = generationInput(chunk, quotes);
       return { candidateId: d.candidateId, baseDigest: d.baseDigest, candidateDigest: d.candidateDigest, pairs: d.pairs, candidate: d.candidate };
     }),
   };
@@ -39,17 +40,18 @@ const resultSchema = generationSchema.shape.results.element.extend({ docId: z.nu
 export const batchSchema = z.object({ results: z.array(resultSchema).min(1).max(LIMITS.reviewPairs) }).strict();
 export type BatchAnswer = z.infer<typeof batchSchema>;
 
-export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[]) {
-  const input = batchInput(chunks);
+export function batchSchemaFor(chunks: readonly ManagedComparisonChunk[], quotes?: GenerationQuoteOptions) {
+  const input = batchInput(chunks, [], quotes);
   const ids = (sources: (typeof input.base)[]) => [...new Set(sources.flatMap(s => s.claims.flatMap(c => c.segments.filter(s => s.quotable).map(s => s.id))))];
-  const base = ids([input.base]), candidate = ids(input.documents.map(d => d.candidate));
+  const base = [...new Set([...ids([input.base]), ...(quotes ? chunks.flatMap(c => generationQuoteRanges(c.base, `b${c.baseDigest}:0`, quotes).map(r => r.id)) : [])])],
+    candidate = [...new Set([...ids(input.documents.map(d => d.candidate)), ...(quotes ? chunks.flatMap(c => generationQuoteRanges(c.candidate, `c${c.candidateDigest}:${c.candidateId}`, quotes).map(r => r.id)) : [])])];
   if (base.length + candidate.length > 1000 || [base, candidate].some(v => v.length > 250 && v.join("").length > 15000)) throw new ComparisonError("plan_limit");
   return batchSchema.extend({ results: z.array(resultSchema.extend({ baseEvidenceId: z.enum(base), candidateEvidenceId: z.enum(candidate) })).min(1).max(LIMITS.reviewPairs) });
 }
 /** Non-quotable parts retain every character and their order. Their long IDs
  * cannot appear in the output enum, so omit only that redundant metadata. */
-export function batchTransportInput(chunks: readonly ManagedComparisonChunk[], sourceAnalysis: SourceAnalysis = []) {
-  const input = batchInput(chunks, sourceAnalysis);
+export function batchTransportInput(chunks: readonly ManagedComparisonChunk[], sourceAnalysis: SourceAnalysis = [], quotes?: GenerationQuoteOptions) {
+  const input = batchInput(chunks, sourceAnalysis, quotes);
   const compact = (source: typeof input.base) => ({ ...source, claims: source.claims.map(c => ({ ...c,
     segments: c.segments.map(s => s.quotable ? s : { text: s.text, quotable: false as const }) })) });
   return { ...input, base: compact(input.base), documents: input.documents.map(d => ({ ...d, candidate: compact(d.candidate) })) };
@@ -73,7 +75,7 @@ export function generationBatches(plan: readonly ManagedComparisonChunk[], syste
     return [...byDocument.values()].map(cs => ({ ...cs[0], pairs: cs.flatMap(c => c.pairs), base: unionSource(cs.map(c => c.base)), candidate: unionSource(cs.map(c => c.candidate)) }));
   };
   const fits = (batch: ManagedComparisonChunk[]) => {
-    try { return requestBytes(system, JSON.stringify(batchTransportInput(batch)), batchSchemaFor(batch)) <= LIMITS.inputBytes; }
+    try { return requestBytes(system, JSON.stringify(batchTransportInput(batch)), batchSchemaFor(batch)) + generationQuoteAllowance(batch) <= LIMITS.inputBytes; }
     catch (e) { if (e instanceof ComparisonError && e.code === "plan_limit") return false; throw e; }
   };
   const batches: ManagedComparisonChunk[][] = [];
