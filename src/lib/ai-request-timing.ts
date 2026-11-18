@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isPatentWatchStopReason, type PatentWatchStopReason } from "./patent-watch/diagnostic";
 
 export type AiRequestTimingPhase = "request_enter" | "reservation_begin" | "reservation_ack" |
   "request_deadline_armed" | "transport_begin" | "headers_received" | "body_begin" | "body_complete" |
-  "abort" | "terminal";
+  "abort" | "stopped" | "terminal";
 /** "caller" can itself be a composite deadline; it does not mean user cancellation. */
 export type AiRequestAbortSource = "request" | "caller" | "comparison" | "managed";
 export type AiRequestTimingEvent = Readonly<{
@@ -10,6 +11,7 @@ export type AiRequestTimingEvent = Readonly<{
   phase: AiRequestTimingPhase;
   elapsedMs: number;
   abortSource: AiRequestAbortSource | null;
+  stopReason?: PatentWatchStopReason;
 }>;
 type Scope = { active: boolean; observe: (event: AiRequestTimingEvent) => unknown };
 const timing = new AsyncLocalStorage<Scope>();
@@ -31,8 +33,14 @@ export function installAiRequestTimingObserver(observe: Scope["observe"]): () =>
 
 /** An explicitly installed private observer receives only bounded numeric timing
  * and fixed labels. It never receives a request, URL, headers, body or exception. */
-export async function withAiRequestTiming<T>(observe: Scope["observe"], operation: () => Promise<T>): Promise<T> {
-  const scope: Scope = { active: true, observe };
+export async function withAiRequestTiming<T>(observe: Scope["observe"], operation: () => Promise<T>, forwardToParent = false): Promise<T> {
+  const parent = forwardToParent ? timing.getStore() ?? (globalThis as TimingGlobal)[processKey] : undefined;
+  const scope: Scope = { active: true, observe(event) {
+    try { void Promise.resolve(observe(event)).catch(() => {}); } catch { /* optional */ }
+    if (parent?.active) {
+      try { void Promise.resolve(parent.observe(event)).catch(() => {}); } catch { /* optional */ }
+    }
+  } };
   return timing.run(scope, async () => {
     try { return await operation(); }
     finally { scope.active = false; }
@@ -45,12 +53,14 @@ export function captureAiRequestTiming() {
   return (attempt: number) => {
     const started = performance.now();
     let closed = false, count = 0, firstAbort: AiRequestAbortSource | null = null;
+    let firstStop: PatentWatchStopReason | undefined;
     const cleanup: (() => void)[] = [];
     const emit = (phase: AiRequestTimingPhase) => {
       if (closed || !scope.active || count >= 32 || !Number.isSafeInteger(attempt) || attempt < 1) return;
       count++;
       const elapsedMs = Math.min(86_400_000, Math.max(0, Math.floor(performance.now() - started)));
-      try { void Promise.resolve(scope.observe(Object.freeze({ attempt, phase, elapsedMs, abortSource: firstAbort }))).catch(() => {}); }
+      try { void Promise.resolve(scope.observe(Object.freeze({ attempt, phase, elapsedMs, abortSource: firstAbort,
+        ...(phase === "stopped" && firstStop ? { stopReason: firstStop } : {}) }))).catch(() => {}); }
       catch { /* Optional observation cannot change a request's outcome. */ }
     };
     const watch = (signal: AbortSignal | undefined | null, source: AiRequestAbortSource) => {
@@ -65,7 +75,10 @@ export function captureAiRequestTiming() {
       if (signal.aborted) aborted();
     };
     emit("request_enter");
-    return { emit, watch, close() {
+    return { emit, watch, stop(reason: PatentWatchStopReason) {
+      if (closed || !scope.active || firstStop || !isPatentWatchStopReason(reason)) return;
+      firstStop = reason; emit("stopped");
+    }, close() {
       if (closed) return;
       emit("terminal");
       closed = true;

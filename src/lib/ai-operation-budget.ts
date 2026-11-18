@@ -158,6 +158,7 @@ export class AiOperationBudget {
       catch { this.stopped ??= new AiOperationStopped("request_rejected"); throw this.stopped; }
       const stop = (reason: PatentWatchStopReason): AiOperationStopped => {
         this.stopped ??= new AiOperationStopped(reason);
+        trace?.stop(this.stopped.reason);
         diagnostic?.stop(this.stopped.reason, observation);
         return this.stopped;
       };
