@@ -364,10 +364,19 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(()=>assessPropositions(reviewInput,retained.review.status==="captured"?retained.review.value:null)).toThrow("ai_incomplete");
     expect(offlineFetch).not.toHaveBeenCalled();
   });
-  it("keeps cross-document generated results attached to their own source", async()=>{
+  it("rejects a possible oversized quote enum before the first paid extraction", async()=>{
     const {inputs,selection}=fictionalInputs();
     inputs.draft=parseComparisonSource("【請求項1】\n基準は熱を記録する装置。",11,"基準");
     inputs.documents=[21,22,23].map(id=>parseComparisonSource(`【請求項1】\n架空${id}は熱を記録する装置。`,id,`架空${id}`));
+    selection.documents=inputs.documents.map(d=>({docId:d.id,claimNos:[1],identity:{publication:d.label,edition:"架空"}}));
+    const transport=vi.fn<typeof fetch>();vi.stubGlobal("fetch",transport);
+    await expect(executeComparison(inputs,selection)).rejects.toThrow("plan_limit");
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it("keeps cross-document generated results attached to their own source", async()=>{
+    const {inputs,selection}=fictionalInputs();
+    inputs.draft=parseComparisonSource("【請求項1】\n基準は熱を記録する装置。",11,"基準");
+    inputs.documents=[21,22].map(id=>parseComparisonSource(`【請求項1】\n架空${id}は熱を記録する装置。`,id,`架空${id}`));
     selection.documents=inputs.documents.map(d=>({docId:d.id,claimNos:[1],identity:{publication:d.label,edition:"架空"}}));
     const transport=vi.fn<typeof fetch>().mockImplementation(async(_url,init)=>{
       const input=JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);

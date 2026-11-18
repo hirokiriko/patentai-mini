@@ -7,7 +7,7 @@ import { ComparisonError } from "./source";
 import { referenceLogicInput } from "./reference-logic";
 import { sourceAnalysisInput, type SourceAnalysis } from "./source-analysis";
 import { literalStructureInput } from "./literal-structure";
-import { generationQuoteAllowance, generationQuoteRanges, type GenerationQuoteOptions } from "./generation-quote-options";
+import { generationQuoteEnumAllowance, generationQuoteAllowance, generationQuoteRanges, type GenerationQuoteOptions } from "./generation-quote-options";
 import { comparisonModelSchema } from "./model-schema";
 
 // Combine only identical source versions; claim text is never summarized.
@@ -75,7 +75,15 @@ export function generationBatches(plan: readonly ManagedComparisonChunk[], syste
     return [...byDocument.values()].map(cs => ({ ...cs[0], pairs: cs.flatMap(c => c.pairs), base: unionSource(cs.map(c => c.base)), candidate: unionSource(cs.map(c => c.candidate)) }));
   };
   const fits = (batch: ManagedComparisonChunk[]) => {
-    try { return requestBytes(system, JSON.stringify(batchTransportInput(batch)), batchSchemaFor(batch)) + generationQuoteAllowance(batch) <= LIMITS.inputBytes; }
+    try {
+      const schema = batchSchemaFor(batch), fields = schema.shape.results.element.shape, extra = generationQuoteEnumAllowance(batch);
+      const bounds = (["base", "candidate"] as const).map(side => {
+        const ids = side === "base" ? fields.baseEvidenceId.options : fields.candidateEvidenceId.options;
+        return { count: ids.length + extra[side].count, characters: ids.join("").length + extra[side].characters };
+      });
+      if (bounds.reduce((n, b) => n + b.count, 0) > 1000 || bounds.some(b => b.count > 250 && b.characters > 15000)) return false;
+      return requestBytes(system, JSON.stringify(batchTransportInput(batch)), schema) + generationQuoteAllowance(batch) <= LIMITS.inputBytes;
+    }
     catch (e) { if (e instanceof ComparisonError && e.code === "plan_limit") return false; throw e; }
   };
   const batches: ManagedComparisonChunk[][] = [];

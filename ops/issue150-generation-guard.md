@@ -56,3 +56,5 @@ same CSV, no new AI sends on retrieval, and fixed-URL OWNER-ON handoff. Code,
 CI, deployment and offline replay alone do not complete #150. Parent #94 keeps
 practitioner feedback pending; acquisition automation and #152 research remain
 outside this correction.
+
+Generation planning also reserves the maximum additional quote enum count and ID character length before any extraction request. It uses the current source fact capacity for each distinct source prefix, including existing segment IDs. The existing batch planner checks both provider enum limits and request bytes. The separated comparison path rejects a selection that would require more than its single complete batch before reservation or AI transmission. It does not discard valid extracted quotes, trim originals, silently omit a candidate, or increase provider limits to make a result fit. The same public three-document, two-pair acceptance input remains within one batch; exact cost planning must be rechecked for the corrected commit before execution.

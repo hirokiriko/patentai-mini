@@ -18,19 +18,35 @@ const prefixFor = (c: ManagedComparisonChunk, side: "base" | "candidate") => sid
 
 /** Covers the maximum extra numeric range transport and escaped enum IDs before
  * the first source request. No source fact or original is discarded to fit. */
-export function generationQuoteAllowance(chunks: readonly ManagedComparisonChunk[]): number {
+function plannedQuoteSources(chunks: readonly ManagedComparisonChunk[]) {
   const sources = new Map<string, ManagedClaimSet>();
   for (const chunk of chunks) for (const side of ["base", "candidate"] as const) {
     const prefix = prefixFor(chunk, side), prior = sources.get(prefix), source = chunk[side];
     sources.set(prefix, prior ? { ...source, claims: [...new Map([...prior.claims, ...source.claims].map(c => [c.claimNo, c])).values()] } : source);
   }
+  return sources;
+}
+const plannedIdLength = (prefix: string, source: ManagedClaimSet) => Math.min(100, prefix.length + Math.max(...source.claims.map(c => String(c.claimNo).length)) + 2 * Math.max(...source.claims.map(c => String(c.text.length).length)) + 3);
+
+/** Reserve both enum cardinality and enum string length before source sends. */
+export function generationQuoteEnumAllowance(chunks: readonly ManagedComparisonChunk[]) {
+ const result = { base: { count: 0, characters: 0 }, candidate: { count: 0, characters: 0 } };
+ for (const [prefix, source] of plannedQuoteSources(chunks)) {
+  const side = prefix.startsWith("b") ? result.base : result.candidate;
+  side.count += SOURCE_CAPACITY.facts;
+  side.characters += SOURCE_CAPACITY.facts * plannedIdLength(prefix, source);
+ }
+ return result;
+}
+
+export function generationQuoteAllowance(chunks: readonly ManagedComparisonChunk[]): number {
+  const sources = plannedQuoteSources(chunks);
   return [...sources].reduce((bytes, [prefix, source]) => {
     const positionDigits = Math.max(...source.claims.map(c => String(c.text.length).length));
-    const claimDigits = Math.max(...source.claims.map(c => String(c.claimNo).length));
     // One enum ID (quotes+comma) plus one escaped-prompt numeric [start,end]
     // range (brackets+commas). Existing originals/segment IDs are counted by
     // the ordinary request measurement; 32/claim covers new field framing.
-    const idBytes = Math.min(100, prefix.length + claimDigits + 2 * positionDigits + 3);
+    const idBytes = plannedIdLength(prefix, source);
     return bytes + SOURCE_CAPACITY.facts * (idBytes + 3 + 2 * positionDigits + 4) + source.claims.length * 32;
   }, 0);
 }
