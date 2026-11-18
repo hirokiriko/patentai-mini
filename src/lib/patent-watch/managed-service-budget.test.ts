@@ -1459,7 +1459,7 @@ it("requires the exact literal-condition predecessor, new approval/epoch and fix
   const f=practitionerReviewEvidenceLocatorsFixture();
   for(const change of [{priorPlanDigest:digest(2399)},{priorProfileDigest:digest(2399)},
     {ownerApprovalDigest:f.f.adjustment.ownerApprovalDigest},{repairEpochDigest:f.f.adjustment.repairEpochDigest},
-    {validUntil:"2026-11-17T00:00:00Z"},{forward:23},
+    {validUntil:"2026-11-17T00:00:00Z"},{forward:23 as const},
     ...["reviewLiteralConditionsRepairEarmark","reviewClaimScopeRepairEarmark","reviewPossessionRepairEarmark","sourceHeatRepairEarmark",
       "sourceOutputRepairEarmark","reviewSourceIdsRepairEarmark","branchRepairEarmark"].map(k=>({[k]:undefined}))])
     expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
@@ -1469,9 +1469,10 @@ it("requires the exact literal-condition predecessor, new approval/epoch and fix
   for(const change of [{forward:25},{monthlyCapYen:114000},{month:"2026-12"},{validUntil:"2026-12-01T00:00:00Z"},
     ...["aiYen","imageRetentionYen","nonAiYen","storageYen"].map(k=>({reviewEvidenceLocatorsRepairEarmark:{...f.adjustment.reviewEvidenceLocatorsRepairEarmark,[k]:0}}))])
     expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,...change})).toThrow();
-  const prior=f.f.previous;
+  const prior=f.f.previous,priorProfileDigest=prior.activeProfileDigest;
+  if(priorProfileDigest===null)throw Error("active predecessor required");
   expect(()=>setManagedMonthPlan(prior,{...f.input,standardMonthAdjustment:{...f.adjustment,
-    priorPlanDigest:managedDigest(prior.plans[2]),priorProfileDigest:prior.activeProfileDigest}},f.now)).toThrow();
+    priorPlanDigest:managedDigest(prior.plans[2]),priorProfileDigest}},f.now)).toThrow();
 });
 it("keeps locator stop twenty-three inert and prevents replenishment or changing old earmarks on rebind",()=>{
   const f=practitionerReviewEvidenceLocatorsFixture(),planned=setManagedMonthPlan(f.previous,f.input,f.now);
