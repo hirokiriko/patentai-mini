@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makePlan, validateAnswer } from "./comparison";
-import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalTransportReview } from "./fixtures.test-support";
+import { fictionalAnswer, fictionalInputs, fictionalReview, fictionalReviewPlan, fictionalTransportReview } from "./fixtures.test-support";
 import { inspectReviewCoverage, reviewInput, reviewTargetUnits, validateReview } from "./semantic-review";
 import { reviewReferenceMentions } from "./reference-mentions";
 import { decodeReviewTransport, REVIEW_TRANSPORT_SYSTEM, reviewTransportInput as packedReviewTransportInput, expandReviewTransportInput, reviewTransportSchemaFor } from "./review-transport";
@@ -16,7 +16,7 @@ function example(candidateClaimNo = 1) {
   inputs.draft = parseComparisonSource(body, 11, "draft");
   inputs.documents = [21, 22, 23].map(id => parseComparisonSource(body, id, `架空-${id}`));
   selection.documents = inputs.documents.map(d => ({ docId: d.id, claimNos: [candidateClaimNo], identity: { publication: d.label, edition: "架空" } }));
-  const plan = makePlan(inputs, selection);
+  const plan = fictionalReviewPlan(inputs, selection);
   const drafts = plan.flatMap(c => validateAnswer(c, fictionalAnswer(c)).map(p => ({ ...p,
     baseObservation: "主装置は光が必須。補助装置は音又は振動。", candidateObservation: "候補条件。" })));
   return { plan, drafts, logical: reviewInput(plan, drafts) };

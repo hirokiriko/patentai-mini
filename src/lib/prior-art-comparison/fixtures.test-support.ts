@@ -33,6 +33,11 @@ export function fictionalAnswer(chunk: ReturnType<typeof makePlan>[number]) {
     candidateEvidence: { claimNo: p.candidateClaimNo, quote: chunk.candidate.claims.find(c => c.claimNo === p.candidateClaimNo)!.text.split("。").filter(Boolean).at(-1)! + "。" },
   })) };
 }
+/** Review-only fixture assembled from individually admitted documents. This does
+ * not assert that a new send may admit the combined multi-document selection. */
+export function fictionalReviewPlan(inputs: ComparisonInputs, selection: Selection) {
+  return selection.documents.flatMap(document => makePlan(inputs, { ...selection, documents: [document] }));
+}
 export function fictionalGeneration(chunk: ReturnType<typeof generationInput>) {
   const evidence = (source: typeof chunk.base, claimNo: number) => source.claims.find(c => c.claimNo === claimNo)!.segments.filter(s => s.quotable).at(-1)!.id;
   return { results: chunk.pairs.map(p => ({ baseClaimNo: p.baseClaimNo, candidateClaimNo: p.candidateClaimNo,
