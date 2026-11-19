@@ -12,6 +12,7 @@ import { comparisonOutputTokens, comparisonRequestMilliseconds, type ComparisonP
 import { decodeSourcePropositions, PROPOSITION_TARGET_SYSTEM, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { assessPropositions, assertPropositionTargetCoverage, renderPropositionDrafts } from "./proposition-result";
+import { closedFactInput, reviewSupportInput } from "./closed-fact-input";
 import { assertPropositionPlan } from "./proposition-plan";
 import { separatedGenerationPlan } from "./source-separation";
 import { ComparisonExecutionError, comparisonExecutionFailure, type ComparisonStage } from "./failure";
@@ -27,6 +28,7 @@ import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-au
 import { captureReviewSdkFailure } from "./review-sdk-failure";
 
 export const PROPOSITION_GENERATION_SYSTEM=SYSTEM+`
+closedFactsは第一読取の型付き事実から作った完成文候補と請求項依存閉包であり、原文に代わる証明ではない。closed:falseの群は完全な従属条件付き候補として使わない。closed:trueでもclaimsの親請求項条件を省かず、原文と照合して各欄へ完全な具体事実を選ぶ。親の条件付き事実と子の追加事実は同じ欄の独立した文として各主語・全条件・動作を残す。親guardを子guardへ合成せず、別claimの事実・引用位置を一つに結合しない。完成文候補を要約して主語・条件・維持状態を削らない。
 出力文は後段で各語句をその文内の根拠へ結び付ける。各文は自立した具体的な技術事実にする。『規定する』『対象とする』『同じ条件』『その条件』『差分は確認できない』『条件方向が異なる』等の照応やメタ総括を加えない。
 各断定では基準側・候補側・両側ともで帰属を明示する。側が変わる断定は句点で別文にし、各文に必要な対象・条件・動作を繰り返す。『候補側も』で省略しない。同一条件にも両側の具体的な条件を明示する。
 対象・条件・動作は原文の正確な表記を保ち、条件を略記しない。原文にない主語・機能・条件を補わない。例えば『部品は緑色栓を備える。圧力が四を超えると緑色栓を開く。』の観察は『基準側の部品は緑色栓を備える。基準側は圧力が四を超えると緑色栓を開く。』とする。commonもdifferencesも具体的な両側事実で表す。
@@ -121,7 +123,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       stage = "generation";
       observation.emit("generation_started", { stage });
       const quoteOptions = generationQuoteOptions(batch, analyses);
-      const prompt = JSON.stringify(batchTransportInput(batch, [], quoteOptions));
+      const prompt = JSON.stringify({ ...batchTransportInput(batch, [], quoteOptions), closedFacts: closedFactInput(analyses) });
       if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, batchSchemaFor(batch, quoteOptions)) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
         const answer = batchSchema.parse(await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(batchSchemaFor(batch, quoteOptions)), "generation"));
@@ -148,7 +150,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       stage = "review";
       observation.emit("review_started", { stage });
       const review = propositionTargetInput(plan, drafts, analyses);
-      const schema = targetPropositionModelSchemaFor(review), targetPrompt=JSON.stringify(propositionTargetTransport(review));
+      const schema = targetPropositionModelSchemaFor(review), targetPrompt=JSON.stringify({ ...propositionTargetTransport(review), supportSelection: reviewSupportInput(review) });
       if(modelRequestBytes(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema)>LIMITS.inputBytes)throw new ComparisonError("ai_incomplete");
       const rawReview = await generate(PROPOSITION_TARGET_SYSTEM,targetPrompt,schema,"review");
       reviewAnswer = structuredClone(rawReview);
