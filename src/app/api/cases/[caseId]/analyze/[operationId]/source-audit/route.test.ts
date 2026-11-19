@@ -28,3 +28,14 @@ it("returns OWNER-only no-store attachment and no dispatch capability",async()=>
 it("rejects malformed operation before reading",async()=>{
  expect((await GET(request(owner),context("bad"))).status).toBe(404);expect(seam.read).not.toHaveBeenCalled();
 });
+
+it("returns identical OWNER-only private JSON for explicit inline mode",async()=>{
+ const audit={version:2,answers:[{taskId:"source",value:{fact:"原文"}}],reviewFailure:{generation:{status:"captured",value:{field:"生成"}},review:{status:"captured",value:{assertions:[]}}}};
+ seam.read.mockResolvedValue(audit);const source=request(owner);const response=await GET(new Request(source.url+"?format=inline",source),context());
+ expect(response.status).toBe(200);expect(response.headers.get("content-type")).toContain("application/json");expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");expect(response.headers.get("content-disposition")).toBeNull();expect(await response.json()).toEqual(audit);expect(seam.read).toHaveBeenCalledExactlyOnceWith(1,id);
+});
+it("inline mode keeps authentication and operation validation",async()=>{
+ for(const oid of [undefined,tenant]){const source=request(oid);expect((await GET(new Request(source.url+"?format=inline",source),context())).status).toBe(oid?403:401);}
+ const source=request(owner);expect((await GET(new Request(source.url+"?format=inline",source),context("bad"))).status).toBe(404);expect(seam.read).not.toHaveBeenCalled();
+});
+it("unrecognized format retains default attachment",async()=>{seam.read.mockResolvedValue({answers:[]});const source=request(owner);const response=await GET(new Request(source.url+"?format=other",source),context());expect(response.headers.get("content-disposition")).toContain("attachment");});
