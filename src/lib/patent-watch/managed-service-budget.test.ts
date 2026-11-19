@@ -1706,3 +1706,47 @@ it("keeps the predecessor stop inert and cannot replenish a corrective unit",()=
   expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
   expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
 });
+
+function practitionerPromptSuccessorFixture(corrective=false): ReturnType<typeof practitionerCorrectiveFixture> & {key:"comparisonPromptCorrectiveEarmark"|"comparisonPromptRepairEarmark"}{
+  const f=corrective?practitionerPromptSuccessorFixture():practitionerCorrectiveFixture();
+  const active=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now),request=f.deployment();
+  const previous=markManagedBudgetUnknown(reserveManagedBudget(active,request,f.p,f.now).state,request.operationId,f.now);
+  const old=previous.plans[2],p={...f.p,goEvidenceDigest:digest(corrective?2900:2800)};
+  const key=corrective?"comparisonPromptCorrectiveEarmark":"comparisonPromptRepairEarmark";
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:corrective?29:28,
+    monthlyCapYen:corrective?148000:142000,ownerApprovalDigest:digest(corrective?2901:2801),
+    repairEpochDigest:digest(corrective?2902:2802),priorPlanDigest:managedDigest(old),priorProfileDigest:managedDigest(f.p),
+    profileDigest:managedDigest(p),[key]:{aiYen:corrective?3000:2000,imageRetentionYen:1115,nonAiYen:1227,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {...f,previous,p,adjustment,key,input:{...f.input,baseYen:old.baseYen+(corrective?5742:4742),
+    pools:{...old.pools,remaining:old.pools.remaining+525},standardMonthAdjustment:adjustment},
+    deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:525})};
+}
+for(const corrective of [false,true]){
+  it(`preserves all holds and adds exactly the approved prompt successor ${corrective}`,()=>{
+    const f=practitionerPromptSuccessorFixture(corrective),planned=setManagedMonthPlan(f.previous,f.input,f.now);
+    const active=activate(planned,f.p,f.now);
+    for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen","cases"] as const)
+      expect(active[key]).toEqual(f.previous[key]);
+    expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(f.previous,"2026-11")).toBe(corrective?6267:5267);
+    const prior=f.previous.plans[2].standardMonthAdjustment!;
+    if(prior.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+    for(const change of [{priorPlanDigest:digest(9991)},{priorProfileDigest:digest(9991)},
+      {ownerApprovalDigest:prior.ownerApprovalDigest},{repairEpochDigest:prior.repairEpochDigest},
+      {forward:corrective?28 as const:27 as const},{monthlyCapYen:136000 as const},{validUntil:"2026-11-17T00:00:00Z"},
+      {comparisonCorrectiveEarmark:undefined},{[f.key]:undefined}])
+      expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+    for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+      {pools:{...f.input.pools,remaining:f.input.pools.remaining+1}},
+      {releaseTailYen:f.input.releaseTailYen-1},{reviewedOperationIds:[f.previous.operations[0].operationId]}])
+      expect(()=>setManagedMonthPlan(f.previous,{...f.input,...change},f.now)).toThrow();
+    const spent=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+    const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(spent.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+    const stopped=setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:corrective?28 as const:27 as const}},f.now);
+    expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();
+    expect(stopped.operations).toEqual(spent.operations);
+    const rebound=setManagedMonthPlan(stopped,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+    expect(()=>reserveManagedBudget(activate(rebound,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
+    expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+  });
+}

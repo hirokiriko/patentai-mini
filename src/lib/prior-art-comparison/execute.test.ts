@@ -50,6 +50,24 @@ describe("real installed SDK, guarded fictional transport", () => {
     vi.spyOn(console, "info").mockImplementation(() => undefined);
   });
   afterEach(() => { expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(SECRET); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+  it("delivers complete-statement reuse instructions through the guarded fictional pipeline", async () => {
+    const f = compactFour(), generations: unknown[] = [];
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
+      if (input.task !== "extract_source_propositions" && input.task !== "extract_source_propositions_pair" && input.task !== "review") {
+        expect(JSON.stringify(body)).toContain("その完成文を条件も主語も述語も変えずに使い");
+        expect(JSON.stringify(body)).toContain("別欄の主語を借りない");
+        generations.push(structuredClone(stageAnswer(input)));
+      }
+      return response(stageAnswer(input));
+    });
+    vi.stubGlobal("fetch", transport);
+    const result = await executeComparison(f.inputs, f.selection);
+    expect(result.status).toBe("complete");
+    expect(generations).toHaveLength(1);
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(f.inputs, f.selection) + 2);
+    expect(() => validateSaved(result)).not.toThrow();
+  });
   it.each(["valid","bad_second","swapped","missing_second","extra","incomplete"])("uses one SDK call for a pair with atomic audit adoption: %s",async mode=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","patentai-gpt54");
     const f=compactFour(),requests=sourceRequestPlan(sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)));
