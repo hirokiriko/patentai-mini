@@ -66,7 +66,7 @@ export function renderMeaning(m:Meaning):string {
     opens_one:`${objects}のうち何れか一つを開く`,opens_together:`${objects}を同時に開く`,
     executes:`「${objects}」という動作を行う`,stops:`${objects}を停止する`,
     generates_heat:`${objects}を発熱させる`,absorbs_heat:`${objects}で吸熱させる`,releases_heat:`${objects}で放熱させる`,
-    maintains:`${objects}を維持する`,at_least:`${objects}以上である`,
+    maintains:m.objects.every(object=>/(?:を|に|が)維持する$/u.test(object))?objects:`${objects}を維持する`,at_least:`${objects}以上である`,
     at_most:`${objects}以下である`,greater_than:`${objects}を超える`,less_than:`${objects}を下回る`}[m.predicate];
   const capability=m.context==="capability"&&["opens","closes","fully_closes","generates_heat","absorbs_heat","releases_heat","maintains","opens_one","opens_together","executes","stops"].includes(m.predicate)?"機能を備える":"";
   return `${context}${condition}${subject}は${action}${capability}`;

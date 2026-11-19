@@ -559,3 +559,33 @@ it.each(["、弁の対応","弁の対応、","弁、、配管","弁、 、配管
     reservation:{topic,basis:[0,topic.length]}}];
   expect(()=>assessPropositions(f.input,f.raw)).toThrow("ai_incomplete");
 });
+
+it("keeps complete maintenance objects identical through actual target decoding without repairing prose", () => {
+  const f = repeatedBinding(), text = "基準側の装置は、温度低下時、青色弁の開度を維持する。";
+  f.target.text = text;
+  const object = "青色弁の開度を維持する", condition = "温度低下時";
+  const meaning: Meaning = {kind:"relation",subject:"装置",context:"operation",guard:{relation:"when",conditions:[condition]},polarity:"positive",predicate:"maintains",objects:[object]};
+  f.atom.meaning = meaning; f.atom.basis = [[0,text.length]]; f.atom.attribution = [0,3];
+  const at = (term:string) => [text.indexOf(term),text.indexOf(term)+term.length] as [number,number];
+  f.atom.bindings = ["装置",condition,object].map(term=>({term,spans:[at(term)]}));
+  f.atom.operators = {selection:null,extent:null,polarity:null,guard:at(condition),context:null};
+  f.answer.parts = [{span:[0,text.length],form:"assertion",atoms:[f.atom],reference:null,reservation:null}];
+  const source = f.input.sourcePropositions.find(s=>s.id===f.atom.sourceIds[0]&&s.scope===f.atom.scope)!;
+  source.meaning = structuredClone(meaning);
+  const before = JSON.stringify(f.raw);
+  const assessment = assessPropositions(f.input,f.raw);
+  expect(assessment.targets.find(t=>t.id===f.target.id)?.relation).toBe("entailed");
+  expect(JSON.stringify(f.raw)).toBe(before);
+  for (const changed of [ {...meaning,predicate:"opens" as const}, {...meaning,subject:null},
+    {...meaning,guard:{relation:"unconditional" as const,conditions:[]}}, {...meaning,objects:["青色弁の開度"]} ]) {
+    f.atom.meaning = changed;
+    if (changed.subject===null) f.atom.bindings=f.atom.bindings.filter(b=>b.term!=="装置");
+    if (changed.guard.relation==="unconditional") {f.atom.bindings=f.atom.bindings.filter(b=>b.term!==condition);f.atom.operators.guard=null;}
+    if (changed.objects[0]!==object) f.atom.bindings=f.atom.bindings.map(b=>b.term===object?{term:changed.objects[0],spans:[at(changed.objects[0])]}:b);
+    try {expect(assessPropositions(f.input,f.raw).targets.find(t=>t.id===f.target.id)?.relation).not.toBe("entailed");}
+    catch(error) {expect((error as Error).message).toBe("ai_incomplete");}
+    f.atom.meaning=meaning;f.atom.bindings=["装置",condition,object].map(term=>({term,spans:[at(term)]}));f.atom.operators.guard=at(condition);
+  }
+  f.atom.bindings[2].spans[0][0]++;
+  expect(()=>decodeTargetPropositions(f.input,f.raw)).toThrow("ai_incomplete");
+});

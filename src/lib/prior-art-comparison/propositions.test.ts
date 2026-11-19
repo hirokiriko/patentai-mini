@@ -210,3 +210,13 @@ describe("position-bound proposition comparison (fictional extraction, not AI qu
     expect(meaningSchema.safeParse({...m,subject:"加熱器",predicate:"upstream",objects:["放熱器"]}).success).toBe(true);
   });
 });
+
+it("renders a typed complete maintenance phrase once while preserving noun-object compatibility",()=>{
+  const m:Meaning={kind:"relation",subject:"制御器",context:"operation",guard,polarity:"positive",predicate:"maintains",objects:["青色弁の開度を所定値に維持する"]};
+  expect(renderMeaning(m)).toContain("青色弁の開度を所定値に維持する");
+  expect(renderMeaning(m)).not.toContain("維持するを維持する");
+  expect(renderMeaning({...m,objects:["青色弁の開度"]})).toContain("青色弁の開度を維持する");
+  expect(renderMeaning({...m,objects:["状態を維持する装置"]})).toContain("状態を維持する装置を維持する");
+  expect(renderMeaning({...m,predicate:"opens"})).toContain("維持するを開く");
+  const before=JSON.stringify(m);renderMeaning(m);expect(JSON.stringify(m)).toBe(before);
+});

@@ -125,3 +125,9 @@ technical failure, required source correction and verification, latest CI and
 independent review, cloud termination or applicable isolation, cleanup and
 full retained holds still need their existing runtime evidence. No old
 operation is resent and no historical response is repaired.
+
+### 未承認の次回予算分岐（署名適用は承認後のみ）
+
+比較prompt修正の追加案は、既存の署名済みforward27からcomparisonPromptRepairEarmarkを追加するforward28（AI 2000円、追加5267円、製品月次上限142000円）と、その実行結果に基づく具体修正・回帰・最新CI・独立レビュー後にのみcomparisonPromptCorrectiveEarmarkを追加するforward29（AI 3000円、追加6267円、製品月次上限148000円）です。このコードの存在は追加承認や実行権限を意味しません。署名適用は原文の追加承認と対象版・実終端・実台帳の照合後に限ります。
+
+各遷移は直前plan/profileのdigest、新しいownerApproval/repairEpoch、元と同じ期限を要求します。全既存earmark・既予約・UNKNOWN・OWNER別枠を保持し、停止forward27/28と再bindは追加枠を補充しません。baseは各4742/5742円、remaining poolは各525円のみ追加します。未承認の署名発行・配備・AI送信は行いません。
