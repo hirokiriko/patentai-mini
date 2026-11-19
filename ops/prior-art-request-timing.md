@@ -90,3 +90,15 @@ conditional corrective trial in advance. Code support and the monthly ceiling
 are not execution authority: the existing Local approval, actual retained
 state, exact candidate, required CI/review and old-worker termination or
 applicable runbook isolation must be bound before a new comparison.
+
+## Bounded HTTP status observation
+
+The `headers_received` timing event additionally records `httpStatus` only for
+an integer from 100 through 599. The comparison console projection preserves
+that number; body, headers, status text and exception details are not logged.
+The existing diagnostic query must explicitly project
+`HttpStatus=toint(Data.httpStatus)` before this field is available in its output.
+Old deployments and old collected projections cannot reconstruct a missing
+status. A non-2xx status alone does not identify a schema, quota or provider
+failure. It does not establish billing, worker termination or permission for
+another comparison. The existing stop, no-retry and UNKNOWN hold rules apply.

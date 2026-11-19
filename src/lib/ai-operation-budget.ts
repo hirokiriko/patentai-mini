@@ -269,7 +269,9 @@ export class AiOperationBudget {
           ...(sourceDispatcher ? { dispatcher: sourceDispatcher } : {}) };
         try { response = await Promise.race([transport(url, transportInit), aborted]); }
         catch { throw stop(signal.aborted ? abortReason() : "transport_error"); }
-        trace?.emit("headers_received");
+        let responseStatus: number | undefined;
+        try { responseStatus = response.status; } catch { /* Optional observation only. */ }
+        trace?.emit("headers_received", responseStatus);
         if (this.stopped) throw this.stopped;
         try { observation?.phase("validating_response"); } catch { /* optional */ }
         if (!response.ok) throw stop("upstream_http_error");
