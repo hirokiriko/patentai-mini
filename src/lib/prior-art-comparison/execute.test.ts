@@ -16,6 +16,7 @@ import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { separatedGenerationPlan } from "./source-separation";
 import { decodeGeneration } from "./generation";
 import { assessPropositions } from "./proposition-result";
+import { reviewSupportInput } from "./closed-fact-input";
 import { parseComparisonSource } from "./source";
 import { fictionalInputs as longFictionalInputs } from "./fixtures.test-support";
 
@@ -57,7 +58,17 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (input.task !== "extract_source_propositions" && input.task !== "extract_source_propositions_pair" && input.task !== "review") {
         expect(JSON.stringify(body)).toContain("その完成文を条件も主語も述語も変えずに使い");
         expect(JSON.stringify(body)).toContain("別欄の主語を借りない");
+        expect(input.closedFacts.length).toBeGreaterThan(0);
+        expect(input.closedFacts.every((s: { requiredClaimNos: number[]; claims: unknown[] }) =>
+          s.requiredClaimNos.length > 0 && s.claims.length === s.requiredClaimNos.length)).toBe(true);
+        expect(JSON.stringify(input.closedFacts)).toContain('"sentence":');
+        expect(input.documents.every((d: { candidate: { claims: unknown[] } }) => d.candidate.claims.length > 0)).toBe(true);
         generations.push(structuredClone(stageAnswer(input)));
+      }
+      if (input.task === "review") {
+        expect(input.supportSelection.length).toBeGreaterThan(0);
+        expect(input.supportSelection.some((f: { supportSelection: string }) =>
+          f.supportSelection === "single_fact_same_subject_context_guard_predicate_objects")).toBe(true);
       }
       return response(stageAnswer(input));
     });
@@ -378,7 +389,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       });
     });
     const reviewInput=propositionTargetInput(replayPlan,drafts,analyses);
-    expect(propositionTargetTransport(reviewInput)).toEqual(expectedReviewInput);
+    expect({ ...propositionTargetTransport(reviewInput), supportSelection: reviewSupportInput(reviewInput) }).toEqual(expectedReviewInput);
     expect(()=>assessPropositions(reviewInput,retained.review.status==="captured"?retained.review.value:null)).toThrow("ai_incomplete");
     expect(offlineFetch).not.toHaveBeenCalled();
   });
