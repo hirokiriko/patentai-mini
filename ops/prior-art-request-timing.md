@@ -74,7 +74,7 @@ the old cloud operation's termination or the applicable runbook isolation
 conditions. A new diagnostic deployment cannot reconstruct events that an old
 deployment never recorded.
 
-## Signed diagnostic trial allowance
+## Original signed diagnostic trial allowance
 
 The separately approved diagnostic continuation uses one new signed
 `comparisonDiagnosticsEarmark` after the exact active forward25/cap124000
@@ -85,7 +85,7 @@ storage400) and remaining pool525, totaling5267. All earlier operations,
 UNKNOWN reservations and the separate OWNER allowance remain intact.
 
 Stop25 is inert for this supplement. Rebinding, stopping or reactivation cannot
-replenish a consumed unit. This change neither issues forward27 nor funds the
+replenish a consumed unit. That original diagnostic-only addition did not issue forward27 or fund the
 conditional corrective trial in advance. Code support and the monthly ceiling
 are not execution authority: the existing Local approval, actual retained
 state, exact candidate, required CI/review and old-worker termination or
@@ -102,3 +102,26 @@ Old deployments and old collected projections cannot reconstruct a missing
 status. A non-2xx status alone does not identify a schema, quota or provider
 failure. It does not establish billing, worker termination or permission for
 another comparison. The existing stop, no-retry and UNKNOWN hold rules apply.
+
+
+## Separately signed conditional corrective allowance
+
+The November decoder supports one exact successor to the active diagnostic
+forward26/cap136000 plan: `comparisonCorrectiveEarmark`, forward27, with the
+same cap136000. It adds AI3000, image1115, other1227 and storage400 to the base,
+plus525 to the existing remaining pool:6267 total. Earlier earmarks, UNKNOWN
+operations, OWNER allowance, recovery/storage pools and the November deadline
+remain unchanged. The retained month26 forecast129147 plus6267 is135414,
+leaving586 under the existing cap.
+
+The transition requires the exact previous plan and active profile, a new
+approval digest and epoch, and unchanged earlier reservations. Stop26 is inert
+for this supplement. Rebinding, stopping or reactivation cannot replenish it.
+No forward28 or later allowance is supported by this change.
+
+This decoder change does not issue a signed allowance or decide execution
+eligibility. The existing conditional approval, known quality or concrete
+technical failure, required source correction and verification, latest CI and
+independent review, cloud termination or applicable isolation, cleanup and
+full retained holds still need their existing runtime evidence. No old
+operation is resent and no historical response is repaired.
