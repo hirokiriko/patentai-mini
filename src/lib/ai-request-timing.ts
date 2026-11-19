@@ -12,6 +12,7 @@ export type AiRequestTimingEvent = Readonly<{
   elapsedMs: number;
   abortSource: AiRequestAbortSource | null;
   stopReason?: PatentWatchStopReason;
+  httpStatus?: number;
 }>;
 type Scope = { active: boolean; observe: (event: AiRequestTimingEvent) => unknown };
 const timing = new AsyncLocalStorage<Scope>();
@@ -55,12 +56,13 @@ export function captureAiRequestTiming() {
     let closed = false, count = 0, firstAbort: AiRequestAbortSource | null = null;
     let firstStop: PatentWatchStopReason | undefined;
     const cleanup: (() => void)[] = [];
-    const emit = (phase: AiRequestTimingPhase) => {
+    const emit = (phase: AiRequestTimingPhase, httpStatus?: number) => {
       if (closed || !scope.active || count >= 32 || !Number.isSafeInteger(attempt) || attempt < 1) return;
       count++;
       const elapsedMs = Math.min(86_400_000, Math.max(0, Math.floor(performance.now() - started)));
       try { void Promise.resolve(scope.observe(Object.freeze({ attempt, phase, elapsedMs, abortSource: firstAbort,
-        ...(phase === "stopped" && firstStop ? { stopReason: firstStop } : {}) }))).catch(() => {}); }
+        ...(phase === "stopped" && firstStop ? { stopReason: firstStop } : {}),
+        ...(phase === "headers_received" && Number.isSafeInteger(httpStatus) && httpStatus! >= 100 && httpStatus! <= 599 ? { httpStatus } : {}) }))).catch(() => {}); }
       catch { /* Optional observation cannot change a request's outcome. */ }
     };
     const watch = (signal: AbortSignal | undefined | null, source: AiRequestAbortSource) => {

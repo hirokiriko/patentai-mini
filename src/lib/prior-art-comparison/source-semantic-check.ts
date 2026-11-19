@@ -172,6 +172,11 @@ export function assertSourceSemanticReading(c:SourceReadingClaim,facts:CheckedSo
     }
     const action=text.slice(...fact.action);
     const local=cues.filter(cue=>contains(fact.action!,cue.span));
+    // A participial state being maintained is not a new opening event. Keep
+    // its checklist cue for complete maintains facts, but do not let that cue
+    // prove opens, even inside a wider quote with an earlier active opening.
+    const opening=local.filter(cue=>cue.predicate===fact.predicate&&cue.predicate.startsWith("opens"));
+    if(opening.length&&opening.some(cue=>/^状態を維持/u.test(text.slice(cue.span[1]))))throw invalid();
     // A broad action quote may include the state phrase. Check the actual
     // printed predicate positions too, so widening a cannot hide its guard.
     const guardActions=[fact.action,...local.filter(cue=>cue.predicate===fact.predicate).map(cue=>cue.span)];

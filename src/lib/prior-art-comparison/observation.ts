@@ -39,6 +39,7 @@ export function comparisonObservation(operationId: string) {
         const timing = details.timing;
         if (timing && Number.isSafeInteger(timing.attempt) && timing.attempt >= 1 && timing.attempt <= LIMITS.sourceRequests + 2 && phases.includes(timing.phase)) {
           fields.attempt = timing.attempt; fields.phase = timing.phase;
+          if (timing.phase === "headers_received" && Number.isSafeInteger(timing.httpStatus) && timing.httpStatus! >= 100 && timing.httpStatus! <= 599) fields.httpStatus = timing.httpStatus!;
           fields.requestElapsedMs = milliseconds(timing.elapsedMs);
           fields.abortSource = timing.abortSource && abortSources.includes(timing.abortSource) ? timing.abortSource : null;
           if (timing.phase === "stopped" && isPatentWatchStopReason(timing.stopReason)) fields.stopReason = timing.stopReason;

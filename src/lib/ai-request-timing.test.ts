@@ -31,7 +31,7 @@ describe("private bounded request timing (fictional transport)", () => {
     expect(phases.at(-1)).toBe("terminal");
     expect(JSON.stringify(events)).not.toMatch(/fictional|https|input_tokens|secret/);
     expect(events.find(event => event.phase === "stopped")?.stopReason).toBe("timeout");
-    for (const event of events) expect(Object.keys(event).sort()).toEqual(["abortSource", "attempt", "elapsedMs", "phase", ...(event.phase === "stopped" ? ["stopReason"] : [])]);
+    for (const event of events) expect(Object.keys(event).sort()).toEqual(["abortSource", "attempt", "elapsedMs", ...(event.phase === "headers_received" ? ["httpStatus"] : []), "phase", ...(event.phase === "stopped" ? ["stopReason"] : [])]);
   });
 
   it("records reservation wait separately before arming the transport deadline", async () => {

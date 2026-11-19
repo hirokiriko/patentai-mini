@@ -1639,3 +1639,70 @@ it("keeps diagnostic stop twenty-five inert and never replenishes the spent twen
   expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
   expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
 });
+
+function practitionerCorrectiveFixture(){
+  const f=practitionerComparisonDiagnosticsFixture();
+  const active=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now),request=f.deployment();
+  const previous=markManagedBudgetUnknown(reserveManagedBudget(active,request,f.p,f.now).state,request.operationId,f.now);
+  const old=previous.plans[2],p={...f.p,goEvidenceDigest:digest(2600)};
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:27,monthlyCapYen:136000,
+    ownerApprovalDigest:digest(2601),repairEpochDigest:digest(2602),priorPlanDigest:managedDigest(old),
+    priorProfileDigest:managedDigest(f.p),profileDigest:managedDigest(p),
+    comparisonCorrectiveEarmark:{aiYen:3000,imageRetentionYen:1115,nonAiYen:1227,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {...f,previous,p,adjustment,input:{...f.input,baseYen:old.baseYen+5742,
+    pools:{...old.pools,remaining:old.pools.remaining+525},standardMonthAdjustment:adjustment},
+    deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:525})};
+}
+
+it("adds exactly one separately signed corrective successor",()=>{
+  const f=practitionerCorrectiveFixture(),before=structuredClone(f.previous),planned=setManagedMonthPlan(before,f.input,f.now);
+  expect(()=>checkManagedExecutionBudget(planned,f.p,f.now)).toThrow();
+  const active=activate(planned,f.p,f.now);
+  for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen","cases"] as const)
+    expect(active[key]).toEqual(before[key]);
+  expect(before.operations.at(-1)?.unknown).toBe(true);
+  expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(6267);
+  expect(active.plans[2].standardMonthAdjustment).toMatchObject({forward:27,monthlyCapYen:136000});
+  expect(()=>reserveManagedBudget(active,f.deployment(),f.p,f.now)).not.toThrow();
+});
+
+it("rejects wrong ancestors, changed holds and nonexact corrective amounts",()=>{
+  const f=practitionerCorrectiveFixture(),prior=f.previous.plans[2].standardMonthAdjustment;
+  if(prior?.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  const key="comparisonCorrectiveEarmark";
+  const oldKeys=["comparisonDiagnosticsEarmark","generationGuardRepairEarmark","reviewEvidenceLocatorsRepairEarmark",
+    "reviewLiteralConditionsRepairEarmark","reviewClaimScopeRepairEarmark","reviewPossessionRepairEarmark",
+    "sourceHeatRepairEarmark","sourceOutputRepairEarmark","reviewSourceIdsRepairEarmark","branchRepairEarmark"] as const;
+  for(const change of [{comparisonCorrectiveEarmark:undefined},{priorPlanDigest:digest(2799)},{priorProfileDigest:digest(2799)},
+    {ownerApprovalDigest:prior.ownerApprovalDigest},{repairEpochDigest:prior.repairEpochDigest},
+    {forward:26 as const},{monthlyCapYen:124000 as const},{validUntil:"2026-11-17T00:00:00Z"},
+    ...oldKeys.map(k=>({[k]:undefined})),{executionEarmark:{...f.adjustment.executionEarmark,forecastBaseYen:f.adjustment.executionEarmark.forecastBaseYen+1}}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+  for(const amount of ["aiYen","imageRetentionYen","nonAiYen","storageYen"] as const)
+    for(const delta of [-1,1])expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,
+      [key]:{...f.adjustment[key],[amount]:f.adjustment[key]![amount]+delta}})).toThrow();
+  for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+    ...["remaining","storage","recovery"].map(pool=>({pools:{...f.input.pools,[pool]:f.input.pools[pool as keyof typeof f.input.pools]+1}})),
+    {reviewedOperationIds:[f.previous.operations[0].operationId]},{releaseTailYen:f.input.releaseTailYen-1}])
+    expect(()=>setManagedMonthPlan(f.previous,{...f.input,...change},f.now)).toThrow();
+  expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:28})).toThrow();
+});
+
+it("keeps the predecessor stop inert and cannot replenish a corrective unit",()=>{
+  const f=practitionerCorrectiveFixture(),active=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now);
+  const spent=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(spent.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+  expect(()=>setManagedMonthPlan(spent,f.input,f.now)).toThrow();
+  for(const change of [{comparisonCorrectiveEarmark:undefined},{ownerApprovalDigest:digest(2799)},{repairEpochDigest:digest(2799)}])
+    expect(()=>setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,...change}},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(spent,{...linked,baseYen:linked.baseYen+5742},f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(spent,{...linked,pools:{...linked.pools,remaining:linked.pools.remaining+525}},f.now)).toThrow();
+  const stopped=setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:26}},f.now);
+  expect(stopped.operations).toEqual(spent.operations);expect(stopped.plans[2].pools).toEqual(spent.plans[2].pools);
+  expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();
+  const again=setManagedMonthPlan(stopped,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+  expect(()=>reserveManagedBudget(activate(again,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
+  expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+});
