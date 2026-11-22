@@ -1,4 +1,5 @@
 import type { DecodedSources, PropositionTargetInput } from "./proposition-extraction";
+import { meaningKey } from "./propositions";
 import { renderMeaning } from "./proposition-result";
 
 /** Input guidance, never a repaired response or an alternative proof. Original
@@ -10,7 +11,7 @@ export function closedFactInput(sources: DecodedSources) {
     return { id: f.id, scope: f.scope, claimNo: f.claimNo, basis: f.basis,
       meaning: f.meaning, sentence };
   });
-  return sources.input.sources.flatMap(source => source.scopes.map(scope => {
+  const scopes = sources.input.sources.flatMap(source => source.scopes.map(scope => {
     const node = scope.nodes.find(n => n.claimNo === scope.selected);
     const required = node?.guaranteed ?? [];
     // An ANY branch is not a conjunctive closure. Do not invent its conditions.
@@ -25,6 +26,28 @@ export function closedFactInput(sources: DecodedSources) {
         c.facts.length > 0 && c.facts.every(f => f.sentence !== null)),
       claims };
   }));
+  // Only offer IDs whose original claims and sentences are present in the
+  // packet. An optional parent in an alternative branch cannot prove a common fact.
+  const indexed = scopes.map(scope => {
+    const ids = new Map<string, string[]>();
+    for (const claim of scope.claims) for (const fact of claim.facts) {
+      if (!fact.sentence || fact.meaning.subject === null) continue;
+      const key = meaningKey(fact.meaning);
+      const group = ids.get(key);
+      if (group) group.push(fact.id);
+      else ids.set(key, [fact.id]);
+    }
+    return { scope, ids };
+  });
+  const bases = indexed.filter(entry => entry.scope.scope.startsWith("base:"));
+  return indexed.map(({ scope, ids }) => {
+    const commonFactPairs = scope.scope.startsWith("base:") ? [] : bases.flatMap(base =>
+      Array.from(ids).flatMap(([key, candidateIds]) => {
+        const baseIds = base.ids.get(key);
+        return baseIds ? [{ baseScope: base.scope.scope, candidateScope: scope.scope, baseIds, candidateIds }] : [];
+      }));
+    return { ...scope, commonFactPairs };
+  });
 }
 
 export function reviewSupportInput(input: PropositionTargetInput) {

@@ -1750,3 +1750,53 @@ for(const corrective of [false,true]){
     expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
   });
 }
+
+function practitionerEvidenceSuccessorFixture(corrective=false): ReturnType<typeof practitionerPromptSuccessorFixture> & {evidenceKey:"comparisonEvidenceRepairEarmark"|"comparisonEvidenceCorrectiveEarmark"}{
+  const f=corrective?practitionerEvidenceSuccessorFixture():practitionerPromptSuccessorFixture(true);
+  const active=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now),request=f.deployment();
+  const previous=markManagedBudgetUnknown(reserveManagedBudget(active,request,f.p,f.now).state,request.operationId,f.now);
+  const old=previous.plans[2],p={...f.p,goEvidenceDigest:digest(corrective?3100:3000)};
+  const evidenceKey=corrective?"comparisonEvidenceCorrectiveEarmark":"comparisonEvidenceRepairEarmark";
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...f.adjustment,forward:corrective?31:30,
+    monthlyCapYen:corrective?163000:157000,ownerApprovalDigest:digest(corrective?3101:3001),
+    repairEpochDigest:digest(corrective?3102:3002),priorPlanDigest:managedDigest(old),priorProfileDigest:managedDigest(f.p),
+    profileDigest:managedDigest(p),[evidenceKey]:{aiYen:3000,imageRetentionYen:corrective?1115:2230,nonAiYen:corrective?1227:2454,storageYen:corrective?400:800}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  return {...f,previous,p,adjustment,evidenceKey,input:{...f.input,baseYen:old.baseYen+(corrective?5742:8484),
+    pools:{...old.pools,remaining:old.pools.remaining+(corrective?525:1050)},standardMonthAdjustment:adjustment},
+    deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:525})};
+}
+for(const corrective of [false,true]){
+ it(`preserves historical holds and admits only exact evidence successor ${corrective}`,()=>{
+  const f=practitionerEvidenceSuccessorFixture(corrective),before=structuredClone(f.previous);
+  const active=activate(setManagedMonthPlan(before,f.input,f.now),f.p,f.now);
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(before,"2026-11")).toBe(corrective?6267:9534);
+  for(const key of ["operations","administration","legacyUnknownYen","releaseTailYen","cases"] as const)expect(active[key]).toEqual(before[key]);
+  expect(active.plans.slice(0,2)).toEqual(before.plans.slice(0,2));
+  const prior=before.plans[2].standardMonthAdjustment!;
+  if(prior.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  for(const change of [{priorPlanDigest:digest(3199)},{priorProfileDigest:digest(3199)},
+    {ownerApprovalDigest:prior.ownerApprovalDigest},{repairEpochDigest:prior.repairEpochDigest},
+    {validUntil:"2026-12-01T00:00:00Z"},{forward:corrective?30 as const:29 as const},
+    {monthlyCapYen:148000 as const},{comparisonPromptCorrectiveEarmark:undefined},
+    {comparisonPromptRepairEarmark:undefined},{[f.evidenceKey]:undefined}])
+    expect(()=>setManagedMonthPlan(before,{...f.input,standardMonthAdjustment:{...f.adjustment,...change}},f.now)).toThrow();
+  for(const change of [{baseYen:f.input.baseYen+1},{baseYen:f.input.baseYen-1},
+    ...["remaining","storage","recovery"].map(k=>({pools:{...f.input.pools,[k]:f.input.pools[k as keyof typeof f.input.pools]+1}})),
+    {releaseTailYen:f.input.releaseTailYen-1},{reviewedOperationIds:[before.operations[0].operationId]}])
+    expect(()=>setManagedMonthPlan(before,{...f.input,...change},f.now)).toThrow();
+  expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,executionEarmark:{...f.adjustment.executionEarmark,evaluationAiYen:0}})).toThrow();
+  for(const amount of ["aiYen","imageRetentionYen","nonAiYen","storageYen"] as const)
+    for(const delta of [-1,1])expect(()=>managedStandardMonthAdjustmentSchema.parse({...f.adjustment,
+      [f.evidenceKey]:{...f.adjustment[f.evidenceKey],[amount]:f.adjustment[f.evidenceKey]![amount]+delta}})).toThrow();
+  const spent=reserveManagedBudget(active,f.deployment(),f.p,f.now).state;
+  const linked={...f.input,standardMonthAdjustment:{...f.adjustment,priorPlanDigest:managedDigest(spent.plans[2]),priorProfileDigest:managedDigest(f.p)}};
+  const stopped=setManagedMonthPlan(spent,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:corrective?30 as const:29 as const}},f.now);
+  expect(()=>checkManagedExecutionBudget(stopped,f.p,f.now)).toThrow();
+  expect(stopped.operations).toEqual(spent.operations);
+  const rebound=setManagedMonthPlan(stopped,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,priorPlanDigest:managedDigest(stopped.plans[2])}},f.now);
+  expect(()=>reserveManagedBudget(activate(rebound,f.p,f.now),f.deployment(),f.p,f.now)).toThrow();
+  expect(()=>setManagedMonthPlan(spent,{...linked,baseYen:linked.baseYen+1},f.now)).toThrow();
+  expect(()=>checkManagedExecutionBudget(active,f.p,clock(f.adjustment.validUntil))).toThrow();
+ });
+}
