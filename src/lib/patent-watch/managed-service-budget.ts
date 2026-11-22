@@ -45,14 +45,16 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
   ordinaryStandardMonthAdjustmentSchema,
   ordinaryStandardMonthAdjustmentSchema.extend({
     scope: z.literal("ISSUE150_PRACTITIONER_EVALUATION_V1"), month: z.literal("2026-11"),
-    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000), z.literal(114000), z.literal(119000), z.literal(124000), z.literal(136000), z.literal(142000), z.literal(148000), z.literal(157000), z.literal(163000)]),
-    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31)]),
+    monthlyCapYen: z.union([z.literal(100000), z.literal(102000), z.literal(103000), z.literal(109000), z.literal(114000), z.literal(119000), z.literal(124000), z.literal(136000), z.literal(142000), z.literal(148000), z.literal(157000), z.literal(163000), z.literal(170000)]),
+    forward: z.union([z.literal(14), z.literal(16), z.literal(17), z.literal(18), z.literal(19), z.literal(20), z.literal(21), z.literal(22), z.literal(23), z.literal(24), z.literal(25), z.literal(26), z.literal(27), z.literal(28), z.literal(29), z.literal(30), z.literal(31), z.literal(32)]),
     repairEpochDigest: hash, priorPlanDigest: hash, priorProfileDigest: hash, validUntil: z.iso.datetime(),
     // Prepared contract only: apply these additions only after explicit approval.
     // Proposal only: signed successor applies evidence cost once; no historical hold is released.
     comparisonEvidenceRepairEarmark: z.object({ aiYen: z.literal(3000), imageRetentionYen: z.literal(2230),
       nonAiYen: z.literal(2454), storageYen: z.literal(800) }).strict().optional(),
     comparisonEvidenceCorrectiveEarmark: z.object({ aiYen: z.literal(3000), imageRetentionYen: z.literal(1115),
+      nonAiYen: z.literal(1227), storageYen: z.literal(400) }).strict().optional(),
+    comparisonAssessmentRepairEarmark: z.object({ aiYen: z.literal(3000), imageRetentionYen: z.literal(1115),
       nonAiYen: z.literal(1227), storageYen: z.literal(400) }).strict().optional(),
     comparisonPromptRepairEarmark: z.object({ aiYen: z.literal(2000), imageRetentionYen: z.literal(1115),
       nonAiYen: z.literal(1227), storageYen: z.literal(400) }).strict().optional(),
@@ -88,7 +90,9 @@ export const managedStandardMonthAdjustmentSchema = z.discriminatedUnion("scope"
       reviewScopeRepairProductionAiYen: z.literal(1238), reviewScopeRepairImageRetentionYen: z.literal(1115),
       evaluationAiYen: z.literal(6000), evaluationImageRetentionYen: z.literal(2230),
       evaluationNonAiYen: z.literal(2434), evaluationStorageYen: z.literal(800) }).strict(),
-  }).strict().refine(a => (a.comparisonEvidenceCorrectiveEarmark
+  }).strict().refine(a => (a.comparisonAssessmentRepairEarmark
+      ? a.comparisonEvidenceCorrectiveEarmark !== undefined && a.comparisonPromptCorrectiveEarmark !== undefined && a.comparisonPromptRepairEarmark !== undefined && a.comparisonEvidenceRepairEarmark !== undefined && a.comparisonCorrectiveEarmark !== undefined && a.comparisonDiagnosticsEarmark !== undefined && a.generationGuardRepairEarmark !== undefined && a.reviewEvidenceLocatorsRepairEarmark !== undefined && a.reviewLiteralConditionsRepairEarmark !== undefined && a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 170000 && [31,32].includes(a.forward)
+      : a.comparisonEvidenceCorrectiveEarmark
       ? a.comparisonPromptCorrectiveEarmark !== undefined && a.comparisonPromptRepairEarmark !== undefined && a.comparisonEvidenceRepairEarmark !== undefined && a.comparisonCorrectiveEarmark !== undefined && a.comparisonDiagnosticsEarmark !== undefined && a.generationGuardRepairEarmark !== undefined && a.reviewEvidenceLocatorsRepairEarmark !== undefined && a.reviewLiteralConditionsRepairEarmark !== undefined && a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 163000 && [30,31].includes(a.forward)
       : a.comparisonEvidenceRepairEarmark
       ? a.comparisonPromptCorrectiveEarmark !== undefined && a.comparisonPromptRepairEarmark !== undefined && a.comparisonCorrectiveEarmark !== undefined && a.comparisonDiagnosticsEarmark !== undefined && a.generationGuardRepairEarmark !== undefined && a.reviewEvidenceLocatorsRepairEarmark !== undefined && a.reviewLiteralConditionsRepairEarmark !== undefined && a.reviewClaimScopeRepairEarmark !== undefined && a.reviewPossessionRepairEarmark !== undefined && a.sourceHeatRepairEarmark !== undefined && a.sourceOutputRepairEarmark !== undefined && a.reviewSourceIdsRepairEarmark !== undefined && a.branchRepairEarmark !== undefined && a.monthlyCapYen === 157000 && [29,30].includes(a.forward)
@@ -333,7 +337,8 @@ function admit(s: ManagedBudgetState, m: string, profile?: ManagedBudgetProfile,
   }
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_NOVEMBER_REVIEW_SCOPE_REPAIR_V1") check(plan.standardMonthAdjustment.forward === 14);
   if (plan?.standardMonthAdjustment?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1")
-    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.comparisonEvidenceCorrectiveEarmark ? 31 :
+    check(plan.standardMonthAdjustment.forward === (plan.standardMonthAdjustment.comparisonAssessmentRepairEarmark ? 32 :
+      plan.standardMonthAdjustment.comparisonEvidenceCorrectiveEarmark ? 31 :
       plan.standardMonthAdjustment.comparisonEvidenceRepairEarmark ? 30 :
       plan.standardMonthAdjustment.comparisonPromptCorrectiveEarmark ? 29 :
       plan.standardMonthAdjustment.comparisonPromptRepairEarmark ? 28 :
@@ -435,6 +440,8 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
       input.releaseTailYen === s.releaseTailYen && (input.reviewedOperationIds?.length ?? 0) === 0);
     const { evaluationAiYen, evaluationImageRetentionYen, evaluationNonAiYen, evaluationStorageYen,
       ...priorEarmark } = adjustment.executionEarmark;
+    if (adjustment.comparisonAssessmentRepairEarmark !== undefined)
+      check(previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" && previous.comparisonEvidenceCorrectiveEarmark !== undefined);
     if (adjustment.comparisonEvidenceCorrectiveEarmark !== undefined)
       check(previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" && previous.comparisonEvidenceRepairEarmark !== undefined);
     if (adjustment.comparisonEvidenceRepairEarmark !== undefined)
@@ -652,6 +659,20 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
         input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
         managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 525 }));
     } else if (previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
+        previous.comparisonEvidenceCorrectiveEarmark !== undefined && previous.comparisonAssessmentRepairEarmark === undefined &&
+        adjustment.comparisonAssessmentRepairEarmark !== undefined) {
+      // One fresh signed successor; preserve every earlier reservation and supplement.
+      const { comparisonAssessmentRepairEarmark: extra, ...withoutExtra } = adjustment;
+      check(previous.profileDigest === s.activeProfileDigest && previous.forward === 31 && adjustment.forward === 32 &&
+        previous.monthlyCapYen === 163000 && adjustment.monthlyCapYen === 170000 &&
+        adjustment.ownerApprovalDigest !== previous.ownerApprovalDigest && adjustment.repairEpochDigest !== previous.repairEpochDigest &&
+        managedDigest({ ...withoutExtra, profileDigest: previous.profileDigest, ownerApprovalDigest: previous.ownerApprovalDigest,
+          repairEpochDigest: previous.repairEpochDigest, monthlyCapYen: previous.monthlyCapYen, forward: previous.forward,
+          priorPlanDigest: previous.priorPlanDigest, priorProfileDigest: previous.priorProfileDigest }) === managedDigest(previous) &&
+        input.baseYen === old.baseYen + extra.aiYen + extra.imageRetentionYen + extra.nonAiYen + extra.storageYen &&
+        managedDigest(input.pools) === managedDigest({ ...old.pools, remaining: old.pools.remaining + 525 }));
+    } else if (previous?.scope === "ISSUE150_PRACTITIONER_EVALUATION_V1" &&
+        adjustment.comparisonAssessmentRepairEarmark === undefined &&
         ((previous.comparisonPromptCorrectiveEarmark !== undefined && previous.comparisonEvidenceRepairEarmark === undefined &&
           adjustment.comparisonEvidenceRepairEarmark !== undefined && adjustment.comparisonEvidenceCorrectiveEarmark === undefined) ||
          (previous.comparisonEvidenceRepairEarmark !== undefined && previous.comparisonEvidenceCorrectiveEarmark === undefined &&
@@ -701,6 +722,7 @@ export function setManagedMonthPlan(value: unknown, input: { baseYen: number; po
         adjustment.monthlyCapYen === previous.monthlyCapYen &&
         managedDigest(adjustment.comparisonEvidenceRepairEarmark ?? null) === managedDigest(previous.comparisonEvidenceRepairEarmark ?? null) &&
         managedDigest(adjustment.comparisonEvidenceCorrectiveEarmark ?? null) === managedDigest(previous.comparisonEvidenceCorrectiveEarmark ?? null) &&
+        managedDigest(adjustment.comparisonAssessmentRepairEarmark ?? null) === managedDigest(previous.comparisonAssessmentRepairEarmark ?? null) &&
         managedDigest(adjustment.comparisonPromptRepairEarmark ?? null) === managedDigest(previous.comparisonPromptRepairEarmark ?? null) &&
         managedDigest(adjustment.comparisonPromptCorrectiveEarmark ?? null) === managedDigest(previous.comparisonPromptCorrectiveEarmark ?? null) &&
         managedDigest(adjustment.comparisonCorrectiveEarmark ?? null) === managedDigest(previous.comparisonCorrectiveEarmark ?? null) &&

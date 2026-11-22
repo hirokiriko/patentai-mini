@@ -81,6 +81,13 @@ function renderPart(part:z.infer<typeof targetPropositionSchema>["targets"][numb
 function comparisonSentences(field:"common"|"differences",records:PropositionComparison[]):string[]{
   const unique=(side:string)=>[...new Map(records.filter(r=>r.target.scope.startsWith(side)).map(r=>[meaningKey(r.target.meaning),r.target.meaning])).values()];
   const base=unique("base:"),candidates=unique("candidate:");
+  const attributed=(side:"base:"|"candidate:",meaning:Meaning)=>{
+    const claims=[...new Set(records.filter(r=>r.target.scope.startsWith(side)&&meaningKey(r.target.meaning)===meaningKey(meaning)).map(r=>r.target.claimNo))].sort((a,b)=>a-b);
+    const full=renderMeaning(meaning),prefix=meaning.context==="capability"?"機能・構成として、":"運転状態として、";
+    // This header preserves the verified context and actual original-claim
+    // attribution, including a parent distinct from the selected child row.
+    return `${side==="base:"?"基準側":"候補側"}請求項${claims.join("/")}・${meaning.context==="capability"?"機能・構成":"運転状態"}：${full.slice(prefix.length)}`;
+  };
   if(!base.length||!candidates.length)throw new ComparisonError("ai_incomplete");
   const used=new Set<number>(),sentences:string[]=[];
   const matches=new Map<number,number>();
@@ -102,7 +109,7 @@ function comparisonSentences(field:"common"|"differences",records:PropositionCom
       // A shared option is not a shared mandatory requirement. Keep the two
       // quantifiers and subjects when the computed correspondence is partial.
       sentences.push(equal?`両側とも、${renderMeaning(b)}。`:`対応候補：基準側の${renderMeaning(b)}。候補側の${renderMeaning(c)}。`);
-    }else sentences.push(equal?`対応づけた条件は一致する（${renderMeaning(b)}）。`:`基準側の${renderMeaning(b)}。候補側の${renderMeaning(c)}。`);
+    }else sentences.push(equal?`対応づけた条件は一致する（${renderMeaning(b)}）。`:`${attributed("base:",b)}。${attributed("candidate:",c)}。`);
   }
   if(used.size!==candidates.length)throw new ComparisonError("ai_incomplete");
   return sentences;

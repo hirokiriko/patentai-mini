@@ -189,7 +189,7 @@ function meanings(text){
     return [plain("装置","has",["青色弁"]),plain("装置",text.includes("下回ると青色弁を開く")?"opens":"closes",["青色弁"],{relation:"when",conditions:[condition]})];
   }
   const object=text.match(/赤色信号|青色信号|温度|熱/)?.[0]??text.slice(0,Math.min(12,text.length));
-  return [plain(null,"has",[object])];
+  return [plain(text.includes("装置")?"装置":null,"has",[object])];
 }
 const terms = m => [...new Set([...(m.subject?[m.subject]:[]),...m.guard.conditions,...m.objects])];
 function extraction(text,m,basis=[0,text.length]){
@@ -197,6 +197,8 @@ function extraction(text,m,basis=[0,text.length]){
     operators:{...neutral,guard:m.guard.conditions.length?span(text,m.guard.conditions[0]):null},routeFrame:null};
 }
 const sentence = m => `${m.guard.conditions.length?`${m.guard.conditions.join("・")}場合、`:""}${m.subject??"装置"}は${m.objects.join("・")}${m.predicate==="has"?"を備える":m.predicate==="opens"?"を開く":"を閉じる"}`;
+// Independent fixture spelling for the existing typed relation renderer.
+const canonicalSentence = m => `${m.context==="capability"?"機能・構成として、":"運転状態として、"}${m.guard.conditions.length?`条件「${m.guard.conditions.join("・")}」のとき、`:""}${m.subject}は${m.objects.join("・")}${m.predicate==="has"?"を備える":m.predicate==="opens"?"を開く":"を閉じる"}${m.context==="capability"&&m.predicate!=="has"?"機能を備える":""}`;
 export function fixturePropositionSource(input){
   input={...input,sources:input.sources.map(s=>({...s,source:{...s.source,claims:s.source.claims.map(c=>c.clauses?{...c,text:c.clauses.map(p=>p[1]).join("")}:c.grid?{...c,text:fixtureGridText(c)}:c.parts?{...c,text:c.parts.map(p=>p.text).join("")}:c)}}))};
   return withInput({sources:input.sources.map(s=>({sourceDigest:s.sourceDigest,facts:s.source.claims.flatMap(c=>meanings(textOf(c)).map(m=>{
@@ -207,6 +209,17 @@ export function fixturePropositionSource(input){
   }))}))},input);
 }
 export function fixturePropositionGeneration(input){
+  if(input.generationProtocol==="scoped_fact_selection_v1")return {results:input.documents.flatMap(d=>d.pairs.map(pair=>{
+    const baseScope=`base:${pair.baseClaimNo}`,candidateScope=`candidate:${d.candidateId}:${pair.candidateClaimNo}`;
+    const choose=scope=>input.observationChoices.find(s=>s.scope===scope).factIds.at(-1);
+    const common=input.closedFacts.find(s=>s.scope===candidateScope).commonFactPairs.find(p=>p.baseScope===baseScope);
+    if(!common)throw Error("fictional_common_missing");
+    const fact=(scope,id)=>input.closedFacts.find(s=>s.scope===scope).claims.flatMap(c=>c.facts).find(f=>f.id===id);
+    const identical=JSON.stringify(fact(baseScope,choose(baseScope)).meaning)===JSON.stringify(fact(candidateScope,choose(candidateScope)).meaning);
+    return {docId:d.candidateId,baseClaimNo:pair.baseClaimNo,candidateClaimNo:pair.candidateClaimNo,baseFacts:[choose(baseScope)],candidateFacts:[choose(candidateScope)],
+      common:[{baseFacts:[common.baseIds[0]],candidateFacts:[common.candidateIds[0]]}],
+      differences:identical?{reservation:"作用の対応は未確認。"}:{baseFacts:[choose(baseScope)],candidateFacts:[choose(candidateScope)]},unconfirmed:"作用の対応は未確認。"};
+  }))};
   const result=(d,p)=>{
     const b=input.base.claims.find(c=>c.claimNo===p.baseClaimNo),c=d.candidate.claims.find(c=>c.claimNo===p.candidateClaimNo);
     const bm=meanings(textOf(b)),cm=meanings(textOf(c));
@@ -240,13 +253,14 @@ export function fixturePropositionTarget(input){
     const [docId,bno,cno,field]=t.id.split(":"),parts=[];let cursor=0;
     for(const unit of t.text.match(/[^。]*。|[^。]+$/gu)??[]){
       const end=cursor+unit.length;
-      if(field==="unconfirmed")parts.push({span:[cursor,end],form:"reservation",atoms:[],reference:null,
+      if(field==="unconfirmed"||unit==="作用の対応は未確認。")parts.push({span:[cursor,end],form:"reservation",atoms:[],reference:null,
         reservation:{topic:"作用の対応",basis:[cursor,cursor+"作用の対応".length]}});
       else{
         const candidate=unit.startsWith("候補"),scope=candidate?`candidate:${docId}:${cno}`:`base:${bno}`;
         const table=input.scopes.find(s=>s.id===scope);
         const fact=input.facts.filter(f=>table.factIds.includes(f.id))
-          .find(f=>sentence(factMeaning(f.id,scope))===unit.slice("基準側の".length,-1));
+          .find(f=>sentence(factMeaning(f.id,scope))===unit.slice("基準側の".length,-1)||
+            canonicalSentence(factMeaning(f.id,scope))===unit.slice("基準側は、".length,-1));
         if(!fact)throw Error("fictional_fact_missing");
         const m=factMeaning(fact.id,scope);
         const raw=extraction(unit,m,[0,unit.length]);
