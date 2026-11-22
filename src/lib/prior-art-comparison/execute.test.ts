@@ -3,17 +3,19 @@ import { executeComparison, PROPOSITION_GENERATION_SYSTEM } from "./execute";
 import { fictionalClauseInputs as fictionalInputs } from "./source-clause-fixtures.test-support";
 import { fictionalPropositionGeneration as fictionalBatch, fictionalPropositionTarget as fictionalReview, fixturePropositionWire as wireGuards } from "./proposition-fixtures.test-support";
 import { makePlan, validateAnswer, validateSaved, type ComparisonInputs, type Selection } from "./comparison";
-import { batchInput, batchSchema, generationBatches } from "./generation-batch";
+import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
 import { decodeSourcePropositions, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
-import {assembleSourceClaims, assembleSourceClaimsWithLocators, sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {assembleSourceClaimsWithLocators, sourceClaimExtractionPlan} from "./source-claim-extraction";
 import {sourceRequestPlan} from "./source-request-plan";
 import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
 import { takeReviewFailure } from "./review-failure-audit";
 import { validateReviewSdkFailure } from "./review-sdk-failure";
 import { targetPropositionModelSchemaFor } from "./proposition-locators";
 import { separatedGenerationPlan } from "./source-separation";
+import { decodeFactSelection } from "./fact-selection-generation";
+import { generationQuoteOptions } from "./generation-quote-options";
 import { decodeGeneration } from "./generation";
 import { assessPropositions } from "./proposition-result";
 import { reviewSupportInput } from "./closed-fact-input";
@@ -56,8 +58,8 @@ describe("real installed SDK, guarded fictional transport", () => {
     const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
       const body = JSON.parse(String(init?.body)), input = JSON.parse(body.input[1].content[0].text);
       if (input.task !== "extract_source_propositions" && input.task !== "extract_source_propositions_pair" && input.task !== "review") {
-        expect(JSON.stringify(body)).toContain("その完成文を条件も主語も述語も変えずに使い");
-        expect(JSON.stringify(body)).toContain("別欄の主語を借りない");
+        expect(input.generationProtocol).toBe("scoped_fact_selection_v1");
+        expect(input.observationChoices.some((s: {factIds:string[]})=>s.factIds.length>0)).toBe(true);
         expect(input.closedFacts.length).toBeGreaterThan(0);
         expect(input.closedFacts.every((s: { requiredClaimNos: number[]; claims: unknown[] }) =>
           s.requiredClaimNos.length > 0 && s.claims.length === s.requiredClaimNos.length)).toBe(true);
@@ -78,6 +80,26 @@ describe("real installed SDK, guarded fictional transport", () => {
     expect(generations).toHaveLength(1);
     expect(transport).toHaveBeenCalledTimes(sourceCallCount(f.inputs, f.selection) + 2);
     expect(() => validateSaved(result)).not.toThrow();
+  });
+  it("retains the exact structured selection on domain rejection before review without repairing it", async () => {
+    const f = fictionalInputs(); let rawSelection: unknown;
+    const transport = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
+      const value = stageAnswer(input);
+      if (input.task === "compare") {
+        Object.assign((value as {results:Record<string,unknown>[]}).results[0], { baseFacts: ["wrong-scope-fact"] });
+        rawSelection = structuredClone(value);
+      }
+      return response(value);
+    });
+    vi.stubGlobal("fetch", transport);
+    const error = await executeComparison(f.inputs, f.selection).catch(error => error);
+    expect(error).toMatchObject({ stage: "generation", kind: "protocol_invalid" });
+    const retained = takeReviewFailure(error)!;
+    expect(retained.step).toBe("generation_check");
+    expect(retained.generation).toMatchObject({ status: "captured", value: rawSelection });
+    expect(retained.review).toMatchObject({ status: "captured", value: null });
+    expect(transport).toHaveBeenCalledTimes(sourceCallCount(f.inputs, f.selection) + 1);
   });
   it.each(["valid","bad_second","swapped","missing_second","extra","incomplete"])("uses one SDK call for a pair with atomic audit adoption: %s",async mode=>{
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME","patentai-gpt54");
@@ -297,12 +319,12 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (retained.inputs.status !== "captured" || retained.selection.status !== "captured" || retained.generation.status !== "captured" || sdk.text.status !== "captured") throw Error("missing replay input");
       const replayPlan = makePlan(retained.inputs.value as ComparisonInputs, retained.selection.value as Selection);
       const replayBatch = separatedGenerationPlan(replayPlan, PROPOSITION_GENERATION_SYSTEM);
-      const reading = await assembleSourceClaims(sourceClaimExtractionPlan(replayBatch), next.answers);
-      const analyses = decodeSourcePropositions(replayBatch, reading), generated = batchSchema.parse(retained.generation.value);
+      const reading = await assembleSourceClaimsWithLocators(sourceClaimExtractionPlan(replayBatch), next.answers);
+      const analyses = decodeSourcePropositions(replayBatch, reading.extraction, reading.locators), quotes=generationQuoteOptions(replayBatch,analyses), generated = decodeFactSelection(replayBatch,analyses,quotes,retained.generation.value);
       const drafts = replayPlan.flatMap(chunk => {
         const results = generated.results.filter(r => r.docId === chunk.candidateId && chunk.pairs.some(p => p.baseClaimNo === r.baseClaimNo && p.candidateClaimNo === r.candidateClaimNo))
           .map(({ docId: ignored, ...row }) => { void ignored; return row; });
-        return validateAnswer(chunk, decodeGeneration(chunk, { results })).map(pair => {
+        return validateAnswer(chunk, decodeGeneration(chunk, { results }, quotes)).map(pair => {
           const row = results.find(r => r.baseClaimNo === pair.baseClaimNo && r.candidateClaimNo === pair.candidateClaimNo)!;
           return { ...pair, baseObservation: row.baseObservation, candidateObservation: row.candidateObservation };
         });
@@ -379,11 +401,11 @@ describe("real installed SDK, guarded fictional transport", () => {
     const replayBatch=separatedGenerationPlan(replayPlan,PROPOSITION_GENERATION_SYSTEM);
     const reading=await assembleSourceClaimsWithLocators(sourceClaimExtractionPlan(replayBatch),downloaded.answers);
     const analyses=decodeSourcePropositions(replayBatch,reading.extraction,reading.locators);
-    const generated=batchSchema.parse(retained.generation.value);
+    const quotes=generationQuoteOptions(replayBatch,analyses),generated=decodeFactSelection(replayBatch,analyses,quotes,retained.generation.value);
     const drafts=replayPlan.flatMap(chunk=>{
       const results=generated.results.filter(r=>r.docId===chunk.candidateId&&chunk.pairs.some(p=>p.baseClaimNo===r.baseClaimNo&&p.candidateClaimNo===r.candidateClaimNo))
         .map(({docId:ignored,...result})=>{void ignored;return result;});
-      return validateAnswer(chunk,decodeGeneration(chunk,{results})).map(pair=>{
+      return validateAnswer(chunk,decodeGeneration(chunk,{results},quotes)).map(pair=>{
         const row=results.find(r=>r.baseClaimNo===pair.baseClaimNo&&r.candidateClaimNo===pair.candidateClaimNo)!;
         return {...pair,baseObservation:row.baseObservation,candidateObservation:row.candidateObservation};
       });
@@ -446,7 +468,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       if (mode === "missing") answer.results.pop();
       if (mode === "duplicate") answer.results[3] = { ...answer.results[0] };
       if (mode === "foreign-document") answer.results[0].docId = 999;
-      if (mode === "cross-document-evidence") answer.results[0].candidateEvidenceId = answer.results[2].candidateEvidenceId;
+      if (mode === "cross-document-evidence") Object.assign(answer.results[0],{candidateFacts:(answer.results[2] as unknown as {candidateFacts:string[]}).candidateFacts});
       if (mode === "truncated") {
         const outer = await response(answer).json(); outer.output[0].content[0].text = JSON.stringify(answer).slice(0, -1);
         return Response.json(outer);
@@ -463,7 +485,7 @@ describe("real installed SDK, guarded fictional transport", () => {
       const input = JSON.parse(JSON.parse(String(init?.body)).input[1].content[0].text);
       if (input.task !== "compare") return response(stageAnswer(input));
       const answer = fictionalBatch(input);
-      if (mode === "wrong-scope") answer.results[0].candidateEvidenceId = answer.results[2].candidateEvidenceId;
+      if (mode === "wrong-scope") Object.assign(answer.results[0],{candidateFacts:(answer.results[2] as unknown as {candidateFacts:string[]}).candidateFacts});
       if (mode === "duplicate") answer.results[1] = { ...answer.results[0] };
       if (mode === "foreign-pair") answer.results[0].candidateClaimNo = 99;
       return response(answer);
