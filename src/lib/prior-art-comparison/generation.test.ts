@@ -13,6 +13,20 @@ function example() {
 }
 
 describe("literal evidence selection", () => {
+  it("keeps ordinary Katakana uncertainty topics through generation and unchanged saved evidence checks", () => {
+    const { chunk, answer } = example();
+    answer.results.forEach(r => { r.unconfirmed = "運転モードの対応関係は未確認。ヒーターの配置は要確認。"; });
+    const original = structuredClone(answer);
+    const saved = validateAnswer(chunk, decodeGeneration(chunk, answer));
+    expect(answer).toEqual(original);
+    expect(saved[0].unconfirmed).toBe(answer.results[0].unconfirmed);
+    expect(saved[0].baseEvidence.quote).toContain("七度を超えると");
+  });
+  it.each(["運転モードから圧縮機を起動する際の制御は未確認。", "モータが弁を開く場合の制御は未確認。"])("still rejects factual clauses in Katakana uncertainties: %s", unconfirmed => {
+    const { chunk, answer } = example();
+    answer.results[0].unconfirmed = unconfirmed;
+    expect(() => decodeGeneration(chunk, answer)).toThrow("ai_incomplete");
+  });
   it("keeps reference alternatives separate from context coverage in generation and review", () => {
     const { inputs, selection } = fictionalInputs();
     const text = "【請求項1】\n架空の光装置を備える。\n【請求項2】\n架空の光装置と記録部を備える。\n【請求項3】\n請求項1又は請求項2に記載の装置は表示部を備える。\n【請求項4】\n請求項3に記載の装置は警報部を備える。";

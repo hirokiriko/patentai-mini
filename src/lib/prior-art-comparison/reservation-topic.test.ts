@@ -6,6 +6,10 @@ it.each([
   "候補側の起動時の制御は未確認。弁の対応関係は要確認。",
   "未確認事項：制御、図面、部材の対応は未検証。",
   "相違する制御条件は不明です。",
+  "運転モードの対応関係は未確認。",
+  "ヒーターとモータの制御は未確認。",
+  "ﾋｰﾀの対応関係は要確認。",
+  "運転モードの対応関係は未確認。開閉弁の対応関係は未確認。比較結果の原文照合は要確認。",
 ])("accepts nominal uncertainties with their actual scope: %s",text=>{
   expect(isNominalReservationText(text)).toBe(true);
 });
@@ -15,6 +19,13 @@ it.each([
   "青弁を開く。制御は未確認。",
   "制御、、図面は未確認。",
   "未確認。", "制御は未確認。。図面は未確認。",
+  "運転モードから圧縮機を起動する際の制御は未確認。",
+  "モータが弁を開く場合の制御は未確認。",
+  "ーは未確認。", "ｰは未確認。",
+  "「運転モード」の対応関係は未確認。",
+  "『運転モード』は未確認。",
+  "（運転モード）は未確認。",
+  "運転モード゠制御は未確認。",
 ])("does not hide assertions inside uncertainty: %s",text=>{
   expect(isNominalReservationText(text)).toBe(false);
 });

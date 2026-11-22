@@ -239,3 +239,8 @@ evidence. This rejection check does not infer subjects or conditions, rewrite
 answers, or require every shared mode/timing/OR scope to be local. Quoted and
 unrecognized syntax still require original-source QA. Only tasks with these
 local state phrases receive the corresponding quotation guidance.
+
+Nominal uncertainty topics accept the fullwidth and halfwidth Katakana long
+marks (U+30FC/U+FF70), as in モード or ﾋｰﾀ. This character allowance does not
+admit quoted/punctuation-wrapped topics or factual clauses as reservations;
+subjects, guards, literal evidence and downstream semantic review are unchanged.
