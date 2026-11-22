@@ -7,7 +7,7 @@ import { batchInput, generationBatches } from "./generation-batch";
 import { SYSTEM } from "./comparison";
 import { decodeSourcePropositions, propositionTargetInput, propositionTargetTransport } from "./proposition-extraction";
 import {fictionalClaimSource as fictionalSourceAnalysis,type FictionalClaimRequest} from "./source-claim-fixtures.test-support";
-import {assembleSourceClaims, assembleSourceClaimsWithLocators, sourceClaimExtractionPlan} from "./source-claim-extraction";
+import {assembleSourceClaimsWithLocators, sourceClaimExtractionPlan} from "./source-claim-extraction";
 import {sourceRequestPlan} from "./source-request-plan";
 import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from "./source-audit";
 import { takeReviewFailure } from "./review-failure-audit";

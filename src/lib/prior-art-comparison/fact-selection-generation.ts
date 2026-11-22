@@ -28,6 +28,7 @@ export function factObservationChoices(chunks: readonly ManagedComparisonChunk[]
   return sources.input.sources.flatMap(source => source.scopes.map(scope => ({ scope: scope.id,
     factIds: sources.facts.filter(f => {
       if (f.scope !== scope.id || !printableSubject(f)) return false;
+      if (sources.facts.some(own => own.scope === scope.id && own.claimNo === scope.selected) && f.claimNo !== scope.selected) return false;
       try {
         if (`基準側は、${renderMeaning(f.meaning)}。`.length > 120) return false;
         const side = source.side, chunk = chunks.find(c => side === "base" || c.candidateId === source.docId);
@@ -92,12 +93,10 @@ export function decodeFactSelection(chunks: readonly ManagedComparisonChunk[], s
         `${side === "base" ? "基準側" : "候補側"}は、${renderMeaning(f.meaning)}。`).join("");
       const bounded = (text: string, maximum: number) => { if (!text || text.length > maximum) throw Error(); return text; };
       const base = select("base", result.baseFacts), candidate = select("candidate", result.candidateFacts);
-      // Representative source text belongs to the actual selected claim when
-      // that claim has a complete selectable reading. Parents remain separate.
-      const choices = factObservationChoices(chunks, sources, quotes);
+      // A long/unquotable own reading cannot authorize silently replacing the
+      // selected claim by its parent. Parents remain separate.
       for (const [side, facts, no] of [["base", base, result.baseClaimNo], ["candidate", candidate, result.candidateClaimNo]] as const) {
-        const own = choices.find(c => c.scope === scope(side))?.factIds ?? [];
-        if (own.some(id => sources.facts.some(f => f.id === id && f.scope === scope(side) && f.claimNo === no)) && facts[0].claimNo !== no) throw Error();
+        if (sources.facts.some(f => f.scope === scope(side) && f.claimNo === no) && facts[0].claimNo !== no) throw Error();
       }
       const common = result.common.map(pair => {
         const b = select("base", pair.baseFacts), c = select("candidate", pair.candidateFacts);

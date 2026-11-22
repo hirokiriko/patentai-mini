@@ -47,7 +47,7 @@ it("selects full literal actors/guards, keeps parent and child separate, and res
     expect(results[0].baseObservation).toContain("条件「温度が七度を超える」のとき、制御器は");
     expect(results[0].candidateObservation).toContain("条件「逆流防止制御を開始する際」のとき、前記制御器は");
     expect(results[0].candidateObservation).not.toContain("温度");
-    const saved = validateAnswer(chunk, decodeGeneration(chunk, { results: results.map(({ docId: _, ...r }) => r) }, f.quotes));
+    const saved = validateAnswer(chunk, decodeGeneration(chunk, { results: results.map(({ docId: ignored, ...r }) => { void ignored; return r; }) }, f.quotes));
     expect(saved[0].candidateEvidence.claimNo).toBe(2);
     expect(saved[0].candidateEvidence.quote).toContain("前記制御器は、逆流防止制御を開始する際に両弁を同時に開く");
   }
