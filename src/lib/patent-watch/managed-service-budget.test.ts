@@ -1722,6 +1722,55 @@ function practitionerPromptSuccessorFixture(corrective=false): ReturnType<typeof
     pools:{...old.pools,remaining:old.pools.remaining+525},standardMonthAdjustment:adjustment},
     deployment:()=>({...f.deployment(),profileDigest:managedDigest(p),reservationYen:525})};
 }
+it("admits one exact 32-to-33 source actor repair while preserving all prior funds",()=>{
+  const f=practitionerEvidenceSuccessorFixture(true);
+  const state31=activate(setManagedMonthPlan(f.previous,f.input,f.now),f.p,f.now),old31=state31.plans[2];
+  const profile32={...f.p,goEvidenceDigest:digest(3200)};
+  const a32=managedStandardMonthAdjustmentSchema.parse({...old31.standardMonthAdjustment,
+    forward:32,monthlyCapYen:170000,ownerApprovalDigest:digest(3201),repairEpochDigest:digest(3202),
+    priorPlanDigest:managedDigest(old31),priorProfileDigest:managedDigest(f.p),profileDigest:managedDigest(profile32),
+    comparisonAssessmentRepairEarmark:{aiYen:3000,imageRetentionYen:1115,nonAiYen:1227,storageYen:400}});
+  const previous=activate(setManagedMonthPlan(state31,{...f.input,baseYen:old31.baseYen+5742,
+    pools:{...old31.pools,remaining:old31.pools.remaining+525},standardMonthAdjustment:a32},f.now),profile32,f.now);
+  const old=previous.plans[2],profile33={...profile32,goEvidenceDigest:digest(3300)};
+  const adjustment=managedStandardMonthAdjustmentSchema.parse({...old.standardMonthAdjustment,
+    forward:33,monthlyCapYen:176000,ownerApprovalDigest:digest(3301),repairEpochDigest:digest(3302),
+    priorPlanDigest:managedDigest(old),priorProfileDigest:managedDigest(profile32),profileDigest:managedDigest(profile33),
+    sourceActorLocatorRepairEarmark:{aiYen:3000,imageRetentionYen:1115,nonAiYen:1227,storageYen:400}});
+  if(adjustment.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1"||a32.scope!==adjustment.scope)throw Error("evaluation required");
+  const input={...f.input,baseYen:old.baseYen+5742,pools:{...old.pools,remaining:old.pools.remaining+525},standardMonthAdjustment:adjustment};
+  const active=activate(setManagedMonthPlan(previous,input,f.now),profile33,f.now);
+  expect(()=>setManagedMonthPlan(state31,{...input,standardMonthAdjustment:{...adjustment,
+    priorPlanDigest:managedDigest(old31),priorProfileDigest:state31.activeProfileDigest}},f.now)).toThrow();
+  expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(previous,"2026-11")).toBe(6267);
+  for(const key of ["operations","administration","cases","legacyUnknownYen","releaseTailYen"] as const)expect(active[key]).toEqual(previous[key]);
+  expect(active.plans.slice(0,2)).toEqual(previous.plans.slice(0,2));
+  expect(active.plans[2].pools.recovery).toBe(old.pools.recovery);
+  const currentAdjustment=active.plans[2].standardMonthAdjustment;
+  if(currentAdjustment?.scope!=="ISSUE150_PRACTITIONER_EVALUATION_V1")throw Error("evaluation required");
+  expect(currentAdjustment.executionEarmark).toEqual(a32.executionEarmark);
+  for(const change of [{forward:32 as const},{monthlyCapYen:170000 as const},{comparisonAssessmentRepairEarmark:undefined},
+    {sourceActorLocatorRepairEarmark:undefined},{comparisonEvidenceRepairEarmark:undefined},
+    {ownerApprovalDigest:a32.ownerApprovalDigest},{repairEpochDigest:a32.repairEpochDigest},
+    {priorPlanDigest:digest(3399)},{priorProfileDigest:digest(3399)},{validUntil:"2026-12-01T00:00:00Z"}])
+    expect(()=>setManagedMonthPlan(previous,{...input,standardMonthAdjustment:{...adjustment,...change}},f.now)).toThrow();
+  for(const change of [{baseYen:input.baseYen+1},{baseYen:input.baseYen+6267},
+    ...["remaining","storage","recovery"].map(k=>({pools:{...input.pools,[k]:input.pools[k as keyof typeof input.pools]+1}})),
+    {releaseTailYen:input.releaseTailYen-1},{reviewedOperationIds:[previous.operations[0].operationId]}])
+    expect(()=>setManagedMonthPlan(previous,{...input,...change},f.now)).toThrow();
+  for(const key of ["aiYen","imageRetentionYen","nonAiYen","storageYen"])
+    for(const delta of [-1,1])expect(()=>managedStandardMonthAdjustmentSchema.parse({...adjustment,
+      sourceActorLocatorRepairEarmark:{...adjustment.sourceActorLocatorRepairEarmark!,[key]:adjustment.sourceActorLocatorRepairEarmark![key as keyof NonNullable<typeof adjustment.sourceActorLocatorRepairEarmark>]+delta}})).toThrow();
+  expect(()=>managedStandardMonthAdjustmentSchema.parse({...adjustment,forward:34})).toThrow();
+  expect(()=>managedStandardMonthAdjustmentSchema.parse({...adjustment,monthlyCapYen:177000})).toThrow();
+  expect(()=>managedStandardMonthAdjustmentSchema.parse({...adjustment,executionEarmark:{...adjustment.executionEarmark,evaluationAiYen:0}})).toThrow();
+  const linked={...input,standardMonthAdjustment:{...adjustment,priorPlanDigest:managedDigest(active.plans[2]),priorProfileDigest:managedDigest(profile33)}};
+  expect(()=>setManagedMonthPlan(active,{...linked,baseYen:linked.baseYen+5742},f.now)).toThrow();
+  const stopped=setManagedMonthPlan(active,{...linked,standardMonthAdjustment:{...linked.standardMonthAdjustment,forward:32}},f.now);
+  expect(()=>checkManagedExecutionBudget(stopped,profile33,f.now)).toThrow();
+  expect(stopped.operations).toEqual(previous.operations);
+  expect(()=>checkManagedExecutionBudget(active,profile33,clock(adjustment.validUntil))).toThrow();
+});
 for(const corrective of [false,true]){
   it(`preserves all holds and adds exactly the approved prompt successor ${corrective}`,()=>{
     const f=practitionerPromptSuccessorFixture(corrective),planned=setManagedMonthPlan(f.previous,f.input,f.now);

@@ -308,7 +308,7 @@ it("requires focused heat objects only when a named heat component repeats in an
  expect((others.properties!.P as JSONSchema7).enum).not.toContain("releases_heat");
  const original=branches(taskFor("青熱交換器にて液を放熱させる。")).find(b=>b.properties?.J)!;
  const definitions=(task.schema.jsonSchema as JSONSchema7).definitions!;
- expect({...others.properties,u:definitions.PriorArtSourceHeatActor,P:undefined}).toEqual({...original.properties,P:undefined});
+ expect({...others.properties,u:others.properties!.u,P:undefined}).toEqual({...original.properties,P:undefined});
  expect(((heat.properties!.J as JSONSchema7).items as JSONSchema7).description).toBe((definitions.PriorArtSourceTerm as JSONSchema7).description);
  expect(new Set(relation.flatMap(b=>(b.properties!.P as JSONSchema7).enum!))).toEqual(new Set((original.properties!.P as JSONSchema7).enum));
  expect(task.system).toContain("heat J requires {reference,focus}");
@@ -340,6 +340,39 @@ it("supplies usable occurrence choices with unchanged source text and the existi
 
 function groupFact<T extends {R:number}>(value:T){const {R,...fact}=value;void R;return fact;}
 function setupFacts(claim:Record<string,unknown>){return claim.f2 as ReturnType<typeof setup>["wire"]["s"][number]["c1"]["facts"];}
+
+it("passes typed actors through the same complete assembly as legacy exact references and rejects fabricated actors",async()=>{
+ const old=setup(),typed=structuredClone(old.answers);
+ for(const answer of typed){
+  const row=(answer.value.c1.f2 as {m:{u:unknown}}[])[0];
+  row.m.u=[{first:0,last:0,quote:"制御器",focus:null}];
+  const defs=(old.plan.tasks[0].schema.jsonSchema as JSONSchema7).definitions!;
+  expect(defs.PriorArtSourceActorTerm).toEqual({type:"array",items:{$ref:"#/definitions/PriorArtSourceActorLocator"}});
+  expect(old.plan.tasks[0].system).not.toMatch(/\bu[=:]\["\d+-\d+:/u);
+ }
+ const before=JSON.stringify(typed);
+ expect(await assembleSourceClaimsWithLocators(old.plan,typed)).toEqual(await assembleSourceClaimsWithLocators(old.plan,old.answers));
+ expect(JSON.stringify(typed)).toBe(before);
+ for(const u of [[":["],[],null,[{first:0,last:0,quote:"別の主体",focus:null}],
+  [{first:0,last:0,quote:"制御器",focus:null,extra:1}]]){
+  const bad=structuredClone(typed);(bad[0].value.c1.f2 as {m:{u:unknown}}[])[0].m.u=u;
+  expect((await old.plan.tasks[0].schema.validate!(bad[0].value)).success).toBe(false);
+ }
+});
+
+it("keeps previously supported near-capacity source plans on their established exact-reference wire",()=>{
+ for(const n of [43,44,45,46,47]){
+  const f=fictionalInputs(),text='【請求項1】'+'青管を備える、'.repeat(n-1)+'青装置。';
+  f.inputs.draft=parseComparisonSource(text,11,'架空');
+  f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(text,d.id,'架空'));
+  const plan=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection));
+  expect(plan.tasks).toHaveLength(3);
+  if(n>=44)for(const task of plan.tasks){
+   expect((task.schema.jsonSchema as JSONSchema7).definitions!.PriorArtSourceActorLocator).toBeUndefined();
+   expect(task.system).toContain('u=["0-0:制御器"]');
+  }
+ }
+});
 // Only hand-authored fictional output is split here. Never use this adapter to
 // repair, reassign or accept a provider response.
 function setup(actor="制御器"){
@@ -623,7 +656,7 @@ it("validates the complete fictional direct-reference has/path example and rejec
  expect(schema.definitions.PriorArtSourceGroupedFact.properties).not.toHaveProperty('R');
  const pathSchema=schema.definitions.PriorArtSourceMeaning.anyOf!.find(x=>x.properties.i)!;
  for(const k of ['i','j','V','B'])expect(pathSchema.properties[k].description).toContain('THIS route occurrence');
- expect(pathSchema.properties.u.description).toContain('printed MODE');
+ expect((schema.definitions.PriorArtSourcePathActor as {description?:string}).description).toContain('printed MODE');
 });
 
 it("shows existing literal route anchors near the target without supplying completed route meanings",()=>{
@@ -890,7 +923,7 @@ it("keeps the recognized whole-route mode subject distinct from its controller w
  await expect(validateDirectSourceClaim(source,1,wrong,SOURCE_CAPACITY)).rejects.toThrow();expect(JSON.stringify(wrong)).toBe(wrongBefore);
  const task=sourceClaimExtractionPlan(chunks).tasks.find(t=>t.sourceIndex===0)!;
  const defs=(task.schema.jsonSchema as {definitions:Record<string,{anyOf?:{properties?:Record<string,{description?:string}>}[]}>}).definitions;
- const branches=defs.PriorArtSourceMeaning.anyOf!;expect(branches.find(b=>b.properties?.i)?.properties?.u.description).toContain("fixed recognizedLoopRoutes mode");
+ expect((defs.PriorArtSourcePathActor as {description?:string}).description).toContain("fixed recognizedLoopRoutes mode");
  expect(task.system).toContain("A return path and switching action in the same clause are distinct meanings");
 });
 
