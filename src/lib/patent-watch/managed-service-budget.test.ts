@@ -1741,7 +1741,7 @@ it("admits one exact 32-to-33 source actor repair while preserving all prior fun
   const input={...f.input,baseYen:old.baseYen+5742,pools:{...old.pools,remaining:old.pools.remaining+525},standardMonthAdjustment:adjustment};
   const active=activate(setManagedMonthPlan(previous,input,f.now),profile33,f.now);
   expect(()=>setManagedMonthPlan(state31,{...input,standardMonthAdjustment:{...adjustment,
-    priorPlanDigest:managedDigest(old31),priorProfileDigest:state31.activeProfileDigest}},f.now)).toThrow();
+    priorPlanDigest:managedDigest(old31),priorProfileDigest:managedDigest(f.p)}},f.now)).toThrow();
   expect(managedBudgetForecast(active,"2026-11")-managedBudgetForecast(previous,"2026-11")).toBe(6267);
   for(const key of ["operations","administration","cases","legacyUnknownYen","releaseTailYen"] as const)expect(active[key]).toEqual(previous[key]);
   expect(active.plans.slice(0,2)).toEqual(previous.plans.slice(0,2));
