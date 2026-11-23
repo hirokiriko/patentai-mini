@@ -53,7 +53,7 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enab
           return;
         }
         setUncertain(true);
-        setMessage("比較の完了を待っています。画面を閉じてもサーバー側の処理は続きます。中断・失敗時も自動再実行しません。");
+        setMessage("比較の予約を確認しました。処理中かどうかは不明です。この画面で保存結果を確認しています。AIは再送しません。");
       } catch {
         if (!disposed) setMessage("保存状態を確認できません。AIは再送せず、保存状態の確認だけを続けます。");
       }
