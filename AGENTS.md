@@ -276,6 +276,9 @@ Every progress or completion report must also include two independent headings:
   GitHub handoff is self-contained. If nothing is needed, state
   `現在、Codexへの指示はありません`. Do not restate a long prompt unless a
   short Local-only execution hint cannot be stored on public GitHub.
+  An intermediate report does not end the assignment. If the operator or verifier
+  can take the next step under existing approval, continue without asking the user
+  to send another instruction.
 - `## 作業の区切り`: choose exactly one of `地続きで続行`,
   `ここで一時休憩OK`, `ここでセッション切替OK`, or `作業完了`.
 
@@ -475,6 +478,17 @@ execution-route label to an incomplete Issue. If information is missing,
 contradictory, or awaiting a decision, record the missing items on the Issue,
 add the appropriate stop label such as `codex:blocked`, and stop before branch
 creation. Do not expand scope by consulting chat history or restricted files.
+
+Once an approved Issue is under way, the assignee coordinates the work through
+acceptance and handoff. If a step is waiting on access, an input, or another
+operator, record what it needs and contact the authorized operator directly.
+Continue independent, approved work in parallel. Resume the dependent step
+when the prerequisite is verified. Within the approved scope and budget,
+handle fixes, safe retries, review, and phase transitions without renewed
+approval. Reuse applicable evidence, serialize shared writes, and reconcile
+unknown outcomes before retrying. Respect explicit stops and Cloud/Local
+boundaries. Bring the OWNER only actions or decisions that require them,
+grouped with the reason and the specific action needed.
 
 Record start information, correction requests, test evidence for the exact
 head SHA, re-verification, unresolved items, and handoff in the Issue or PR.
