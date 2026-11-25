@@ -1,6 +1,6 @@
 import { generateObject, NoObjectGeneratedError, type Schema } from "ai";
 import { getModel } from "../ai-model";
-import { aiOperationDeadline, withPriorArtClaimComparisonBudget } from "../ai-operation-budget";
+import { aiOperationDeadline, withPriorArtClaimComparisonBudget, type ComparisonSpendAllocation } from "../ai-operation-budget";
 import { LIMITS, makePlan, savedDigest, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
@@ -31,7 +31,8 @@ import { captureReviewSdkFailure } from "./review-sdk-failure";
 export const PROPOSITION_GENERATION_SYSTEM = `Select complete existing fact IDs from closedFacts for each planned pair. Return only the structured selections, never patent prose. baseFacts/candidateFacts are scoped observations and their first fact supplies the representative original quote. Choose observations from observationChoices, first citing the selected claim when it has an own source fact. Passive is_state/power_ends facts retain their legitimate absent actor. Cover each requiredControlChoices group with at least one existing complete fact across the fields, keeping parent and child separate. Choose complete quote ranges. common pairs must have exactly the same complete meaning on both sides, including subject, context, guards and predicate, or an existing explicit set-member correspondence whose separate quantifiers remain printed. differences selects distinct complete facts from each side, or a nominal reservation object when no supported difference is established. Never label identical facts as differences; never compose parent and child conditions into one fact. All original claims and facts remain available. The server writes the exact complete subject, conditions and action, and independent review still checks the reading against original sources. Select a different complete fact if the rendered observation exceeds120 UTF16 units or paired common/differences exceeds200; never shorten a fact. unconfirmed contains nominal uncertainty topics only, e.g. 比較結果の原文照合は要確認。`;
 
 /** One finite serial operation. No fallback and no partial successful save. */
-export async function executeComparison(inputs: ComparisonInputs, selection: Selection, auditSink?: SourceAuditSink): Promise<SavedComparison> {
+export async function executeComparison(inputs: ComparisonInputs, selection: Selection, auditSink?: SourceAuditSink,
+  allocation?: ComparisonSpendAllocation): Promise<SavedComparison> {
   const plan = makePlan(inputs, selection); // Entire scope must fit before any send.
   const batch = separatedGenerationPlan(plan, PROPOSITION_GENERATION_SYSTEM);
   assertPropositionPlan(batch);
@@ -51,6 +52,7 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const generate = async (system: string, prompt: string, schema: Schema<unknown>, phase: ComparisonPhase, sourceTaskId?: string, partitionedSource?: boolean, outputTokenLimit?: number) => {
         if (absolute.aborted) throw new ComparisonExecutionError(stage, "timeout");
         const model = getModel();
+        if (allocation && (model.provider !== "azure.responses" || model.modelId !== "patentai-gpt54")) throw new ComparisonError("ai_incomplete");
         const options = comparisonProviderOptions(model, phase, partitionedSource);
         const outputTokens = Math.min(comparisonOutputTokens(model, phase), outputTokenLimit ?? Infinity);
         const signal = AbortSignal.any([absolute, aiOperationDeadline(comparisonRequestMilliseconds(model, phase))]);
@@ -175,6 +177,6 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       if (reviewStep) retainReviewFailure(failure, { step: reviewStep, inputs, selection, generation: generationAnswer, review: reviewAnswer });
       throw failure;
     }
-  }), true);
+  }, false, allocation), true);
   } finally { observation.close(); }
 }

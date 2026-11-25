@@ -79,3 +79,12 @@ it.each([
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(sessionStorage.setItem).not.toHaveBeenCalled();
 });
+it("a verified new slot ignores but preserves the old sessionStorage operation without manual deletion", () => {
+  const assigned = "c0000000-0000-4000-8000-000000000008";
+  const props = { catalog, completedIds: [], pendingIds: [operationId], blocked: false, enabled: true,
+    admission: { restricted: true, operationId: assigned, canStart: true } };
+  state.cursor = 0; state.effects = []; renderToStaticMarkup(SelectionForm(props)); state.effects[0]();
+  state.cursor = 0; state.effects = []; const html = renderToStaticMarkup(SelectionForm(props));
+  expect(storage.get(pendingKey)).toBe(operationId); expect(sessionStorage.setItem).not.toHaveBeenCalled();
+  expect(html).not.toContain(`今回の操作ID: ${operationId}`); expect(html).not.toContain("前回の操作が未照合");
+});

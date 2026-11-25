@@ -3,19 +3,22 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { comparisonCatalog } from "@/lib/prior-art-comparison/repository";
+import type { Admission } from "@/lib/prior-art-comparison/limited-release";
 import { LIMITS } from "@/lib/prior-art-comparison/limits";
 
 type Catalog = Awaited<ReturnType<typeof comparisonCatalog>>;
 const field = "rounded border border-slate-400 bg-white p-2 text-slate-900";
-export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enabled }: { catalog: Catalog; completedIds: string[]; pendingIds: string[]; blocked: boolean; enabled: boolean }) {
+export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enabled, admission }: { catalog: Catalog; completedIds: string[]; pendingIds: string[]; blocked: boolean; enabled: boolean; admission?: Admission }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const [message, setMessage] = useState("");
   const [operation, setOperation] = useState<string | null>(null);
-  const pendingKey = `prior-art-comparison-pending-${catalog.caseId}`;
+  const restricted = admission?.restricted === true;
+  const assignedOperation = admission?.operationId ?? null;
+  const pendingKey = restricted ? `prior-art-comparison-pending-${catalog.caseId}-${assignedOperation ?? "closed"}` : `prior-art-comparison-pending-${catalog.caseId}`;
   useEffect(() => {
-    const pending = sessionStorage.getItem(pendingKey) || pendingIds[0];
+    const pending = sessionStorage.getItem(pendingKey) || (restricted ? pendingIds.find(id => id === assignedOperation) : pendingIds[0]);
     if (!pending) return;
     setOperation(pending);
     if (completedIds.includes(pending)) {
@@ -25,7 +28,7 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enab
       setUncertain(true);
       setMessage("前回の操作が未照合です。再実行せず保存結果を再読込してください。表示されない場合は利用状況と保存状態の確認が必要です。");
     }
-  }, [pendingKey, completedIds, pendingIds]);
+  }, [pendingKey, completedIds, pendingIds, restricted, assignedOperation]);
   useEffect(() => {
     if (busy || !operation || completedIds.includes(operation)) return;
     let disposed = false;
@@ -65,9 +68,9 @@ export function SelectionForm({ catalog, completedIds, pendingIds, blocked, enab
   }, [busy, operation, completedIds, catalog.caseId, pendingKey, router]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!enabled || busy || uncertain || blocked || sessionStorage.getItem(pendingKey)) return;
+    if (!enabled || busy || uncertain || blocked || sessionStorage.getItem(pendingKey) || (restricted && (!assignedOperation || !admission?.canStart))) return;
     const data = new FormData(event.currentTarget);
-    const operationId = crypto.randomUUID();
+    const operationId = restricted ? assignedOperation! : crypto.randomUUID();
     sessionStorage.setItem(pendingKey, operationId);
     setOperation(operationId); setBusy(true); setMessage("");
     const documents = catalog.documents.filter(d => data.get(`doc-${d.id}`)).map(d => ({ docId: d.id,

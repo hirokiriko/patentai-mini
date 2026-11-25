@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { withOwnerRoute } from "@/lib/owner-http";
 import { selectionSchema } from "@/lib/prior-art-comparison/comparison";
-import { comparisonCatalog, listComparisons, reserveComparison, completeReservedComparison } from "@/lib/prior-art-comparison/repository";
+import { comparisonCatalog, listComparisons, comparisonAdmission, reserveComparison, completeReservedComparison } from "@/lib/prior-art-comparison/repository";
 import { caseNumber, comparisonFailure } from "@/lib/prior-art-comparison/http";
 import { ComparisonError } from "@/lib/prior-art-comparison/source";
 import { comparisonEnabled } from "@/lib/prior-art-comparison/availability";
@@ -21,7 +21,7 @@ export const GET = withOwnerRoute(async (request: Request, { params }: Context) 
       const failed = saved.failedOperations.find(result => result.operationId === operationId);
       return Response.json({ operationId, ...(failed ? { failure: failed.failure } : {}), status: complete ? "complete" : failed ? "failed" : saved.pendingOperationIds.includes(operationId) ? "reserved" : "unconfirmed" });
     }
-    return Response.json({ enabled: comparisonEnabled(), catalog: await comparisonCatalog(id), saved: await listComparisons(id) });
+    return Response.json({ enabled: comparisonEnabled(), catalog: await comparisonCatalog(id), saved: await listComparisons(id), admission: await comparisonAdmission(id) });
   } catch (error) { return comparisonFailure(error); }
 });
 export const POST = withOwnerRoute(async (request: Request, { params }: Context) => {

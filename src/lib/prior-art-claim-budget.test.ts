@@ -6,6 +6,33 @@ const response=(usage:unknown={input_tokens:10,output_tokens:5})=>Response.json(
 describe("finite per-claim comparison scope (fictional transport only)",()=>{
  beforeEach(()=>{vi.useFakeTimers();vi.spyOn(AbortSignal,"timeout").mockImplementation(ms=>{const c=new AbortController();setTimeout(()=>c.abort(),ms);return c.signal;});});
  afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.clearAllTimers();vi.useRealTimers();});
+ it("reserves each complete wire request before dispatch and retains the reservation after low usage", async () => {
+   const transport = vi.fn<typeof fetch>().mockImplementation(async () => response());
+   vi.stubGlobal("fetch", transport);
+   const body = JSON.stringify({ ...JSON.parse(request().body), service_tier: "default" });
+   const inputRate = 50, outputRate = 200;
+   const one = Math.ceil(2 * ((Buffer.byteLength(body, "utf8") + 8192) * inputRate + 64 * outputRate) / 100_000);
+   await withPriorArtClaimComparisonBudget(6, async () => {
+     const send = boundedAzureFetch("normal"), init = { method: "POST", body };
+     await send(url, init);
+     await expect(send(url, init)).rejects.toThrow("ai_operation_stopped");
+     await expect(send(url, init)).rejects.toThrow("ai_operation_stopped");
+   }, false, { phase: "day", maximumSends: 8, maximumJPY: 2 * one - 1, inputYenPer100k: inputRate,
+     outputYenPer100k: outputRate, releaseSHA256: "a".repeat(64), validUntilUTC: new Date(Date.now() + 60_000).toISOString() });
+   expect(transport).toHaveBeenCalledTimes(1);
+ });
+ it.each(["expired", "other_tier", "other_model"])("refuses a scoped wire request before delivery: %s", async mode => {
+   const transport = vi.fn<typeof fetch>(); vi.stubGlobal("fetch", transport);
+   const expiry = Date.now() + 10_000;
+   await withPriorArtClaimComparisonBudget(6, async () => {
+     if (mode === "expired") vi.setSystemTime(expiry);
+     const body = JSON.stringify({ ...JSON.parse(request().body), model: mode === "other_model" ? "fictional" : "patentai-gpt54",
+       service_tier: mode === "other_tier" ? "auto" : "default" });
+     await expect(boundedAzureFetch("normal")(url, { method: "POST", body })).rejects.toThrow("ai_operation_stopped");
+   }, false, { phase: "dev", maximumSends: 8, maximumJPY: 500, inputYenPer100k: 50, outputYenPer100k: 200,
+     releaseSHA256: "b".repeat(64), validUntilUTC: new Date(expiry).toISOString() });
+   expect(transport).not.toHaveBeenCalled();
+ });
  it.each(["compare","review","after_complete"])("counts a source pair once and rejects another pair at %s",async position=>{
   const transport=vi.fn<typeof fetch>().mockImplementation(async()=>response());vi.stubGlobal("fetch",transport);
   await withPriorArtClaimComparisonBudget(1,async()=>{

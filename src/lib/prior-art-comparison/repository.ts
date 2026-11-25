@@ -12,9 +12,11 @@ import { appendReviewFailureAudit, validateSourceAudit, type SourceAudit } from 
 import { takeReviewFailure, type ReviewFailureEvidence } from "./review-failure-audit";
 import { sourceClaimExtractionPlan } from "./source-claim-extraction";
 import { comparisonObservation } from "./observation";
+import type { ComparisonSpendAllocation } from "../ai-operation-budget";
+import { readLimitedRelease, assertReleaseSelection, assertReleaseHistory, releaseAllocation, type Admission } from "./limited-release";
 
 type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
-const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string }>();
+const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string; releaseSHA256?: string }>();
 function knownFailure(error: unknown): KnownFailure | null {
   return error instanceof ComparisonExecutionError && ["protocol_invalid", "review_rejected", "output_incomplete"].includes(error.kind)
     ? { stage: error.stage, kind: error.kind as KnownFailure["kind"] } : null;
@@ -105,6 +107,23 @@ export async function listComparisons(caseId: number) {
   const raw = await rawInputs(db, caseId);
   return { ...await savedResults(db, caseId), currentInputDigest: raw.inputDigest };
 }
+/** Display hint only; the same complete proof is checked again under the lock. */
+export async function comparisonAdmission(caseId: number): Promise<Admission> {
+  const limited = readLimitedRelease();
+  if (!limited.configured) return { restricted: false, operationId: null, canStart: true };
+  const blocked: Admission = { restricted: true, operationId: null, canStart: false };
+  if (!limited.value || caseId !== 104) return blocked;
+  try {
+    const rows = await db.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+    const stored = readGroups(rows, caseId);
+    if (stored.invalidCount) return blocked;
+    assertReleaseHistory(limited.value, rows, stored.results);
+    const raw = await rawInputs(db, caseId);
+    if (raw.inputDigest !== limited.value.scope.inputDigest) return blocked;
+    return { restricted: true, operationId: limited.value.activeOperationId,
+      canStart: !rows.some(row => (envelope(row) as { operationId?: string } | null)?.operationId === limited.value!.activeOperationId) };
+  } catch { return blocked; }
+}
 export async function getComparison(caseId: number, operationId: string) {
   const data = await listComparisons(caseId);
   const saved = data.results.find(r => r.operationId === operationId);
@@ -115,14 +134,24 @@ export async function getComparison(caseId: number, operationId: string) {
 /** Commit a durable no-retry reservation BEFORE dispatch. A missing commit ACK
  * never permits a send. Failed/unknown attempts keep the reservation across
  * processes and restarts; only complete results are downloadable. */
-export async function reserveComparison(caseId: number, selection: Selection) {
-    const reservation = await db.transaction(async tx => {
+type ComparisonReservation = { existing?: SavedComparison; pending?: true; inputs?: ComparisonInputs; ids?: number[]; allocation?: ComparisonSpendAllocation };
+export async function reserveComparison(caseId: number, selection: Selection): Promise<ComparisonReservation> {
+    const reservation: ComparisonReservation = await db.transaction(async tx => {
       await tx.execute(sql`set local lock_timeout = '3s'`);
       const locked = await tx.execute(sql`select pg_try_advisory_xact_lock(150, ${caseId}) as acquired`);
       if (locked.rows[0]?.acquired !== true) throw new ComparisonError("save_unconfirmed");
       const stored = await savedResults(tx, caseId);
+      const limited = readLimitedRelease();
+      if (limited.configured) {
+        if (!limited.value) throw new ComparisonError("selection_invalid");
+        assertReleaseSelection(limited.value, caseId, selection);
+        if (stored.invalidCount) throw new ComparisonError("result_invalid");
+        const preserved = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
+        assertReleaseHistory(limited.value, preserved, stored.results);
+      }
       const existing = stored.results.find(r => r.operationId === selection.operationId);
       if (existing) {
+        if (limited.configured) throw new ComparisonError("save_unconfirmed");
         if (digest(existing.selection) !== digest(selection)) throw new ComparisonError("selection_invalid");
         return { existing };
       }
@@ -132,11 +161,12 @@ export async function reserveComparison(caseId: number, selection: Selection) {
         return value?.status === "reserved" && value.operationId === selection.operationId;
       });
       if (ownPending.length) {
+        if (limited.configured) throw new ComparisonError("save_unconfirmed");
         if (ownPending.some(row => digest((envelope(row) as { selection?: unknown }).selection) !== digest(selection))) throw new ComparisonError("selection_invalid");
         return { pending: true as const };
       }
       if (stored.invalidCount) throw new ComparisonError("result_invalid");
-      if (stored.reservedCount) throw new ComparisonError("save_unconfirmed");
+      if (stored.reservedCount && !limited.value) throw new ComparisonError("save_unconfirmed");
       const rows = await tx.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId));
       if (rows.some(row => {
         const value = envelope(row);
@@ -159,9 +189,11 @@ export async function reserveComparison(caseId: number, selection: Selection) {
         matchedElementsJson: JSON.stringify({ matched: [], unmatched: [], explanation: "完了未確認の指定比較です。再実行せず保存結果を照合してください。",
           priorArtComparison: { version: 1, status: "reserved", operationId: selection.operationId, selection } }),
       }))).returning({ id: comparisonResults.resultId });
-      return { inputs, ids: reservedRows.map(r => r.id) };
+      return { inputs, ids: reservedRows.map(r => r.id),
+        ...(limited.value ? { allocation: releaseAllocation(limited.value, limited.sha256!) } : {}) };
     });
-    if (reservation.inputs) reservationCapabilities.set(reservation, { caseId, selectionHash: digest(selection), reservationHash: digest(reservation) });
+    if (reservation.inputs) reservationCapabilities.set(reservation, { caseId, selectionHash: digest(selection), reservationHash: digest(reservation),
+      ...(reservation.allocation ? { releaseSHA256: reservation.allocation.releaseSHA256 } : {}) });
     return reservation;
 }
 
@@ -173,6 +205,11 @@ export async function completeReservedComparison(caseId: number, selection: Sele
   const capability = reservationCapabilities.get(reservation);
   reservationCapabilities.delete(reservation);
   if (!capability || capability.caseId !== caseId || capability.selectionHash !== digest(selection) || capability.reservationHash !== digest(reservation)) throw new ComparisonError("save_unconfirmed");
+  if (capability.releaseSHA256) {
+    const current = readLimitedRelease();
+    if (!current.value || current.sha256 !== capability.releaseSHA256) throw new ComparisonError("save_unconfirmed");
+    assertReleaseSelection(current.value, caseId, selection);
+  }
   const observation = comparisonObservation(selection.operationId);
   let saveStarted = false;
   try {
@@ -184,7 +221,7 @@ export async function completeReservedComparison(caseId: number, selection: Sele
         await recordSourceAudit(caseId, selection, ids!, validateSourceAudit(audit, selection.operationId, inputs!.inputDigest, tasks.map(({ id, sourceIndex, sourceDigest, claimNo }) => ({ id, sourceIndex, sourceDigest, claimNo }))));
         observation.emit("source_audit_saved", { answers: audit.answers.length, tasks: tasks.length });
       } catch (error) { observation.emit("source_audit_unconfirmed"); throw error; }
-    });
+    }, reservation.allocation);
     saveStarted = true;
     observation.emit("result_save_begin");
     const result = await db.transaction(async tx => {
