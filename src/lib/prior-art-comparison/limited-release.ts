@@ -4,9 +4,11 @@ import { ComparisonError, digest } from "./source";
 import { validateSourceAudit } from "./source-audit";
 import type { ComparisonSpendAllocation } from "../ai-operation-budget";
 
+import { heldEvidenceSchema, heldReservationEvidence, type HeldReference } from "./held-reservation";
+
 export const LIMITED_RELEASE_ENV = "PRIOR_ART_COMPARISON_CASE104_RELEASE";
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
-const releaseSchema = z.object({ schema: z.literal("CASE104_LIMITED_RELEASE_V1"), caseId: z.literal(104),
+const legacyReleaseSchema = z.object({ schema: z.literal("CASE104_LIMITED_RELEASE_V1"), caseId: z.literal(104),
   phase: z.enum(["dev", "day"]), activeOperationId: z.uuid(), devOperationId: z.uuid(),
   validFromUTC: z.iso.datetime(), validUntilUTC: z.iso.datetime(),
   authority: z.object({ sequence: z.literal(168), envelopeSHA256: hash, ownerDecisionSHA256: hash }).strict(),
@@ -17,7 +19,33 @@ const releaseSchema = z.object({ schema: z.literal("CASE104_LIMITED_RELEASE_V1")
     inputYenPer100k: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), outputYenPer100k: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }).strict(),
   devSavedSnapshotDigest: hash.optional(),
 }).strict();
+const successorReleaseSchema = legacyReleaseSchema.extend({
+  schema: z.literal("CASE104_LIMITED_RELEASE_V2"),
+  authority: z.object({ sequence: z.literal(170), envelopeSHA256: hash, ownerDecisionSHA256: hash }).strict(),
+  retainedUnknown: z.object({ evidence: heldEvidenceSchema, isolationEvidenceSHA256: hash }).strict(),
+}).strict();
+const releaseSchema = z.union([legacyReleaseSchema, successorReleaseSchema]);
 export type LimitedRelease = z.infer<typeof releaseSchema>;
+function assertSuccessorIsolation(value: LimitedRelease) {
+  if (value.schema !== "CASE104_LIMITED_RELEASE_V2") return;
+  const held = value.retainedUnknown.evidence, { evidenceDigest, ...body } = held;
+  if (digest(body) !== evidenceDigest || [value.oldFailure.operationId, value.activeOperationId, value.devOperationId].includes(held.operationId) ||
+      held.selectionSHA256 !== digest({ ...value.scope, operationId: held.operationId })) throw new ComparisonError("result_invalid");
+}
+/** Expiry is deliberately ignored only for OWNER's non-dispatch historical fingerprint GET. */
+export function historicalHeldReference(caseId: number, operationId: string): HeldReference {
+  let value: LimitedRelease;
+  try { const raw = process.env[LIMITED_RELEASE_ENV]; if (!raw || Buffer.byteLength(raw) > 16384) throw Error();
+    value = releaseSchema.parse(JSON.parse(raw)); assertSuccessorIsolation(value);
+  } catch { throw new ComparisonError("save_unconfirmed"); }
+  const fixed = value.schema === "CASE104_LIMITED_RELEASE_V2" ? value.retainedUnknown.evidence.operationId : value.devOperationId;
+  if (caseId !== 104 || fixed !== operationId || value.oldFailure.operationId === fixed ||
+      value.scope.draftClaimNos.length !== 1 || value.scope.documents.length !== 2 ||
+      value.scope.documents.some(doc => doc.claimNos.length !== 1) ||
+      Date.parse(value.validFromUTC) >= Date.parse(value.validUntilUTC)) throw new ComparisonError("save_unconfirmed");
+  const selection = selectionSchema.parse({ ...value.scope, operationId });
+  return { operationId, selection, selectionSHA256: digest(selection) };
+}
 export type Admission = { restricted: boolean; operationId: string | null; canStart: boolean };
 export function readLimitedRelease(now = Date.now()): { configured: boolean; value: LimitedRelease | null; sha256?: string } {
   const raw = process.env[LIMITED_RELEASE_ENV];
@@ -25,6 +53,7 @@ export function readLimitedRelease(now = Date.now()): { configured: boolean; val
   try {
     if (!raw.length || Buffer.byteLength(raw) > 16384) throw Error();
     const value = releaseSchema.parse(JSON.parse(raw));
+    assertSuccessorIsolation(value);
     if (Date.parse(value.validFromUTC) > now || now >= Date.parse(value.validUntilUTC) ||
       Date.parse(value.validFromUTC) >= Date.parse(value.validUntilUTC) ||
       value.oldFailure.operationId === value.activeOperationId || value.oldFailure.operationId === value.devOperationId ||
@@ -38,7 +67,7 @@ export function assertReleaseSelection(release: LimitedRelease, caseId: number, 
   const { operationId, ...scope } = selection;
   if (caseId !== 104 || operationId !== release.activeOperationId || digest(scope) !== digest(release.scope)) throw new ComparisonError("selection_invalid");
 }
-type Row = { caseId: number; draftClaimId: string | null; priorDocId: number | null; matchedElementsJson: string | null };
+type Row = { resultId?: number; caseId: number; draftClaimId: string | null; priorDocId: number | null; matchedElementsJson: string | null };
 function record(row: Row): { marker: Record<string, unknown>; audit: unknown } {
   try { const value = JSON.parse(row.matchedElementsJson ?? "null");
     if (!value?.priorArtComparison || typeof value.priorArtComparison !== "object") throw Error();
@@ -47,6 +76,7 @@ function record(row: Row): { marker: Record<string, unknown>; audit: unknown } {
 }
 /** Exact old terminal evidence is retained, never changed/reclassified/released. */
 export function assertReleaseHistory(release: LimitedRelease, rows: Row[], saved: SavedComparison[]) {
+  assertSuccessorIsolation(release);
   const old = rows.filter(row => record(row).marker.operationId === release.oldFailure.operationId);
   if (!old.length) throw new ComparisonError("save_unconfirmed");
   const first = record(old[0]), selection = selectionSchema.parse(first.marker.selection);
@@ -63,8 +93,15 @@ export function assertReleaseHistory(release: LimitedRelease, rows: Row[], saved
     if (audit.auditDigest !== release.oldFailure.auditDigest) throw new ComparisonError("result_invalid");
   }
   if (keys.size) throw new ComparisonError("result_invalid");
+  if (release.schema === "CASE104_LIMITED_RELEASE_V2") {
+    const held = release.retainedUnknown.evidence;
+    const actual = heldReservationEvidence(rows, { operationId: held.operationId,
+      selection: { ...release.scope, operationId: held.operationId }, selectionSHA256: held.selectionSHA256 });
+    if (digest(actual) !== digest(held)) throw new ComparisonError("result_invalid");
+  }
   for (const row of rows) {
     const marker = record(row).marker;
+    if (release.schema === "CASE104_LIMITED_RELEASE_V2" && marker.operationId === release.retainedUnknown.evidence.operationId) continue;
     if (row.caseId !== 104 || ![release.oldFailure.operationId, release.activeOperationId, ...(release.phase === "day" ? [release.devOperationId] : [])].includes(String(marker.operationId))) throw new ComparisonError("save_unconfirmed");
     if (marker.status === "reserved" && marker.operationId !== release.oldFailure.operationId && marker.operationId !== release.activeOperationId) throw new ComparisonError("save_unconfirmed");
   }

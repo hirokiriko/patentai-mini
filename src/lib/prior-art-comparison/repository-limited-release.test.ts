@@ -13,8 +13,9 @@ import { fictionalSaved } from "./fixtures.test-support";
 import { savedDigest, type Selection } from "./comparison";
 import { digest } from "./source";
 import { sourceAudit } from "./source-audit";
-import { reserveComparison, completeReservedComparison, listComparisons, comparisonAdmission, getComparisonSourceAudit } from "./repository";
+import { reserveComparison, completeReservedComparison, listComparisons, comparisonAdmission, getComparisonSourceAudit, getHeldComparisonEvidence } from "./repository";
 import { LIMITED_RELEASE_ENV, type LimitedRelease } from "./limited-release";
+import { heldReservationEvidence, type HeldRow } from "./held-reservation";
 const OLD = "b0000000-0000-4000-8000-000000000001", DEV = "b0000000-0000-4000-8000-000000000002", DAY = "b0000000-0000-4000-8000-000000000003";
 let release: LimitedRelease, selected: Selection, saved: ReturnType<typeof fictionalSaved>, oldBytes: string[];
 beforeEach(() => {
@@ -86,4 +87,30 @@ it("old failure and new completed result coexist; repeated GET/audit reads canno
 it("deadline/config changes after commit leave the reservation and prevent dispatch", async () => {
   const reservation = await reserveComparison(104, selected); vi.stubEnv(LIMITED_RELEASE_ENV, "{}");
   await expect(completeReservedComparison(104, selected, reservation)).rejects.toBeDefined(); expect(seam.executeAI).not.toHaveBeenCalled(); expect(seam.rows).toHaveLength(4);
+});
+
+function successorFixture() {
+  const heldId="b0000000-0000-4000-8000-000000000004",heldSelection={...selected,operationId:heldId};
+  seam.rows.push(...selected.documents.map((doc,i)=>({resultId:31+i,caseId:104,priorDocId:doc.docId,draftClaimId:String(selected.draftClaimNos[0]),matchedElementsJson:JSON.stringify({priorArtComparison:{version:1,status:"reserved",operationId:heldId,selection:heldSelection}})})));
+  const evidence=heldReservationEvidence(seam.rows as HeldRow[],{operationId:heldId,selection:heldSelection,selectionSHA256:digest(heldSelection)});
+  const successor:LimitedRelease={...release,schema:"CASE104_LIMITED_RELEASE_V2",authority:{...release.authority,sequence:170},retainedUnknown:{evidence,isolationEvidenceSHA256:"e".repeat(64)}};
+  vi.stubEnv(LIMITED_RELEASE_ENV,JSON.stringify(successor));return {heldId,successor,evidence};
+}
+it("successor reservation preserves both predecessor groups and cannot rearm either",async()=>{
+  const {heldId}=successorFixture(),before=JSON.stringify(seam.rows);
+  expect(await comparisonAdmission(104)).toMatchObject({canStart:true,operationId:DEV});
+  await expect(reserveComparison(104,{...selected,operationId:heldId})).rejects.toBeDefined();
+  const reservation=await reserveComparison(104,selected);expect(reservation.ids).toHaveLength(2);expect(JSON.stringify(seam.rows.slice(0,4))).toBe(before);
+  await expect(reserveComparison(104,selected)).rejects.toBeDefined();expect(seam.executeAI).not.toHaveBeenCalled();
+});
+it("expired successor OWNER fingerprints use two reads and never reserve, transact or send AI",async()=>{
+  const {heldId,successor,evidence}=successorFixture();vi.stubEnv(LIMITED_RELEASE_ENV,JSON.stringify({...successor,validFromUTC:"2025-01-01T00:00:00Z",validUntilUTC:"2025-01-01T01:00:00Z"}));
+  const before=JSON.stringify(seam.rows);expect(await getHeldComparisonEvidence(104,heldId)).toEqual({evidence,historicalReadOnly:true,aiSends:0,rowWrites:0});
+  expect(JSON.stringify(seam.rows)).toBe(before);expect(seam.transaction).not.toHaveBeenCalled();expect(seam.executeAI).not.toHaveBeenCalled();
+  await expect(getHeldComparisonEvidence(105,heldId)).rejects.toBeDefined();await expect(getHeldComparisonEvidence(104,DAY)).rejects.toBeDefined();
+});
+it("fingerprint read rejects changes between its two snapshots",async()=>{
+  const {heldId}=successorFixture(),original=seam.select.getMockImplementation()!;let reads=0;
+  seam.select.mockImplementation(()=>{if(++reads===2)seam.rows[2].matchedElementsJson=String(seam.rows[2].matchedElementsJson)+" ";return original();});
+  await expect(getHeldComparisonEvidence(104,heldId)).rejects.toMatchObject({code:"save_unconfirmed"});expect(seam.transaction).not.toHaveBeenCalled();expect(seam.executeAI).not.toHaveBeenCalled();
 });

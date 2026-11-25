@@ -4,6 +4,7 @@ import { selectionSchema } from "@/lib/prior-art-comparison/comparison";
 import { comparisonCatalog, listComparisons, comparisonAdmission, reserveComparison, completeReservedComparison } from "@/lib/prior-art-comparison/repository";
 import { caseNumber, comparisonFailure } from "@/lib/prior-art-comparison/http";
 import { ComparisonError } from "@/lib/prior-art-comparison/source";
+import { getHeldComparisonEvidence } from "@/lib/prior-art-comparison/repository";
 import { comparisonEnabled } from "@/lib/prior-art-comparison/availability";
 import { comparisonObservation } from "@/lib/prior-art-comparison/observation";
 
@@ -13,7 +14,13 @@ type Context = { params: Promise<{ caseId: string }> };
 export const GET = withOwnerRoute(async (request: Request, { params }: Context) => {
   try {
     const id = caseNumber((await params).caseId);
-    const operationId = new URL(request.url).searchParams.get("operationId");
+    const query = new URL(request.url).searchParams;
+    const preservedOperationId = query.get("preservedOperationId");
+    if (preservedOperationId !== null) {
+      if (query.size !== 1 || !selectionSchema.shape.operationId.safeParse(preservedOperationId).success) throw new ComparisonError("not_found");
+      return Response.json(await getHeldComparisonEvidence(id, preservedOperationId));
+    }
+    const operationId = query.get("operationId");
     if (operationId !== null) {
       if (!selectionSchema.shape.operationId.safeParse(operationId).success) throw new ComparisonError("selection_invalid");
       const saved = await listComparisons(id);
