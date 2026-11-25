@@ -5,7 +5,7 @@ import { LIMITS, makePlan, savedDigest, validateAnswer, validateSaved,
   type ComparisonInputs, type SavedComparison, type Selection } from "./comparison";
 import { ComparisonError } from "./source";
 import { decodeGeneration } from "./generation";
-import { batchTransportInput, requestBytes, modelRequestBytes } from "./generation-batch";
+import { batchTransportInput, modelRequestBytes } from "./generation-batch";
 import { type ReviewDraft } from "./semantic-review";
 import { comparisonProviderOptions } from "./provider-options";
 import { comparisonOutputTokens, comparisonRequestMilliseconds, type ComparisonPhase } from "./limits";
@@ -22,7 +22,7 @@ import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 import { withAiRequestTiming } from "../ai-request-timing";
 import { comparisonObservation } from "./observation";
 
-import { decodeFactSelection, factSelectionSchema, factObservationChoices, factControlCoverage } from "./fact-selection-generation";
+import { decodeFactSelection, generationSelectionSchema, factObservationChoices, factControlCoverage } from "./fact-selection-generation";
 import { generationQuoteOptions } from "./generation-quote-options";
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-audit";
@@ -112,10 +112,14 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       stage = "generation";
       observation.emit("generation_started", { stage });
       const quoteOptions = generationQuoteOptions(batch, analyses);
-      const prompt = JSON.stringify({ ...batchTransportInput(batch, [], quoteOptions), generationProtocol: "scoped_fact_selection_v1", closedFacts: closedFactInput(analyses), observationChoices: factObservationChoices(batch, analyses, quoteOptions), requiredControlChoices: factControlCoverage(analyses) });
-      if (requestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, factSelectionSchema) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
+      const observationChoices = factObservationChoices(batch, analyses, quoteOptions);
+      const requiredControlChoices = factControlCoverage(analyses);
+      const selectionSchema = comparisonModelSchema<unknown>(generationSelectionSchema(batch, analyses, observationChoices, requiredControlChoices));
+      const prompt = JSON.stringify({ ...batchTransportInput(batch, [], quoteOptions), generationProtocol: "scoped_fact_selection_v1",
+        closedFacts: closedFactInput(analyses), observationChoices, requiredControlChoices });
+      if (modelRequestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, selectionSchema) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {
-        const selectionAnswer = await generate(PROPOSITION_GENERATION_SYSTEM, prompt, comparisonModelSchema(factSelectionSchema), "generation");
+        const selectionAnswer = await generate(PROPOSITION_GENERATION_SYSTEM, prompt, selectionSchema, "generation");
         generationAnswer = structuredClone(selectionAnswer);
         reviewStep = "generation_check";
         reviewAnswer = null; // No review send has occurred; preserve the raw generation on rejection.
