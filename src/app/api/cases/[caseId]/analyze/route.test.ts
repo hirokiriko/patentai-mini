@@ -5,7 +5,7 @@ vi.mock("@/lib/owner-http", () => import("../../../../../lib/owner-http"));
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/navigation", () => ({ notFound: vi.fn() }));
 vi.mock("@/lib/prior-art-comparison/repository", () => ({ reserveComparison: mocks.reserve,
-  completeReservedComparison: mocks.complete, listComparisons: mocks.list, comparisonCatalog: mocks.catalog }));
+  completeReservedComparison: mocks.complete, listComparisons: mocks.list, comparisonCatalog: mocks.catalog, comparisonAdmission: async () => ({restricted:false,operationId:null,canStart:true}) }));
 vi.mock("@/lib/prior-art-comparison/comparison", () => import("../../../../../lib/prior-art-comparison/comparison"));
 vi.mock("@/lib/prior-art-comparison/source", () => import("../../../../../lib/prior-art-comparison/source"));
 vi.mock("@/lib/prior-art-comparison/http", () => import("../../../../../lib/prior-art-comparison/http"));

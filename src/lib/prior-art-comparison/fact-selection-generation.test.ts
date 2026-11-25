@@ -4,7 +4,8 @@ import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource, digest } from "./source";
 import { decodeSourcePropositions, propositionSourceInput, type SourceExtraction } from "./proposition-extraction";
 import { generationQuoteOptions } from "./generation-quote-options";
-import { decodeFactSelection } from "./fact-selection-generation";
+import { decodeFactSelection, factControlCoverage, factObservationChoices, generationSelectionSchema } from "./fact-selection-generation";
+import { comparisonModelSchema } from "./model-schema";
 import { decodeGeneration } from "./generation";
 import type { Span } from "./propositions";
 
@@ -50,6 +51,38 @@ it("selects full literal actors/guards, keeps parent and child separate, and res
     const saved = validateAnswer(chunk, decodeGeneration(chunk, { results: results.map(({ docId: ignored, ...r }) => { void ignored; return r; }) }, f.quotes));
     expect(saved[0].candidateEvidence.claimNo).toBe(2);
     expect(saved[0].candidateEvidence.quote).toContain("前記制御器は、逆流防止制御を開始する際に両弁を同時に開く");
+  }
+});
+
+it("requires an explicit parent difference only for the pair where no other field can show that control", () => {
+  const f = fixture();
+  const observations = factObservationChoices(f.plan, f.sources, f.quotes);
+  const parent = f.sources.facts.find(fact => fact.id === "s1.0")!;
+  // A long, distinct parent control cannot fit as a second observation.
+  // The other document's parent still has an exact common fact.
+  parent.meaning.guard = { relation: "when", conditions: ["高温の検出が続き、".repeat(5) + "規定時間を超えた場合"] };
+  const schema = generationSelectionSchema(f.plan, f.sources, observations, factControlCoverage(f.sources));
+  expect(schema.safeParse(f.selection).success).toBe(false);
+  const first = f.selection.results[0];
+  const explicit = { results: [{ ...first, differences: { baseFacts: first.differences.baseFacts,
+    candidateFacts: { controlFactId: "s1.0", additionalFactId: null } } }, f.selection.results[1]] };
+  expect(schema.safeParse(explicit).success).toBe(true);
+  expect(JSON.stringify(comparisonModelSchema<unknown>(schema).jsonSchema)).toContain('"enum":["s1.0"]');
+  explicit.results[0] = { ...explicit.results[0], differences: { baseFacts: first.differences.baseFacts,
+    candidateFacts: { controlFactId: "s1.1", additionalFactId: null } } };
+  expect(schema.safeParse(explicit).success).toBe(false);
+});
+
+it("renders only the control and optional second fact the model explicitly chose", () => {
+  const f = fixture(), result = f.selection.results[0];
+  const original = decodeFactSelection(f.plan, f.sources, f.quotes, f.selection);
+  const withSlot = (controlFactId: string, additionalFactId: string | null) => ({ results: [
+    { ...result, differences: { baseFacts: result.differences.baseFacts, candidateFacts: { controlFactId, additionalFactId } } },
+    f.selection.results[1],
+  ] });
+  expect(decodeFactSelection(f.plan, f.sources, f.quotes, withSlot("s1.1", null))).toEqual(original);
+  for (const extra of ["s1.1", "s999.0"]) {
+    expect(() => decodeFactSelection(f.plan, f.sources, f.quotes, withSlot("s1.1", extra))).toThrow("ai_incomplete");
   }
 });
 

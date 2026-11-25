@@ -71,10 +71,20 @@ function isComparisonTaskInput(input: unknown, task: "review" | "extract_source_
 }
 const isComparisonSourceInput = (input: unknown) => isComparisonTaskInput(input, "extract_source_propositions") ||
   isComparisonTaskInput(input, "extract_source_propositions_pair");
+export type ComparisonSpendAllocation = Readonly<{
+  phase: "dev" | "day";
+  maximumSends: 8;
+  maximumJPY: number;
+  inputYenPer100k: number;
+  outputYenPer100k: number;
+  releaseSHA256: string;
+  validUntilUTC: string;
+}>;
 type ComparisonBudgetOptions = {
   capability: typeof comparisonCapability;
   deadline: AbortSignal;
   claimPlan?: { sourceClaims: number; diagnostic: boolean };
+  allocation?: ComparisonSpendAllocation;
 };
 export type ManagedWatchDispatchJournal = {
   /** Atomic durable reservation ACK is required before network dispatch. */
@@ -111,6 +121,7 @@ export function aiOperationDeadline(milliseconds: number): AbortSignal {
 
 export class AiOperationBudget {
   private readonly consumed = { normal: 0, fast: 0 };
+  private comparisonReservedYen = 0;
   private readonly maximum: Readonly<Record<Role, number>>;
   get used(): Readonly<Record<Role, number>> { return Object.freeze({ ...this.consumed }); }
   private stopped: AiOperationStopped | null = null;
@@ -220,6 +231,17 @@ export class AiOperationBudget {
         estimatedInputTokens = requestBytes + 8192;
         maximumOutputTokens = body.max_output_tokens;
         if (estimatedInputTokens > (role === "normal" ? 150_000 : 50_000)) throw stop("input_limit");
+        const allocation = this.comparison?.allocation;
+        if (allocation) {
+          if (Date.now() >= Date.parse(allocation.validUntilUTC)) throw stop("timeout");
+          if (body.model !== "patentai-gpt54" || body.service_tier !== "default") throw stop("request_rejected");
+          const numerator = 2 * (estimatedInputTokens * allocation.inputYenPer100k + maximumOutputTokens * allocation.outputYenPer100k);
+          const reserved = Math.ceil(numerator / 100_000);
+          if (!Number.isSafeInteger(numerator) || reserved > allocation.maximumJPY - this.comparisonReservedYen) throw stop("request_limit");
+          // Reserve against the final wire body before any await or dispatch.
+          // Unknown outcomes and lower measured usage both retain this amount.
+          this.comparisonReservedYen += reserved;
+        }
       } catch { throw stop("request_rejected"); }
       // Capture this attempt before awaiting; concurrent sends cannot renumber it.
       const attempt = ++this.consumed[role];
@@ -337,10 +359,14 @@ export function withPriorArtComparisonBudget<T>(operation: (deadline: AbortSigna
 }
 /** Finite claim extraction scope. This does not change generic AI or watch
  * allowances, and cannot be nested to restart a consumed comparison budget. */
-export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, operation: (deadline: AbortSignal) => Promise<T>, diagnostic = false): Promise<T> {
+export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, operation: (deadline: AbortSignal) => Promise<T>, diagnostic = false, allocation?: ComparisonSpendAllocation): Promise<T> {
   if (active.getStore() || !Number.isSafeInteger(sourceClaims) || sourceClaims < 1 || sourceClaims > comparisonLimits.sourceRequests)
     throw new AiOperationStopped("request_rejected");
   const calls = sourceClaims + (diagnostic ? 1 : 2), closing = new AbortController();
+  if (allocation && (diagnostic || calls !== 8 || calls !== allocation.maximumSends ||
+      !["dev", "day"].includes(allocation.phase) || !/^[a-f0-9]{64}$/.test(allocation.releaseSHA256) ||
+      ![allocation.maximumJPY, allocation.inputYenPer100k, allocation.outputYenPer100k].every(n => Number.isSafeInteger(n) && n > 0) ||
+      !(Date.parse(allocation.validUntilUTC) > Date.now()))) throw new AiOperationStopped("request_rejected");
   // A diagnostic may wait for the fixed independent source-QA gate before its
   // final review. This adds time only, never a dispatch or a retry allowance.
   // Fix the deadline once, using the admitted number of partition requests.
@@ -350,7 +376,8 @@ export function withPriorArtClaimComparisonBudget<T>(sourceClaims: number, opera
   const deadline = AbortSignal.any([aiOperationDeadline(milliseconds), closing.signal]);
   deadlines.add(deadline);
   const budget = new AiOperationBudget({ normal: calls, fast: 0 }, undefined,
-    Object.freeze({ capability: comparisonCapability, deadline, claimPlan: Object.freeze({ sourceClaims, diagnostic }) }));
+    Object.freeze({ capability: comparisonCapability, deadline, claimPlan: Object.freeze({ sourceClaims, diagnostic }),
+      allocation: allocation && Object.freeze({ ...allocation }) }));
   return active.run(budget, async () => {
     try { return await operation(deadline); }
     finally { budget.closeComparisonScope(); closing.abort(); }
