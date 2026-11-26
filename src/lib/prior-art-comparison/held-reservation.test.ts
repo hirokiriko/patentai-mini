@@ -16,9 +16,53 @@ function fixture(){
   const heldRows=make(heldSelection,31),oldRows=make(oldSelection,21,failure,audit),rows=[...oldRows,...heldRows];
   const reference={operationId:HELD,selection:heldSelection,selectionSHA256:digest(heldSelection)},evidence=heldReservationEvidence(rows,reference),now=Date.now();
   const release:LimitedRelease={schema:"CASE104_LIMITED_RELEASE_V2",caseId:104,phase:"dev",activeOperationId:DEV,devOperationId:DEV,validFromUTC:new Date(now-1000).toISOString(),validUntilUTC:new Date(now+60000).toISOString(),authority:{sequence:170,envelopeSHA256:"c".repeat(64),ownerDecisionSHA256:"d".repeat(64)},scope,oldFailure:{operationId:OLD,selectionSHA256:digest(oldSelection),auditDigest:audit.auditDigest,...failure},retainedUnknown:{evidence,isolationEvidenceSHA256:"e".repeat(64)},budget:{maximumSends:8,maximumJPY:500,inputYenPer100k:7,outputYenPer100k:19}};
-  return {release,rows,heldRows,reference,evidence,saved};
+  return {release,rows,heldRows,reference,evidence,saved,make,failure};
 }
 afterEach(()=>vi.unstubAllEnvs());
+function continuedFixture() {
+  const f = fixture();
+  const operationId = "a0000000-0000-4000-8000-000000000005";
+  const selection = { ...f.release.scope, operationId };
+  const task = { id: "b".repeat(64) + ":1", sourceIndex: 0, sourceDigest: "b".repeat(64), claimNo: 1 };
+  const audit = sourceAudit(operationId, selection.inputDigest, [task], []);
+  const additionalFailure = { operationId, selectionSHA256: digest(selection), auditDigest: audit.auditDigest, ...f.failure };
+  const release = { ...f.release, schema: "CASE104_LIMITED_RELEASE_V3" as const,
+    authority: { ...f.release.authority, sequence: 172 as const }, additionalFailure };
+  return { ...f, release, additionalRows: f.make(selection, 41, f.failure, audit) };
+}
+it("V3 admits development and day only with both exact terminal failures and the held operation", () => {
+  const f = continuedFixture(), rows = [...f.rows, ...f.additionalRows];
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(f.release));
+  expect(readLimitedRelease().value).toEqual(f.release);
+  expect(historicalHeldReference(104, HELD)).toEqual(f.reference);
+  const original = JSON.stringify(rows);
+  assertReleaseHistory(f.release, rows, []);
+  const day = { ...f.release, phase: "day" as const, activeOperationId: DAY, devSavedSnapshotDigest: f.saved.snapshotDigest };
+  assertReleaseHistory(day, rows, [f.saved]);
+  expect(JSON.stringify(rows)).toBe(original);
+  expect(() => assertReleaseHistory(day, rows, [])).toThrow();
+  for (const index of [0, 2, 4, 5]) {
+    expect(() => assertReleaseHistory(f.release, rows.filter((_, i) => i !== index), [])).toThrow();
+  }
+  expect(() => assertReleaseHistory(f.release, [...rows, f.additionalRows[0]], [])).toThrow();
+  expect(() => assertReleaseHistory(f.release, [...rows, ...f.make({ ...f.release.scope, operationId: DAY }, 51)], [])).toThrow();
+  for (const field of ["auditDigest", "selectionSHA256"] as const) {
+    const changed = { ...f.release, additionalFailure: { ...f.release.additionalFailure, [field]: "0".repeat(64) } };
+    expect(() => assertReleaseHistory(changed, rows, [])).toThrow();
+  }
+});
+it("V3 rejects an unrelated failure, a reused operation identity and the earlier authority", () => {
+  const { release } = continuedFixture();
+  for (const extra of [
+    { additionalFailure: undefined }, { authority: { ...release.authority, sequence: 170 } },
+    { additionalFailure: { ...release.additionalFailure, stage: "review" } },
+    ...[OLD, HELD, DEV].map(operationId => ({ additionalFailure: { ...release.additionalFailure, operationId } })),
+    { phase: "day", activeOperationId: release.additionalFailure.operationId, devSavedSnapshotDigest: "f".repeat(64) },
+  ]) {
+    vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, ...extra }));
+    expect(readLimitedRelease().value).toBeNull();
+  }
+});
 it("new authority admits only exact preserved known failure and two unknown rows without mutation",()=>{const f=fixture(),before=JSON.stringify(f.rows);assertReleaseHistory(f.release,f.rows,[]);expect(JSON.stringify(f.rows)).toBe(before);expect(f.evidence.rows).toHaveLength(2);expect(JSON.stringify(f.evidence)).not.toContain("matchedElementsJson");});
 it("changed raw, row IDs, missing/duplicate/extra unknown rows, terminal reclassification and changed scope reject",()=>{for(const mutate of [(f:ReturnType<typeof fixture>)=>f.rows.pop(),(f:ReturnType<typeof fixture>)=>f.rows.push({...f.heldRows[0],resultId:99}),(f:ReturnType<typeof fixture>)=>f.rows[2].resultId=99,(f:ReturnType<typeof fixture>)=>f.rows[2].matchedElementsJson+=" ",(f:ReturnType<typeof fixture>)=>{const x=JSON.parse(f.rows[2].matchedElementsJson!);x.priorArtComparison.failure={stage:"generation",kind:"protocol_invalid"};f.rows[2].matchedElementsJson=JSON.stringify(x);},(f:ReturnType<typeof fixture>)=>{const x=JSON.parse(f.rows[2].matchedElementsJson!);x.priorArtComparison.selection.inputDigest="f".repeat(64);f.rows[2].matchedElementsJson=JSON.stringify(x);},(f:ReturnType<typeof fixture>)=>{const x=JSON.parse(f.rows[2].matchedElementsJson!);x.priorArtComparison.operationId=DAY;f.rows[2].matchedElementsJson=JSON.stringify(x);}]){const f=fixture();mutate(f);expect(()=>assertReleaseHistory(f.release,f.rows,[])).toThrow();}});
 it("fingerprint remains read-only after config expiry but admission and wrong case/operation stay closed",()=>{const f=fixture();const legacy={...f.release,schema:"CASE104_LIMITED_RELEASE_V1",authority:{...f.release.authority,sequence:168},activeOperationId:HELD,devOperationId:HELD,validFromUTC:"2025-01-01T00:00:00Z",validUntilUTC:"2025-01-01T01:00:00Z"};delete (legacy as Record<string,unknown>).retainedUnknown;vi.stubEnv(LIMITED_RELEASE_ENV,JSON.stringify(legacy));expect(readLimitedRelease()).toEqual({configured:true,value:null});expect(historicalHeldReference(104,HELD)).toEqual(f.reference);expect(()=>historicalHeldReference(105,HELD)).toThrow();expect(()=>historicalHeldReference(104,DEV)).toThrow();});

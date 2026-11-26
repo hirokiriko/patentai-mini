@@ -24,12 +24,25 @@ const successorReleaseSchema = legacyReleaseSchema.extend({
   authority: z.object({ sequence: z.literal(170), envelopeSHA256: hash, ownerDecisionSHA256: hash }).strict(),
   retainedUnknown: z.object({ evidence: heldEvidenceSchema, isolationEvidenceSHA256: hash }).strict(),
 }).strict();
-const releaseSchema = z.union([legacyReleaseSchema, successorReleaseSchema]);
+const continuedReleaseSchema = successorReleaseSchema.extend({
+  schema: z.literal("CASE104_LIMITED_RELEASE_V3"),
+  authority: successorReleaseSchema.shape.authority.extend({ sequence: z.literal(172) }),
+  additionalFailure: legacyReleaseSchema.shape.oldFailure.extend({
+    stage: z.literal("generation"), kind: z.literal("protocol_invalid"),
+  }),
+});
+const releaseSchema = z.discriminatedUnion("schema", [legacyReleaseSchema, successorReleaseSchema, continuedReleaseSchema]);
 export type LimitedRelease = z.infer<typeof releaseSchema>;
+function retainedFailures(value: LimitedRelease): LimitedRelease["oldFailure"][] {
+  return value.schema === "CASE104_LIMITED_RELEASE_V3" ? [value.oldFailure, value.additionalFailure] : [value.oldFailure];
+}
 function assertSuccessorIsolation(value: LimitedRelease) {
-  if (value.schema !== "CASE104_LIMITED_RELEASE_V2") return;
+  if (value.schema === "CASE104_LIMITED_RELEASE_V1") return;
   const held = value.retainedUnknown.evidence, { evidenceDigest, ...body } = held;
-  if (digest(body) !== evidenceDigest || [value.oldFailure.operationId, value.activeOperationId, value.devOperationId].includes(held.operationId) ||
+  const failures = retainedFailures(value);
+  const historicalIds = new Set([held.operationId, ...failures.map(failure => failure.operationId)]);
+  if (historicalIds.size !== failures.length + 1 || historicalIds.has(value.activeOperationId) || historicalIds.has(value.devOperationId) ||
+      digest(body) !== evidenceDigest ||
       held.selectionSHA256 !== digest({ ...value.scope, operationId: held.operationId })) throw new ComparisonError("result_invalid");
 }
 /** Expiry is deliberately ignored only for OWNER's non-dispatch historical fingerprint GET. */
@@ -38,7 +51,7 @@ export function historicalHeldReference(caseId: number, operationId: string): He
   try { const raw = process.env[LIMITED_RELEASE_ENV]; if (!raw || Buffer.byteLength(raw) > 16384) throw Error();
     value = releaseSchema.parse(JSON.parse(raw)); assertSuccessorIsolation(value);
   } catch { throw new ComparisonError("save_unconfirmed"); }
-  const fixed = value.schema === "CASE104_LIMITED_RELEASE_V2" ? value.retainedUnknown.evidence.operationId : value.devOperationId;
+  const fixed = value.schema === "CASE104_LIMITED_RELEASE_V1" ? value.devOperationId : value.retainedUnknown.evidence.operationId;
   if (caseId !== 104 || fixed !== operationId || value.oldFailure.operationId === fixed ||
       value.scope.draftClaimNos.length !== 1 || value.scope.documents.length !== 2 ||
       value.scope.documents.some(doc => doc.claimNos.length !== 1) ||
@@ -74,36 +87,42 @@ function record(row: Row): { marker: Record<string, unknown>; audit: unknown } {
     return { marker: value.priorArtComparison, audit: value.priorArtComparisonSourceAudit };
   } catch { throw new ComparisonError("result_invalid"); }
 }
-/** Exact old terminal evidence is retained, never changed/reclassified/released. */
-export function assertReleaseHistory(release: LimitedRelease, rows: Row[], saved: SavedComparison[]) {
-  assertSuccessorIsolation(release);
-  const old = rows.filter(row => record(row).marker.operationId === release.oldFailure.operationId);
+function assertRetainedFailure(releaseScope: LimitedRelease["scope"], expected: LimitedRelease["oldFailure"], rows: Row[]) {
+  const old = rows.filter(row => record(row).marker.operationId === expected.operationId);
   if (!old.length) throw new ComparisonError("save_unconfirmed");
   const first = record(old[0]), selection = selectionSchema.parse(first.marker.selection);
-  const failure = { stage: release.oldFailure.stage, kind: release.oldFailure.kind };
-  const exact = { version: 1, status: "reserved", operationId: release.oldFailure.operationId, selection, failure };
+  const failure = { stage: expected.stage, kind: expected.kind };
+  const exact = { version: 1, status: "reserved", operationId: expected.operationId, selection, failure };
   const { operationId: ignored, ...scope } = selection; void ignored;
-  if (digest(selection) !== release.oldFailure.selectionSHA256 || digest(scope) !== digest(release.scope)) throw new ComparisonError("result_invalid");
+  if (selection.operationId !== expected.operationId || digest(selection) !== expected.selectionSHA256 || digest(scope) !== digest(releaseScope)) throw new ComparisonError("result_invalid");
   const keys = new Set(selection.documents.flatMap(d => selection.draftClaimNos.map(n => `${n}:${d.docId}`)));
   if (old.length !== keys.size) throw new ComparisonError("result_invalid");
   for (const row of old) {
     const own = record(row);
     if (!own.audit || !first.audit || row.caseId !== 104 || digest(own.marker) !== digest(exact) || !keys.delete(`${row.draftClaimId}:${row.priorDocId}`) || digest(own.audit) !== digest(first.audit)) throw new ComparisonError("result_invalid");
-    const audit = validateSourceAudit(own.audit, release.oldFailure.operationId, selection.inputDigest);
-    if (audit.auditDigest !== release.oldFailure.auditDigest) throw new ComparisonError("result_invalid");
+    const audit = validateSourceAudit(own.audit, expected.operationId, selection.inputDigest);
+    if (audit.auditDigest !== expected.auditDigest) throw new ComparisonError("result_invalid");
   }
   if (keys.size) throw new ComparisonError("result_invalid");
-  if (release.schema === "CASE104_LIMITED_RELEASE_V2") {
+}
+/** Each retained terminal failure and each held row must still match the signed scope. */
+export function assertReleaseHistory(release: LimitedRelease, rows: Row[], saved: SavedComparison[]) {
+  assertSuccessorIsolation(release);
+  const failures = retainedFailures(release);
+  for (const failure of failures) assertRetainedFailure(release.scope, failure, rows);
+  const historicalIds = new Set(failures.map(failure => failure.operationId));
+  if (release.schema !== "CASE104_LIMITED_RELEASE_V1") {
     const held = release.retainedUnknown.evidence;
     const actual = heldReservationEvidence(rows, { operationId: held.operationId,
       selection: { ...release.scope, operationId: held.operationId }, selectionSHA256: held.selectionSHA256 });
     if (digest(actual) !== digest(held)) throw new ComparisonError("result_invalid");
+    historicalIds.add(held.operationId);
   }
   for (const row of rows) {
     const marker = record(row).marker;
-    if (release.schema === "CASE104_LIMITED_RELEASE_V2" && marker.operationId === release.retainedUnknown.evidence.operationId) continue;
-    if (row.caseId !== 104 || ![release.oldFailure.operationId, release.activeOperationId, ...(release.phase === "day" ? [release.devOperationId] : [])].includes(String(marker.operationId))) throw new ComparisonError("save_unconfirmed");
-    if (marker.status === "reserved" && marker.operationId !== release.oldFailure.operationId && marker.operationId !== release.activeOperationId) throw new ComparisonError("save_unconfirmed");
+    if (historicalIds.has(String(marker.operationId))) continue;
+    if (row.caseId !== 104 || (marker.operationId !== release.activeOperationId &&
+        !(release.phase === "day" && marker.operationId === release.devOperationId && marker.status !== "reserved"))) throw new ComparisonError("save_unconfirmed");
   }
   if (release.phase === "day") {
     const prior = saved.find(value => value.operationId === release.devOperationId);

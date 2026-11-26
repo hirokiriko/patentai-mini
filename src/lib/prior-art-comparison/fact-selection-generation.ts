@@ -8,6 +8,7 @@ import { meaningKey, propositionKey, type SourceProposition } from "./propositio
 import { isNominalReservationText } from "./reservation-topic";
 import { ComparisonError, digest } from "./source";
 import { LIMITS } from "./limits";
+import { assertDifferenceSchemaCapacity, budgetedDifferences } from "./generation-difference-budget";
 
 const printableSubject = (fact: SourceProposition) => fact.meaning.subject !== null ||
   fact.meaning.kind === "relation" && ["is_state", "power_ends"].includes(fact.meaning.predicate);
@@ -28,7 +29,11 @@ export const factSelectionSchema = z.object({ results: z.array(resultSchema).min
 // A named required slot can be constrained on the provider wire. An optional
 // second selection remains available under the original two-fact limit.
 const controlSlot = z.object({ controlFactId: factId, additionalFactId: factId.nullable() }).strict();
-const receivedIds = z.union([ids, controlSlot.transform(({ controlFactId, additionalFactId }) =>
+const encodedIds = z.string().transform((value, context) => {
+  try { return ids.parse(JSON.parse(value)); }
+  catch { context.addIssue({ code: "custom", message: "invalid_fact_bundle" }); return z.NEVER; }
+});
+const receivedIds = z.union([ids, encodedIds, controlSlot.transform(({ controlFactId, additionalFactId }) =>
   additionalFactId === null ? [controlFactId] : [controlFactId, additionalFactId])]);
 const receivedSelection = factSelectionSchema.extend({ results: z.array(resultSchema.extend({
   differences: z.union([differences.extend({ baseFacts: receivedIds, candidateFacts: receivedIds }), reservation]),
@@ -105,9 +110,7 @@ export function generationSelectionSchema(chunks: readonly ManagedComparisonChun
     });
     // With several mandatory groups the model retains the general placement
     // contract; one named slot must not privilege an arbitrary parent.
-    if (required.length === 1) return controlSlot.extend({
-      controlFactId: z.enum(required[0]).describe("Select the complete parent-claim control for this difference. Keep the child's own observation separate."),
-    });
+    if (required.length === 1) return required[0];
   }
   let constrained = false;
   const pairs = chunks.flatMap(chunk => chunk.pairs.map(pair => {
@@ -117,10 +120,16 @@ export function generationSelectionSchema(chunks: readonly ManagedComparisonChun
     constrained ||= Boolean(baseSlot || candidateSlot);
     return resultSchema.extend({
       docId: z.literal(chunk.candidateId), baseClaimNo: z.literal(pair.baseClaimNo), candidateClaimNo: z.literal(pair.candidateClaimNo),
-      differences: baseSlot || candidateSlot ? differences.extend({ baseFacts: baseSlot ?? ids, candidateFacts: candidateSlot ?? ids }) : resultSchema.shape.differences,
+      differences: baseSlot || candidateSlot ? budgetedDifferences(base, candidate,
+        printable.filter(entry => entry.fact.scope === base).map(entry => ({ id: entry.fact.id, length: entry.length })),
+        printable.filter(entry => entry.fact.scope === candidate).map(entry => ({ id: entry.fact.id, length: entry.length })),
+        baseSlot, candidateSlot) : resultSchema.shape.differences,
     });
   }));
-  return constrained ? factSelectionSchema.extend({ results: z.array(z.union(pairs)).min(1).max(LIMITS.reviewPairs) }) : factSelectionSchema;
+  if (!constrained) return factSelectionSchema;
+  const schema = factSelectionSchema.extend({ results: z.array(z.union(pairs)).min(1).max(LIMITS.reviewPairs) });
+  assertDifferenceSchemaCapacity(schema);
+  return schema;
 }
 
 /** Model chooses facts, never rewritten subjects, conditions, or source quotes.
