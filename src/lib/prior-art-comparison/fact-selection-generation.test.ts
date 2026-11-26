@@ -4,7 +4,7 @@ import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource, digest } from "./source";
 import { decodeSourcePropositions, propositionSourceInput, type SourceExtraction } from "./proposition-extraction";
 import { generationQuoteOptions } from "./generation-quote-options";
-import { decodeFactSelection, factControlCoverage, factObservationChoices, generationSelectionSchema } from "./fact-selection-generation";
+import { decodeFactSelection, factControlCoverage, factObservationChoices, generationSelectionSchema, factSelectionSchema } from "./fact-selection-generation";
 import { comparisonModelSchema } from "./model-schema";
 import { decodeGeneration } from "./generation";
 import type { Span } from "./propositions";
@@ -64,12 +64,12 @@ it("requires an explicit parent difference only for the pair where no other fiel
   const schema = generationSelectionSchema(f.plan, f.sources, observations, factControlCoverage(f.sources));
   expect(schema.safeParse(f.selection).success).toBe(false);
   const first = f.selection.results[0];
-  const explicit = { results: [{ ...first, differences: { baseFacts: first.differences.baseFacts,
-    candidateFacts: { controlFactId: "s1.0", additionalFactId: null } } }, f.selection.results[1]] };
+  const explicit = { results: [{ ...first, differences: { baseFacts: JSON.stringify(first.differences.baseFacts),
+    candidateFacts: JSON.stringify(["s1.0"]) } }, f.selection.results[1]] };
   expect(schema.safeParse(explicit).success).toBe(true);
-  expect(JSON.stringify(comparisonModelSchema<unknown>(schema).jsonSchema)).toContain('"enum":["s1.0"]');
-  explicit.results[0] = { ...explicit.results[0], differences: { baseFacts: first.differences.baseFacts,
-    candidateFacts: { controlFactId: "s1.1", additionalFactId: null } } };
+  expect(JSON.stringify(comparisonModelSchema<unknown>(schema).jsonSchema)).toContain('s1.0');
+  explicit.results[0] = { ...explicit.results[0], differences: { baseFacts: JSON.stringify(first.differences.baseFacts),
+    candidateFacts: JSON.stringify(["s1.1"]) } };
   expect(schema.safeParse(explicit).success).toBe(false);
 });
 
@@ -84,6 +84,21 @@ it("renders only the control and optional second fact the model explicitly chose
   for (const extra of ["s1.1", "s999.0"]) {
     expect(() => decodeFactSelection(f.plan, f.sources, f.quotes, withSlot("s1.1", extra))).toThrow("ai_incomplete");
   }
+});
+
+it("decodes exact budget bundles while preserving legacy selections and the child quote", () => {
+  const f = fixture(), legacy = decodeFactSelection(f.plan, f.sources, f.quotes, f.selection);
+  const encoded = structuredClone(f.selection) as unknown as { results: Record<string, unknown>[] };
+  for (const result of encoded.results) {
+    const difference = result.differences as { baseFacts: string[]; candidateFacts: string[] };
+    result.differences = { baseFacts: JSON.stringify(difference.baseFacts), candidateFacts: JSON.stringify(difference.candidateFacts) };
+  }
+  expect(decodeFactSelection(f.plan, f.sources, f.quotes, encoded)).toEqual(legacy);
+  const schema = generationSelectionSchema(f.plan, f.sources,
+    factObservationChoices(f.plan, f.sources, f.quotes), factControlCoverage(f.sources));
+  expect(schema).toBe(factSelectionSchema);
+  expect(schema.safeParse(f.selection).success).toBe(true);
+  expect(legacy.results[0].candidateEvidenceId).toContain(":2:");
 });
 
 it.each(["wrong_scope", "missing_fact", "duplicate", "wrong_common", "raw_prose", "missing_pair", "duplicate_pair", "parent_as_selected_child", "identical_difference"])("rejects invalid selections: %s", mode => {
