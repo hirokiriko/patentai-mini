@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ reserve: vi.fn(), complete: vi.fn(), after: vi.fn(), list: vi.fn(), catalog: vi.fn() }));
+const mocks = vi.hoisted(() => ({ reserve: vi.fn(), complete: vi.fn(), after: vi.fn(), list: vi.fn(), catalog: vi.fn(), held: vi.fn() }));
 vi.mock("next/server", () => ({ after: mocks.after }));
 vi.mock("@/lib/owner-http", () => import("../../../../../lib/owner-http"));
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("next/navigation", () => ({ notFound: vi.fn() }));
 vi.mock("@/lib/prior-art-comparison/repository", () => ({ reserveComparison: mocks.reserve,
-  completeReservedComparison: mocks.complete, listComparisons: mocks.list, comparisonCatalog: mocks.catalog, comparisonAdmission: async () => ({restricted:false,operationId:null,canStart:true}) }));
+  completeReservedComparison: mocks.complete, listComparisons: mocks.list, comparisonCatalog: mocks.catalog, getHeldComparisonEvidence: mocks.held, comparisonAdmission: async () => ({restricted:false,operationId:null,canStart:true}) }));
 vi.mock("@/lib/prior-art-comparison/comparison", () => import("../../../../../lib/prior-art-comparison/comparison"));
 vi.mock("@/lib/prior-art-comparison/source", () => import("../../../../../lib/prior-art-comparison/source"));
 vi.mock("@/lib/prior-art-comparison/http", () => import("../../../../../lib/prior-art-comparison/http"));
@@ -125,4 +125,11 @@ describe("durable comparison acceptance", () => {
     expect(mocks.after).not.toHaveBeenCalled(); expect(mocks.complete).not.toHaveBeenCalled();
   });
 
+});
+
+it("OWNER can read only the explicit preserved-operation query while AI admission is OFF",async()=>{
+  vi.stubEnv("OWNER_AUTH_MODE","azure-easy-auth");vi.stubEnv("OWNER_APP_ORIGIN","https://fictional.invalid");vi.stubEnv("OWNER_OBJECT_ID",owner);vi.stubEnv("OWNER_TENANT_ID",tenant);vi.stubEnv("OWNER_CLIENT_ID","33333333-3333-3333-3333-333333333333");vi.stubEnv("PRIOR_ART_COMPARISON_ENABLED","0");
+  const op="a0000000-0000-4000-8000-000000000002",ctx={params:Promise.resolve({caseId:"104"})};mocks.held.mockResolvedValue({evidence:{evidenceDigest:"a".repeat(64)},historicalReadOnly:true,aiSends:0,rowWrites:0});
+  const request=new Request("https://fictional.invalid/api/cases/104/analyze?preservedOperationId="+op,{headers:ownerHeaders()});expect((await GET(request,ctx)).status).toBe(200);expect(mocks.held).toHaveBeenCalledWith(104,op);
+  mocks.held.mockClear();expect((await GET(new Request(request.url+"&operationId="+op,{headers:ownerHeaders()}),ctx)).status).toBe(404);expect(mocks.held).not.toHaveBeenCalled();
 });

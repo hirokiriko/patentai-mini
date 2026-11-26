@@ -13,7 +13,9 @@ import { takeReviewFailure, type ReviewFailureEvidence } from "./review-failure-
 import { sourceClaimExtractionPlan } from "./source-claim-extraction";
 import { comparisonObservation } from "./observation";
 import type { ComparisonSpendAllocation } from "../ai-operation-budget";
-import { readLimitedRelease, assertReleaseSelection, assertReleaseHistory, releaseAllocation, type Admission } from "./limited-release";
+import { readLimitedRelease, assertReleaseSelection, assertReleaseHistory, releaseAllocation, type Admission, historicalHeldReference } from "./limited-release";
+
+import { heldReservationEvidence } from "./held-reservation";
 
 type KnownFailure = { stage: ComparisonStage; kind: "protocol_invalid" | "review_rejected" | "output_incomplete" };
 const reservationCapabilities = new WeakMap<object, { caseId: number; selectionHash: string; reservationHash: string; releaseSHA256?: string }>();
@@ -357,4 +359,13 @@ export async function getComparisonSourceAudit(caseId: number, operationId: stri
       digest(auditProperty(row)) !== digest({ priorArtComparisonSourceAudit: audit }) ||
       !expected.delete(`${row.draftClaimId}:${row.priorDocId ?? JSON.parse(row.matchedElementsJson!).detachedPriorDocId}`)) || expected.size) throw new ComparisonError("result_invalid");
   return audit;
+}
+
+/** OWNER-only exact historical fingerprints; no new reservation, AI or row mutation. */
+export async function getHeldComparisonEvidence(caseId: number, operationId: string) {
+  const reference = historicalHeldReference(caseId, operationId);
+  const first = heldReservationEvidence(await db.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId)), reference);
+  const second = heldReservationEvidence(await db.select().from(comparisonResults).where(eq(comparisonResults.caseId, caseId)), reference);
+  if (digest(first) !== digest(second)) throw new ComparisonError("save_unconfirmed");
+  return { evidence: first, historicalReadOnly: true, aiSends: 0, rowWrites: 0 };
 }
