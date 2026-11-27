@@ -7,6 +7,7 @@ import { generationQuoteOptions } from "./generation-quote-options";
 import { decodeFactSelection, factControlCoverage, factObservationChoices, generationSelectionSchema, factSelectionSchema } from "./fact-selection-generation";
 import { comparisonModelSchema } from "./model-schema";
 import { decodeGeneration } from "./generation";
+import { renderMeaning } from "./proposition-result";
 import type { Span } from "./propositions";
 
 function fixture() {
@@ -40,6 +41,18 @@ function fixture() {
   return { plan, sources, quotes, selection };
 }
 
+it("restores a length-dispatched bundle and rejects a false length annotation", () => {
+  const f = fixture(), original = decodeFactSelection(f.plan, f.sources, f.quotes, f.selection);
+  const fact = f.sources.facts.find(fact => fact.id === "s0.0")!;
+  const length = (`基準側は、${renderMeaning(fact.meaning)}。`).length;
+  const value = { results: f.selection.results.map(result => ({ ...result,
+    differences: { [`baseFactsLength${length}`]: JSON.stringify(result.differences.baseFacts),
+      candidateFacts: JSON.stringify(result.differences.candidateFacts) } })) };
+  expect(decodeFactSelection(f.plan, f.sources, f.quotes, value)).toEqual(original);
+  value.results[0].differences = { baseFactsLength1: JSON.stringify(["s0.0"]), candidateFacts: JSON.stringify(["s1.1"]) };
+  expect(() => decodeFactSelection(f.plan, f.sources, f.quotes, value)).toThrow("ai_incomplete");
+});
+
 it("selects full literal actors/guards, keeps parent and child separate, and resolves the child quote", () => {
   const f = fixture(), before = JSON.stringify(f.sources), answer = decodeFactSelection(f.plan, f.sources, f.quotes, f.selection);
   expect(JSON.stringify(f.sources)).toBe(before);
@@ -64,11 +77,12 @@ it("requires an explicit parent difference only for the pair where no other fiel
   const schema = generationSelectionSchema(f.plan, f.sources, observations, factControlCoverage(f.sources));
   expect(schema.safeParse(f.selection).success).toBe(false);
   const first = f.selection.results[0];
-  const explicit = { results: [{ ...first, differences: { baseFacts: JSON.stringify(first.differences.baseFacts),
+  const baseLengthKey = "baseFactsLength" + ("基準側は、" + renderMeaning(f.sources.facts.find(fact => fact.id === "s0.0")!.meaning) + "。").length;
+  const explicit = { results: [{ ...first, differences: { [baseLengthKey]: JSON.stringify(first.differences.baseFacts),
     candidateFacts: JSON.stringify(["s1.0"]) } }, f.selection.results[1]] };
   expect(schema.safeParse(explicit).success).toBe(true);
   expect(JSON.stringify(comparisonModelSchema<unknown>(schema).jsonSchema)).toContain('s1.0');
-  explicit.results[0] = { ...explicit.results[0], differences: { baseFacts: JSON.stringify(first.differences.baseFacts),
+  explicit.results[0] = { ...explicit.results[0], differences: { [baseLengthKey]: JSON.stringify(first.differences.baseFacts),
     candidateFacts: JSON.stringify(["s1.1"]) } };
   expect(schema.safeParse(explicit).success).toBe(false);
 });

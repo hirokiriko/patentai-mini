@@ -30,6 +30,64 @@ function continuedFixture() {
     authority: { ...f.release.authority, sequence: 172 as const }, additionalFailure };
   return { ...f, release, additionalRows: f.make(selection, 41, f.failure, audit) };
 }
+function twoHeldFixture() {
+  const f = continuedFixture();
+  const operationId = "a0000000-0000-4000-8000-000000000006";
+  const selection = { ...f.release.scope, operationId };
+  const reference = { operationId, selection, selectionSHA256: digest(selection) };
+  const rows = [...f.rows, ...f.additionalRows, ...f.make(selection, 51)];
+  const evidence = heldReservationEvidence(rows, reference);
+  const release = { ...f.release, schema: "CASE104_LIMITED_RELEASE_V4" as const,
+    authority: { ...f.release.authority, sequence: 174 as const },
+    additionalUnknown: { evidence, isolationEvidenceSHA256: "f".repeat(64) } };
+  return { ...f, release, rows, secondReference: reference };
+}
+it("V4 binds both held fingerprints and terminal failures throughout development and practitioner use", () => {
+  const f = twoHeldFixture();
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(f.release));
+  expect(readLimitedRelease().value).toEqual(f.release);
+  expect(historicalHeldReference(104, HELD)).toEqual(f.reference);
+  expect(historicalHeldReference(104, f.secondReference.operationId)).toEqual(f.secondReference);
+  expect(() => historicalHeldReference(104, DEV)).toThrow();
+  const original = JSON.stringify(f.rows);
+  assertReleaseHistory(f.release, f.rows, []);
+  const day = { ...f.release, phase: "day" as const, activeOperationId: DAY, devSavedSnapshotDigest: f.saved.snapshotDigest };
+  assertReleaseHistory(day, f.rows, [f.saved]);
+  expect(() => assertReleaseHistory(day, f.rows, [])).toThrow();
+  expect(JSON.stringify(f.rows)).toBe(original);
+  for (const index of [0, 2, 4, 6, 7]) {
+    const changed = f.rows.map((row, i) => i === index ? { ...row, matchedElementsJson: null } : row);
+    expect(() => assertReleaseHistory(f.release, changed, [])).toThrow();
+    expect(() => assertReleaseHistory(day, f.rows.filter((_, i) => i !== index), [f.saved])).toThrow();
+  }
+  expect(() => assertReleaseHistory(f.release, [...f.rows, ...f.make({ ...f.release.scope, operationId: DAY }, 71)], [])).toThrow();
+});
+it("V4 rejects missing, duplicated, aliased, unbound or obsolete evidence", () => {
+  const { release } = twoHeldFixture(), held = release.additionalUnknown;
+  for (const extra of [
+    { additionalUnknown: undefined }, { additionalUnknown: release.retainedUnknown },
+    { additionalUnknown: { evidence: held.evidence } },
+    { additionalUnknown: { ...held, evidence: { ...held.evidence, evidenceDigest: "a".repeat(64) } } },
+    { activeOperationId: held.evidence.operationId, devOperationId: held.evidence.operationId },
+    { additionalFailure: { ...release.additionalFailure, operationId: held.evidence.operationId } },
+    { authority: { ...release.authority, sequence: 172 } },
+  ]) {
+    vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, ...extra }));
+    expect(readLimitedRelease().value).toBeNull();
+  }
+});
+it("the previous development operation is eligible for historical fingerprinting even after admission expires", () => {
+  const f = continuedFixture();
+  const expired = { ...f.release, validFromUTC: "2025-01-01T00:00:00Z", validUntilUTC: "2025-01-01T01:00:00Z" };
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(expired));
+  expect(readLimitedRelease().value).toBeNull();
+  expect(historicalHeldReference(104, DEV).selection).toEqual(f.saved.selection);
+  expect(() => historicalHeldReference(104, f.release.additionalFailure.operationId)).toThrow();
+  expect(() => historicalHeldReference(105, DEV)).toThrow();
+  expect(() => historicalHeldReference(104, DAY)).toThrow();
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...expired, phase: "day", activeOperationId: DAY, devSavedSnapshotDigest: f.saved.snapshotDigest }));
+  expect(() => historicalHeldReference(104, DEV)).toThrow();
+});
 it("V3 admits development and day only with both exact terminal failures and the held operation", () => {
   const f = continuedFixture(), rows = [...f.rows, ...f.additionalRows];
   vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(f.release));

@@ -35,8 +35,20 @@ const encodedIds = z.string().transform((value, context) => {
 });
 const receivedIds = z.union([ids, encodedIds, controlSlot.transform(({ controlFactId, additionalFactId }) =>
   additionalFactId === null ? [controlFactId] : [controlFactId, additionalFactId])]);
+const budgetedSelection = z.record(z.string(), z.unknown()).transform((value, context) => {
+  try {
+    const keys = Object.keys(value), key = keys.find(key => /^(base|candidate)FactsLength[1-9]\d{0,2}$/.test(key));
+    if (!key || keys.length !== 2) throw Error();
+    const side = key.startsWith("base") ? "base" : "candidate";
+    const length = Number(key.split("Length")[1]);
+    const opposite = side === "base" ? "candidateFacts" : "baseFacts";
+    if (length > 200 || !keys.includes(opposite)) throw Error();
+    return { baseFacts: receivedIds.parse(value[side === "base" ? key : opposite]),
+      candidateFacts: receivedIds.parse(value[side === "candidate" ? key : opposite]), budget: { side, length } };
+  } catch { context.addIssue({ code: "custom", message: "invalid_budget_selection" }); return z.NEVER; }
+});
 const receivedSelection = factSelectionSchema.extend({ results: z.array(resultSchema.extend({
-  differences: z.union([differences.extend({ baseFacts: receivedIds, candidateFacts: receivedIds }), reservation]),
+  differences: z.union([differences.extend({ baseFacts: receivedIds, candidateFacts: receivedIds }), reservation, budgetedSelection]),
 })).min(1).max(LIMITS.reviewPairs) });
 
 /** Compact selectable observation IDs; every original fact stays in closedFacts.
@@ -180,6 +192,10 @@ export function decodeFactSelection(chunks: readonly ManagedComparisonChunk[], s
         differences = result.differences.reservation;
       } else {
         const b = select("base", result.differences.baseFacts), c = select("candidate", result.differences.candidateFacts);
+        if ("budget" in result.differences) {
+          const { side, length } = result.differences.budget;
+          if (sentence(side === "base" ? "base" : "candidate", side === "base" ? b : c).length !== length) throw Error();
+        }
         const keys = (facts: SourceProposition[]) => [...new Set(facts.map(f => meaningKey(f.meaning)))].sort();
         if (JSON.stringify(keys(b)) === JSON.stringify(keys(c))) throw Error();
         differences = sentence("base", b) + sentence("candidate", c);
