@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { budgetedDifferences, assertDifferenceSchemaCapacity } from "./generation-difference-budget";
+import { budgetedDifferences, differenceSchemaBytes } from "./generation-difference-budget";
 import { comparisonModelSchema } from "./model-schema";
 
 const bundle = (...ids: string[]) => JSON.stringify([...ids].sort((a, b) => a.localeCompare(b)));
@@ -40,7 +40,7 @@ it.each(["base", "candidate", "both"])("keeps independently meaningful short add
   expect(schema.safeParse(value).success).toBe(true);
   expect(matches(wire, value)).toBe(true);
   expect(JSON.stringify({ base, candidate })).toBe(before);
-  assertDifferenceSchemaCapacity(schema);
+  expect(differenceSchemaBytes(schema)).toBeLessThan(Infinity);
 });
 
 it("accepts combined200 and refuses201,260,wrong scope,duplicates at the provider wire", () => {
@@ -86,15 +86,31 @@ it("gives each length branch a distinct first property without another object le
   const keys = node.anyOf!.map(branch => Object.keys(branch.properties!)[0]);
   expect(keys).toEqual(["candidateFactsLength40", "candidateFactsLength90"]);
   expect(schema.safeParse({ candidateFactsLength90: bundle("c1", "c2"), baseFacts: bundle("b1", "b2") }).success).toBe(true);
-  assertDifferenceSchemaCapacity(z.object({ differences: schema }));
+  expect(differenceSchemaBytes(z.object({ differences: schema }))).toBeLessThan(Infinity);
+});
+
+it("keeps complete shared bundles when flattening would exceed the total enum limit", () => {
+  const facts = (side: string, offset: number) => Array.from({ length: 14 }, (_, i) =>
+    ({ id: side + i, length: offset + 5 * i }));
+  const build = (layout: "flat" | "shared") => z.object({ differences: budgetedDifferences("b", "c",
+    facts("b", 20), facts("c", 23), undefined, ["c0"], layout) }).strict();
+  const shared = build("shared"), flat = build("flat");
+  expect(differenceSchemaBytes(flat)).toBe(Infinity);
+  expect(differenceSchemaBytes(shared)).toBeLessThan(Infinity);
+  const sharedWire = comparisonModelSchema(shared).jsonSchema as Node;
+  const flatWire = comparisonModelSchema(flat).jsonSchema as Node;
+  for (const ids of [["b0"], ["b13"], ["b0", "b13"], ["b12", "b13"], ["foreign"]]) {
+    const selected = { differences: { candidateFactsLength23: bundle("c0"), baseFacts: bundle(...ids) } };
+    expect(matches(sharedWire, selected)).toBe(matches(flatWire, selected));
+    expect(matches(sharedWire, selected)).toBe(!ids.includes("foreign"));
+  }
 });
 
 it("enforces Azure capacity before a generation request, including shared references", () => {
   const tooManyProperties = z.object(Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`p${index}`, z.string()]))).strict();
-  expect(() => assertDifferenceSchemaCapacity(tooManyProperties)).toThrow("plan_limit");
-  expect(() => assertDifferenceSchemaCapacity(z.object({ id: z.enum(Array.from({ length: 1001 }, (_, index) => `f${index}`)) }).strict()))
-    .toThrow("plan_limit");
+  expect(differenceSchemaBytes(tooManyProperties)).toBe(Infinity);
+  expect(differenceSchemaBytes(z.object({ id: z.enum(Array.from({ length: 1001 }, (_, index) => `f${index}`)) }).strict())).toBe(Infinity);
   let nested: z.ZodType = z.string();
   for (let depth = 0; depth < 6; depth++) nested = z.object({ child: nested }).strict();
-  expect(() => assertDifferenceSchemaCapacity(nested)).toThrow("plan_limit");
+  expect(differenceSchemaBytes(nested)).toBe(Infinity);
 });

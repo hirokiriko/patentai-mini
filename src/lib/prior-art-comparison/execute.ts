@@ -22,7 +22,7 @@ import { sourceRequestPlan, sourceRequestPieces } from "./source-request-plan";
 import { withAiRequestTiming } from "../ai-request-timing";
 import { comparisonObservation } from "./observation";
 
-import { decodeFactSelection, generationSelectionSchema, factObservationChoices, factControlCoverage } from "./fact-selection-generation";
+import { decodeFactSelection, generationSelectionSchema, factSelectionSchema, factObservationChoices, factControlCoverage } from "./fact-selection-generation";
 import { generationQuoteOptions } from "./generation-quote-options";
 import { sourceAudit, type SourceAuditSink } from "./source-audit";
 import { retainReviewFailure, type ReviewFailureStep } from "./review-failure-audit";
@@ -116,8 +116,10 @@ export async function executeComparison(inputs: ComparisonInputs, selection: Sel
       const quoteOptions = generationQuoteOptions(batch, analyses);
       const observationChoices = factObservationChoices(batch, analyses, quoteOptions);
       const requiredControlChoices = factControlCoverage(analyses);
-      const selectionSchema = comparisonModelSchema<unknown>(generationSelectionSchema(batch, analyses, observationChoices, requiredControlChoices));
+      const selectionShape = generationSelectionSchema(batch, analyses, observationChoices, requiredControlChoices);
+      const selectionSchema = comparisonModelSchema<unknown>(selectionShape);
       const prompt = JSON.stringify({ ...batchTransportInput(batch, [], quoteOptions), generationProtocol: "scoped_fact_selection_v1",
+        ...(selectionShape === factSelectionSchema ? {} : { resultLayout: "Fill every required results property. Its name identifies the document, base claim and candidate claim." }),
         closedFacts: closedFactInput(analyses), observationChoices, requiredControlChoices });
       if (modelRequestBytes(PROPOSITION_GENERATION_SYSTEM, prompt, selectionSchema) > LIMITS.inputBytes) throw new ComparisonError("ai_incomplete");
       {

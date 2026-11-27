@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { createAzure } from "@ai-sdk/azure";
+import { generateObject } from "ai";
 import { makePlan, validateAnswer } from "./comparison";
 import { fictionalInputs } from "./fixtures.test-support";
 import { parseComparisonSource, digest } from "./source";
@@ -10,27 +12,39 @@ import { decodeGeneration } from "./generation";
 import { renderMeaning } from "./proposition-result";
 import type { Span } from "./propositions";
 
-function fixture() {
+function keyedResults(rows: { docId: number; baseClaimNo: number; candidateClaimNo: number; differences: unknown }[]) {
+  return Object.fromEntries(rows.map(({ docId, baseClaimNo, candidateClaimNo, ...fields }) =>
+    [`doc${docId}_base${baseClaimNo}_candidate${candidateClaimNo}`, fields]));
+}
+
+function fixture(distinctParent = false) {
   const f = fictionalInputs(), parent = "制御器は、温度が七度を超えると青色弁を閉じる。";
   const child = "前記制御器は、逆流防止制御を開始する際に両弁を同時に開く。";
-  f.inputs.draft = parseComparisonSource(`【請求項1】${parent}`, f.inputs.draft.id, f.inputs.draft.label);
-  f.inputs.documents = f.inputs.documents.map(d => parseComparisonSource(`【請求項1】${parent}\n【請求項2】${child}請求項1に記載の装置。`, d.id, d.label));
+  const longCondition = "高温の検出が続き、".repeat(5) + "規定時間を超えた場合";
+  const candidateParent = distinctParent ? parent.replace("温度が七度を超える", longCondition) : parent;
+  f.inputs.draft = parseComparisonSource(`【請求項1】${parent}${distinctParent ? child : ""}`, f.inputs.draft.id, f.inputs.draft.label);
+  f.inputs.documents = f.inputs.documents.map(d => parseComparisonSource(`【請求項1】${candidateParent}\n【請求項2】${child}請求項1に記載の装置。`, d.id, d.label));
   f.selection.documents.forEach(d => { d.claimNos = [2]; });
   const plan = makePlan(f.inputs, f.selection), input = propositionSourceInput(plan);
   const raw: SourceExtraction = { sources: input.sources.map(s => ({ sourceDigest: s.sourceDigest,
-    facts: s.source.claims.map(c => {
-      const text = c.segments.map(p => p.text).join(""), childFact = c.claimNo === 2;
-      const subject = childFact ? "前記制御器" : "制御器", condition = childFact ? "逆流防止制御を開始する際" : "温度が七度を超える", object = childFact ? "両弁" : "青色弁";
-      const span = (term: string): Span => [text.indexOf(term), text.indexOf(term) + term.length];
-      return { claimNo: c.claimNo, basis: [[0, text.length] as Span], meaning: { kind: "relation", subject,
-        context: "operation", guard: { relation: "when", conditions: [condition] }, polarity: "positive",
-        predicate: childFact ? "opens_together" : "closes", objects: [object] },
-        bindings: [subject, condition, object].map(term => ({ term, spans: [span(term)] })),
-        operators: { selection: null, extent: null, polarity: null, guard: span(condition), context: null }, routeFrame: null };
+    facts: s.source.claims.flatMap(c => {
+      const text = c.segments.map(p => p.text).join("");
+      const actions = distinctParent && s.side === "base" ? [false, true] : [c.claimNo === 2];
+      return actions.map((childFact): SourceExtraction["sources"][number]["facts"][number] => {
+        const subject = childFact ? "前記制御器" : "制御器";
+        const condition = childFact ? "逆流防止制御を開始する際" : text.includes(longCondition) ? longCondition : "温度が七度を超える";
+        const object = childFact ? "両弁" : "青色弁";
+        const span = (term: string): Span => [text.indexOf(term), text.indexOf(term) + term.length];
+        return { claimNo: c.claimNo, basis: [[0, text.length] as Span], meaning: { kind: "relation", subject,
+          context: "operation", guard: { relation: "when", conditions: [condition] }, polarity: "positive",
+          predicate: childFact ? "opens_together" : "closes", objects: [object] },
+          bindings: [subject, condition, object].map(term => ({ term, spans: [span(term)] })),
+          operators: { selection: null, extent: null, polarity: null, guard: span(condition), context: null }, routeFrame: null };
+      });
     }) })) };
   const actions = raw.sources.map(s => ({ sourceDigest: s.sourceDigest, facts: s.facts.map(fact => {
     const text = input.sources.find(v => v.sourceDigest === s.sourceDigest)!.source.claims.find(c => c.claimNo === fact.claimNo)!.segments.map(p => p.text).join("");
-    const action = fact.claimNo === 2 ? "同時に開く" : "閉じる";
+    const action = fact.meaning.kind === "relation" && fact.meaning.predicate === "opens_together" ? "同時に開く" : "閉じる";
     return { claimNo: fact.claimNo, factDigest: digest(fact), action: [text.indexOf(action), text.indexOf(action) + action.length] as Span };
   }) }));
   const sources = decodeSourcePropositions(plan, raw, actions), quotes = generationQuoteOptions(plan, sources);
@@ -75,16 +89,89 @@ it("requires an explicit parent difference only for the pair where no other fiel
   // The other document's parent still has an exact common fact.
   parent.meaning.guard = { relation: "when", conditions: ["高温の検出が続き、".repeat(5) + "規定時間を超えた場合"] };
   const schema = generationSelectionSchema(f.plan, f.sources, observations, factControlCoverage(f.sources));
+  expect(schema.safeParse({ results: [f.selection.results[1], f.selection.results[1]] }).success).toBe(false);
   expect(schema.safeParse(f.selection).success).toBe(false);
   const first = f.selection.results[0];
   const baseLengthKey = "baseFactsLength" + ("基準側は、" + renderMeaning(f.sources.facts.find(fact => fact.id === "s0.0")!.meaning) + "。").length;
-  const explicit = { results: [{ ...first, differences: { [baseLengthKey]: JSON.stringify(first.differences.baseFacts),
-    candidateFacts: JSON.stringify(["s1.0"]) } }, f.selection.results[1]] };
+  const explicit = { results: keyedResults([{ ...first, differences: { [baseLengthKey]: JSON.stringify(first.differences.baseFacts),
+    candidateFacts: JSON.stringify(["s1.0"]) } }, f.selection.results[1]]) };
   expect(schema.safeParse(explicit).success).toBe(true);
-  expect(JSON.stringify(comparisonModelSchema<unknown>(schema).jsonSchema)).toContain('s1.0');
-  explicit.results[0] = { ...explicit.results[0], differences: { [baseLengthKey]: JSON.stringify(first.differences.baseFacts),
-    candidateFacts: JSON.stringify(["s1.1"]) } };
+  const wire = comparisonModelSchema<unknown>(schema);
+  expect(JSON.stringify(wire.jsonSchema)).toContain('s1.0');
+  const [left, right] = Object.keys(explicit.results);
+  expect(schema.safeParse({ results: { [right]: explicit.results[right] } }).success).toBe(false);
+  expect(schema.safeParse({ results: { ...explicit.results, other: explicit.results[right] } }).success).toBe(false);
+  expect(schema.safeParse({ results: { ...explicit.results, [left]: explicit.results[right] } }).success).toBe(false);
+  explicit.results[left].differences = { [baseLengthKey]: JSON.stringify(first.differences.baseFacts), candidateFacts: JSON.stringify(["s1.1"]) };
   expect(schema.safeParse(explicit).success).toBe(false);
+});
+
+it("reads required pair slots in plan order and preserves legacy decoded claims and quotes", () => {
+  const f = fixture(), original = decodeFactSelection(f.plan, f.sources, f.quotes, f.selection);
+  const results = keyedResults([...f.selection.results].reverse());
+  expect(decodeFactSelection(f.plan, f.sources, f.quotes, { results })).toEqual(original);
+  const [first, second] = Object.keys(results);
+  for (const wrong of [
+    { [first]: results[first] }, { [first]: results[first], foreign: results[second] },
+    { ...results, foreign: results[second] }, { ...results, [first]: results[second] },
+    { ...results, [first]: { ...results[first], docId: 1 } },
+  ]) expect(() => decodeFactSelection(f.plan, f.sources, f.quotes, { results: wrong })).toThrow("ai_incomplete");
+});
+
+it("serializes two constrained pairs sharing the same base claim and keeps their candidate choices separate", () => {
+  const f = fixture();
+  for (const id of ["s1.0", "s2.0"]) {
+    const parent = f.sources.facts.find(fact => fact.id === id)!;
+    parent.meaning.guard = { relation: "when", conditions: ["高温の検出が続き、".repeat(5) + "規定時間を超えた場合"] };
+  }
+  const schema = generationSelectionSchema(f.plan, f.sources,
+    factObservationChoices(f.plan, f.sources, f.quotes), factControlCoverage(f.sources));
+  const wire = comparisonModelSchema<unknown>(schema).jsonSchema;
+  const base = f.sources.facts.find(fact => fact.id === "s0.0")!;
+  const field = "baseFactsLength" + (`基準側は、${renderMeaning(base.meaning)}。`).length;
+  const results = keyedResults(f.selection.results.map((row, i) => ({ ...row,
+    differences: { [field]: '["s0.0"]', candidateFacts: JSON.stringify([`s${i + 1}.0`]) },
+  })));
+  expect(wire).toMatchObject({ properties: { results: { type: "object", required: Object.keys(results) } } });
+  expect(schema.safeParse({ results }).success).toBe(true);
+  const [left, right] = Object.keys(results);
+  expect(schema.safeParse({ results: { ...results, [right]: results[left] } }).success).toBe(false);
+});
+
+it("reads two constrained SDK response slots into comparisons with the selected child quotations", async () => {
+  const f = fixture(true);
+  const shape = generationSelectionSchema(f.plan, f.sources, factObservationChoices(f.plan, f.sources, f.quotes),
+    factControlCoverage(f.sources));
+  const parent = f.sources.facts.find(fact => fact.id === "s1.0")!;
+  const lengthField = "candidateFactsLength" + (`候補側は、${renderMeaning(parent.meaning)}。`).length;
+  const rows = f.selection.results.map((row, i) => ({ ...row,
+    common: [{ baseFacts: ["s0.1"], candidateFacts: [`s${i + 1}.1`] }],
+    differences: { baseFacts: '["s0.0"]', [lengthField]: JSON.stringify([`s${i + 1}.0`]) },
+  }));
+  const results = keyedResults(rows);
+  let requests = 0;
+  const azure = createAzure({ resourceName: "fictional", apiKey: "fictional", fetch: async (_url, init) => {
+    requests++;
+    const sent = JSON.parse(String(init?.body));
+    expect(sent.text.format.schema.properties.results).toMatchObject({ type: "object", required: Object.keys(results) });
+    return Response.json({ id: "resp_fixture", model: "fictional", created_at: 0, status: "completed",
+      output: [{ type: "message", id: "msg_fixture", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: JSON.stringify({ results }), annotations: [] }] }],
+      usage: { input_tokens: 1, output_tokens: 1 } });
+  } });
+  const response = await generateObject({ model: azure.responses("fictional"), prompt: "Select both fictional pairs.",
+    schema: comparisonModelSchema<unknown>(shape), maxRetries: 0 });
+  expect(requests).toBe(1);
+  const decoded = decodeFactSelection(f.plan, f.sources, f.quotes, response.object);
+  expect(decoded.results.map(row => row.docId)).toEqual(f.plan.map(chunk => chunk.candidateId));
+  for (const [index, chunk] of f.plan.entries()) {
+    const { docId, ...row } = decoded.results[index];
+    expect(docId).toBe(chunk.candidateId);
+    const [pair] = validateAnswer(chunk, decodeGeneration(chunk, { results: [row] }, f.quotes));
+    expect(pair.candidateEvidence.claimNo).toBe(2);
+    expect(pair.candidateEvidence.quote).toContain("両弁を同時に開く");
+    expect(row.differences).toContain("規定時間を超えた場合");
+  }
 });
 
 it("renders only the control and optional second fact the model explicitly chose", () => {

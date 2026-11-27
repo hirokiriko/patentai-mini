@@ -23,12 +23,22 @@ function bundles(facts: readonly DifferenceFact[], required: readonly string[] |
   return result;
 }
 
-function groups(scope: string, values: readonly Bundle[]) {
+type EnumCache = Map<string, z.ZodType<string>>;
+
+function namedEnum(cache: EnumCache, id: string, values: string[]) {
+  const existing = cache.get(id);
+  if (existing) return existing;
+  const schema = z.enum(values).meta({ id });
+  cache.set(id, schema);
+  return schema;
+}
+
+function groups(scope: string, values: readonly Bundle[], cache: EnumCache) {
   const lengths = [...new Set(values.map(value => value.length))].sort((a, b) => a - b);
   return lengths.map(length => {
     const choices = values.filter(value => value.length === length).map(value => JSON.stringify(value.ids)).sort();
-    const schema = z.enum(choices).meta({ id: `DifferenceBundle_${digest({ scope, length, choices })}` });
-    return { length, schema };
+    const schema = namedEnum(cache, `DifferenceBundle_${digest({ scope, length, choices })}`, choices);
+    return { length, choices, schema };
   });
 }
 
@@ -42,16 +52,30 @@ function choice(schemas: z.ZodType[]) {
  * Canonical ordering removes only duplicate permutations, not fact choices. */
 export function budgetedDifferences(baseScope: string, candidateScope: string,
   baseFacts: readonly DifferenceFact[], candidateFacts: readonly DifferenceFact[],
-  requiredBase: readonly string[] | undefined, requiredCandidate: readonly string[] | undefined) {
+  requiredBase: readonly string[] | undefined, requiredCandidate: readonly string[] | undefined,
+  enumLayout: "shared" | "flat" = "shared", enums: EnumCache = new Map()) {
   const minimum = (facts: readonly DifferenceFact[], required: readonly string[] | undefined) =>
     Math.min(...facts.filter(fact => !required || required.includes(fact.id)).map(fact => fact.length));
-  const base = groups(baseScope, bundles(baseFacts, requiredBase, 200 - minimum(candidateFacts, requiredCandidate)));
-  const candidate = groups(candidateScope, bundles(candidateFacts, requiredCandidate, 200 - minimum(baseFacts, requiredBase)));
+  const base = groups(baseScope, bundles(baseFacts, requiredBase, 200 - minimum(candidateFacts, requiredCandidate)), enums);
+  const candidate = groups(candidateScope, bundles(candidateFacts, requiredCandidate, 200 - minimum(baseFacts, requiredBase)), enums);
   const dispatchBase = base.length <= candidate.length;
+  const oppositeScope = dispatchBase ? candidateScope : baseScope;
+  const thresholds = new Map<number, z.ZodType>();
   const branches = (dispatchBase ? base : candidate).flatMap(group => {
     const others = (dispatchBase ? candidate : base).filter(other => group.length + other.length <= 200);
     if (!others.length) return [];
-    const opposite = choice(others.map(other => other.schema));
+    // Equal thresholds admit exactly the same opposite bundles. Reuse a single
+    // enum instead of repeatedly nesting a union of string-enum references.
+    let opposite = thresholds.get(others.length);
+    if (!opposite) {
+      if (enumLayout === "flat" && others.length > 1) {
+        const choices = others.flatMap(other => other.choices);
+        opposite = namedEnum(enums, `DifferenceChoices_${digest({ oppositeScope, choices })}`, choices);
+      } else {
+        opposite = choice(others.map(other => other.schema));
+      }
+      thresholds.set(others.length, opposite);
+    }
     // Distinct branch keys keep the length dispatch unambiguous without an
     // extra object level. The receiver restores the original two side names.
     return [z.object(dispatchBase
@@ -64,16 +88,16 @@ export function budgetedDifferences(baseScope: string, candidateScope: string,
 
 /** Azure counts shared definitions once for capacity and expands references for
  * nesting. Reject a whole unrepresentable plan before its generation request. */
-export function assertDifferenceSchemaCapacity(schema: z.ZodType) {
+export function differenceSchemaBytes(schema: z.ZodType) {
   const wire = comparisonModelSchema<unknown>(schema).jsonSchema;
-  let properties = 0, enumValues = 0;
+  let properties = 0, enumValues = 0, oversizedEnum = false;
   const scan = (value: unknown) => {
     if (!value || typeof value !== "object") return;
     const node = value as Record<string, unknown>;
     if (node.properties) properties += Object.keys(node.properties).length;
     if (Array.isArray(node.enum)) {
       enumValues += node.enum.length;
-      if (node.enum.length > 250 && node.enum.join("").length > 15000) throw new ComparisonError("plan_limit");
+      if (node.enum.length > 250 && node.enum.join("").length > 15000) oversizedEnum = true;
     }
     Object.values(node).forEach(child => Array.isArray(child) ? child.forEach(scan) : scan(child));
   };
@@ -90,6 +114,7 @@ export function assertDifferenceSchemaCapacity(schema: z.ZodType) {
     return Math.max(next, ...children.map(child => depth(child, next)));
   };
   scan(wire);
-  if (properties > 100 || enumValues > 1000 || depth(wire) > 5 || JSON.stringify(wire).length > 120000)
-    throw new ComparisonError("plan_limit");
+  const bytes = Buffer.byteLength(JSON.stringify(wire), "utf8");
+  return oversizedEnum || properties > 100 || enumValues > 1000 || depth(wire) > 5 || bytes > 120000
+    ? Infinity : bytes;
 }

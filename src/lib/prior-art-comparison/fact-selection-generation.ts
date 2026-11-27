@@ -8,7 +8,7 @@ import { meaningKey, propositionKey, type SourceProposition } from "./propositio
 import { isNominalReservationText } from "./reservation-topic";
 import { ComparisonError, digest } from "./source";
 import { LIMITS } from "./limits";
-import { assertDifferenceSchemaCapacity, budgetedDifferences } from "./generation-difference-budget";
+import { budgetedDifferences, differenceSchemaBytes } from "./generation-difference-budget";
 
 const printableSubject = (fact: SourceProposition) => fact.meaning.subject !== null ||
   fact.meaning.kind === "relation" && ["is_state", "power_ends"].includes(fact.meaning.predicate);
@@ -25,6 +25,9 @@ const resultSchema = z.object({
   unconfirmed: z.string().min(1).max(120),
 }).strict();
 export const factSelectionSchema = z.object({ results: z.array(resultSchema).min(1).max(LIMITS.reviewPairs) }).strict();
+const identityFields = { docId: true, baseClaimNo: true, candidateClaimNo: true } as const;
+type PairIdentity = Pick<z.infer<typeof resultSchema>, keyof typeof identityFields>;
+const pairKey = (pair: PairIdentity) => `doc${pair.docId}_base${pair.baseClaimNo}_candidate${pair.candidateClaimNo}`;
 
 // A named required slot can be constrained on the provider wire. An optional
 // second selection remains available under the original two-fact limit.
@@ -47,9 +50,12 @@ const budgetedSelection = z.record(z.string(), z.unknown()).transform((value, co
       candidateFacts: receivedIds.parse(value[side === "candidate" ? key : opposite]), budget: { side, length } };
   } catch { context.addIssue({ code: "custom", message: "invalid_budget_selection" }); return z.NEVER; }
 });
-const receivedSelection = factSelectionSchema.extend({ results: z.array(resultSchema.extend({
+const receivedResult = resultSchema.extend({
   differences: z.union([differences.extend({ baseFacts: receivedIds, candidateFacts: receivedIds }), reservation, budgetedSelection]),
-})).min(1).max(LIMITS.reviewPairs) });
+});
+const receivedSelection = z.object({ results: z.union([
+  z.array(receivedResult).min(1).max(LIMITS.reviewPairs), z.record(z.string(), receivedResult.omit(identityFields)),
+]) }).strict();
 
 /** Compact selectable observation IDs; every original fact stays in closedFacts.
  * No shortened or fabricated quotation is offered to make a choice fit. */
@@ -124,24 +130,36 @@ export function generationSelectionSchema(chunks: readonly ManagedComparisonChun
     // contract; one named slot must not privilege an arbitrary parent.
     if (required.length === 1) return required[0];
   }
-  let constrained = false;
   const pairs = chunks.flatMap(chunk => chunk.pairs.map(pair => {
     const base = `base:${pair.baseClaimNo}`, candidate = `candidate:${chunk.candidateId}:${pair.candidateClaimNo}`;
-    const baseSlot = requiredDifference(base, pair.baseClaimNo, candidate);
-    const candidateSlot = requiredDifference(candidate, pair.candidateClaimNo, base);
-    constrained ||= Boolean(baseSlot || candidateSlot);
-    return resultSchema.extend({
-      docId: z.literal(chunk.candidateId), baseClaimNo: z.literal(pair.baseClaimNo), candidateClaimNo: z.literal(pair.candidateClaimNo),
-      differences: baseSlot || candidateSlot ? budgetedDifferences(base, candidate,
-        printable.filter(entry => entry.fact.scope === base).map(entry => ({ id: entry.fact.id, length: entry.length })),
-        printable.filter(entry => entry.fact.scope === candidate).map(entry => ({ id: entry.fact.id, length: entry.length })),
-        baseSlot, candidateSlot) : resultSchema.shape.differences,
-    });
+    return { key: pairKey({ ...pair, docId: chunk.candidateId }), base, candidate,
+      baseSlot: requiredDifference(base, pair.baseClaimNo, candidate),
+      candidateSlot: requiredDifference(candidate, pair.candidateClaimNo, base) };
   }));
-  if (!constrained) return factSelectionSchema;
-  const schema = factSelectionSchema.extend({ results: z.array(z.union(pairs)).min(1).max(LIMITS.reviewPairs) });
-  assertDifferenceSchemaCapacity(schema);
-  return schema;
+  if (!pairs.some(pair => pair.baseSlot || pair.candidateSlot)) return factSelectionSchema;
+  // A required property per planned pair prevents a duplicate row from
+  // satisfying the wire schema in place of a missing dependent claim.
+  const slot = resultSchema.omit(identityFields);
+  const scopedFacts = (scope: string) => printable.filter(entry => entry.fact.scope === scope)
+    .map(entry => ({ id: entry.fact.id, length: entry.length }));
+  function makeSchema(layout: "shared" | "flat") {
+    // Pairs can share a claim. Each definition ID must identify one schema
+    // instance throughout this response, even across different result slots.
+    const enums = new Map<string, z.ZodType<string>>();
+    const slots = pairs.map(({ key, base, candidate, baseSlot, candidateSlot }) => {
+      if (!baseSlot && !candidateSlot) return [key, slot] as const;
+      const differences = budgetedDifferences(base, candidate, scopedFacts(base), scopedFacts(candidate),
+        baseSlot, candidateSlot, layout, enums);
+      return [key, slot.extend({ differences })] as const;
+    });
+    return z.object({ results: z.object(Object.fromEntries(slots)).strict() }).strict();
+  }
+  // Merging disjoint enums can repeat options across thresholds. Compare the
+  // complete schemas so a large but representable selection keeps all choices.
+  const flat = makeSchema("flat"), shared = makeSchema("shared");
+  const flatBytes = differenceSchemaBytes(flat), sharedBytes = differenceSchemaBytes(shared);
+  if (!Number.isFinite(Math.min(flatBytes, sharedBytes))) throw new ComparisonError("plan_limit");
+  return flatBytes <= sharedBytes ? flat : shared;
 }
 
 /** Model chooses facts, never rewritten subjects, conditions, or source quotes.
@@ -150,11 +168,18 @@ export function decodeFactSelection(chunks: readonly ManagedComparisonChunk[], s
   quotes: GenerationQuoteOptions, value: unknown): BatchAnswer {
   try {
     if (digest(generationQuoteOptions(chunks, sources)) !== digest(quotes)) throw Error();
-    const answer = receivedSelection.parse(value);
-    const expected = new Set(chunks.flatMap(c => c.pairs.map(p => `${c.candidateId}:${p.baseClaimNo}:${p.candidateClaimNo}`)));
-    const received = answer.results.map(r => `${r.docId}:${r.baseClaimNo}:${r.candidateClaimNo}`);
+    const { results } = receivedSelection.parse(value);
+    const pairs = chunks.flatMap(c => c.pairs.map(p => ({ ...p, docId: c.candidateId })));
+    const expected = new Set(pairs.map(pairKey));
+    if (!Array.isArray(results) && Object.keys(results).length !== expected.size) throw Error();
+    const rows = Array.isArray(results) ? results : pairs.map(pair => {
+      const key = pairKey(pair);
+      if (!Object.hasOwn(results, key)) throw Error();
+      return { ...results[key], ...pair };
+    });
+    const received = rows.map(pairKey);
     if (received.length !== expected.size || new Set(received).size !== received.length || received.some(key => !expected.has(key))) throw Error();
-    return { results: answer.results.map(result => {
+    return { results: rows.map(result => {
       const chunk = chunks.find(c => c.candidateId === result.docId && c.pairs.some(p =>
         p.baseClaimNo === result.baseClaimNo && p.candidateClaimNo === result.candidateClaimNo));
       if (!chunk || !isNominalReservationText(result.unconfirmed)) throw Error();
