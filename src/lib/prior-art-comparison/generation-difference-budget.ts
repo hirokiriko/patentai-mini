@@ -52,8 +52,11 @@ export function budgetedDifferences(baseScope: string, candidateScope: string,
     const others = (dispatchBase ? candidate : base).filter(other => group.length + other.length <= 200);
     if (!others.length) return [];
     const opposite = choice(others.map(other => other.schema));
-    return [z.object({ baseFacts: dispatchBase ? group.schema : opposite,
-      candidateFacts: dispatchBase ? opposite : group.schema }).strict()];
+    // Distinct branch keys keep the length dispatch unambiguous without an
+    // extra object level. The receiver restores the original two side names.
+    return [z.object(dispatchBase
+      ? { [`baseFactsLength${group.length}`]: group.schema, candidateFacts: opposite }
+      : { [`candidateFactsLength${group.length}`]: group.schema, baseFacts: opposite }).strict()];
   });
   if (!branches.length) throw new ComparisonError("plan_limit");
   return choice(branches);

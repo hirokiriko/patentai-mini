@@ -34,7 +34,9 @@ it.each(["base", "candidate", "both"])("keeps independently meaningful short add
   const differences = budgetedDifferences("base", "candidate", base, candidate,
     required === "candidate" ? undefined : ["b.parent"], required === "base" ? undefined : ["c.parent"]);
   const schema = z.object({ differences }).strict(), wire = comparisonModelSchema(schema).jsonSchema as Node;
-  const value = { differences: { baseFacts: bundle("b.parent", "b.condition"), candidateFacts: bundle("c.parent", "c.other") } };
+  const value = { differences: required === "candidate"
+    ? { candidateFactsLength100: bundle("c.parent", "c.other"), baseFacts: bundle("b.parent", "b.condition") }
+    : { baseFactsLength85: bundle("b.parent", "b.condition"), candidateFacts: bundle("c.parent", "c.other") } };
   expect(schema.safeParse(value).success).toBe(true);
   expect(matches(wire, value)).toBe(true);
   expect(JSON.stringify({ base, candidate })).toBe(before);
@@ -47,7 +49,7 @@ it("accepts combined200 and refuses201,260,wrong scope,duplicates at the provide
     { id: "c.six", length: 6 }, { id: "c.child", length: 65 },
   ], undefined, ["c.parent"]);
   const schema = z.object({ differences }).strict(), wire = comparisonModelSchema(schema).jsonSchema as Node;
-  const value = (candidateFacts: string) => ({ differences: { baseFacts: bundle("b"), candidateFacts } });
+  const value = (candidateFacts: string) => ({ differences: { baseFactsLength85: bundle("b"), candidateFacts } });
   for (const ids of [["c.parent"], ["c.parent", "c.five"]]) {
     expect(schema.safeParse(value(bundle(...ids))).success).toBe(true);
     expect(matches(wire, value(bundle(...ids)))).toBe(true);
@@ -64,8 +66,8 @@ it("preserves different-length mandatory choices and either ordering of source m
   ];
   const first = budgetedDifferences("base", "candidate", base, candidate, undefined, ["c.long", "c.short"]);
   const second = budgetedDifferences("base", "candidate", base, [...candidate].reverse(), undefined, ["c.short", "c.long"]);
-  expect(first.safeParse({ baseFacts: bundle("b"), candidateFacts: bundle("c.short", "c.extra") }).success).toBe(true);
-  expect(first.safeParse({ baseFacts: bundle("b"), candidateFacts: bundle("c.long", "c.extra") }).success).toBe(false);
+  expect(first.safeParse({ baseFactsLength85: bundle("b"), candidateFacts: bundle("c.short", "c.extra") }).success).toBe(true);
+  expect(first.safeParse({ baseFactsLength85: bundle("b"), candidateFacts: bundle("c.long", "c.extra") }).success).toBe(false);
   expect(comparisonModelSchema(z.object({ differences: first })).jsonSchema).toEqual(
     comparisonModelSchema(z.object({ differences: second })).jsonSchema);
 });
@@ -74,6 +76,17 @@ it("refuses an unrepresentable full selection rather than silently dropping choi
   const facts = Array.from({ length: 46 }, (_, index) => ({ id: `b${index}`, length: 10 }));
   expect(() => budgetedDifferences("base", "candidate", facts, [{ id: "c", length: 10 }], undefined, ["c"]))
     .toThrow("plan_limit");
+});
+
+it("gives each length branch a distinct first property without another object level", () => {
+  const schema = budgetedDifferences("b", "c", [{ id: "b1", length: 20 }, { id: "b2", length: 35 }, { id: "b3", length: 60 }],
+    [{ id: "c1", length: 40 }, { id: "c2", length: 50 }], undefined, ["c1"]);
+  const wire = comparisonModelSchema(z.object({ differences: schema })).jsonSchema as Node;
+  const node = wire.properties!.differences;
+  const keys = node.anyOf!.map(branch => Object.keys(branch.properties!)[0]);
+  expect(keys).toEqual(["candidateFactsLength40", "candidateFactsLength90"]);
+  expect(schema.safeParse({ candidateFactsLength90: bundle("c1", "c2"), baseFacts: bundle("b1", "b2") }).success).toBe(true);
+  assertDifferenceSchemaCapacity(z.object({ differences: schema }));
 });
 
 it("enforces Azure capacity before a generation request, including shared references", () => {

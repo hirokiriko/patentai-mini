@@ -16,6 +16,12 @@ Two independent SELECT observations must agree. The response is `{ evidence, his
 
 The feature ships with the normal reviewed product image. It needs no new service, extra image solely for fingerprint collection, migration, new database permission or custom server. Deployment, shared-replica settings, infrastructure budget and actual execution remain separate release operations. Previously signed packages and saved records must not be edited to fit a new release.
 
+## Two held operations
+
+V3 records a second terminal failure. With a historical development-phase V3 configuration, the OWNER fingerprint GET accepts the designated development ID or the retained unknown ID. Each request still requires exactly two consistent reserved rows for that ID. This allows the operator to fingerprint an interrupted development operation while intake is closed.
+
+V4 binds activation sequence 174 to two terminal failures and two unknown operations. The second unknown uses `additionalUnknown`, with the same row fingerprint and isolation evidence format as `retainedUnknown`. The release producer verifies the separate isolation evidence for each operation and retains its spending reservation. Admission and reservation both check the four distinct historical identities. Practitioner admission also requires the saved snapshot from the new development operation.
+
 ## Validation
 
 Tests use fictional selections and in-memory database seams. They cover unchanged predecessors, one-shot successor reservation, strict authority/isolation requirements, missing/extra/changed unknown rows, historical OWNER fingerprints with intake OFF, expiry separation, concurrent snapshot changes, and practitioner snapshot binding. No test dispatches a provider request or accesses a production database.
