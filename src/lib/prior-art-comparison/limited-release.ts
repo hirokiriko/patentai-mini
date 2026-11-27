@@ -41,11 +41,19 @@ const threeHeldReleaseSchema = twoHeldReleaseSchema.extend({
   authority: twoHeldReleaseSchema.shape.authority.extend({ sequence: z.literal(176) }),
   thirdUnknown: successorReleaseSchema.shape.retainedUnknown,
 });
+const sourceFailureReleaseSchema = threeHeldReleaseSchema.extend({
+  schema: z.literal("CASE104_LIMITED_RELEASE_V6"),
+  authority: threeHeldReleaseSchema.shape.authority.extend({ sequence: z.literal(178) }),
+  sourceFailure: legacyReleaseSchema.shape.oldFailure.extend({
+    stage: z.literal("source_reading"), kind: z.literal("protocol_invalid"),
+  }),
+});
 const releaseSchema = z.discriminatedUnion("schema", [
-  legacyReleaseSchema, successorReleaseSchema, continuedReleaseSchema, twoHeldReleaseSchema, threeHeldReleaseSchema,
+  legacyReleaseSchema, successorReleaseSchema, continuedReleaseSchema, twoHeldReleaseSchema, threeHeldReleaseSchema, sourceFailureReleaseSchema,
 ]);
 export type LimitedRelease = z.infer<typeof releaseSchema>;
 function retainedFailures(value: LimitedRelease): LimitedRelease["oldFailure"][] {
+  if ("sourceFailure" in value) return [value.oldFailure, value.additionalFailure, value.sourceFailure];
   return "additionalFailure" in value ? [value.oldFailure, value.additionalFailure] : [value.oldFailure];
 }
 function retainedReservations(value: LimitedRelease) {
@@ -114,7 +122,8 @@ function record(row: Row): { marker: Record<string, unknown>; audit: unknown } {
     return { marker: value.priorArtComparison, audit: value.priorArtComparisonSourceAudit };
   } catch { throw new ComparisonError("result_invalid"); }
 }
-function assertRetainedFailure(releaseScope: LimitedRelease["scope"], expected: LimitedRelease["oldFailure"], rows: Row[]) {
+function assertRetainedFailure(releaseScope: LimitedRelease["scope"], expected: LimitedRelease["oldFailure"], rows: Row[],
+  requireFailedAnswer: boolean) {
   const old = rows.filter(row => record(row).marker.operationId === expected.operationId);
   if (!old.length) throw new ComparisonError("save_unconfirmed");
   const first = record(old[0]), selection = selectionSchema.parse(first.marker.selection);
@@ -128,7 +137,8 @@ function assertRetainedFailure(releaseScope: LimitedRelease["scope"], expected: 
     const own = record(row);
     if (!own.audit || !first.audit || row.caseId !== 104 || digest(own.marker) !== digest(exact) || !keys.delete(`${row.draftClaimId}:${row.priorDocId}`) || digest(own.audit) !== digest(first.audit)) throw new ComparisonError("result_invalid");
     const audit = validateSourceAudit(own.audit, expected.operationId, selection.inputDigest);
-    if (audit.auditDigest !== expected.auditDigest) throw new ComparisonError("result_invalid");
+    if (audit.auditDigest !== expected.auditDigest || (requireFailedAnswer && (audit.version !== 1 || !audit.failure)))
+      throw new ComparisonError("result_invalid");
   }
   if (keys.size) throw new ComparisonError("result_invalid");
 }
@@ -136,7 +146,9 @@ function assertRetainedFailure(releaseScope: LimitedRelease["scope"], expected: 
 export function assertReleaseHistory(release: LimitedRelease, rows: Row[], saved: SavedComparison[]) {
   assertSuccessorIsolation(release);
   const failures = retainedFailures(release);
-  for (const failure of failures) assertRetainedFailure(release.scope, failure, rows);
+  for (const failure of failures) {
+    assertRetainedFailure(release.scope, failure, rows, "sourceFailure" in release && failure === release.sourceFailure);
+  }
   const historicalIds = new Set(failures.map(failure => failure.operationId));
   for (const { evidence: held } of retainedReservations(release)) {
     const actual = heldReservationEvidence(rows, { operationId: held.operationId,

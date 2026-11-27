@@ -10,7 +10,7 @@ function fixture(){
   const saved=fictionalSaved();saved.inputs.caseId=104;saved.operationId=DEV;saved.selection.operationId=DEV;saved.snapshotDigest=savedDigest(saved);
   const {operationId:ignored,...scope}=saved.selection;void ignored;
   const heldSelection={...scope,operationId:HELD},oldSelection={...scope,operationId:OLD};
-  const make=(selection:typeof heldSelection,firstId:number,failure?:{stage:"generation";kind:"protocol_invalid"},audit?:unknown):HeldRow[]=>scope.documents.map((doc,i)=>({resultId:firstId+i,caseId:104,draftClaimId:String(scope.draftClaimNos[0]),priorDocId:doc.docId,matchedElementsJson:JSON.stringify({priorArtComparison:{version:1,status:"reserved",operationId:selection.operationId,selection,...(failure?{failure}:{})},...(audit?{priorArtComparisonSourceAudit:audit}:{})})}));
+  const make=(selection:typeof heldSelection,firstId:number,failure?:{stage:"generation"|"source_reading";kind:"protocol_invalid"},audit?:unknown):HeldRow[]=>scope.documents.map((doc,i)=>({resultId:firstId+i,caseId:104,draftClaimId:String(scope.draftClaimNos[0]),priorDocId:doc.docId,matchedElementsJson:JSON.stringify({priorArtComparison:{version:1,status:"reserved",operationId:selection.operationId,selection,...(failure?{failure}:{})},...(audit?{priorArtComparisonSourceAudit:audit}:{})})}));
   const audit=sourceAudit(OLD,scope.inputDigest,[{id:"b".repeat(64)+":1",sourceIndex:0,sourceDigest:"b".repeat(64),claimNo:1}],[]);
   const failure={stage:"generation" as const,kind:"protocol_invalid" as const};
   const heldRows=make(heldSelection,31),oldRows=make(oldSelection,21,failure,audit),rows=[...oldRows,...heldRows];
@@ -88,7 +88,7 @@ it("V4 exposes the active development fingerprint for reconciliation only with c
   vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, phase: "day", activeOperationId: DAY, devSavedSnapshotDigest: saved.snapshotDigest }));
   expect(() => historicalHeldReference(104, DEV)).toThrow();
 });
-it("V5 reconciles each of three independent reservations without authorizing another pending row", () => {
+function threeHeldFixture() {
   const f = twoHeldFixture(), operationId = "a0000000-0000-4000-8000-000000000007";
   const selection = { ...f.release.scope, operationId };
   const reference = { operationId, selection, selectionSHA256: digest(selection) };
@@ -96,6 +96,10 @@ it("V5 reconciles each of three independent reservations without authorizing ano
   const thirdUnknown = { evidence: heldReservationEvidence(rows, reference), isolationEvidenceSHA256: "1".repeat(64) };
   const release = { ...f.release, schema: "CASE104_LIMITED_RELEASE_V5" as const,
     thirdUnknown, authority: { ...f.release.authority, sequence: 176 as const } };
+  return { f, operationId, selection, reference, rows, thirdUnknown, release };
+}
+it("V5 reconciles each of three independent reservations without authorizing another pending row", () => {
+  const { f, operationId, selection, reference, rows, thirdUnknown, release } = threeHeldFixture();
   vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(release));
   expect(readLimitedRelease().value).toEqual(release);
   expect(historicalHeldReference(104, operationId)).toEqual(reference);
@@ -114,6 +118,42 @@ it("V5 reconciles each of three independent reservations without authorizing ano
     vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, ...changes }));
     expect(readLimitedRelease().value).toBeNull();
   }
+});
+it("V6 retains a separately audited source failure alongside both failures and all three held reservations", () => {
+  const { f, rows, release: previous } = threeHeldFixture();
+  const operationId = "a0000000-0000-4000-8000-000000000008";
+  const selection = { ...previous.scope, operationId };
+  const task = { id: "b".repeat(64) + ":1", sourceIndex: 0, sourceDigest: "b".repeat(64), claimNo: 1 };
+  const audit = sourceAudit(operationId, selection.inputDigest, [task], [], { taskId: task.id, text: "fictional answer" });
+  const failure = { stage: "source_reading" as const, kind: "protocol_invalid" as const };
+  const sourceFailure = { ...failure, operationId, selectionSHA256: digest(selection), auditDigest: audit.auditDigest };
+  const release = { ...previous, schema: "CASE104_LIMITED_RELEASE_V6" as const,
+    authority: { ...previous.authority, sequence: 178 as const }, sourceFailure };
+  const allRows = [...rows, ...f.make(selection, 71, failure, audit)];
+  const original = JSON.stringify(allRows);
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(release));
+  expect(readLimitedRelease().value).toEqual(release);
+  expect(() => historicalHeldReference(104, operationId)).toThrow();
+  expect(() => assertReleaseHistory(previous, allRows, [])).toThrow();
+  assertReleaseHistory(release, allRows, []);
+  const prefixOnly = sourceAudit(operationId, selection.inputDigest, [task], []);
+  const prefixRelease = { ...release, sourceFailure: { ...sourceFailure, auditDigest: prefixOnly.auditDigest } };
+  expect(() => assertReleaseHistory(prefixRelease, [...rows, ...f.make(selection, 71, failure, prefixOnly)], [])).toThrow();
+  for (const row of allRows) expect(() => assertReleaseHistory(release, allRows.filter(item => item !== row), [])).toThrow();
+  expect(() => assertReleaseHistory(release, [...allRows, allRows.at(-1)!], [])).toThrow();
+  for (const key of ["selectionSHA256", "auditDigest"] as const) {
+    expect(() => assertReleaseHistory({ ...release, sourceFailure: { ...sourceFailure, [key]: "0".repeat(64) } }, allRows, [])).toThrow();
+  }
+  const day = { ...release, phase: "day" as const, activeOperationId: DAY, devSavedSnapshotDigest: f.saved.snapshotDigest };
+  assertReleaseHistory(day, allRows, [f.saved]);
+  expect(() => assertReleaseHistory(day, allRows, [])).toThrow();
+  for (const change of [{ sourceFailure: undefined }, { authority: previous.authority },
+    { sourceFailure: { ...sourceFailure, stage: "generation" } }, { sourceFailure: { ...sourceFailure, operationId: HELD } },
+    { activeOperationId: operationId, devOperationId: operationId }]) {
+    vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, ...change }));
+    expect(readLimitedRelease().value).toBeNull();
+  }
+  expect(JSON.stringify(allRows)).toBe(original);
 });
 it("the previous development operation is eligible for historical fingerprinting even after admission expires", () => {
   const f = continuedFixture();

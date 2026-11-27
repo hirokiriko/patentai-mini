@@ -19,7 +19,8 @@ import { sourceClaimObligations, sourceCompoundMaintainedStates } from "./source
 import { sourceTerminalRoutes, matchesSourceTerminalRoute } from "./source-terminal-routes";
 import { sourceCausalModeGuards, assertSourceCausalModeGuards } from "./source-causal-mode-guards";
 import { isLiteralComponentType } from "./literal-source-state";
-import { sourceActorLocatorSchema, sourceActorLocatorFact, sourceActorLocatorExamples, sourceActorSchemaRoom } from "./source-actor-locator";
+import { componentMentionLocations, declaredComponentName, sourceActorLocatorSchema, sourceActorLocatorFact, sourceActorLocatorExamples, sourceActorSchemaRoom } from "./source-actor-locator";
+import { modelRequestBytes } from "./generation-batch";
 
 const invalid = () => new ComparisonError("ai_incomplete");
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -121,12 +122,11 @@ export function sourceClaimExtractionPlan(chunks: readonly ManagedComparisonChun
       const loopStarts=source.recognizedLoopRoutes.filter(r=>r.claimNo===claimNo)
         .map(r=>c.clauses.findIndex(([a,b])=>a<=r.route[0]&&r.route[0]<b));
       const firstLoop=loopStarts.length?Math.min(...loopStarts):-1;
-      const declaration=/^(?:前記|当該|該)?([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]{1,80})を(?:備え|有し)[、，]$/u;
       const candidates=partitions[1].filter(id=>{
-        const named=declaration.exec(c.grid.text.slice(...c.clauses[id]));
+        const named=declaredComponentName(c.grid.text.slice(...c.clauses[id]));
         if(!named||id+1>=secondEnd)return false;
         const next=c.grid.text.slice(...c.clauses[id+1]);
-        return ['該','前記','当該'].some(prefix=>next===`${prefix}${named[1]}により、`||next===`${prefix}${named[1]}により，`);
+        return ['該','前記','当該'].some(prefix=>next===`${prefix}${named}により、`||next===`${prefix}${named}により，`);
       });
       if(candidates.length===1){
         const boundary=candidates[0]+1,coordinate=c.clauses[boundary][0];
@@ -380,10 +380,7 @@ For opens_one, a must quote the COMPLETE obligation.literal, including the choic
 `:"")+(branchClauses.length||obligations.some(t=>t.kind==="opens_one")?`
 Keep every structural definition alongside its routes. A path's endpoints, via and bypass components do not express where a pipe branches or is installed. Fictional "青弁の上流側で分岐し、液を青槽から赤槽へ流す白管": a route from 青槽 to 赤槽 via 白管 alone loses the upstream branch relation. Retain the complete quoted definition including 青弁の上流側で分岐し in a correctly typed fact with its printed subject, as well as the route. Account for every original clause, including structural clauses without an obligation; an empty fN is allowed only when its complete meaning is explicitly retained in another correctly scoped fact. Check every requiredRouteClauses occurrence using that clause's actual endpoint/via quotes; a combined path citing only earlier occurrences does not cover later route clauses.
 `:"");
-    tasks.push(Object.freeze({ id: taskId, sourceIndex, sourceDigest, claimNo, system: (structuredActors?sourceActorLocatorExamples(claimSystem):claimSystem)+(fixedModeIdentityInstruction?"\n"+fixedModeIdentityInstruction:"")+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
-      partitioned: split, compactBatchEligible: !split && !fixedModeIdentityInstruction && c.clauses.length<=5 && c.grid.text.length<=120 && !sourceReadingTasks(c,true,true).some(t=>t.kind==="path") && !ownedTerminals.length,
-      modeBatchEligible: boundedModeDefinition&&!split&&!loops.length&&!ownedTerminals.length,
-      ...(fixedModeIdentityInstruction&&!split&&c.clauses.length<=8?{outputTokenLimit:LIMITS.azureReasoningOutputTokens}:{}), prompt: JSON.stringify({ task: "extract_source_propositions", citationClauses: { version: 20 },
+    const request = { task: "extract_source_propositions", citationClauses: { version: 20 },
         target: { sourceDigest, claimNo,
           ...(continuityCues?{continuityCues}:{}),
           ...(conditionalPropertyCues.length?{conditionalPropertyCues,
@@ -396,7 +393,24 @@ Keep every structural definition alongside its routes. A path's endpoints, via a
           requiredRouteClauses: [...sourceReadingTasks(c, true, true).filter(t => t.kind === "path"&&clauseIds.includes(t.clause)),
             ...ownedTerminals].map(t => ({clause:t.clause,literal:c.grid.text.slice(...t.span)})) },
         sourceContext: { ...transport.sources[sourceIndex],
-          referenceLogic: source.source.referenceLogic, scopes: source.scopes } }), schema: taskSchema }));
+          referenceLogic: source.source.referenceLogic, scopes: source.scopes } };
+    const task = { id: taskId, sourceIndex, sourceDigest, claimNo, system: (structuredActors?sourceActorLocatorExamples(claimSystem):claimSystem)+(fixedModeIdentityInstruction?"\n"+fixedModeIdentityInstruction:"")+(canonicalSetInstruction?"\n"+canonicalSetInstruction+"\n"+modeActorInstruction:"")+(ownedTerminals.length?`\nThis target owns an explicit terminal route ending 吸い込ませる. For EACH such requiredRouteClauses entry, emit a separate k=path terminal-edge fact in that clause's own fN group. Its i and j must quote the origin and destination from THAT SAME terminal clause; its u quotes the printed mode. A combined upstream path whose last V cites an earlier occurrence of the same junction does not meet this exact-occurrence requirement, even when the component names and overall direction agree. Preserve preceding route clauses in their own path facts, with the original mode, causal and temporal conditions. The terminal path is additional to the controller's inhalation executes and the apparatus's separate mode-switching executes; neither relation supplies a missing path.`:"")+(split?`\nThis is a preplanned PART, never a complete extraction. Emit ONLY its owned fN groups. possessions/sets are owned by their explicit R in target.partition.clauseIds; preserve every member governed by that R even across the boundary. T uses target.obligations order (their original t IDs are unchanged). Emit only target.partition.loopIds, each as a COMPLETE loop using original global IDs. All other clauses and claims remain unchanged reference context. Cite the full governing actor, condition, negation, possession members and complete routes across boundaries. Scope IDs are local to this response; every selected scope must be explicit here. Do not emit another part's groups/lanes/loops, or omit an owned assertion because another part may mention it. No part permits saving or comparison; all parts must pass the unchanged complete-source decoder and original QA.`:""),
+      partitioned: split, compactBatchEligible: !split && !fixedModeIdentityInstruction && c.clauses.length<=5 && c.grid.text.length<=120 && !sourceReadingTasks(c,true,true).some(t=>t.kind==="path") && !ownedTerminals.length,
+      modeBatchEligible: boundedModeDefinition&&!split&&!loops.length&&!ownedTerminals.length,
+      ...(fixedModeIdentityInstruction&&!split&&c.clauses.length<=8?{outputTokenLimit:LIMITS.azureReasoningOutputTokens}:{}), schema: taskSchema };
+    let prompt = JSON.stringify(request);
+    if (structuredActors && !split && !task.compactBatchEligible && !task.modeBatchEligible) {
+      const components = componentMentionLocations(c);
+      if (components.length) {
+        const withLocations = JSON.stringify({ ...request, target: { ...request.target, componentMentions: {
+          components,
+          instruction: "Read the declaration and each later mention in the full original. When a mention introduces the subject of an action, cite that occurrence in m.u for every action it governs. When the subject is restated, use the restatement for its actions. A matching name in the component list or an earlier subject span cannot stand in for it. Check the role at each occurrence: instruments, conditions, possession and path subjects retain their own readings.",
+        } } });
+        // Keep the whole-source preflight allowance even at the input boundary.
+        if (modelRequestBytes(task.system, withLocations, taskSchema) + 1024 <= LIMITS.inputBytes) prompt = withLocations;
+      }
+    }
+    tasks.push(Object.freeze({ ...task, prompt }));
     }
   }
   if (!tasks.length || tasks.length > LIMITS.sourceRequests) throw new ComparisonError("plan_limit");
