@@ -1,7 +1,35 @@
 import type { JSONSchema7 } from "ai";
+import type { SourceReadingClaim } from "./source-clause-coverage";
 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const invalid = () => new Error("comparison_source_actor_locator_invalid");
+
+export function declaredComponentName(clause: string) {
+  return /^(?:前記|当該|該)?([\p{Script=Han}\p{Script=Katakana}A-Za-z0-9０-９Ａ-Ｚａ-ｚー]{1,80})を(?:備え|有し)[、，]$/u.exec(clause)?.[1];
+}
+
+/** List literal occurrences across clauses. Which occurrence governs a fact
+ * is a reading of the original, never a decision made by this index. */
+export function componentMentionLocations(claim: SourceReadingClaim) {
+  const components = new Map<string, { declaration: number; mentions: {
+    first: number; last: number; quote: string; focus: string;
+  }[] }>();
+  for (const [id, span] of claim.clauses.entries()) {
+    const quote = claim.grid.text.slice(...span).trim();
+    const name = declaredComponentName(quote);
+    if (name) {
+      components.set(name, { declaration: id, mentions: [] });
+      continue;
+    }
+    const mention = /^(?:前記|当該|該)(.+?)(?:により|は|が)[、，]$/u.exec(quote);
+    if (!mention) continue;
+    const focus = mention[1], component = components.get(focus);
+    if (component && quote.indexOf(focus) === quote.lastIndexOf(focus)) {
+      component.mentions.push({ first: id, last: id, quote, focus });
+    }
+  }
+  return [...components.values()].filter(component => component.mentions.length >= 2);
+}
 
 /** Retain the established transport for a schema already at the provider's
  * property boundary; a syntax aid must not reject an otherwise valid plan. */

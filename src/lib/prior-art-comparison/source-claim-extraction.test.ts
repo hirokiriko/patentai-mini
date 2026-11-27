@@ -610,10 +610,32 @@ it("rejects a prefix from another claim even when that exact prefix occurs in th
  expect(JSON.stringify(wrong)).toBe(before);
 });
 
+it("supplies exact actor locations for separate mentions after a component declaration", () => {
+ const f = fictionalInputs();
+ const text = "読取器を備え、該読取器により、青札を読み、赤札を数え、前記読取器は、結果を出力する。";
+ f.inputs.draft = parseComparisonSource(`【請求項1】${text}`, 11, "架空");
+ f.inputs.documents = f.inputs.documents.map(doc => parseComparisonSource(`【請求項1】${text}`, doc.id, "架空"));
+ const task = sourceClaimExtractionPlan(makePlan(f.inputs, f.selection)).tasks[0];
+ const request = JSON.parse(task.prompt);
+ const locations = request.target.componentMentions.components;
+ expect(locations).toEqual([{ declaration: 0, mentions: [
+   { first: 1, last: 1, quote: "該読取器により、", focus: "読取器" },
+   { first: 4, last: 4, quote: "前記読取器は、", focus: "読取器" },
+ ] }]);
+ const claim = sourceReadingClaim(1, text);
+ for (const { first, last, quote, focus } of locations[0].mentions) {
+   const span = resolveClaimLiteralReference(claim, { reference: `${first}-${last}:${quote}`, focus });
+   expect(span[0]).toBe(text.indexOf(focus, claim.clauses[first][0]));
+   expect(text.slice(...span)).toBe(focus);
+ }
+ expect(request.sourceContext.source.claims[0].clauses.map(([, literal]: [number, string]) => literal).join("")).toBe(text);
+});
+
 it("keeps the operative actor occurrence distinct from the same name in a condition",async()=>{
  const f=fictionalInputs(),text="制御器は、制御器が非通電状態の場合、赤弁を閉じる。";
  f.inputs.draft=parseComparisonSource(`【請求項1】${text}`,11,"架空");f.inputs.documents=f.inputs.documents.map(d=>parseComparisonSource(`【請求項1】${text}`,d.id,"架空"));
  const task=sourceClaimExtractionPlan(makePlan(f.inputs,f.selection)).tasks[0];
+ expect(JSON.parse(task.prompt).target).not.toHaveProperty("componentMentions");
  const c=fictionalQuotationClaim(sourceReadingClaim(1,text),{Q:["q0|0-0:制御器","q1|1-1:制御器が非通電状態の場合","q2|2-2:赤弁","q3|2-2:閉じる"],facts:[{R:2,m:{u:["q0"],x:"operation",g:"when",G:[["q1"]],p:"positive",k:"relation",P:"closes",J:[["q2"]],a:"q3"},O:[null,null,null,"q1",null],F:null}]});
  const raw={v:34,sourceDigest:task.sourceDigest,claimNo:1,d:task.sourceDigest,scopes:fictionalScopesFor(c),c1:c};
  expect((await task.schema.validate!(raw)).success).toBe(true);

@@ -114,3 +114,45 @@ it("fingerprint read rejects changes between its two snapshots",async()=>{
   seam.select.mockImplementation(()=>{if(++reads===2)seam.rows[2].matchedElementsJson=String(seam.rows[2].matchedElementsJson)+" ";return original();});
   await expect(getHeldComparisonEvidence(104,heldId)).rejects.toMatchObject({code:"save_unconfirmed"});expect(seam.transaction).not.toHaveBeenCalled();expect(seam.executeAI).not.toHaveBeenCalled();
 });
+
+it("admits one new slot while the audited source failure stays readable and cannot be retried", async () => {
+  const history = (id: number, stage?: "source_reading" | "generation") => {
+    const operationId = `b0000000-0000-4000-8000-${String(id).padStart(12, "0")}`;
+    const selection = { ...selected, operationId }, selectionSHA256 = digest(selection);
+    const task = { id: "c".repeat(64) + ":1", sourceIndex: 0, sourceDigest: "c".repeat(64), claimNo: 1 };
+    const failure = { stage, kind: "protocol_invalid" as const };
+    const audit = sourceAudit(operationId, selection.inputDigest, [task], [],
+      stage === "source_reading" ? { taskId: task.id, text: "fictional incomplete reading" } : undefined);
+    for (const [i, doc] of selection.documents.entries()) {
+      const marker = { version: 1, status: "reserved", operationId, selection, ...(stage ? { failure } : {}) };
+      seam.rows.push({ resultId: id * 10 + i, caseId: 104, priorDocId: doc.docId, draftClaimId: String(selection.draftClaimNos[0]),
+        matchedElementsJson: JSON.stringify({ priorArtComparison: marker, ...(stage ? { priorArtComparisonSourceAudit: audit } : {}) }) });
+    }
+    return { operationId, selection, selectionSHA256, auditDigest: audit.auditDigest };
+  };
+  const held = (id: number) => {
+    const reference = history(id);
+    return { evidence: heldReservationEvidence(seam.rows as HeldRow[], reference), isolationEvidenceSHA256: "e".repeat(64) };
+  };
+  const additionalFailure = history(5, "generation");
+  const v5 = { ...release, schema: "CASE104_LIMITED_RELEASE_V5", authority: { ...release.authority, sequence: 176 },
+    additionalFailure: { operationId: additionalFailure.operationId, selectionSHA256: additionalFailure.selectionSHA256,
+      auditDigest: additionalFailure.auditDigest, stage: "generation", kind: "protocol_invalid" },
+    retainedUnknown: held(6), additionalUnknown: held(7), thirdUnknown: held(8) };
+  const source = history(9, "source_reading");
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(v5));
+  expect((await comparisonAdmission(104)).canStart).toBe(false);
+  const v6 = { ...v5, schema: "CASE104_LIMITED_RELEASE_V6", authority: { ...v5.authority, sequence: 178 },
+    sourceFailure: { operationId: source.operationId, selectionSHA256: source.selectionSHA256,
+      auditDigest: source.auditDigest, stage: "source_reading", kind: "protocol_invalid" } };
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(v6));
+  const previousRows = structuredClone(seam.rows);
+  expect(await comparisonAdmission(104)).toMatchObject({ operationId: DEV, canStart: true });
+  expect((await getComparisonSourceAudit(104, source.operationId)).auditDigest).toBe(source.auditDigest);
+  await expect(reserveComparison(104, source.selection)).rejects.toBeDefined();
+  expect((await reserveComparison(104, selected)).ids).toHaveLength(2);
+  expect((await comparisonAdmission(104)).canStart).toBe(false);
+  await expect(reserveComparison(104, selected)).rejects.toBeDefined();
+  expect(seam.rows.slice(0, previousRows.length)).toEqual(previousRows);
+  expect(seam.executeAI).not.toHaveBeenCalled();
+});
