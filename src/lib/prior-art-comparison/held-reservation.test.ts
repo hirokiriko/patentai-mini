@@ -76,6 +76,45 @@ it("V4 rejects missing, duplicated, aliased, unbound or obsolete evidence", () =
     expect(readLimitedRelease().value).toBeNull();
   }
 });
+it("V4 exposes the active development fingerprint for reconciliation only with comparison disabled", () => {
+  const { release, saved } = twoHeldFixture();
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(release));
+  vi.stubEnv("PRIOR_ART_COMPARISON_ENABLED", "1");
+  expect(() => historicalHeldReference(104, DEV)).toThrow();
+  vi.stubEnv("PRIOR_ART_COMPARISON_ENABLED", "0");
+  expect(historicalHeldReference(104, DEV).selection).toEqual(saved.selection);
+  expect(() => historicalHeldReference(105, DEV)).toThrow();
+  expect(() => historicalHeldReference(104, DAY)).toThrow();
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, phase: "day", activeOperationId: DAY, devSavedSnapshotDigest: saved.snapshotDigest }));
+  expect(() => historicalHeldReference(104, DEV)).toThrow();
+});
+it("V5 reconciles each of three independent reservations without authorizing another pending row", () => {
+  const f = twoHeldFixture(), operationId = "a0000000-0000-4000-8000-000000000007";
+  const selection = { ...f.release.scope, operationId };
+  const reference = { operationId, selection, selectionSHA256: digest(selection) };
+  const rows = [...f.rows, ...f.make(selection, 61)];
+  const thirdUnknown = { evidence: heldReservationEvidence(rows, reference), isolationEvidenceSHA256: "1".repeat(64) };
+  const release = { ...f.release, schema: "CASE104_LIMITED_RELEASE_V5" as const,
+    thirdUnknown, authority: { ...f.release.authority, sequence: 176 as const } };
+  vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify(release));
+  expect(readLimitedRelease().value).toEqual(release);
+  expect(historicalHeldReference(104, operationId)).toEqual(reference);
+  expect(() => historicalHeldReference(104, DEV)).toThrow();
+  const original = JSON.stringify(rows);
+  assertReleaseHistory(release, rows, []);
+  const day = { ...release, phase: "day" as const, activeOperationId: DAY, devSavedSnapshotDigest: f.saved.snapshotDigest };
+  assertReleaseHistory(day, rows, [f.saved]);
+  expect(() => assertReleaseHistory(day, rows, [])).toThrow();
+  for (const row of rows) expect(() => assertReleaseHistory(release, rows.filter(r => r !== row), [])).toThrow();
+  expect(() => assertReleaseHistory(release, [...rows, ...f.make({ ...selection, operationId: DAY }, 71)], [])).toThrow();
+  expect(JSON.stringify(rows)).toBe(original);
+  for (const changes of [{ thirdUnknown: undefined }, { thirdUnknown: release.additionalUnknown },
+    { thirdUnknown: { ...thirdUnknown, evidence: { ...thirdUnknown.evidence, evidenceDigest: "3".repeat(64) } } },
+    { activeOperationId: operationId, devOperationId: operationId }, { authority: f.release.authority }]) {
+    vi.stubEnv(LIMITED_RELEASE_ENV, JSON.stringify({ ...release, ...changes }));
+    expect(readLimitedRelease().value).toBeNull();
+  }
+});
 it("the previous development operation is eligible for historical fingerprinting even after admission expires", () => {
   const f = continuedFixture();
   const expired = { ...f.release, validFromUTC: "2025-01-01T00:00:00Z", validUntilUTC: "2025-01-01T01:00:00Z" };

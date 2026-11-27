@@ -36,14 +36,20 @@ const twoHeldReleaseSchema = continuedReleaseSchema.extend({
   authority: continuedReleaseSchema.shape.authority.extend({ sequence: z.literal(174) }),
   additionalUnknown: successorReleaseSchema.shape.retainedUnknown,
 });
+const threeHeldReleaseSchema = twoHeldReleaseSchema.extend({
+  schema: z.literal("CASE104_LIMITED_RELEASE_V5"),
+  authority: twoHeldReleaseSchema.shape.authority.extend({ sequence: z.literal(176) }),
+  thirdUnknown: successorReleaseSchema.shape.retainedUnknown,
+});
 const releaseSchema = z.discriminatedUnion("schema", [
-  legacyReleaseSchema, successorReleaseSchema, continuedReleaseSchema, twoHeldReleaseSchema,
+  legacyReleaseSchema, successorReleaseSchema, continuedReleaseSchema, twoHeldReleaseSchema, threeHeldReleaseSchema,
 ]);
 export type LimitedRelease = z.infer<typeof releaseSchema>;
 function retainedFailures(value: LimitedRelease): LimitedRelease["oldFailure"][] {
   return "additionalFailure" in value ? [value.oldFailure, value.additionalFailure] : [value.oldFailure];
 }
 function retainedReservations(value: LimitedRelease) {
+  if ("thirdUnknown" in value) return [value.retainedUnknown, value.additionalUnknown, value.thirdUnknown];
   if ("additionalUnknown" in value) return [value.retainedUnknown, value.additionalUnknown];
   return "retainedUnknown" in value ? [value.retainedUnknown] : [];
 }
@@ -69,8 +75,9 @@ export function historicalHeldReference(caseId: number, operationId: string): He
     value = releaseSchema.parse(JSON.parse(raw)); assertSuccessorIsolation(value);
   } catch { throw new ComparisonError("save_unconfirmed"); }
   const eligible = retainedReservations(value).map(held => held.evidence.operationId);
-  if (value.schema === "CASE104_LIMITED_RELEASE_V1" ||
-      (value.schema === "CASE104_LIMITED_RELEASE_V3" && value.phase === "dev" && value.activeOperationId === value.devOperationId))
+  const previousDev = value.phase === "dev" && value.activeOperationId === value.devOperationId;
+  const closedV4 = value.schema === "CASE104_LIMITED_RELEASE_V4" && process.env.PRIOR_ART_COMPARISON_ENABLED === "0";
+  if (value.schema === "CASE104_LIMITED_RELEASE_V1" || (previousDev && (value.schema === "CASE104_LIMITED_RELEASE_V3" || closedV4)))
     eligible.push(value.devOperationId);
   if (caseId !== 104 || !eligible.includes(operationId) || value.oldFailure.operationId === operationId ||
       value.scope.draftClaimNos.length !== 1 || value.scope.documents.length !== 2 ||
